@@ -42,7 +42,12 @@ RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FF
     && cp /tmp/${FFMPEG_BUILD}/bin/ffmpeg  /usr/local/bin/ffmpeg \
     && cp /tmp/${FFMPEG_BUILD}/bin/ffprobe /usr/local/bin/ffprobe \
     && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
-    && rm -rf /tmp/ffmpeg.tar.xz /tmp/${FFMPEG_BUILD}
+    && rm -rf /tmp/ffmpeg.tar.xz /tmp/${FFMPEG_BUILD} \
+    # Build-Zeit-Verifikation: bricht den Build ab, falls NVENC/AV1 fehlt
+    && echo "== Enthaltene NVENC/AV1-Encoder ==" \
+    && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -iE "nvenc|libsvtav1" \
+    && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q av1_nvenc \
+       || (echo "FEHLER: av1_nvenc fehlt im FFmpeg-Build!" && exit 1)
 
 # ------------------------------------------------------------- VMAF-Modelle
 # libvmaf ist im FFmpeg-Build enthalten, die Modelle werden separat bereitgestellt.

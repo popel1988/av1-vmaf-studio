@@ -41,6 +41,11 @@ queue = QueueManager()
 @app.on_event("startup")
 async def _startup() -> None:
     config.ensure_dirs()
+    logger = logging.getLogger("vcompress.startup")
+    logger.info("FFmpeg-Binary: %s | FFprobe: %s", config.FFMPEG, config.FFPROBE)
+    encs = sorted(e for e in ff.available_encoders()
+                  if any(x in e for x in ("nvenc", "qsv", "vaapi", "svt", "x264", "x265")))
+    logger.info("Verfügbare relevante Encoder: %s", ", ".join(encs) or "KEINE erkannt!")
 
 
 @app.on_event("shutdown")

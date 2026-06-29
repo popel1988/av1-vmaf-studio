@@ -205,6 +205,20 @@ class QueueManager:
 
         s = item.settings
 
+        # --- Vorab-Check: ist der gewählte Encoder im FFmpeg-Build vorhanden? -
+        from . import ffmpeg_utils as ffu
+        if not ffu.encoder_available(s.platform, s.codec):
+            enc = ffu.encoder_name(s.platform, s.codec)
+            avail = sorted(e for e in ffu.available_encoders()
+                           if any(x in e for x in ("nvenc", "qsv", "vaapi", "av1", "x264", "x265", "svt")))
+            item.status = STATUS_FAILED
+            item.error = (f"Encoder '{enc}' ist im FFmpeg-Build nicht verfügbar. "
+                          f"Verfügbar: {', '.join(avail) or 'keine erkannt'}. "
+                          f"Anderen Codec/Plattform wählen oder Image neu bauen.")
+            logger.error("Encoder fehlt: %s | verfügbar: %s", enc, avail)
+            self._active_id = None
+            return
+
         # --- VMAF-Test (optional, repräsentativ pro Gruppe) -------------------
         if s.vmaf_check and item.group_id not in self._group_quality:
             item.status = STATUS_ANALYZING

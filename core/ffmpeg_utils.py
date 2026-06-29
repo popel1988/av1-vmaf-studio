@@ -1,14 +1,18 @@
 """FFprobe-Abfragen und Mapping von Plattform/Codec auf FFmpeg-Flags."""
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("vcompress.ffprobe")
+
+_ENCODER_LINE = re.compile(r"^\s*[VAS][.FSXBD]{5}\s+(\S+)")
 
 # HDR-Transferfunktionen
 HDR_TRANSFERS = {"smpte2084", "arib-std-b67", "smptest2084"}
@@ -142,6 +146,32 @@ QUALITY_FLAG = {
 
 def encoder_name(platform: str, codec: str) -> str:
     return ENCODERS.get(platform, ENCODERS["cpu"]).get(codec, "libsvtav1")
+
+
+@functools.lru_cache(maxsize=1)
+def available_encoders() -> frozenset:
+    """Liest die im FFmpeg-Build kompilierten Encoder (`ffmpeg -encoders`)."""
+    from . import config
+    try:
+        out = subprocess.run(
+            [config.FFMPEG, "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    names = set()
+    for line in out.stdout.splitlines():
+        m = _ENCODER_LINE.match(line)
+        if m:
+            names.add(m.group(1))
+    return frozenset(names)
+
+
+def encoder_available(platform: str, codec: str) -> bool:
+    enc = encoder_name(platform, codec)
+    avail = available_encoders()
+    # Wenn die Liste leer ist (ffmpeg nicht abfragbar), nicht fälschlich blocken.
+    return not avail or enc in avail
 
 
 def quality_args(platform: str, value: int) -> list[str]:
