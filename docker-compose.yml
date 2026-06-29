@@ -1,0 +1,59 @@
+# =============================================================================
+#  AV1 / VMAF Compression Studio – Universelle Stack-Definition (Portainer)
+#
+#  Reicht /media/input + /media/output sowie ALLE GPU-Geräte durch
+#  (Intel/AMD via /dev/dri, Nvidia via Container-Runtime). Für eine fehlerfreie
+#  Hardware-Auslastungsanzeige wird privileged genutzt (alternativ unten das
+#  feingranulare Device-Mapping einkommentieren).
+# =============================================================================
+services:
+  av1-vmaf-studio:
+    build: .
+    # Alternativ direkt ein vorgebautes Image angeben:
+    # image: ghcr.io/<user>/av1-vmaf-studio:latest
+    container_name: av1-vmaf-studio
+    restart: unless-stopped
+
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+    # Pfade bequem in Portainer unter "Environment variables" setzen
+    # (INPUT_PATH / OUTPUT_PATH) – kein Editieren der Datei nötig.
+    volumes:
+      - ${INPUT_PATH:-/media/input}:/media/input
+      - ${OUTPUT_PATH:-/media/output}:/media/output
+
+    # --- Hardware-Zugriff --------------------------------------------------
+    # privileged sorgt für vollen Zugriff auf sysfs/DRM (saubere GPU-Metriken).
+    privileged: true
+
+    # Intel/AMD GPU (VAAPI/QSV) – DRM-Render-Knoten durchreichen
+    devices:
+      - /dev/dri:/dev/dri
+
+    # Nvidia: Runtime + Capabilities (nvidia-container-toolkit erforderlich)
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - PUID=0
+      - PGID=0
+      - METRICS_INTERVAL=1.5
+
+    # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
+    # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video]
+
+    # --- Feingranulare Alternative ZU 'privileged: true' -------------------
+    # (privileged auskommentieren und stattdessen folgendes nutzen)
+    # cap_add:
+    #   - SYS_ADMIN
+    # group_add:
+    #   - video
+    #   - render
