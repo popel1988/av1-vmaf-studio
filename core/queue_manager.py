@@ -7,6 +7,7 @@ weiteren Dateien angewendet.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -19,6 +20,8 @@ from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
 from .encoder import EncodeProgress, EncodeRunner, build_encode_cmd
 from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
+
+logger = logging.getLogger("vcompress.queue")
 
 STATUS_WAITING = "wartend"
 STATUS_ANALYZING = "vmaf-test"
@@ -250,7 +253,9 @@ class QueueManager:
             out_path.unlink(missing_ok=True)
         elif rc != 0:
             item.status = STATUS_FAILED
-            item.error = stderr[-500:] if stderr else f"FFmpeg exit {rc}"
+            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+            logger.error("Encode fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
+                         item.title, rc, " ".join(cmd), stderr)
             out_path.unlink(missing_ok=True)
         else:
             item.output_path = str(out_path)

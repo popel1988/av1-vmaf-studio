@@ -11,6 +11,7 @@ Ablauf:
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -21,6 +22,17 @@ from . import config
 from . import ffmpeg_utils as ff
 from .encoder import build_encode_cmd
 from .ffmpeg_utils import VideoInfo
+
+logger = logging.getLogger("vcompress.vmaf")
+
+
+def _run_logged(cmd: list[str], label: str) -> subprocess.CompletedProcess:
+    """Führt ein FFmpeg-Kommando aus und loggt bei Fehler die volle stderr."""
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        logger.error("%s fehlgeschlagen (Exit %s)\nCMD: %s\nSTDERR:\n%s",
+                     label, res.returncode, " ".join(cmd), (res.stderr or "")[-3000:])
+    return res
 
 
 @dataclass
@@ -86,7 +98,7 @@ def _extract_reference(info: VideoInfo, work: Path, tonemap: bool, status: Statu
     cmd += ["-an", "-sn", "-c:v", "ffv1", "-level", "3", str(ref)]
     if status:
         status("Referenz-Clip wird extrahiert …")
-    subprocess.run(cmd, capture_output=True, check=False)
+    _run_logged(cmd, "VMAF-Referenz")
     return ref
 
 
@@ -109,7 +121,7 @@ def _vmaf_compare(distorted: Path, reference: Path, info: VideoInfo,
     cmd = [config.FFMPEG, "-y", "-hide_banner",
            "-i", str(distorted), "-i", str(reference),
            "-filter_complex", fc, "-f", "null", "-"]
-    subprocess.run(cmd, capture_output=True, check=False)
+    _run_logged(cmd, f"VMAF-Vergleich Q{quality}")
 
     if not log.exists():
         return None
@@ -161,7 +173,7 @@ def analyze(
                 target_height, tonemap,
                 duration_limit=clip_len, start_at=start,
             )
-            subprocess.run(cmd, capture_output=True, check=False)
+            _run_logged(cmd, f"VMAF-Test-Encode Q{q}")
             if not test_file.exists() or test_file.stat().st_size == 0:
                 continue
 
