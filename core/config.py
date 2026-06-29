@@ -2,7 +2,29 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
+
+
+def _resolve_binary(name: str) -> str:
+    """Bevorzugt unseren eigenen FFmpeg-Build in /usr/local/bin.
+
+    Wichtig auf QNAP: Der Nvidia-Treiber bringt eigene (teils kaputte)
+    ffmpeg/ffprobe-Binaries mit und steht oft vorne im PATH. Wir nutzen
+    daher den absoluten Pfad zu unserem Build, statt uns auf PATH zu verlassen.
+    """
+    env_override = os.getenv(name.upper() + "_BIN")
+    if env_override:
+        return env_override
+    local = Path("/usr/local/bin") / name
+    if local.exists():
+        return str(local)
+    return shutil.which(name) or name
+
+
+# Pfade zu den (eigenen) FFmpeg-Binaries – immun gegen PATH-Shadowing.
+FFMPEG = _resolve_binary("ffmpeg")
+FFPROBE = _resolve_binary("ffprobe")
 
 # --- Verzeichnisse (werden via Docker-Volumes gemountet) ---------------------
 INPUT_DIR = Path(os.getenv("INPUT_DIR", "/media/input"))

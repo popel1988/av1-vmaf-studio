@@ -115,9 +115,9 @@ async def probe(path: str):
     target = _safe_resolve(path)
     if target is None or not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
-    info = ff.ffprobe(target)
+    info, err = ff.probe_with_error(target)
     if info is None:
-        return JSONResponse({"error": "ffprobe fehlgeschlagen"}, status_code=500)
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
     return info.to_dict()
 
 

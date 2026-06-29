@@ -18,7 +18,7 @@ from . import config
 from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
 from .encoder import EncodeProgress, EncodeRunner, build_encode_cmd
-from .ffmpeg_utils import VideoInfo, ffprobe
+from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
 
 STATUS_WAITING = "wartend"
 STATUS_ANALYZING = "vmaf-test"
@@ -193,10 +193,10 @@ class QueueManager:
 
     def _process(self, item: QueueItem) -> None:
         self._active_id = item.id
-        info = ffprobe(Path(item.path))
+        info, probe_err = probe_with_error(Path(item.path))
         if info is None:
             item.status = STATUS_FAILED
-            item.error = "ffprobe fehlgeschlagen / kein gültiges Video."
+            item.error = f"ffprobe: {probe_err or 'kein gültiges Video'}"
             self._active_id = None
             return
 

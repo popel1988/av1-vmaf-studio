@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("vcompress.ffprobe")
 
 # HDR-Transferfunktionen
 HDR_TRANSFERS = {"smpte2084", "arib-std-b67", "smptest2084"}
@@ -52,10 +55,12 @@ class VideoInfo:
         }
 
 
-def ffprobe(path: Path) -> Optional[VideoInfo]:
-    """Liest Auflösung, Dauer, Codec und Farbinformationen via ffprobe aus."""
+def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
+    """Wie ffprobe(), liefert aber zusätzlich eine Diagnose-Meldung zurück
+    (z. B. ffprobe-stderr), damit Fehlerursachen sichtbar werden."""
+    from . import config
     cmd = [
-        "ffprobe", "-v", "error",
+        config.FFPROBE, "-v", "error",
         "-select_streams", "v:0",
         "-show_entries",
         "stream=width,height,codec_name,pix_fmt,color_transfer,"
@@ -64,19 +69,25 @@ def ffprobe(path: Path) -> Optional[VideoInfo]:
         str(path),
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+    except FileNotFoundError:
+        return None, "ffprobe nicht gefunden (PATH prüfen – /usr/local/bin)."
+    except subprocess.TimeoutExpired:
+        return None, "ffprobe-Timeout (Datei evtl. sehr groß oder Mount langsam)."
+    except OSError as e:
+        return None, f"ffprobe-Aufruf fehlgeschlagen: {e}"
+
     if out.returncode != 0:
-        return None
+        err = (out.stderr or "").strip() or f"Exit-Code {out.returncode}"
+        return None, err
     try:
         data = json.loads(out.stdout)
     except json.JSONDecodeError:
-        return None
+        return None, "ffprobe-Ausgabe nicht lesbar (kein gültiges JSON)."
 
     streams = data.get("streams", [])
     if not streams:
-        return None
+        return None, "Kein Video-Stream gefunden."
     s = streams[0]
     fmt = data.get("format", {})
 
@@ -99,7 +110,15 @@ def ffprobe(path: Path) -> Optional[VideoInfo]:
         color_space=s.get("color_space", "") or "",
         bit_rate=bit_rate,
         size_bytes=size_bytes,
-    )
+    ), None
+
+
+def ffprobe(path: Path) -> Optional[VideoInfo]:
+    """Liest Auflösung, Dauer, Codec und Farbinformationen via ffprobe aus."""
+    info, err = probe_with_error(path)
+    if err:
+        logger.warning("ffprobe fehlgeschlagen für %s: %s", path, err)
+    return info
 
 
 # ----------------------------------------------------------------- Encoder-Map

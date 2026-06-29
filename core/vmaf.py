@@ -78,7 +78,7 @@ def _extract_reference(info: VideoInfo, work: Path, tonemap: bool, status: Statu
     ref = work / "reference.mkv"
     start = _middle_start(info.duration)
     clip_len = min(config.VMAF_CLIP_SECONDS, info.duration)
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-ss", str(start), "-t", str(clip_len),
+    cmd = [config.FFMPEG, "-y", "-hide_banner", "-ss", str(start), "-t", str(clip_len),
            "-i", str(info.path)]
     if tonemap and info.is_hdr:
         from .encoder import _TONEMAP_CHAIN  # gleiche Kette wie beim Encode
@@ -106,7 +106,7 @@ def _vmaf_compare(distorted: Path, reference: Path, info: VideoInfo,
         f"[dist][ref]libvmaf=model=path={model_path}:"
         f"log_fmt=json:log_path={log}:n_threads={n_threads}"
     )
-    cmd = ["ffmpeg", "-y", "-hide_banner",
+    cmd = [config.FFMPEG, "-y", "-hide_banner",
            "-i", str(distorted), "-i", str(reference),
            "-filter_complex", fc, "-f", "null", "-"]
     subprocess.run(cmd, capture_output=True, check=False)

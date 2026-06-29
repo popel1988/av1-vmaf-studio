@@ -71,7 +71,8 @@ def build_encode_cmd(
     start_at: Optional[float] = None,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
-    cmd: list[str] = ["ffmpeg", "-y", "-hide_banner"]
+    from . import config
+    cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
 
     # HW-Device-Initialisierung für den hwupload-Schritt der Filterkette.
     if platform == "amd":
