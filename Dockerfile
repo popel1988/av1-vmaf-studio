@@ -35,7 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ------------------------------------------------------ Moderner FFmpeg (BtbN)
 # Statischer GPL-Build inkl. libvmaf, NVENC, VAAPI, QSV (libvpl).
-ARG FFMPEG_BUILD=ffmpeg-n7.1-latest-linux64-gpl-7.1
+# n8.1 enthält av1_nvenc (der ältere n7.1-Build NICHT!). Verifiziert per
+# strings-Check des Binaries; nicht ohne Grund zurückstufen.
+ARG FFMPEG_BUILD=ffmpeg-n8.1-latest-linux64-gpl-8.1
 RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FFMPEG_BUILD}.tar.xz" \
         -O /tmp/ffmpeg.tar.xz \
     && tar -xf /tmp/ffmpeg.tar.xz -C /tmp \
