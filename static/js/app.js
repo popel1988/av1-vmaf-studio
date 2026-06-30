@@ -127,14 +127,60 @@
     try {
       const res = await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`);
       const info = await res.json();
-      if (!info.error) {
-        const hdr = info.is_hdr ? " · HDR" : "";
-        const k = info.is_4k ? " · 4K" : "";
+      if (info.error) {
         $("selected-info").innerHTML =
-          `<strong>${escapeHtml(f.name)}</strong> · ${info.resolution} · ${info.codec.toUpperCase()} · ${info.size_human} · ${info.duration_human}${k}${hdr}`;
-        if (info.is_hdr) $("opt-tonemap").checked = false;
+          `<strong>${escapeHtml(f.name)}</strong> · <span class="bad">${escapeHtml(info.error)}</span>`;
+        return;
       }
-    } catch (_) { /* ignore */ }
+      renderFileDetails(f.name, info);
+      if (info.is_hdr) $("opt-tonemap").checked = false;
+    } catch (e) {
+      $("selected-info").innerHTML = `<span class="bad">Analyse-Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  function chip(label, value, cls) {
+    return `<div class="chip ${cls || ""}"><span class="chip-k">${label}</span><span class="chip-v">${value}</span></div>`;
+  }
+
+  function renderFileDetails(name, info) {
+    const chips = [];
+    chips.push(chip("Auflösung", `${info.resolution}${info.megapixels ? " · " + info.megapixels + " MP" : ""}`));
+    if (info.is_4k) chips.push(chip("Klasse", "4K / UHD", "accent"));
+    chips.push(chip("Codec", info.codec.toUpperCase() + (info.profile ? " · " + info.profile : "")));
+    chips.push(chip("Bit-Tiefe", info.bit_depth + " bit"));
+    if (info.fps) chips.push(chip("FPS", info.fps));
+    chips.push(chip("Dynamik", info.hdr_type, info.is_hdr ? "warn" : ""));
+    chips.push(chip("Größe", info.size_human));
+    chips.push(chip("Dauer", info.duration_human));
+    if (info.overall_bitrate) chips.push(chip("Gesamt-Bitrate", info.overall_bitrate_human));
+    chips.push(chip("Video-Bitrate", info.video_bitrate_human));
+    chips.push(chip("Pixelformat", info.pix_fmt));
+    if (info.color_primaries) chips.push(chip("Farbraum", info.color_primaries));
+    chips.push(chip("Container", (info.container || "—").split(",")[0]));
+
+    let audio = "";
+    if (info.audio && info.audio.length) {
+      audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length})</div>` +
+        info.audio.map((a) =>
+          `<div class="track-row"><span class="track-lang">${escapeHtml((a.language || "und").toUpperCase())}</span>` +
+          `<span>${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}</span>` +
+          `${a.title ? `<span class="track-extra">${escapeHtml(a.title)}</span>` : ""}</div>`).join("") +
+        `</div>`;
+    }
+    let subs = "";
+    if (info.subtitles && info.subtitles.length) {
+      subs = `<div class="track-block"><div class="track-title">Untertitel (${info.subtitles.length})</div>` +
+        info.subtitles.map((s) =>
+          `<div class="track-row"><span class="track-lang">${escapeHtml((s.language || "und").toUpperCase())}</span>` +
+          `<span>${escapeHtml(s.codec.toUpperCase())}${s.forced ? " · forced" : ""}${s.default ? " · default" : ""}</span>` +
+          `${s.title ? `<span class="track-extra">${escapeHtml(s.title)}</span>` : ""}</div>`).join("") +
+        `</div>`;
+    }
+
+    $("selected-info").innerHTML =
+      `<div class="file-title">${escapeHtml(name)}</div>` +
+      `<div class="chips">${chips.join("")}</div>${audio}${subs}`;
   }
 
   function selectFolder(path, isRoot) {

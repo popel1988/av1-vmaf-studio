@@ -26,19 +26,28 @@ def build_video_filters(
     platform: str,
     target_height: Optional[int],
     tonemap: bool,
+    *,
+    nvidia_cuda_frames: bool = False,
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
-    Es wird bewusst eine Software-Filterkette mit Hardware-*Encoder* genutzt –
-    das ist herstellerübergreifend am robustesten (NVENC/QSV/VAAPI nehmen die
-    gefilterten Frames entgegen).
+    `nvidia_cuda_frames=True` => reine GPU-Pipeline (Frames bleiben als CUDA-
+    Surfaces, Skalierung via scale_cuda). Sonst Software-Filterpfad.
     """
+    downscale = bool(target_height and info.height and target_height < info.height)
+
+    # --- Reine NVIDIA-GPU-Pipeline (kein Tonemap) --------------------------
+    if platform == "nvidia" and nvidia_cuda_frames:
+        if downscale:
+            return f"scale_cuda=-2:{target_height}"
+        return None
+
     filters: list[str] = []
 
     if tonemap and info.is_hdr:
         filters.append(_TONEMAP_CHAIN)
 
-    if target_height and info.height and target_height < info.height:
+    if downscale:
         # -2 hält das Seitenverhältnis (gerade Pixelzahl für die Encoder).
         filters.append(f"scale=-2:{target_height}:flags=lanczos")
 
@@ -49,9 +58,6 @@ def build_video_filters(
         filters.append("format=nv12,hwupload")
     elif platform == "intel":
         filters.append("format=nv12,hwupload=extra_hw_frames=64")
-    elif platform == "nvidia" and not filters:
-        # NVENC akzeptiert Software-Frames direkt; nichts nötig.
-        pass
 
     if not filters:
         return None
@@ -74,9 +80,19 @@ def build_encode_cmd(
     from . import config
     cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
 
-    # HW-Device-Initialisierung für den hwupload-Schritt der Filterkette.
-    if platform == "amd":
-        # VAAPI-Device als Upload-Ziel.
+    nvidia_cuda_frames = False
+
+    # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
+    if platform == "nvidia":
+        if tonemap and info.is_hdr:
+            # GPU-Decode, aber Download nach RAM fürs Software-Tonemapping.
+            cmd += ["-hwaccel", "cuda"]
+        else:
+            # Komplett auf der GPU: Decode -> (scale_cuda) -> NVENC.
+            cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+            nvidia_cuda_frames = True
+    elif platform == "amd":
+        # VAAPI-Device als Upload-Ziel für den Software-Filterpfad.
         cmd += ["-init_hw_device", "vaapi=va:/dev/dri/renderD128",
                 "-filter_hw_device", "va"]
     elif platform == "intel":
@@ -94,7 +110,8 @@ def build_encode_cmd(
     if duration_limit is not None:
         cmd += ["-t", str(duration_limit)]
 
-    vf = build_video_filters(info, platform, target_height, tonemap)
+    vf = build_video_filters(info, platform, target_height, tonemap,
+                             nvidia_cuda_frames=nvidia_cuda_frames)
     if vf:
         cmd += ["-vf", vf]
 

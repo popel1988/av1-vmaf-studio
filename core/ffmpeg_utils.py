@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +31,17 @@ class VideoInfo:
     color_space: str
     bit_rate: int  # bps (kann 0 sein)
     size_bytes: int
+    # --- erweiterte Analyse (für die UI) ---
+    profile: str = ""
+    level: str = ""
+    fps: float = 0.0
+    bit_depth: int = 8
+    hdr_type: str = "SDR"
+    dolby_vision: bool = False
+    overall_bitrate: int = 0
+    container: str = ""
+    audio: list = field(default_factory=list)
+    subtitles: list = field(default_factory=list)
 
     @property
     def is_4k(self) -> bool:
@@ -38,9 +49,19 @@ class VideoInfo:
 
     @property
     def is_hdr(self) -> bool:
-        return self.color_transfer.lower() in HDR_TRANSFERS
+        return self.color_transfer.lower() in HDR_TRANSFERS or self.dolby_vision
+
+    @property
+    def video_bitrate(self) -> int:
+        if self.bit_rate:
+            return self.bit_rate
+        # Schätzung: Gesamtbitrate aus Größe/Dauer, falls Stream-Bitrate fehlt
+        if self.duration > 0 and self.size_bytes > 0:
+            return int(self.size_bytes * 8 / self.duration)
+        return 0
 
     def to_dict(self) -> dict:
+        megapixels = round(self.width * self.height / 1_000_000, 1) if self.width else 0
         return {
             "path": self.path,
             "width": self.width,
@@ -49,26 +70,39 @@ class VideoInfo:
             "codec": self.codec,
             "pix_fmt": self.pix_fmt,
             "color_transfer": self.color_transfer,
+            "color_primaries": self.color_primaries,
+            "color_space": self.color_space,
             "is_4k": self.is_4k,
             "is_hdr": self.is_hdr,
             "bit_rate": self.bit_rate,
             "size_bytes": self.size_bytes,
             "size_human": human_size(self.size_bytes),
             "resolution": f"{self.width}x{self.height}",
+            "megapixels": megapixels,
             "duration_human": human_duration(self.duration),
+            # erweiterte Felder
+            "profile": self.profile,
+            "level": self.level,
+            "fps": round(self.fps, 3) if self.fps else 0,
+            "bit_depth": self.bit_depth,
+            "hdr_type": self.hdr_type,
+            "dolby_vision": self.dolby_vision,
+            "overall_bitrate": self.overall_bitrate,
+            "overall_bitrate_human": _bitrate_human(self.overall_bitrate),
+            "video_bitrate": self.video_bitrate,
+            "video_bitrate_human": _bitrate_human(self.video_bitrate),
+            "container": self.container,
+            "audio": self.audio,
+            "subtitles": self.subtitles,
         }
 
 
 def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
-    """Wie ffprobe(), liefert aber zusätzlich eine Diagnose-Meldung zurück
-    (z. B. ffprobe-stderr), damit Fehlerursachen sichtbar werden."""
+    """Vollständige Stream-Analyse via ffprobe. Liefert (VideoInfo, Fehler)."""
     from . import config
     cmd = [
         config.FFPROBE, "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries",
-        "stream=width,height,codec_name,pix_fmt,color_transfer,"
-        "color_primaries,color_space,bit_rate,duration:format=duration,bit_rate",
+        "-show_streams", "-show_format",
         "-of", "json",
         str(path),
     ]
@@ -90,31 +124,125 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
         return None, "ffprobe-Ausgabe nicht lesbar (kein gültiges JSON)."
 
     streams = data.get("streams", [])
-    if not streams:
-        return None, "Kein Video-Stream gefunden."
-    s = streams[0]
     fmt = data.get("format", {})
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if video is None:
+        return None, "Kein Video-Stream gefunden."
 
-    duration = _f(s.get("duration")) or _f(fmt.get("duration")) or 0.0
-    bit_rate = int(_f(s.get("bit_rate")) or _f(fmt.get("bit_rate")) or 0)
+    duration = _f(video.get("duration")) or _f(fmt.get("duration")) or 0.0
+    bit_rate = int(_f(video.get("bit_rate")) or 0)
+    overall_bitrate = int(_f(fmt.get("bit_rate")) or 0)
     try:
         size_bytes = path.stat().st_size
     except OSError:
-        size_bytes = 0
+        size_bytes = int(_f(fmt.get("size")) or 0)
 
-    return VideoInfo(
+    pix_fmt = video.get("pix_fmt", "?") or "?"
+    transfer = (video.get("color_transfer", "") or "").lower()
+    hdr_type, dovi = _detect_hdr(transfer, video)
+
+    # Audio-/Untertitel-Spuren strukturiert sammeln
+    audio = [_audio_entry(s) for s in streams if s.get("codec_type") == "audio"]
+    subs = [_subtitle_entry(s) for s in streams if s.get("codec_type") == "subtitle"]
+
+    info = VideoInfo(
         path=str(path),
-        width=int(s.get("width") or 0),
-        height=int(s.get("height") or 0),
+        width=int(video.get("width") or 0),
+        height=int(video.get("height") or 0),
         duration=duration,
-        codec=s.get("codec_name", "?"),
-        pix_fmt=s.get("pix_fmt", "?"),
-        color_transfer=s.get("color_transfer", "") or "",
-        color_primaries=s.get("color_primaries", "") or "",
-        color_space=s.get("color_space", "") or "",
+        codec=video.get("codec_name", "?"),
+        pix_fmt=pix_fmt,
+        color_transfer=video.get("color_transfer", "") or "",
+        color_primaries=video.get("color_primaries", "") or "",
+        color_space=video.get("color_space", "") or "",
         bit_rate=bit_rate,
         size_bytes=size_bytes,
-    ), None
+        profile=str(video.get("profile", "") or ""),
+        level=str(video.get("level", "") or ""),
+        fps=_parse_fraction(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+        bit_depth=_bit_depth(pix_fmt, video),
+        hdr_type=hdr_type,
+        dolby_vision=dovi,
+        overall_bitrate=overall_bitrate,
+        container=fmt.get("format_name", "") or "",
+        audio=audio,
+        subtitles=subs,
+    )
+    return info, None
+
+
+def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool]:
+    """Bestimmt HDR-Typ und ob Dolby Vision vorliegt."""
+    dovi = False
+    for sd in video.get("side_data_list", []) or []:
+        t = str(sd.get("side_data_type", "")).lower()
+        if "dolby vision" in t or "dovi" in t:
+            dovi = True
+    if transfer in ("smpte2084", "smptest2084"):
+        base = "HDR10 (PQ)"
+    elif transfer == "arib-std-b67":
+        base = "HLG"
+    else:
+        base = "SDR"
+    if dovi:
+        return (f"Dolby Vision + {base}" if base != "SDR" else "Dolby Vision"), True
+    return base, False
+
+
+def _bit_depth(pix_fmt: str, video: dict) -> int:
+    raw = video.get("bits_per_raw_sample")
+    if raw and str(raw).isdigit():
+        return int(raw)
+    if "12" in pix_fmt:
+        return 12
+    if "10" in pix_fmt:
+        return 10
+    return 8
+
+
+def _audio_entry(s: dict) -> dict:
+    tags = s.get("tags", {}) or {}
+    br = int(_f(s.get("bit_rate")) or 0)
+    return {
+        "codec": s.get("codec_name", "?"),
+        "channels": s.get("channels", 0),
+        "layout": s.get("channel_layout", "") or "",
+        "sample_rate": s.get("sample_rate", "") or "",
+        "bitrate": br,
+        "bitrate_human": _bitrate_human(br) if br else "—",
+        "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
+        "title": tags.get("title", "") or tags.get("TITLE", "") or "",
+    }
+
+
+def _subtitle_entry(s: dict) -> dict:
+    tags = s.get("tags", {}) or {}
+    disp = s.get("disposition", {}) or {}
+    return {
+        "codec": s.get("codec_name", "?"),
+        "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
+        "title": tags.get("title", "") or tags.get("TITLE", "") or "",
+        "forced": bool(disp.get("forced")),
+        "default": bool(disp.get("default")),
+    }
+
+
+def _parse_fraction(value: Optional[str]) -> float:
+    if not value or "/" not in str(value):
+        return _f(value) or 0.0
+    num, _, den = str(value).partition("/")
+    n, d = _f(num), _f(den)
+    if not n or not d:
+        return 0.0
+    return n / d
+
+
+def _bitrate_human(bps: float) -> str:
+    if not bps:
+        return "—"
+    if bps >= 1_000_000:
+        return f"{bps / 1_000_000:.1f} Mbit/s"
+    return f"{bps / 1000:.0f} kbit/s"
 
 
 def ffprobe(path: Path) -> Optional[VideoInfo]:
