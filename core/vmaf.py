@@ -161,36 +161,41 @@ def _vmaf_compare(
 
 
 def _extract_screenshots(
-    info: VideoInfo,
+    reference: Path,
     test_file: Path,
-    preview_dir: Path,
     item_id: str,
     key: str,
-    source_start: float,
     clip_len: float,
 ) -> tuple[str, str]:
-    """Screenshots aus Quelle und Test-Encode zur gleichen relativen Position."""
-    preview_dir.mkdir(parents=True, exist_ok=True)
+    """Screenshots aus Referenz-Clip und Test-Encode zur gleichen Position.
+
+    Beide Quellen sind bereits kurze Clips (Start = 0). Der Referenzclip hat
+    ein evtl. nötiges Tonemapping schon angewendet, daher sind Original- und
+    Encode-Screenshot direkt vergleichbar.
+    """
+    # Unterordner je Job MUSS existieren, sonst kann FFmpeg nicht schreiben.
+    (config.PREVIEW_DIR / item_id).mkdir(parents=True, exist_ok=True)
     rel_ref = f"{item_id}/{key}_ref.jpg"
     rel_enc = f"{item_id}/{key}_enc.jpg"
-    ts_src = source_start + clip_len / 2.0
-    ts_enc = clip_len / 2.0
+    ts = max(0.0, clip_len / 2.0)
 
     ref_cmd = [
         config.FFMPEG, "-y", "-hide_banner",
-        "-ss", str(ts_src), "-i", str(info.path),
+        "-ss", str(ts), "-i", str(reference),
         "-frames:v", "1", "-q:v", "2",
         str(config.PREVIEW_DIR / rel_ref),
     ]
     enc_cmd = [
         config.FFMPEG, "-y", "-hide_banner",
-        "-ss", str(ts_enc), "-i", str(test_file),
+        "-ss", str(ts), "-i", str(test_file),
         "-frames:v", "1", "-q:v", "2",
         str(config.PREVIEW_DIR / rel_enc),
     ]
-    _run_logged(ref_cmd, f"Screenshot Ref {key}")
-    _run_logged(enc_cmd, f"Screenshot Enc {key}")
-    return rel_ref, rel_enc
+    ref_res = _run_logged(ref_cmd, f"Screenshot Ref {key}")
+    enc_res = _run_logged(enc_cmd, f"Screenshot Enc {key}")
+    ok_ref = ref_res.returncode == 0 and (config.PREVIEW_DIR / rel_ref).exists()
+    ok_enc = enc_res.returncode == 0 and (config.PREVIEW_DIR / rel_enc).exists()
+    return (rel_ref if ok_ref else ""), (rel_enc if ok_enc else "")
 
 
 def analyze(
@@ -240,14 +245,14 @@ def analyze(
                     target_height, tonemap,
                     duration_limit=clip_len, start_at=start,
                     rate_mode=opts.rate_mode, bitrate_kbps=val,
-                    include_progress=False, audio_copy=True,
+                    include_progress=False, audio_mode="copy",
                 )
             else:
                 cmd = build_encode_cmd(
                     info, test_file, platform, codec, val,
                     target_height, tonemap,
                     duration_limit=clip_len, start_at=start,
-                    include_progress=False, audio_copy=True,
+                    include_progress=False, audio_mode="copy",
                 )
             _run_logged(cmd, f"VMAF-Test {lbl}")
             if not test_file.exists() or test_file.stat().st_size == 0:
@@ -268,8 +273,7 @@ def analyze(
             scr_ref, scr_enc = "", ""
             if opts.generate_screenshots and opts.item_id:
                 scr_ref, scr_enc = _extract_screenshots(
-                    info, test_file, config.PREVIEW_DIR, opts.item_id, key,
-                    start, clip_len,
+                    reference, test_file, opts.item_id, key, clip_len,
                 )
 
             analysis.results.append(VmafResult(

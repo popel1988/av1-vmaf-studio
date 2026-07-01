@@ -210,6 +210,75 @@ class HardwareMonitor:
             platforms.insert(0, "amd")
         return platforms
 
+    # ---------------------------------------------------- Encoder-Kapazität
+    def _nvidia_names(self) -> list[str]:
+        out = _run([
+            self._nvidia_smi or "nvidia-smi",
+            "--query-gpu=name", "--format=csv,noheader",
+        ])
+        if not out:
+            return []
+        return [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+
+    def encode_capacity(self) -> dict:
+        """Best-effort-Schätzung, wie viele Encodes parallel sinnvoll sind.
+
+        Die genaue Zahl der NVENC-Engines wird von nvidia-smi nicht direkt
+        gemeldet; wir schätzen sie über den GPU-Namen und erlauben dem Nutzer,
+        den Wert im UI zu überschreiben.
+        """
+        gpus: list[dict] = []
+        nvenc_engines = 0
+        if self._has_nvidia:
+            names = self._nvidia_names() or ["NVIDIA GPU"]
+            for name in names:
+                eng = _nvenc_engines(name)
+                nvenc_engines += eng
+                gpus.append({"vendor": "nvidia", "name": name, "encoders": eng})
+        for card in self._drm_cards:
+            label = "Intel GPU (QSV)" if card["vendor"] == "intel" else "AMD GPU (VAAPI)"
+            gpus.append({"vendor": card["vendor"], "name": label, "encoders": 1})
+
+        cpu_threads = psutil.cpu_count(logical=True) or 2
+
+        if self._has_nvidia and nvenc_engines >= 1:
+            # NVENC verarbeitet mehrere Sessions gut nebenläufig; 2 pro Engine
+            # ist ein praxistauglicher Durchsatz-Sweetspot.
+            suggested = min(6, max(2, nvenc_engines * 2))
+        elif gpus:
+            # QSV/VAAPI: eine feste Engine -> parallele Encodes bringen kaum etwas.
+            suggested = 1
+        else:
+            # Reines CPU-Encoding: grob an Threads koppeln.
+            suggested = max(1, min(3, cpu_threads // 8))
+
+        return {
+            "gpus": gpus,
+            "nvenc_engines": nvenc_engines,
+            "cpu_threads": cpu_threads,
+            "suggested_parallel": suggested,
+        }
+
+
+# Grobe NVENC-Engine-Anzahl je GPU-Familie (nvidia-smi meldet sie nicht direkt).
+# Fallback ist 1; bekannte Mehr-Engine-Karten werden angehoben.
+_NVENC_MULTI = (
+    # (Teilstring im Namen, Anzahl NVENC-Engines)
+    ("RTX 6000 ADA", 3), ("RTX 5000 ADA", 2), ("L40", 3), ("L20", 3),
+    ("A100", 0), ("H100", 0),  # reine Rechen-GPUs ohne NVENC
+    ("A40", 2), ("A30", 1), ("A16", 4), ("A10", 1),
+    ("RTX A6000", 3), ("RTX A5000", 2), ("RTX A4500", 2),
+    ("QUADRO RTX 8000", 2), ("QUADRO RTX 6000", 2),
+)
+
+
+def _nvenc_engines(name: str) -> int:
+    up = name.upper()
+    for token, count in _NVENC_MULTI:
+        if token in up:
+            return count
+    return 1
+
 
 def _to_float(value: str) -> Optional[float]:
     try:

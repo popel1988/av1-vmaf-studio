@@ -78,7 +78,11 @@ def build_encode_cmd(
     rate_mode: str = "cq",
     bitrate_kbps: Optional[int] = None,
     include_progress: bool = True,
-    audio_copy: bool = False,
+    audio_mode: str = "copy",
+    audio_codec: str = "aac",
+    audio_bitrate_kbps: int = 160,
+    audio_channels: int = 0,
+    audio_normalize: bool = False,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -137,11 +141,12 @@ def build_encode_cmd(
     elif "qsv" in enc:
         cmd += ["-preset", "slower"]
 
-    cmd += ["-map", "0:v:0", "-map", "0:a?"]
-    if audio_copy:
-        cmd += ["-c:a", "copy"]
-    else:
-        cmd += ["-c:a", "aac", "-b:a", "160k"]
+    cmd += ["-map", "0:v:0"]
+    if audio_mode != "none":
+        cmd += ["-map", "0:a?"]
+    cmd += ff.audio_args(
+        audio_mode, audio_codec, audio_bitrate_kbps, audio_channels, audio_normalize,
+    )
 
     if include_progress:
         cmd += ["-progress", "pipe:1", "-nostats", str(output)]

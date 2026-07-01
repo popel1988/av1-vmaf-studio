@@ -70,6 +70,12 @@ VIDEO_EXTENSIONS = {
 ARCHIVE_DIRNAME = ".archiv"
 METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 
+# --- Parallele Encodes --------------------------------------------------------
+# MAX_PARALLEL_ENCODES = 0 -> beim Start automatisch aus der Hardware ableiten.
+# PARALLEL_ENCODES_LIMIT begrenzt, was der Nutzer im UI maximal wählen darf.
+MAX_PARALLEL_ENCODES = int(os.getenv("MAX_PARALLEL_ENCODES", "0"))
+PARALLEL_ENCODES_LIMIT = max(1, int(os.getenv("PARALLEL_ENCODES_LIMIT", "6")))
+
 
 def data_paths_dict() -> dict:
     """Alle relevanten Pfade für API / UI."""

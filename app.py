@@ -42,7 +42,12 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 monitor = HardwareMonitor()
-queue = QueueManager()
+CAPACITY = monitor.encode_capacity()
+# Startwert für parallele Encodes: explizite Env-Vorgabe oder HW-Empfehlung,
+# begrenzt durch das konfigurierte Limit.
+_initial_parallel = config.MAX_PARALLEL_ENCODES or CAPACITY["suggested_parallel"]
+_initial_parallel = max(1, min(config.PARALLEL_ENCODES_LIMIT, _initial_parallel))
+queue = QueueManager(max_parallel=_initial_parallel)
 
 
 @app.on_event("startup")
@@ -54,6 +59,11 @@ async def _startup() -> None:
     encs = sorted(e for e in ff.available_encoders()
                   if any(x in e for x in ("nvenc", "qsv", "vaapi", "svt", "x264", "x265")))
     logger.info("Verfügbare relevante Encoder: %s", ", ".join(encs) or "KEINE erkannt!")
+    logger.info("Encoder-Kapazität: %s GPU(s), NVENC-Engines: %s, Threads: %s → "
+                "empfohlen %s parallel, aktiv %s (Limit %s)",
+                len(CAPACITY["gpus"]), CAPACITY["nvenc_engines"], CAPACITY["cpu_threads"],
+                CAPACITY["suggested_parallel"], queue.get_parallel(),
+                config.PARALLEL_ENCODES_LIMIT)
 
 
 @app.on_event("shutdown")
@@ -72,6 +82,9 @@ async def index(request: Request):
             "input_dir": str(config.INPUT_DIR),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
+            "capacity": CAPACITY,
+            "parallel_limit": config.PARALLEL_ENCODES_LIMIT,
+            "parallel_current": queue.get_parallel(),
         },
     )
 
@@ -157,7 +170,11 @@ class EnqueueRequest(BaseModel):
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
-    audio_copy: bool = True
+    audio_mode: str = "copy"         # copy | encode | none
+    audio_codec: str = "aac"         # aac | opus | ac3 | eac3 | flac
+    audio_bitrate: int = 160
+    audio_channels: int = 0          # 0 = Original, 1 = Mono, 2 = Stereo
+    audio_normalize: bool = False
 
 
 class ApproveRequest(BaseModel):
@@ -184,7 +201,11 @@ async def enqueue(req: EnqueueRequest):
         generate_screenshots=req.generate_screenshots,
         post_processing=req.post_processing,
         suffix=req.suffix,
-        audio_copy=req.audio_copy,
+        audio_mode=req.audio_mode,
+        audio_codec=req.audio_codec,
+        audio_bitrate=req.audio_bitrate,
+        audio_channels=req.audio_channels,
+        audio_normalize=req.audio_normalize,
     )
     if req.is_batch:
         items = queue.add_batch(str(target), settings)
@@ -234,6 +255,25 @@ async def cancel(item_id: str):
 async def clear():
     queue.clear_finished()
     return {"ok": True}
+
+
+class ParallelRequest(BaseModel):
+    value: int = Field(..., ge=1)
+
+
+@app.get("/api/config/parallel")
+async def get_parallel():
+    return {
+        "value": queue.get_parallel(),
+        "limit": config.PARALLEL_ENCODES_LIMIT,
+        "capacity": CAPACITY,
+    }
+
+
+@app.post("/api/config/parallel")
+async def set_parallel(req: ParallelRequest):
+    n = max(1, min(config.PARALLEL_ENCODES_LIMIT, req.value))
+    return {"value": queue.set_parallel(n)}
 
 
 @app.get("/api/config/paths")

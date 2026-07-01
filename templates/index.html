@@ -164,7 +164,7 @@
               </div>
 
               <div class="field" id="test-values-block">
-                <label>Testwerte (bis zu 4)</label>
+                <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
                 <div class="test-values-grid" id="test-values-grid">
                   <input type="number" class="test-val" value="20" min="1" max="51" />
                   <input type="number" class="test-val" value="24" min="1" max="51" />
@@ -200,10 +200,49 @@
               <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
             </div>
 
-            <label class="check">
-              <input type="checkbox" id="opt-audio-copy" checked />
-              <span>Audio kopieren (verlustfrei, schneller)</span>
-            </label>
+            <div class="divider"></div>
+
+            <div class="field">
+              <label>Ton</label>
+              <select id="opt-audio-mode">
+                <option value="copy">Original kopieren (verlustfrei, schnell)</option>
+                <option value="encode">Neu codieren</option>
+                <option value="none">Ohne Ton (entfernen)</option>
+              </select>
+            </div>
+
+            <div id="audio-encode-opts" class="disabled">
+              <div class="field-row">
+                <div class="field">
+                  <label>Audio-Codec</label>
+                  <select id="opt-audio-codec">
+                    <option value="aac">AAC (universell)</option>
+                    <option value="opus">Opus (effizient)</option>
+                    <option value="ac3">AC3 (Dolby)</option>
+                    <option value="eac3">E-AC3 (Dolby Digital+)</option>
+                    <option value="flac">FLAC (verlustfrei)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Kanäle</label>
+                  <select id="opt-audio-channels">
+                    <option value="0">Original beibehalten</option>
+                    <option value="2">Stereo (2.0)</option>
+                    <option value="1">Mono (1.0)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field" id="audio-bitrate-field">
+                <label>Audio-Bitrate: <strong id="audio-bitrate-val">160</strong> kbit/s</label>
+                <input type="range" id="opt-audio-bitrate" min="64" max="640" value="160" step="32" />
+              </div>
+
+              <label class="check">
+                <input type="checkbox" id="opt-audio-normalize" />
+                <span>Lautstärke normalisieren (EBU R128, −16 LUFS)</span>
+              </label>
+            </div>
 
             <div class="divider"></div>
 
@@ -249,26 +288,14 @@
           </div>
         </section>
 
-        <!-- CARD 4: Live-Fortschritt -->
+        <!-- CARD 4: Live-Fortschritt (mehrere parallele Encodes möglich) -->
         <section class="card span-3 progress-card" id="progress-card" style="display:none">
           <div class="card-head">
             <h3><span class="card-idx">▶</span> Live-Verarbeitung</h3>
-            <span class="badge badge-running" id="progress-title">—</span>
+            <span class="badge badge-running" id="progress-count">—</span>
           </div>
           <div class="card-body">
-            <div class="big-progress">
-              <div class="bar-track"><div class="bar-fill" id="bar-fill"></div></div>
-              <div class="bar-pct" id="bar-pct">0%</div>
-            </div>
-            <div class="stat-grid">
-              <div class="stat"><span class="stat-label">Geschwindigkeit</span><span class="stat-val" id="st-fps">— fps</span></div>
-              <div class="stat"><span class="stat-label">Bitrate</span><span class="stat-val" id="st-bitrate">—</span></div>
-              <div class="stat"><span class="stat-label">ETA</span><span class="stat-val" id="st-eta">—</span></div>
-              <div class="stat"><span class="stat-label">Aktuelle Größe</span><span class="stat-val" id="st-size">—</span></div>
-              <div class="stat"><span class="stat-label">Eingespart</span><span class="stat-val good" id="st-saved">—</span></div>
-              <div class="stat"><span class="stat-label">Speed</span><span class="stat-val" id="st-speed">—</span></div>
-            </div>
-            <p class="muted" id="progress-msg"></p>
+            <div id="progress-list"></div>
           </div>
         </section>
 
@@ -277,6 +304,14 @@
           <div class="card-head">
             <h3><span class="card-idx">≡</span> Warteschlange &amp; Status</h3>
             <div class="queue-stats">
+              <label class="parallel-ctl" title="Wie viele Encodes gleichzeitig laufen dürfen">
+                <span>Parallel</span>
+                <select id="opt-parallel">
+                  {% for n in range(1, parallel_limit + 1) %}
+                  <option value="{{ n }}" {% if n == parallel_current %}selected{% endif %}>{{ n }}</option>
+                  {% endfor %}
+                </select>
+              </label>
               <span class="badge badge-wait" id="cnt-wait">0 wartend</span>
               <span class="badge badge-run" id="cnt-run">0 aktiv</span>
               <span class="badge badge-done" id="cnt-done">0 fertig</span>

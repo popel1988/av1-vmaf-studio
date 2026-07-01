@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +49,12 @@ class JobSettings:
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
-    audio_copy: bool = True
+    # Audio
+    audio_mode: str = "copy"       # copy | encode | none
+    audio_codec: str = "aac"       # aac | opus | ac3 | eac3 | flac
+    audio_bitrate: int = 160       # kbit/s pro Stream
+    audio_channels: int = 0        # 0 = Original, 1 = Mono, 2 = Stereo
+    audio_normalize: bool = False
     selected_result_index: Optional[int] = None
 
 
@@ -70,6 +74,7 @@ class QueueItem:
     output_size: int = 0
     output_path: str = ""
     saved_bytes: int = 0
+    message: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +87,7 @@ class QueueItem:
             "progress": self.progress,
             "vmaf": self.vmaf,
             "error": self.error,
+            "message": self.message,
             "original_size": self.original_size,
             "original_human": ff.human_size(self.original_size) if self.original_size else "—",
             "output_size": self.output_size,
@@ -93,17 +99,33 @@ class QueueItem:
 
 
 class QueueManager:
-    def __init__(self) -> None:
+    def __init__(self, max_parallel: int = 1) -> None:
         self._items: list[QueueItem] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._wake = threading.Event()
-        self._runner: Optional[EncodeRunner] = None
-        self._active_id: Optional[str] = None
+        # Aktive Jobs: item_id -> EncodeRunner (None während VMAF/Setup).
+        self._active: dict[str, Optional[EncodeRunner]] = {}
+        self._cancel_ids: set[str] = set()
+        self._max_parallel = max(1, int(max_parallel))
         self._group_quality: dict[str, dict] = {}
+        # Gruppen, deren Repräsentant NICHT encodiert werden soll
+        # (Workflow "compare_only" oder manueller Skip). Folgedateien im
+        # Batch werden dann ebenfalls übersprungen statt mit Default zu encoden.
+        self._group_skip: set[str] = set()
         self._status_msg = ""
         self._stop = False
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+    # ------------------------------------------------------------- Parallelität
+    def set_parallel(self, n: int) -> int:
+        with self._lock:
+            self._max_parallel = max(1, int(n))
+        self._wake.set()
+        return self._max_parallel
+
+    def get_parallel(self) -> int:
+        return self._max_parallel
 
     # ------------------------------------------------------------- Hinzufügen
     def add_file(self, path: str, settings: JobSettings, group_id: Optional[str] = None) -> Optional[QueueItem]:
@@ -149,8 +171,12 @@ class QueueManager:
     # ---------------------------------------------------------------- Steuerung
     def cancel(self, item_id: str) -> bool:
         with self._lock:
-            if item_id == self._active_id and self._runner:
-                self._runner.cancel()
+            if item_id in self._active:
+                # Läuft gerade (Encode oder VMAF-Phase) -> Abbruch anfordern.
+                self._cancel_ids.add(item_id)
+                runner = self._active.get(item_id)
+                if runner:
+                    runner.cancel()
                 return True
             for it in self._items:
                 if it.id == item_id and it.status in (STATUS_WAITING, STATUS_AWAITING):
@@ -178,11 +204,13 @@ class QueueManager:
         return True
 
     def skip_encode(self, item_id: str) -> bool:
-        """Vergleich-only oder manuell abbrechen."""
+        """Vergleich-only oder manuell abbrechen (auch für Batch-Folgedateien)."""
         with self._lock:
             for it in self._items:
                 if it.id == item_id and it.status == STATUS_AWAITING:
                     it.status = STATUS_DONE
+                    self._group_skip.add(it.group_id)
+                    self._wake.set()
                     return True
         return False
 
@@ -202,61 +230,108 @@ class QueueManager:
     def state(self) -> dict:
         with self._lock:
             items = [it.to_dict() for it in self._items]
-            active = self._active_id
+            active_ids = list(self._active.keys())
             msg = self._status_msg
+            parallel = self._max_parallel
         total_saved = sum(i["saved_bytes"] for i in items if i["saved_bytes"] > 0)
         return {
             "items": items,
-            "active_id": active,
+            "active_ids": active_ids,
+            "active_id": active_ids[0] if active_ids else None,  # Rückwärtskompat.
             "status_message": msg,
+            "max_parallel": parallel,
             "total_saved_bytes": total_saved,
             "total_saved_human": ff.human_size(total_saved) if total_saved else "0 B",
             "counts": _counts(items),
         }
 
     # ------------------------------------------------------------------ Worker
-    def _next_item(self) -> Optional[QueueItem]:
-        with self._lock:
-            for it in self._items:
-                if it.status != STATUS_WAITING:
-                    continue
-                if not it.settings.vmaf_check and self._group_blocked(it.group_id):
-                    continue
-                return it
+    def _claim_next_locked(self) -> Optional[QueueItem]:
+        """Nächsten startbaren Job holen (Lock muss gehalten werden)."""
+        for it in self._items:
+            if it.status != STATUS_WAITING:
+                continue
+            if it.id in self._active:
+                continue
+            # Nur Folgedateien (ohne eigenen VMAF-Check) auf die Gruppen-
+            # Entscheidung warten lassen – der Repräsentant selbst darf nie
+            # durch seine eigene Gruppe blockiert werden (sonst Deadlock).
+            if not it.settings.vmaf_check and self._group_blocked_locked(it.group_id):
+                continue
+            return it
         return None
 
-    def _group_blocked(self, group_id: str) -> bool:
-        """Batch-Follower warten, bis VMAF der Gruppe entschieden ist."""
-        if group_id in self._group_quality:
+    def _group_blocked_locked(self, group_id: str) -> bool:
+        """Batch-Follower warten, bis der VMAF-Repräsentant entschieden ist."""
+        if group_id in self._group_quality or group_id in self._group_skip:
             return False
-        return any(
-            i.group_id == group_id and i.status == STATUS_AWAITING
-            for i in self._items
-        )
+        # Existiert ein noch nicht entschiedener Repräsentant (VMAF-Job) der
+        # Gruppe? Dann Folgedateien zurückhalten, damit sie den ermittelten
+        # Qualitätswert übernehmen statt vorzeitig mit Default zu starten.
+        for i in self._items:
+            if i.group_id != group_id or not i.settings.vmaf_check:
+                continue
+            if i.status in (STATUS_WAITING, STATUS_ANALYZING, STATUS_AWAITING):
+                return True
+            if i.id in self._active:
+                return True
+        return False
 
     def _worker(self) -> None:
+        """Dispatcher: startet bis zu _max_parallel Jobs in eigenen Threads."""
         while not self._stop:
-            item = self._next_item()
-            if item is None:
-                self._wake.wait(timeout=2.0)
-                self._wake.clear()
-                continue
-            self._process(item)
+            while not self._stop:
+                with self._lock:
+                    if len(self._active) >= self._max_parallel:
+                        break
+                    item = self._claim_next_locked()
+                    if item is None:
+                        break
+                    self._active[item.id] = None  # als aktiv markieren (Claim)
+                threading.Thread(
+                    target=self._run_job, args=(item,), daemon=True,
+                ).start()
+            self._wake.wait(timeout=2.0)
+            self._wake.clear()
 
     def _set_msg(self, msg: str) -> None:
         with self._lock:
             self._status_msg = msg
 
+    def _refresh_global_msg(self) -> None:
+        n = len(self._active)
+        self._status_msg = f"{n} Encode(s) aktiv" if n else ""
+
+    def _finish_active(self, item_id: str) -> None:
+        with self._lock:
+            self._active.pop(item_id, None)
+            self._cancel_ids.discard(item_id)
+            self._refresh_global_msg()
+        self._wake.set()
+
+    def _run_job(self, item: QueueItem) -> None:
+        try:
+            self._process(item)
+        except Exception as e:  # pragma: no cover - Schutz vor Worker-Absturz
+            item.status = STATUS_FAILED
+            item.error = f"Interner Fehler: {e}"
+            logger.exception("Job abgestürzt: %s", item.title)
+        finally:
+            self._finish_active(item.id)
+
     def _process(self, item: QueueItem) -> None:
-        self._active_id = item.id
         info, probe_err = probe_with_error(Path(item.path))
         if info is None:
             item.status = STATUS_FAILED
             item.error = f"ffprobe: {probe_err or 'kein gültiges Video'}"
-            self._active_id = None
             return
 
         s = item.settings
+
+        # --- Batch-Folgedatei einer übersprungenen Gruppe → nicht encodieren -
+        if item.group_id in self._group_skip and not s.vmaf_check:
+            item.status = STATUS_DONE
+            return
 
         # --- Vorab-Check: ist der gewählte Encoder im FFmpeg-Build vorhanden? -
         from . import ffmpeg_utils as ffu
@@ -269,14 +344,15 @@ class QueueManager:
                           f"Verfügbar: {', '.join(avail) or 'keine erkannt'}. "
                           f"Anderen Codec/Plattform wählen oder Image neu bauen.")
             logger.error("Encoder fehlt: %s | verfügbar: %s", enc, avail)
-            self._active_id = None
             return
 
         # --- VMAF-Test (optional, repräsentativ pro Gruppe) -------------------
-        if s.vmaf_check and item.group_id not in self._group_quality:
+        with self._lock:
+            do_vmaf = s.vmaf_check and item.group_id not in self._group_quality
+        if do_vmaf:
             item.status = STATUS_ANALYZING
-            self._set_msg(f"VMAF-Analyse: {item.title}")
-            self._runner = None
+            item.message = "VMAF-Analyse läuft …"
+            self._refresh_global_msg()
             vmaf_opts = vmaf_mod.VmafOptions(
                 rate_mode=s.rate_mode,
                 test_values=list(s.test_values),
@@ -286,38 +362,47 @@ class QueueManager:
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
-                opts=vmaf_opts, status=self._set_msg,
+                opts=vmaf_opts,
+                status=lambda m: setattr(item, "message", m),
+                cancelled=lambda: item.id in self._cancel_ids,
             )
             item.vmaf = analysis.to_dict()
+            item.message = ""
+
+            if item.id in self._cancel_ids:
+                item.status = STATUS_CANCELLED
+                return
 
             if s.workflow == "compare_only":
                 item.status = STATUS_DONE
-                self._active_id = None
-                self._set_msg("")
+                with self._lock:
+                    self._group_skip.add(item.group_id)
                 return
 
             if s.workflow == "manual":
                 item.status = STATUS_AWAITING
-                self._active_id = None
-                self._set_msg(f"Auswahl erforderlich: {item.title}")
                 return
 
             # auto: empfohlenen Wert übernehmen
             if analysis.recommended_value is not None:
                 s.quality = analysis.recommended_value
-                self._group_quality[item.group_id] = {
-                    "value": analysis.recommended_value,
-                    "rate_mode": s.rate_mode,
-                }
-        elif item.group_id in self._group_quality:
-            gq = self._group_quality[item.group_id]
-            s.quality = gq["value"]
-            s.rate_mode = gq.get("rate_mode", s.rate_mode)
+                with self._lock:
+                    self._group_quality[item.group_id] = {
+                        "value": analysis.recommended_value,
+                        "rate_mode": s.rate_mode,
+                    }
+        else:
+            with self._lock:
+                gq = self._group_quality.get(item.group_id)
+            if gq:
+                s.quality = gq["value"]
+                s.rate_mode = gq.get("rate_mode", s.rate_mode)
 
         # --- Haupt-Encode -----------------------------------------------------
         item.status = STATUS_RUNNING
         qlabel = _quality_label(s)
-        self._set_msg(f"Encode: {item.title} ({qlabel})")
+        item.message = f"Encode ({qlabel})"
+        self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -335,19 +420,27 @@ class QueueManager:
                 "saved_human": ff.human_size(saved),
             }
 
-        enc_kw: dict = {"audio_copy": s.audio_copy}
+        enc_kw: dict = {
+            "audio_mode": s.audio_mode,
+            "audio_codec": s.audio_codec,
+            "audio_bitrate_kbps": s.audio_bitrate,
+            "audio_channels": s.audio_channels,
+            "audio_normalize": s.audio_normalize,
+        }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
             enc_kw["bitrate_kbps"] = s.quality
 
-        self._runner = EncodeRunner(on_progress=on_prog)
+        runner = EncodeRunner(on_progress=on_prog)
+        with self._lock:
+            self._active[item.id] = runner
         cmd = build_encode_cmd(
             info, out_path, s.platform, s.codec, s.quality,
             s.target_height, s.tonemap, **enc_kw,
         )
-        rc, stderr = self._runner.run(cmd, info.duration)
+        rc, stderr = runner.run(cmd, info.duration)
 
-        if self._runner._cancel:
+        if runner._cancel:
             item.status = STATUS_CANCELLED
             out_path.unlink(missing_ok=True)
         elif rc != 0:
@@ -363,10 +456,7 @@ class QueueManager:
             self._post_process(item, out_path)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
-
-        self._runner = None
-        self._active_id = None
-        self._set_msg("")
+        item.message = ""
 
     # ------------------------------------------------------------ Postprocessing
     @staticmethod
@@ -390,8 +480,10 @@ class QueueManager:
 
     def shutdown(self) -> None:
         self._stop = True
-        if self._runner:
-            self._runner.cancel()
+        with self._lock:
+            for runner in self._active.values():
+                if runner:
+                    runner.cancel()
         self._wake.set()
 
 

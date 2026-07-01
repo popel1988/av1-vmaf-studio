@@ -215,8 +215,24 @@
     $("opt-workflow").addEventListener("change", syncVmaf);
     syncVmaf();
 
-    $("opt-rate-mode").addEventListener("change", updateTestValueHints);
-    updateTestValueHints();
+    $("opt-rate-mode").addEventListener("change", () => updateTestValueHints(true));
+    updateTestValueHints(false);
+
+    const audioMode = $("opt-audio-mode");
+    const audioCodec = $("opt-audio-codec");
+    const audioBr = $("opt-audio-bitrate");
+    const syncAudio = () => {
+      const encoding = audioMode.value === "encode";
+      $("audio-encode-opts").classList.toggle("disabled", !encoding);
+      // FLAC ist verlustfrei -> keine Bitratenwahl
+      $("audio-bitrate-field").classList.toggle("disabled", audioCodec.value === "flac");
+    };
+    audioMode.addEventListener("change", syncAudio);
+    audioCodec.addEventListener("change", syncAudio);
+    audioBr.addEventListener("input", () => {
+      $("audio-bitrate-val").textContent = audioBr.value;
+    });
+    syncAudio();
 
     $("btn-enqueue").addEventListener("click", enqueue);
     $("btn-clear").addEventListener("click", async () => {
@@ -227,17 +243,28 @@
     });
   }
 
-  function updateTestValueHints() {
+  let prevRateFamily = null;
+  const rateFamily = (mode) => (mode === "cq" ? "cq" : "bitrate");
+
+  function updateTestValueHints(refill) {
     const mode = $("opt-rate-mode").value;
     const inputs = document.querySelectorAll(".test-val");
     const hint = $("test-values-hint");
+    const fam = rateFamily(mode);
     if (mode === "cq") {
-      hint.textContent = "CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei";
+      hint.textContent = "CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei · leere Felder werden ignoriert";
       inputs.forEach((i) => { i.min = 1; i.max = 51; });
     } else {
-      hint.textContent = "Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000)";
+      hint.textContent = "Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000) · leere Felder werden ignoriert";
       inputs.forEach((i) => { i.min = 500; i.max = 50000; });
     }
+    // Beim Wechsel der Wert-Familie (CQ <-> Bitrate) sinnvolle Defaults setzen.
+    // Zwischen Bitrate und ABR bleiben die eingegebenen Werte erhalten.
+    if (refill && fam !== prevRateFamily) {
+      const defaults = mode === "cq" ? [20, 24, 28, 32] : [8000, 6000, 4000, 2000];
+      inputs.forEach((inp, idx) => { inp.value = defaults[idx]; });
+    }
+    prevRateFamily = fam;
   }
 
   function gatherTestValues() {
@@ -263,7 +290,11 @@
       generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
       suffix: "_" + $("opt-codec").value,
-      audio_copy: $("opt-audio-copy").checked,
+      audio_mode: $("opt-audio-mode").value,
+      audio_codec: $("opt-audio-codec").value,
+      audio_bitrate: parseInt($("opt-audio-bitrate").value, 10),
+      audio_channels: parseInt($("opt-audio-channels").value, 10),
+      audio_normalize: $("opt-audio-normalize").checked,
     };
   }
 
@@ -403,8 +434,9 @@
 
     $("global-status").textContent = q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit");
 
-    renderQueueTable(q.items, q.active_id);
-    renderActiveProgress(q.items, q.active_id);
+    const activeIds = q.active_ids || (q.active_id ? [q.active_id] : []);
+    renderQueueTable(q.items, activeIds);
+    renderActiveProgress(q.items, activeIds);
     renderVmaf(q.items, q.active_id);
   }
 
@@ -424,15 +456,16 @@
     return s.quality;
   }
 
-  function renderQueueTable(items, activeId) {
+  function renderQueueTable(items, activeIds) {
     const body = $("queue-body");
+    const active = new Set(activeIds || []);
     if (!items.length) {
       body.innerHTML = '<tr class="empty-row"><td colspan="6">Warteschlange ist leer.</td></tr>';
       return;
     }
     body.innerHTML = items.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
-      const canCancel = ["wartend", "auswahl"].includes(it.status) || it.id === activeId;
+      const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
       const err = it.error ? `<div class="muted" style="font-size:11px">${escapeHtml(it.error.slice(0, 80))}</div>` : "";
@@ -451,32 +484,50 @@
     });
   }
 
-  function renderActiveProgress(items, activeId) {
+  function renderActiveProgress(items, activeIds) {
     const card = $("progress-card");
-    const active = items.find((i) => i.id === activeId);
-    if (!active || !active.progress || active.status === "vmaf-test") {
-      if (active && active.status === "vmaf-test") {
-        card.style.display = "";
-        $("progress-title").textContent = `VMAF-Test: ${active.title}`;
-        $("bar-fill").style.width = "100%";
-        $("bar-pct").textContent = "…";
-        $("progress-msg").textContent = "Test-Encodes & VMAF-Vergleich laufen …";
-        return;
-      }
+    const list = $("progress-list");
+    const active = new Set(activeIds || []);
+    const jobs = items.filter((i) => active.has(i.id));
+    if (!jobs.length) {
       card.style.display = "none";
+      list.innerHTML = "";
       return;
     }
-    const p = active.progress;
     card.style.display = "";
-    $("progress-title").textContent = active.title;
-    $("bar-fill").style.width = `${p.percent || 0}%`;
-    $("bar-pct").textContent = `${Math.round(p.percent || 0)}%`;
-    $("st-fps").textContent = `${p.fps || 0} fps`;
-    $("st-bitrate").textContent = p.bitrate || "—";
-    $("st-eta").textContent = p.eta_human || "—";
-    $("st-size").textContent = p.current_human || "—";
-    $("st-saved").textContent = p.saved_human || "—";
-    $("st-speed").textContent = p.speed || "—";
+    $("progress-count").textContent =
+      jobs.length === 1 ? "1 Encode" : `${jobs.length} Encodes parallel`;
+    list.innerHTML = jobs.map(progressBlock).join("");
+  }
+
+  function progressBlock(job) {
+    const analyzing = job.status === "vmaf-test";
+    const p = job.progress || {};
+    const pct = analyzing ? 100 : (p.percent || 0);
+    const stage = analyzing
+      ? (job.message || "VMAF-Test läuft …")
+      : (job.message || "Encode");
+    const stats = analyzing ? "" : `
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-label">Geschwindigkeit</span><span class="stat-val">${p.fps || 0} fps</span></div>
+        <div class="stat"><span class="stat-label">Bitrate</span><span class="stat-val">${p.bitrate || "—"}</span></div>
+        <div class="stat"><span class="stat-label">ETA</span><span class="stat-val">${p.eta_human || "—"}</span></div>
+        <div class="stat"><span class="stat-label">Aktuelle Größe</span><span class="stat-val">${p.current_human || "—"}</span></div>
+        <div class="stat"><span class="stat-label">Eingespart</span><span class="stat-val good">${p.saved_human || "—"}</span></div>
+        <div class="stat"><span class="stat-label">Speed</span><span class="stat-val">${p.speed || "—"}</span></div>
+      </div>`;
+    return `
+      <div class="job-progress ${analyzing ? "analyzing" : ""}">
+        <div class="job-progress-head">
+          <span class="job-progress-title">${escapeHtml(job.title)}</span>
+          <span class="job-progress-stage">${escapeHtml(stage)}</span>
+        </div>
+        <div class="big-progress">
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="bar-pct">${analyzing ? "…" : Math.round(pct) + "%"}</div>
+        </div>
+        ${stats}
+      </div>`;
   }
 
   /* ----------------------------------------------------------- VMAF CHART */
@@ -835,10 +886,30 @@
   }
 
   /* ------------------------------------------------------------------ INIT */
+  function initParallel() {
+    const sel = $("opt-parallel");
+    if (!sel) return;
+    fetch("/api/config/parallel").then((r) => r.json()).then((cfg) => {
+      if (cfg.value) sel.value = String(cfg.value);
+      const cap = cfg.capacity || {};
+      const gpus = (cap.gpus || []).map((g) => `${g.name} (${g.encoders}×)`).join(", ");
+      sel.title = `Empfohlen: ${cap.suggested_parallel || 1} · `
+        + (gpus ? `GPUs: ${gpus}` : `CPU-Threads: ${cap.cpu_threads || "?"}`);
+    }).catch(() => {});
+    sel.addEventListener("change", () => {
+      fetch("/api/config/parallel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: parseInt(sel.value, 10) }),
+      }).catch(() => {});
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     initSettings();
     initDataBrowser();
+    initParallel();
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

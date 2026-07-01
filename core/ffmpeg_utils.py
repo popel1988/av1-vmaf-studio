@@ -323,6 +323,49 @@ def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> lis
     return args
 
 
+# Ziel-Audiocodec -> FFmpeg-Encoder
+AUDIO_ENCODERS = {
+    "aac": "aac",
+    "opus": "libopus",
+    "ac3": "ac3",
+    "eac3": "eac3",
+    "flac": "flac",
+}
+
+
+def audio_args(
+    mode: str = "copy",
+    codec: str = "aac",
+    bitrate_kbps: int = 160,
+    channels: int = 0,
+    normalize: bool = False,
+) -> list[str]:
+    """Baut die Audio-Argumente.
+
+    mode:      "copy" (Stream 1:1 übernehmen) | "encode" (neu codieren) | "none"
+    codec:     Zielcodec bei mode="encode" (aac/opus/ac3/eac3/flac)
+    bitrate:   kbit/s pro Stream (bei verlustbehafteten Codecs)
+    channels:  0 = Original behalten, 1 = Mono, 2 = Stereo (Downmix)
+    normalize: EBU-R128-Lautheitsnormalisierung (loudnorm)
+    """
+    if mode == "none":
+        return ["-an"]
+    # Direktes Kopieren nur möglich, wenn keine Umwandlung nötig ist.
+    if mode == "copy" and channels == 0 and not normalize:
+        return ["-c:a", "copy"]
+
+    enc = AUDIO_ENCODERS.get(codec, "aac")
+    args = ["-c:a", enc]
+    if enc != "flac":
+        args += ["-b:a", f"{max(32, int(bitrate_kbps))}k"]
+    if channels in (1, 2):
+        args += ["-ac", str(channels)]
+    if normalize:
+        # Zielwerte nach Streaming-Standard (EBU R128).
+        args += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    return args
+
+
 def hwaccel_input_args(platform: str) -> list[str]:
     """Hardware-Decode-/Init-Argumente, die VOR dem -i Input stehen."""
     if platform == "nvidia":

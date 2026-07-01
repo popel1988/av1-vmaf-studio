@@ -302,6 +302,8 @@ input[type="range"]::-moz-range-thumb {
 .range-scale { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
 .manual-quality.disabled { opacity: .4; pointer-events: none; }
 #vmaf-options.disabled { opacity: .4; pointer-events: none; }
+#audio-encode-opts.disabled { opacity: .4; pointer-events: none; }
+#audio-bitrate-field.disabled { opacity: .4; pointer-events: none; }
 
 .subsection { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); margin: 4px 0 8px; }
 .test-values-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -426,6 +428,22 @@ input[type="range"]::-moz-range-thumb {
 
 .queue-stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .status-cell { display: flex; align-items: center; gap: 6px; }
+
+/* Parallel-Regler + mehrere Live-Fortschritte */
+.parallel-ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.parallel-ctl select {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 3px 8px; font-weight: 700;
+}
+#progress-list { display: flex; flex-direction: column; gap: 14px; }
+.job-progress {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px 14px;
+}
+.job-progress.analyzing { border-style: dashed; }
+.job-progress-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.job-progress-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-progress-stage { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
 
 /* ---------------------------- RESPONSIVE -------------------------------- */
 @media (max-width: 1000px) {
