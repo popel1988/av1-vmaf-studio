@@ -17,14 +17,15 @@ logging.basicConfig(
 )
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from core import config
 from core import ffmpeg_utils as ff
+from core.data_browser import DATA_ROOTS, browse, delete_all_in_root, delete_item, storage_summary
 from core.hardware import HardwareMonitor
 from core.queue_manager import JobSettings, QueueManager
 
@@ -43,6 +44,7 @@ async def _startup() -> None:
     config.ensure_dirs()
     logger = logging.getLogger("vcompress.startup")
     logger.info("FFmpeg-Binary: %s | FFprobe: %s", config.FFMPEG, config.FFPROBE)
+    logger.info("Datenordner: %s", config.data_paths_dict())
     encs = sorted(e for e in ff.available_encoders()
                   if any(x in e for x in ("nvenc", "qsv", "vaapi", "svt", "x264", "x265")))
     logger.info("Verfügbare relevante Encoder: %s", ", ".join(encs) or "KEINE erkannt!")
@@ -142,8 +144,18 @@ class EnqueueRequest(BaseModel):
     target_height: Optional[int] = None
     tonemap: bool = False
     vmaf_check: bool = True
+    workflow: str = "auto"           # auto | manual | compare_only
+    rate_mode: str = "cq"            # cq | bitrate | abr
+    test_values: list[int] = [20, 24, 28, 32]
+    clip_seconds: int = 30
+    generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
+    audio_copy: bool = True
+
+
+class ApproveRequest(BaseModel):
+    result_index: int
 
 
 @app.post("/api/enqueue")
@@ -159,8 +171,14 @@ async def enqueue(req: EnqueueRequest):
         target_height=req.target_height,
         tonemap=req.tonemap,
         vmaf_check=req.vmaf_check,
+        workflow=req.workflow,
+        rate_mode=req.rate_mode,
+        test_values=req.test_values[:4],
+        clip_seconds=max(5, min(120, req.clip_seconds)),
+        generate_screenshots=req.generate_screenshots,
         post_processing=req.post_processing,
         suffix=req.suffix,
+        audio_copy=req.audio_copy,
     )
     if req.is_batch:
         items = queue.add_batch(str(target), settings)
@@ -178,6 +196,29 @@ async def get_queue():
     return queue.state()
 
 
+@app.post("/api/queue/{item_id}/approve")
+async def approve(item_id: str, req: ApproveRequest):
+    return {"ok": queue.approve(item_id, req.result_index)}
+
+
+@app.post("/api/queue/{item_id}/skip")
+async def skip_encode(item_id: str):
+    return {"ok": queue.skip_encode(item_id)}
+
+
+@app.get("/api/preview/{path:path}")
+async def preview_image(path: str):
+    """Liefert VMAF-Vergleichs-Screenshots aus dem Preview-Verzeichnis."""
+    target = (config.PREVIEW_DIR / path).resolve()
+    try:
+        target.relative_to(config.PREVIEW_DIR.resolve())
+    except ValueError:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    return FileResponse(target, media_type="image/jpeg")
+
+
 @app.post("/api/queue/{item_id}/cancel")
 async def cancel(item_id: str):
     return {"ok": queue.cancel(item_id)}
@@ -187,6 +228,75 @@ async def cancel(item_id: str):
 async def clear():
     queue.clear_finished()
     return {"ok": True}
+
+
+@app.get("/api/config/paths")
+async def config_paths():
+    data = config.data_paths_dict()
+    data["storage"] = storage_summary()
+    return data
+
+
+class DataDeleteRequest(BaseModel):
+    root: str = Field(..., pattern="^(vmaf|previews|work)$")
+    path: str = ""
+
+
+@app.get("/api/data/browse")
+async def data_browse(root: str = "vmaf", path: str = ""):
+    if root not in DATA_ROOTS:
+        return JSONResponse({"error": "Unbekannte Zone"}, status_code=400)
+    result = browse(root, path)
+    if "error" in result:
+        return JSONResponse(result, status_code=404)
+    return result
+
+
+@app.get("/api/data/file")
+async def data_file(root: str, path: str):
+    """Dateien aus dem Datenordner ausliefern (Bilder, JSON, Videos)."""
+    target = _safe_data_file(root, path)
+    if target is None:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    media = _guess_media_type(target)
+    return FileResponse(target, media_type=media)
+
+
+def _safe_data_file(root: str, path: str):
+    from core.data_browser import _safe_resolve
+    return _safe_resolve(root, path)
+
+
+def _guess_media_type(path: Path) -> str:
+    ext = path.suffix.lower()
+    return {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif",
+        ".json": "application/json",
+        ".mkv": "video/x-matroska", ".mp4": "video/mp4", ".webm": "video/webm",
+    }.get(ext, "application/octet-stream")
+
+
+@app.post("/api/data/delete")
+async def data_delete(req: DataDeleteRequest):
+    if not req.path:
+        return JSONResponse({"error": "Pfad fehlt"}, status_code=400)
+    ok, err = delete_item(req.root, req.path)
+    if not ok:
+        return JSONResponse({"error": err}, status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/data/delete-all")
+async def data_delete_all(root: str):
+    if root not in DATA_ROOTS:
+        return JSONResponse({"error": "Unbekannte Zone"}, status_code=400)
+    count, err = delete_all_in_root(root)
+    if err:
+        return JSONResponse({"error": err, "deleted": count}, status_code=500)
+    return {"ok": True, "deleted": count}
 
 
 @app.get("/api/hardware")

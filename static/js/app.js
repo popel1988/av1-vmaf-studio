@@ -7,9 +7,10 @@
 
   const state = {
     currentPath: "",
-    selected: null, // { path, name, isBatch }
+    selected: null,
     vmafChart: null,
     lastVmafKey: null,
+    awaitingItemId: null,
   };
 
   /* --------------------------------------------------------------- THEME */
@@ -197,16 +198,53 @@
     const quality = $("opt-quality");
     quality.addEventListener("input", () => { $("quality-val").textContent = quality.value; });
 
+    const clip = $("opt-clip");
+    clip.addEventListener("input", () => { $("clip-val").textContent = clip.value; });
+
     const vmaf = $("opt-vmaf");
     const manual = $("manual-quality");
-    const syncManual = () => manual.classList.toggle("disabled", vmaf.checked);
-    vmaf.addEventListener("change", syncManual);
-    syncManual();
+    const vmafOpts = $("vmaf-options");
+    const syncVmaf = () => {
+      const on = vmaf.checked;
+      manual.classList.toggle("disabled", on);
+      vmafOpts.classList.toggle("disabled", !on);
+      $("btn-enqueue").textContent = on && $("opt-workflow").value === "compare_only"
+        ? "VMAF-Vergleich starten" : "Zur Warteschlange hinzufügen";
+    };
+    vmaf.addEventListener("change", syncVmaf);
+    $("opt-workflow").addEventListener("change", syncVmaf);
+    syncVmaf();
+
+    $("opt-rate-mode").addEventListener("change", updateTestValueHints);
+    updateTestValueHints();
 
     $("btn-enqueue").addEventListener("click", enqueue);
     $("btn-clear").addEventListener("click", async () => {
       await fetch("/api/queue/clear", { method: "POST" });
     });
+    $("btn-skip-encode").addEventListener("click", () => {
+      if (state.awaitingItemId) skipEncode(state.awaitingItemId);
+    });
+  }
+
+  function updateTestValueHints() {
+    const mode = $("opt-rate-mode").value;
+    const inputs = document.querySelectorAll(".test-val");
+    const hint = $("test-values-hint");
+    if (mode === "cq") {
+      hint.textContent = "CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei";
+      inputs.forEach((i) => { i.min = 1; i.max = 51; });
+    } else {
+      hint.textContent = "Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000)";
+      inputs.forEach((i) => { i.min = 500; i.max = 50000; });
+    }
+  }
+
+  function gatherTestValues() {
+    return [...document.querySelectorAll(".test-val")]
+      .map((i) => parseInt(i.value, 10))
+      .filter((v) => !isNaN(v) && v > 0)
+      .slice(0, 4);
   }
 
   function gatherSettings() {
@@ -218,9 +256,29 @@
       target_height: res ? parseInt(res, 10) : null,
       tonemap: $("opt-tonemap").checked,
       vmaf_check: $("opt-vmaf").checked,
+      workflow: $("opt-workflow").value,
+      rate_mode: $("opt-rate-mode").value,
+      test_values: gatherTestValues(),
+      clip_seconds: parseInt($("opt-clip").value, 10),
+      generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
       suffix: "_" + $("opt-codec").value,
+      audio_copy: $("opt-audio-copy").checked,
     };
+  }
+
+  async function approveEncode(itemId, resultIndex) {
+    await fetch(`/api/queue/${itemId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result_index: resultIndex }),
+    });
+    state.awaitingItemId = null;
+  }
+
+  async function skipEncode(itemId) {
+    await fetch(`/api/queue/${itemId}/skip`, { method: "POST" });
+    state.awaitingItemId = null;
   }
 
   async function enqueue() {
@@ -341,6 +399,7 @@
     $("cnt-run").textContent = `${c.running} aktiv`;
     $("cnt-done").textContent = `${c.done} fertig`;
     $("cnt-fail").textContent = `${c.failed} fehlgeschlagen`;
+    if ($("cnt-await")) $("cnt-await").textContent = `${c.awaiting || 0} Auswahl`;
 
     $("global-status").textContent = q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit");
 
@@ -352,9 +411,17 @@
   function statusBadge(status) {
     const map = {
       "wartend": "badge-wait", "vmaf-test": "badge-run", "in arbeit": "badge-run",
-      "fertig": "badge-done", "fehlgeschlagen": "badge-fail", "abgebrochen": "badge-fail",
+      "auswahl": "badge-await", "fertig": "badge-done", "fehlgeschlagen": "badge-fail",
+      "abgebrochen": "badge-fail",
     };
     return `<span class="badge ${map[status] || ""}">${status}</span>`;
+  }
+
+  function settingsLabel(it) {
+    const s = it.settings;
+    if (s.rate_mode === "bitrate") return `${s.quality} kbit/s`;
+    if (s.rate_mode === "abr") return `ABR ${s.quality}`;
+    return s.quality;
   }
 
   function renderQueueTable(items, activeId) {
@@ -365,7 +432,7 @@
     }
     body.innerHTML = items.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
-      const canCancel = it.status === "wartend" || it.id === activeId;
+      const canCancel = ["wartend", "auswahl"].includes(it.status) || it.id === activeId;
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
       const err = it.error ? `<div class="muted" style="font-size:11px">${escapeHtml(it.error.slice(0, 80))}</div>` : "";
@@ -373,7 +440,7 @@
         <td>${escapeHtml(it.title)}${err}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
-        <td>${it.settings.quality}</td>
+        <td>${settingsLabel(it)}</td>
         <td class="good">${it.saved_human}</td>
         <td>${cancelBtn}</td>
       </tr>`;
@@ -414,31 +481,75 @@
 
   /* ----------------------------------------------------------- VMAF CHART */
   function renderVmaf(items, activeId) {
-    // Zeige VMAF des aktiven Items, sonst des letzten mit Ergebnis.
     let target = items.find((i) => i.id === activeId && i.vmaf);
-    if (!target) target = [...items].reverse().find((i) => i.vmaf && i.vmaf.results.length);
+    if (!target) target = [...items].reverse().find((i) => i.vmaf && i.vmaf.results && i.vmaf.results.length);
+    const awaiting = items.find((i) => i.status === "auswahl" && i.vmaf);
+    if (awaiting) target = awaiting;
+
     const card = $("vmaf-card");
+    const actions = $("vmaf-actions");
     if (!target || !target.vmaf || !target.vmaf.results.length) {
       card.style.display = "none";
+      if (actions) actions.style.display = "none";
       return;
     }
-    const key = target.id + ":" + target.vmaf.results.length + ":" + target.vmaf.recommended_quality;
+
+    const vmaf = target.vmaf;
+    const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status;
     card.style.display = "";
-    $("vmaf-model-badge").textContent = "Modell: " + target.vmaf.model;
-    if (key === state.lastVmafKey) return;
+    $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+
+    drawChart(vmaf);
+    fillVmafTable(vmaf);
+    renderScreenshots(vmaf);
+
+    const showPick = target.status === "auswahl";
+    if (actions) {
+      actions.style.display = showPick ? "" : "none";
+      if (showPick) {
+        state.awaitingItemId = target.id;
+        const btns = $("vmaf-pick-btns");
+        btns.innerHTML = vmaf.results.map((r, idx) =>
+          `<button class="btn btn-primary btn-sm btn-pick" data-idx="${idx}">
+            ${escapeHtml(r.label || ("Q" + r.quality))} · VMAF ${r.vmaf.toFixed(1)}
+          </button>`).join("");
+        btns.querySelectorAll(".btn-pick").forEach((b) => {
+          b.addEventListener("click", () => approveEncode(target.id, parseInt(b.dataset.idx, 10)));
+        });
+      }
+    }
     state.lastVmafKey = key;
-    drawChart(target.vmaf);
-    fillVmafTable(target.vmaf);
+  }
+
+  function renderScreenshots(vmaf) {
+    const grid = $("vmaf-screenshots");
+    if (!grid) return;
+    const withShots = vmaf.results.filter((r) => r.screenshot_ref && r.screenshot_enc);
+    if (!withShots.length) { grid.innerHTML = ""; return; }
+
+    grid.innerHTML = withShots.map((r) => `
+      <div class="screenshot-card ${r.recommended ? "recommended" : ""}">
+        <div class="screenshot-head">
+          <span>${escapeHtml(r.label || ("Q" + r.quality))}</span>
+          <span>VMAF ${r.vmaf.toFixed(1)}</span>
+        </div>
+        <div class="screenshot-pair">
+          <div><div class="screenshot-cap">Original</div>
+            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" /></div>
+          <div><div class="screenshot-cap">Encode</div>
+            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" /></div>
+        </div>
+      </div>`).join("");
   }
 
   function fillVmafTable(vmaf) {
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r) => `
       <tr class="${r.recommended ? "row-recommended" : ""}">
-        <td>${r.quality}</td>
+        <td>${escapeHtml(r.label || ("Q" + r.quality))}</td>
         <td>${r.vmaf.toFixed(2)}</td>
         <td>${r.predicted_human}</td>
-        <td class="good">${r.savings_percent}%</td>
+        <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td>${r.recommended ? '<span class="badge recommended">Empfohlen</span>' : ""}</td>
       </tr>`).join("");
   }
@@ -458,7 +569,7 @@
     if (typeof Chart === "undefined") return;
     const ctx = $("vmaf-chart");
     const col = chartColors();
-    const labels = vmaf.results.map((r) => "Q" + r.quality);
+    const labels = vmaf.results.map((r) => r.label || ("Q" + r.quality));
     const scores = vmaf.results.map((r) => r.vmaf);
     const savings = vmaf.results.map((r) => r.savings_percent);
     const pointColors = vmaf.results.map((r) => (r.recommended ? col.good : col.accent));
@@ -516,6 +627,207 @@
     state.lastVmafKey = null; // erzwingt Neuzeichnen mit neuen Theme-Farben
   }
 
+  /* ---------------------------------------------------------- DATA BROWSER */
+  const dataState = { root: "vmaf", path: "" };
+
+  function initDataBrowser() {
+    $("data-root").addEventListener("change", (e) => {
+      dataState.root = e.target.value;
+      dataState.path = "";
+      loadDataDir();
+    });
+    $("btn-data-refresh").addEventListener("click", () => {
+      loadDataDir();
+      refreshStorageBadge();
+    });
+    $("btn-data-delete-all").addEventListener("click", deleteAllInDataRoot);
+    $("btn-data-preview-close").addEventListener("click", () => {
+      $("data-preview").style.display = "none";
+    });
+    loadDataDir();
+    refreshStorageBadge();
+  }
+
+  async function refreshStorageBadge() {
+    try {
+      const p = await fetch("/api/config/paths").then((r) => r.json());
+      const s = p.storage || {};
+      const parts = ["vmaf", "previews", "work"].map((k) =>
+        s[k] ? `${k}: ${s[k].size_human}` : "").filter(Boolean);
+      $("data-storage-badge").textContent = parts.join(" · ") || "—";
+    } catch (_) { /* ignore */ }
+  }
+
+  async function loadDataDir() {
+    const browser = $("data-browser");
+    browser.innerHTML = '<div class="browser-loading">Lade …</div>';
+    try {
+      const res = await fetch(
+        `/api/data/browse?root=${encodeURIComponent(dataState.root)}&path=${encodeURIComponent(dataState.path)}`
+      );
+      const data = await res.json();
+      if (data.error) {
+        browser.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`;
+        return;
+      }
+      renderDataBreadcrumb(data);
+      renderDataBrowser(data);
+    } catch (e) {
+      browser.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function renderDataBreadcrumb(data) {
+    const bc = $("data-breadcrumb");
+    bc.innerHTML = "";
+    const rootLink = document.createElement("a");
+    rootLink.textContent = data.root_label;
+    rootLink.onclick = () => { dataState.path = ""; loadDataDir(); };
+    bc.appendChild(rootLink);
+    if (data.path) {
+      const parts = data.path.split("/");
+      let acc = "";
+      parts.forEach((p) => {
+        acc = acc ? `${acc}/${p}` : p;
+        const sep = document.createElement("span");
+        sep.textContent = " / ";
+        bc.appendChild(sep);
+        const a = document.createElement("a");
+        a.textContent = p;
+        const target = acc;
+        a.onclick = () => { dataState.path = target; loadDataDir(); };
+        bc.appendChild(a);
+      });
+    }
+    if (!data.is_root) {
+      const info = document.createElement("span");
+      info.textContent = ` · ${data.total_human}`;
+      info.style.color = "var(--text-muted)";
+      bc.appendChild(info);
+    }
+  }
+
+  function renderDataBrowser(data) {
+    const browser = $("data-browser");
+    browser.innerHTML = "";
+    if (!data.is_root) {
+      browser.appendChild(dataRow({
+        is_dir: true, name: "..", rel: data.parent || "", size_human: "",
+      }, data, true));
+    }
+    data.dirs.forEach((d) => browser.appendChild(dataRow(d, data, true)));
+    data.files.forEach((f) => browser.appendChild(dataRow(f, data, false)));
+    if (!data.dirs.length && !data.files.length && data.is_root) {
+      browser.innerHTML = '<div class="browser-loading">Ordner ist leer.</div>';
+    }
+  }
+
+  function dataRow(item, data, isDir) {
+    const row = document.createElement("div");
+    row.className = "row-item";
+    const icon = isDir ? "📁" : fileIcon(item);
+    row.innerHTML = `
+      <span class="row-icon">${icon}</span>
+      <span class="row-name">${escapeHtml(item.name)}</span>
+      <span class="row-size">${item.size_human || ""}</span>`;
+
+    if (isDir && item.name !== "..") {
+      row.addEventListener("click", () => {
+        dataState.path = item.rel;
+        loadDataDir();
+      });
+    } else if (!isDir) {
+      row.addEventListener("click", () => openDataPreview(item, data.root));
+      const open = document.createElement("span");
+      open.className = "row-open";
+      open.textContent = "Öffnen";
+      row.appendChild(open);
+    } else if (item.name === "..") {
+      row.addEventListener("click", () => {
+        dataState.path = data.parent || "";
+        loadDataDir();
+      });
+    }
+
+    if (item.name !== "..") {
+      const del = document.createElement("button");
+      del.className = "row-del";
+      del.textContent = "Löschen";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteDataItem(data.root, item.rel, item.name);
+      });
+      row.appendChild(del);
+    }
+    return row;
+  }
+
+  function fileIcon(item) {
+    if (item.preview_url) return "🖼️";
+    if (item.kind === "json") return "📄";
+    if (item.kind === "video") return "🎬";
+    return "📎";
+  }
+
+  async function openDataPreview(item, root) {
+    const panel = $("data-preview");
+    const body = $("data-preview-body");
+    $("data-preview-title").textContent = item.name;
+    panel.style.display = "";
+
+    if (item.preview_url) {
+      body.innerHTML = `<img src="${item.preview_url}" alt="${escapeHtml(item.name)}" />`;
+      return;
+    }
+    if (item.kind === "json") {
+      const url = `/api/data/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.rel)}`;
+      try {
+        const text = await fetch(url).then((r) => r.text());
+        body.innerHTML = `<pre>${escapeHtml(text.slice(0, 50000))}</pre>`;
+      } catch (e) {
+        body.innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+      }
+      return;
+    }
+    if (item.kind === "video") {
+      const url = `/api/data/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.rel)}`;
+      body.innerHTML = `<video controls style="max-width:100%"><source src="${url}" /></video>
+        <p class="hint muted">Test-Encode-Vorschau (nur Ausschnitt).</p>`;
+      return;
+    }
+    body.innerHTML = `<p class="muted">Keine Vorschau für diesen Dateityp. Pfad: <code>${escapeHtml(item.rel)}</code></p>`;
+  }
+
+  async function deleteDataItem(root, rel, name) {
+    if (!confirm(`„${name}" wirklich löschen?`)) return;
+    const res = await fetch("/api/data/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root, path: rel }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    $("data-preview").style.display = "none";
+    loadDataDir();
+    refreshStorageBadge();
+  }
+
+  async function deleteAllInDataRoot() {
+    const root = dataState.root;
+    const label = $("data-root").selectedOptions[0].text;
+    if (!confirm(`Gesamten Bereich „${label}" leeren? Alle Dateien werden unwiderruflich gelöscht.`)) return;
+    const res = await fetch(`/api/data/delete-all?root=${encodeURIComponent(root)}`, { method: "POST" });
+    const data = await res.json();
+    if (data.error) alert(data.error);
+    dataState.path = "";
+    $("data-preview").style.display = "none";
+    loadDataDir();
+    refreshStorageBadge();
+  }
+
   /* ----------------------------------------------------------------- UTIL */
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) =>
@@ -526,7 +838,12 @@
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     initSettings();
+    initDataBrowser();
     loadDir("");
     connectWs();
+    fetch("/api/config/paths").then((r) => r.json()).then((p) => {
+      const el = $("data-dir");
+      if (el) el.textContent = p.data_dir;
+    }).catch(() => {});
   });
 })();

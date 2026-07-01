@@ -22,6 +22,8 @@ services:
     volumes:
       - ${INPUT_PATH:-/media/input}:/media/input
       - ${OUTPUT_PATH:-/media/output}:/media/output
+      # Persistenter App-Datenordner (Screenshots, VMAF-Sessions, Cache)
+      - ${DATA_PATH:-./data}:/data
 
     # --- Hardware-Zugriff --------------------------------------------------
     # privileged sorgt für vollen Zugriff auf sysfs/DRM (saubere GPU-Metriken).
@@ -39,6 +41,8 @@ services:
       - PUID=0
       - PGID=0
       - METRICS_INTERVAL=1.5
+      - DATA_DIR=/data
+      - RETAIN_VMAF_SESSIONS=true
 
     # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
     # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.

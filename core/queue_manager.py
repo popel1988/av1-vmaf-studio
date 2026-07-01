@@ -25,6 +25,7 @@ logger = logging.getLogger("vcompress.queue")
 
 STATUS_WAITING = "wartend"
 STATUS_ANALYZING = "vmaf-test"
+STATUS_AWAITING = "auswahl"
 STATUS_RUNNING = "in arbeit"
 STATUS_DONE = "fertig"
 STATUS_FAILED = "fehlgeschlagen"
@@ -39,11 +40,18 @@ class JobSettings:
     platform: str = "cpu"
     codec: str = "av1"
     quality: int = 28
-    target_height: Optional[int] = None  # None = Originalauflösung
+    target_height: Optional[int] = None
     tonemap: bool = False
     vmaf_check: bool = True
-    post_processing: str = "keep"  # keep | inplace | archive
+    workflow: str = "auto"         # auto | manual | compare_only
+    rate_mode: str = "cq"          # cq | bitrate | abr
+    test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
+    clip_seconds: int = 30
+    generate_screenshots: bool = True
+    post_processing: str = "keep"
     suffix: str = "_av1"
+    audio_copy: bool = True
+    selected_result_index: Optional[int] = None
 
 
 @dataclass
@@ -91,7 +99,7 @@ class QueueManager:
         self._wake = threading.Event()
         self._runner: Optional[EncodeRunner] = None
         self._active_id: Optional[str] = None
-        self._group_quality: dict[str, int] = {}
+        self._group_quality: dict[str, dict] = {}
         self._status_msg = ""
         self._stop = False
         self._thread = threading.Thread(target=self._worker, daemon=True)
@@ -145,16 +153,49 @@ class QueueManager:
                 self._runner.cancel()
                 return True
             for it in self._items:
-                if it.id == item_id and it.status == STATUS_WAITING:
+                if it.id == item_id and it.status in (STATUS_WAITING, STATUS_AWAITING):
                     it.status = STATUS_CANCELLED
                     return True
         return False
+
+    def approve(self, item_id: str, result_index: int) -> bool:
+        """Nutzer wählt VMAF-Ergebnis → Encode startet."""
+        with self._lock:
+            item = next((i for i in self._items if i.id == item_id), None)
+            if not item or item.status != STATUS_AWAITING:
+                return False
+            if not item.vmaf or result_index >= len(item.vmaf.get("results", [])):
+                return False
+            res = item.vmaf["results"][result_index]
+            item.settings.selected_result_index = result_index
+            self._apply_vmaf_choice(item.settings, res)
+            self._group_quality[item.group_id] = {
+                "value": res["value"],
+                "rate_mode": res.get("rate_mode", item.settings.rate_mode),
+            }
+            item.status = STATUS_WAITING
+        self._wake.set()
+        return True
+
+    def skip_encode(self, item_id: str) -> bool:
+        """Vergleich-only oder manuell abbrechen."""
+        with self._lock:
+            for it in self._items:
+                if it.id == item_id and it.status == STATUS_AWAITING:
+                    it.status = STATUS_DONE
+                    return True
+        return False
+
+    @staticmethod
+    def _apply_vmaf_choice(settings: JobSettings, res: dict) -> None:
+        settings.rate_mode = res.get("rate_mode", settings.rate_mode)
+        settings.quality = res["value"]
 
     def clear_finished(self) -> None:
         with self._lock:
             self._items = [
                 it for it in self._items
-                if it.status in (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING)
+                if it.status in (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
             ]
 
     # ------------------------------------------------------------------- State
@@ -177,9 +218,21 @@ class QueueManager:
     def _next_item(self) -> Optional[QueueItem]:
         with self._lock:
             for it in self._items:
-                if it.status == STATUS_WAITING:
-                    return it
+                if it.status != STATUS_WAITING:
+                    continue
+                if not it.settings.vmaf_check and self._group_blocked(it.group_id):
+                    continue
+                return it
         return None
+
+    def _group_blocked(self, group_id: str) -> bool:
+        """Batch-Follower warten, bis VMAF der Gruppe entschieden ist."""
+        if group_id in self._group_quality:
+            return False
+        return any(
+            i.group_id == group_id and i.status == STATUS_AWAITING
+            for i in self._items
+        )
 
     def _worker(self) -> None:
         while not self._stop:
@@ -224,20 +277,47 @@ class QueueManager:
             item.status = STATUS_ANALYZING
             self._set_msg(f"VMAF-Analyse: {item.title}")
             self._runner = None
+            vmaf_opts = vmaf_mod.VmafOptions(
+                rate_mode=s.rate_mode,
+                test_values=list(s.test_values),
+                clip_seconds=s.clip_seconds,
+                generate_screenshots=s.generate_screenshots,
+                item_id=item.id,
+            )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
-                status=self._set_msg,
+                opts=vmaf_opts, status=self._set_msg,
             )
             item.vmaf = analysis.to_dict()
-            if analysis.recommended_quality is not None:
-                s.quality = analysis.recommended_quality
-                self._group_quality[item.group_id] = analysis.recommended_quality
+
+            if s.workflow == "compare_only":
+                item.status = STATUS_DONE
+                self._active_id = None
+                self._set_msg("")
+                return
+
+            if s.workflow == "manual":
+                item.status = STATUS_AWAITING
+                self._active_id = None
+                self._set_msg(f"Auswahl erforderlich: {item.title}")
+                return
+
+            # auto: empfohlenen Wert übernehmen
+            if analysis.recommended_value is not None:
+                s.quality = analysis.recommended_value
+                self._group_quality[item.group_id] = {
+                    "value": analysis.recommended_value,
+                    "rate_mode": s.rate_mode,
+                }
         elif item.group_id in self._group_quality:
-            s.quality = self._group_quality[item.group_id]
+            gq = self._group_quality[item.group_id]
+            s.quality = gq["value"]
+            s.rate_mode = gq.get("rate_mode", s.rate_mode)
 
         # --- Haupt-Encode -----------------------------------------------------
         item.status = STATUS_RUNNING
-        self._set_msg(f"Encode: {item.title} (Q{s.quality})")
+        qlabel = _quality_label(s)
+        self._set_msg(f"Encode: {item.title} ({qlabel})")
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -255,10 +335,15 @@ class QueueManager:
                 "saved_human": ff.human_size(saved),
             }
 
+        enc_kw: dict = {"audio_copy": s.audio_copy}
+        if s.rate_mode in ("bitrate", "abr"):
+            enc_kw["rate_mode"] = s.rate_mode
+            enc_kw["bitrate_kbps"] = s.quality
+
         self._runner = EncodeRunner(on_progress=on_prog)
         cmd = build_encode_cmd(
             info, out_path, s.platform, s.codec, s.quality,
-            s.target_height, s.tonemap,
+            s.target_height, s.tonemap, **enc_kw,
         )
         rc, stderr = self._runner.run(cmd, info.duration)
 
@@ -325,14 +410,24 @@ def _output_path(item: QueueItem) -> Path:
     return target.with_name(f"{src.stem}{item.settings.suffix}{ext}")
 
 
+def _quality_label(s: JobSettings) -> str:
+    if s.rate_mode == "abr":
+        return f"ABR {s.quality} kbit/s"
+    if s.rate_mode == "bitrate":
+        return f"{s.quality} kbit/s"
+    return f"CQ/QP {s.quality}"
+
+
 def _counts(items: list[dict]) -> dict:
-    c = {"waiting": 0, "running": 0, "done": 0, "failed": 0}
+    c = {"waiting": 0, "running": 0, "done": 0, "failed": 0, "awaiting": 0}
     for it in items:
         st = it["status"]
         if st == STATUS_WAITING:
             c["waiting"] += 1
         elif st in (STATUS_RUNNING, STATUS_ANALYZING):
             c["running"] += 1
+        elif st == STATUS_AWAITING:
+            c["awaiting"] += 1
         elif st == STATUS_DONE:
             c["done"] += 1
         elif st in (STATUS_FAILED, STATUS_CANCELLED):

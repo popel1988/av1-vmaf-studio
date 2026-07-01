@@ -75,6 +75,10 @@ def build_encode_cmd(
     *,
     duration_limit: Optional[float] = None,
     start_at: Optional[float] = None,
+    rate_mode: str = "cq",
+    bitrate_kbps: Optional[int] = None,
+    include_progress: bool = True,
+    audio_copy: bool = False,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -115,26 +119,34 @@ def build_encode_cmd(
     if vf:
         cmd += ["-vf", vf]
 
-    cmd += ["-c:v", ff.encoder_name(platform, codec)]
-    cmd += ff.quality_args(platform, quality)
-
-    # Sinnvolle Defaults je Encoder-Familie
     enc = ff.encoder_name(platform, codec)
+    cmd += ["-c:v", enc]
+    if rate_mode in ("bitrate", "abr") and bitrate_kbps:
+        cmd += ff.bitrate_args(platform, codec, bitrate_kbps, abr=(rate_mode == "abr"))
+    else:
+        cmd += ff.quality_args(platform, quality)
+
     if enc == "libsvtav1":
         cmd += ["-preset", "6", "-svtav1-params", "tune=0"]
     elif enc.startswith("libx"):
         cmd += ["-preset", "medium"]
-    elif "nvenc" in enc:
+    elif "nvenc" in enc and rate_mode not in ("bitrate", "abr"):
         cmd += ["-preset", "p5", "-rc", "vbr", "-tune", "hq"]
+    elif "nvenc" in enc:
+        cmd += ["-preset", "p5", "-tune", "hq"]
     elif "qsv" in enc:
         cmd += ["-preset", "slower"]
 
-    # Video + alle Audiospuren übernehmen (Audio platzsparend als AAC).
-    # Untertitel werden bewusst nicht kopiert, um Container-Inkompatibilitäten
-    # (z. B. Bild-Untertitel in MP4) und damit Encode-Abbrüche zu vermeiden.
-    cmd += ["-map", "0:v:0", "-map", "0:a?", "-c:a", "aac", "-b:a", "160k"]
+    cmd += ["-map", "0:v:0", "-map", "0:a?"]
+    if audio_copy:
+        cmd += ["-c:a", "copy"]
+    else:
+        cmd += ["-c:a", "aac", "-b:a", "160k"]
 
-    cmd += ["-progress", "pipe:1", "-nostats", str(output)]
+    if include_progress:
+        cmd += ["-progress", "pipe:1", "-nostats", str(output)]
+    else:
+        cmd += [str(output)]
     return cmd
 
 

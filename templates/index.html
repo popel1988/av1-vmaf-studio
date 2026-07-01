@@ -76,7 +76,8 @@
       <header class="topbar">
         <div>
           <h2>Dashboard</h2>
-          <p class="muted">Quelle: <code id="input-dir">{{ input_dir }}</code></p>
+          <p class="muted">Quelle: <code id="input-dir">{{ input_dir }}</code>
+            · Daten: <code id="data-dir">/data</code></p>
         </div>
         <div class="status-pill" id="global-status">Bereit</div>
       </header>
@@ -145,21 +146,64 @@
 
             <div class="divider"></div>
 
+            <h4 class="subsection">VMAF-Vergleich</h4>
+
             <label class="check check-accent">
               <input type="checkbox" id="opt-vmaf" checked />
-              <span>Automatisierten VMAF-Check durchführen</span>
+              <span>VMAF-Check durchführen</span>
             </label>
-            <p class="hint" id="vmaf-hint">
-              Erstellt 4 Test-Encodes ({{ test_qualities|join(', ') }}) aus einem
-              30-Sek-Ausschnitt und ermittelt den optimalen Wert
-              (Sweet Spot VMAF {{ sweetspot[0] }}–{{ sweetspot[1] }}).
-            </p>
+
+            <div id="vmaf-options">
+              <div class="field">
+                <label>Steuerungsmodus</label>
+                <select id="opt-rate-mode">
+                  <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
+                  <option value="bitrate">Festbitrate (CBR)</option>
+                  <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                </select>
+              </div>
+
+              <div class="field" id="test-values-block">
+                <label>Testwerte (bis zu 4)</label>
+                <div class="test-values-grid" id="test-values-grid">
+                  <input type="number" class="test-val" value="20" min="1" max="51" />
+                  <input type="number" class="test-val" value="24" min="1" max="51" />
+                  <input type="number" class="test-val" value="28" min="1" max="51" />
+                  <input type="number" class="test-val" value="32" min="1" max="51" />
+                </div>
+                <p class="hint" id="test-values-hint">CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei</p>
+              </div>
+
+              <div class="field">
+                <label>Vergleichsclip-Länge: <strong id="clip-val">30</strong> Sek.</label>
+                <input type="range" id="opt-clip" min="5" max="120" value="30" step="5" />
+              </div>
+
+              <div class="field">
+                <label>Nach VMAF-Ergebnis</label>
+                <select id="opt-workflow">
+                  <option value="auto">Automatisch besten Wert encodieren</option>
+                  <option value="manual">Manuell wählen, dann encodieren</option>
+                  <option value="compare_only">Nur Vergleich (kein Encode)</option>
+                </select>
+              </div>
+
+              <label class="check">
+                <input type="checkbox" id="opt-screenshots" checked />
+                <span>Screenshots für optischen Vergleich erstellen</span>
+              </label>
+            </div>
 
             <div class="field manual-quality" id="manual-quality">
-              <label>Manuelle Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
-              <input type="range" id="opt-quality" min="10" max="40" value="28" />
-              <div class="range-scale"><span>10 · hohe Qualität</span><span>40 · klein</span></div>
+              <label>Manuelle Qualität (ohne VMAF): <strong id="quality-val">28</strong></label>
+              <input type="range" id="opt-quality" min="10" max="51" value="28" />
+              <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
             </div>
+
+            <label class="check">
+              <input type="checkbox" id="opt-audio-copy" checked />
+              <span>Audio kopieren (verlustfrei, schneller)</span>
+            </label>
 
             <div class="divider"></div>
 
@@ -191,10 +235,16 @@
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">
                 <thead>
-                  <tr><th>CQ/QP</th><th>VMAF</th><th>Prognose</th><th>Ersparnis</th><th></th></tr>
+                  <tr><th>Einstellung</th><th>VMAF</th><th>Prognose</th><th>Ersparnis</th><th></th></tr>
                 </thead>
                 <tbody></tbody>
               </table>
+            </div>
+            <div id="vmaf-screenshots" class="screenshot-grid"></div>
+            <div id="vmaf-actions" class="vmaf-actions" style="display:none">
+              <p class="hint">Wähle eine Qualitätsstufe für den Encode:</p>
+              <div id="vmaf-pick-btns" class="pick-btns"></div>
+              <button class="btn btn-ghost btn-sm" id="btn-skip-encode">Nur Vergleich – kein Encode</button>
             </div>
           </div>
         </section>
@@ -230,6 +280,7 @@
               <span class="badge badge-wait" id="cnt-wait">0 wartend</span>
               <span class="badge badge-run" id="cnt-run">0 aktiv</span>
               <span class="badge badge-done" id="cnt-done">0 fertig</span>
+              <span class="badge badge-await" id="cnt-await">0 Auswahl</span>
               <span class="badge badge-fail" id="cnt-fail">0 fehlgeschlagen</span>
               <button class="btn btn-ghost btn-sm" id="btn-clear">Erledigte entfernen</button>
             </div>
@@ -243,6 +294,41 @@
                 <tr class="empty-row"><td colspan="6">Warteschlange ist leer.</td></tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <!-- CARD 6: Datenordner / VMAF-Archive -->
+        <section class="card span-3">
+          <div class="card-head">
+            <h3><span class="card-idx">💾</span> Datenordner &amp; VMAF-Archive</h3>
+            <div class="data-head-actions">
+              <span class="badge" id="data-storage-badge">—</span>
+              <button class="btn btn-ghost btn-sm" id="btn-data-refresh">Aktualisieren</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="data-toolbar">
+              <div class="field" style="margin:0">
+                <label>Bereich</label>
+                <select id="data-root">
+                  <option value="vmaf">VMAF-Sessions (Clips &amp; Logs)</option>
+                  <option value="previews">Screenshots</option>
+                  <option value="work">Arbeit / Temp</option>
+                </select>
+              </div>
+              <button class="btn btn-ghost btn-sm bad-btn" id="btn-data-delete-all">Gesamten Bereich leeren</button>
+            </div>
+            <div class="breadcrumb" id="data-breadcrumb"></div>
+            <div class="browser data-browser" id="data-browser">
+              <div class="browser-loading">Lade …</div>
+            </div>
+            <div class="data-preview" id="data-preview" style="display:none">
+              <div class="data-preview-head">
+                <span id="data-preview-title">Vorschau</span>
+                <button class="btn btn-ghost btn-sm" id="btn-data-preview-close">Schließen</button>
+              </div>
+              <div id="data-preview-body" class="data-preview-body"></div>
+            </div>
           </div>
         </section>
       </div>

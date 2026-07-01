@@ -308,6 +308,21 @@ def quality_args(platform: str, value: int) -> list[str]:
     return [flag, str(value)]
 
 
+def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> list[str]:
+    """Festbitrate (CBR) oder Average-Bitrate (VBR-Ziel) in kbit/s."""
+    br = f"{kbps}k"
+    enc = encoder_name(platform, codec)
+    if abr:
+        args = ["-b:v", br, "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k"]
+        if "nvenc" in enc:
+            args += ["-rc", "vbr"]
+        return args
+    args = ["-b:v", br]
+    if "nvenc" in enc:
+        args += ["-maxrate", br, "-bufsize", f"{kbps * 2}k", "-rc", "cbr"]
+    return args
+
+
 def hwaccel_input_args(platform: str) -> list[str]:
     """Hardware-Decode-/Init-Argumente, die VOR dem -i Input stehen."""
     if platform == "nvidia":
