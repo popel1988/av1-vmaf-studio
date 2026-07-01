@@ -25,7 +25,13 @@ from starlette.requests import Request
 
 from core import config
 from core import ffmpeg_utils as ff
-from core.data_browser import DATA_ROOTS, browse, delete_all_in_root, delete_item, storage_summary
+from core.data_browser import (
+    DATA_ROOTS,
+    browse as browse_data_zone,
+    delete_all_in_root,
+    delete_item,
+    storage_summary,
+)
 from core.hardware import HardwareMonitor
 from core.queue_manager import JobSettings, QueueManager
 
@@ -83,7 +89,7 @@ def _safe_resolve(rel: str) -> Optional[Path]:
 
 
 @app.get("/api/browse")
-async def browse(path: str = ""):
+async def browse_input(path: str = ""):
     target = _safe_resolve(path)
     if target is None or not target.exists():
         return JSONResponse({"error": "Pfad nicht gefunden"}, status_code=404)
@@ -246,7 +252,7 @@ class DataDeleteRequest(BaseModel):
 async def data_browse(root: str = "vmaf", path: str = ""):
     if root not in DATA_ROOTS:
         return JSONResponse({"error": "Unbekannte Zone"}, status_code=400)
-    result = browse(root, path)
+    result = browse_data_zone(root, path)
     if "error" in result:
         return JSONResponse(result, status_code=404)
     return result

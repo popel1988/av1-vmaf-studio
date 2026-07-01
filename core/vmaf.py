@@ -233,6 +233,7 @@ def analyze(
             if status:
                 status(f"Test-Encode @ {lbl} …")
 
+            test_file = work / f"test_{key}.mkv"
             if use_bitrate:
                 cmd = build_encode_cmd(
                     info, test_file, platform, codec, 28,
