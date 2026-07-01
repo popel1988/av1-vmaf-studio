@@ -83,6 +83,7 @@ def build_encode_cmd(
     audio_bitrate_kbps: int = 160,
     audio_channels: int = 0,
     audio_normalize: bool = False,
+    audio_tracks: Optional[list] = None,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -143,7 +144,13 @@ def build_encode_cmd(
 
     cmd += ["-map", "0:v:0"]
     if audio_mode != "none":
-        cmd += ["-map", "0:a?"]
+        if audio_tracks:
+            # Nur ausgewählte Tonspuren übernehmen ("?" = fehlende ignorieren,
+            # wichtig für Batch-Dateien mit abweichender Spurzahl).
+            for idx in audio_tracks:
+                cmd += ["-map", f"0:a:{int(idx)}?"]
+        else:
+            cmd += ["-map", "0:a?"]
     cmd += ff.audio_args(
         audio_mode, audio_codec, audio_bitrate_kbps, audio_channels, audio_normalize,
     )

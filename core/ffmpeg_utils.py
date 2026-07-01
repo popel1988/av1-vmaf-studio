@@ -142,7 +142,8 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     hdr_type, dovi = _detect_hdr(transfer, video)
 
     # Audio-/Untertitel-Spuren strukturiert sammeln
-    audio = [_audio_entry(s) for s in streams if s.get("codec_type") == "audio"]
+    audio = [_audio_entry(s, i) for i, s in
+             enumerate(s for s in streams if s.get("codec_type") == "audio")]
     subs = [_subtitle_entry(s) for s in streams if s.get("codec_type") == "subtitle"]
 
     info = VideoInfo(
@@ -200,10 +201,11 @@ def _bit_depth(pix_fmt: str, video: dict) -> int:
     return 8
 
 
-def _audio_entry(s: dict) -> dict:
+def _audio_entry(s: dict, index: int = 0) -> dict:
     tags = s.get("tags", {}) or {}
     br = int(_f(s.get("bit_rate")) or 0)
     return {
+        "index": index,  # relativer Audio-Index (0:a:index)
         "codec": s.get("codec_name", "?"),
         "channels": s.get("channels", 0),
         "layout": s.get("channel_layout", "") or "",

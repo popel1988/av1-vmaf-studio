@@ -11,6 +11,7 @@
     vmafChart: null,
     lastVmafKey: null,
     awaitingItemId: null,
+    audioTracks: [],   // ausgewählte Audio-Indizes der aktuellen Datei
   };
 
   /* --------------------------------------------------------------- THEME */
@@ -162,11 +163,17 @@
 
     let audio = "";
     if (info.audio && info.audio.length) {
-      audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length})</div>` +
-        info.audio.map((a) =>
-          `<div class="track-row"><span class="track-lang">${escapeHtml((a.language || "und").toUpperCase())}</span>` +
-          `<span>${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}</span>` +
-          `${a.title ? `<span class="track-extra">${escapeHtml(a.title)}</span>` : ""}</div>`).join("") +
+      // Standard: alle Spuren behalten.
+      state.audioTracks = info.audio.map((a, i) => (a.index != null ? a.index : i));
+      audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length}) · zum Behalten anhaken</div>` +
+        info.audio.map((a, i) => {
+          const idx = a.index != null ? a.index : i;
+          return `<label class="track-row track-pick">` +
+            `<input type="checkbox" class="audio-track" value="${idx}" checked />` +
+            `<span class="track-lang">${escapeHtml((a.language || "und").toUpperCase())}</span>` +
+            `<span>${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}</span>` +
+            `${a.title ? `<span class="track-extra">${escapeHtml(a.title)}</span>` : ""}</label>`;
+        }).join("") +
         `</div>`;
     }
     let subs = "";
@@ -217,6 +224,10 @@
 
     $("opt-rate-mode").addEventListener("change", () => updateTestValueHints(true));
     updateTestValueHints(false);
+
+    $("opt-platform").addEventListener("change", buildCompareOptions);
+    $("opt-codec").addEventListener("change", buildCompareOptions);
+    buildCompareOptions();
 
     const audioMode = $("opt-audio-mode");
     const audioCodec = $("opt-audio-codec");
@@ -274,6 +285,48 @@
       .slice(0, 4);
   }
 
+  const COMPARE_LABELS = {
+    "nvidia:av1": "AV1 (NVENC)", "nvidia:hevc": "HEVC (NVENC)", "nvidia:h264": "H.264 (NVENC)",
+    "intel:av1": "AV1 (QSV)", "intel:hevc": "HEVC (QSV)", "intel:h264": "H.264 (QSV)",
+    "amd:av1": "AV1 (VAAPI)", "amd:hevc": "HEVC (VAAPI)", "amd:h264": "H.264 (VAAPI)",
+    "cpu:av1": "SVT-AV1 (CPU)", "cpu:hevc": "x265 (CPU)", "cpu:h264": "x264 (CPU)",
+  };
+
+  function buildCompareOptions() {
+    const cont = $("compare-encoders");
+    if (!cont) return;
+    const plat = $("opt-platform").value;
+    const codec = $("opt-codec").value;
+    const cands = [];
+    // Gleiche GPU-Plattform mit anderen Codecs (falls GPU gewählt)
+    if (plat !== "cpu") ["av1", "hevc"].forEach((c) => cands.push(`${plat}:${c}`));
+    // CPU-Qualitätsreferenzen
+    cands.push("cpu:hevc", "cpu:av1");
+    const base = `${plat}:${codec}`;
+    const seen = new Set();
+    const list = cands.filter((v) => v !== base && !seen.has(v) && seen.add(v));
+    const prev = new Set(getCompareEncoders());
+    if (!list.length) {
+      cont.innerHTML = '<span class="empty">Keine sinnvollen Zusatz-Encoder.</span>';
+      return;
+    }
+    cont.innerHTML = list.map((v) =>
+      `<label><input type="checkbox" class="compare-enc" value="${v}" ${prev.has(v) ? "checked" : ""}/>` +
+      `<span>${COMPARE_LABELS[v] || v}</span></label>`).join("");
+  }
+
+  function getCompareEncoders() {
+    return [...document.querySelectorAll(".compare-enc:checked")].map((b) => b.value);
+  }
+
+  function gatherAudioTracks() {
+    const boxes = [...document.querySelectorAll(".audio-track")];
+    if (!boxes.length) return [];               // Batch/kein Probe -> alle
+    const sel = boxes.filter((b) => b.checked).map((b) => parseInt(b.value, 10));
+    // Alle ausgewählt -> leer lassen (= alle, sauberes Mapping).
+    return sel.length === boxes.length ? [] : sel;
+  }
+
   function gatherSettings() {
     const res = $("opt-resolution").value;
     return {
@@ -285,6 +338,7 @@
       vmaf_check: $("opt-vmaf").checked,
       workflow: $("opt-workflow").value,
       rate_mode: $("opt-rate-mode").value,
+      compare_encoders: getCompareEncoders(),
       test_values: gatherTestValues(),
       clip_seconds: parseInt($("opt-clip").value, 10),
       generate_screenshots: $("opt-screenshots").checked,
@@ -295,6 +349,7 @@
       audio_bitrate: parseInt($("opt-audio-bitrate").value, 10),
       audio_channels: parseInt($("opt-audio-channels").value, 10),
       audio_normalize: $("opt-audio-normalize").checked,
+      audio_tracks: gatherAudioTracks(),
     };
   }
 
@@ -449,11 +504,24 @@
     return `<span class="badge ${map[status] || ""}">${status}</span>`;
   }
 
+  const CODEC_SHORT = {
+    "cpu:av1": "SVT-AV1", "cpu:hevc": "x265", "cpu:h264": "x264",
+    "nvidia:av1": "AV1", "nvidia:hevc": "HEVC", "nvidia:h264": "H.264",
+    "intel:av1": "AV1", "intel:hevc": "HEVC", "intel:h264": "H.264",
+    "amd:av1": "AV1", "amd:hevc": "HEVC", "amd:h264": "H.264",
+  };
+
+  function codecName(s) {
+    return CODEC_SHORT[`${s.platform}:${s.codec}`] || (s.codec || "").toUpperCase();
+  }
+
   function settingsLabel(it) {
     const s = it.settings;
-    if (s.rate_mode === "bitrate") return `${s.quality} kbit/s`;
-    if (s.rate_mode === "abr") return `ABR ${s.quality}`;
-    return s.quality;
+    let val;
+    if (s.rate_mode === "bitrate") val = `${s.quality} kbit/s`;
+    else if (s.rate_mode === "abr") val = `ABR ${s.quality}`;
+    else val = `CQ ${s.quality}`;
+    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}`;
   }
 
   function renderQueueTable(items, activeIds) {
@@ -495,8 +563,12 @@
       return;
     }
     card.style.display = "";
-    $("progress-count").textContent =
-      jobs.length === 1 ? "1 Encode" : `${jobs.length} Encodes parallel`;
+    const enc = jobs.filter((j) => j.status !== "vmaf-test").length;
+    const ana = jobs.length - enc;
+    const parts = [];
+    if (enc) parts.push(enc === 1 ? "1 Encode" : `${enc} Encodes`);
+    if (ana) parts.push(ana === 1 ? "1 VMAF-Analyse" : `${ana} VMAF-Analysen`);
+    $("progress-count").textContent = parts.join(" + ") || "—";
     list.innerHTML = jobs.map(progressBlock).join("");
   }
 
@@ -550,6 +622,10 @@
     card.style.display = "";
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
 
+    // Nur neu rendern, wenn sich wirklich etwas geändert hat – sonst flackert
+    // der Graph bei jedem Queue-Poll (alle paar Sekunden).
+    if (key === state.lastVmafKey) return;
+
     drawChart(vmaf);
     fillVmafTable(vmaf);
     renderScreenshots(vmaf);
@@ -578,19 +654,58 @@
     const withShots = vmaf.results.filter((r) => r.screenshot_ref && r.screenshot_enc);
     if (!withShots.length) { grid.innerHTML = ""; return; }
 
-    grid.innerHTML = withShots.map((r) => `
+    grid.innerHTML = withShots.map((r) => {
+      const lbl = escapeHtml(r.label || ("Q" + r.quality));
+      return `
       <div class="screenshot-card ${r.recommended ? "recommended" : ""}">
         <div class="screenshot-head">
-          <span>${escapeHtml(r.label || ("Q" + r.quality))}</span>
+          <span>${lbl}</span>
           <span>VMAF ${r.vmaf.toFixed(1)}</span>
         </div>
         <div class="screenshot-pair">
           <div><div class="screenshot-cap">Original</div>
-            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" /></div>
+            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" data-cap="Original · ${lbl}" /></div>
           <div><div class="screenshot-cap">Encode</div>
-            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" /></div>
+            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" data-cap="Encode · ${lbl}" /></div>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
+
+    if (!grid._lightboxBound) {
+      grid.addEventListener("click", (e) => {
+        const img = e.target.closest("img");
+        if (img) openLightbox(img.src, img.dataset.cap || "");
+      });
+      grid._lightboxBound = true;
+    }
+  }
+
+  function openLightbox(src, caption) {
+    let box = $("lightbox");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "lightbox";
+      box.className = "lightbox";
+      box.innerHTML =
+        '<div class="lightbox-cap"></div><img alt="Vollansicht" />' +
+        '<div class="lightbox-hint">Klick oder Esc zum Schließen</div>';
+      document.body.appendChild(box);
+      box.addEventListener("click", closeLightbox);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeLightbox();
+      });
+    }
+    box.querySelector("img").src = src;
+    box.querySelector(".lightbox-cap").textContent = caption;
+    box.style.display = "flex";
+    requestAnimationFrame(() => box.classList.add("open"));
+  }
+
+  function closeLightbox() {
+    const box = $("lightbox");
+    if (!box) return;
+    box.classList.remove("open");
+    setTimeout(() => { box.style.display = "none"; }, 150);
   }
 
   function fillVmafTable(vmaf) {
@@ -616,8 +731,12 @@
     };
   }
 
+  const CHART_PALETTE = ["#4f9dff", "#22c55e", "#f59e0b", "#e879f9", "#f43f5e", "#14b8a6"];
+
   function drawChart(vmaf) {
     if (typeof Chart === "undefined") return;
+    if (vmaf.multi_codec) return drawChartMultiCodec(vmaf);
+
     const ctx = $("vmaf-chart");
     const col = chartColors();
     const labels = vmaf.results.map((r) => r.label || ("Q" + r.quality));
@@ -668,6 +787,62 @@
           y1: {
             position: "right", title: { display: true, text: "Ersparnis %", color: col.muted },
             grid: { drawOnChartArea: false }, ticks: { color: col.muted },
+          },
+        },
+      },
+    });
+  }
+
+  // Mehrere Codecs: faire Achse = VMAF (y) vs. Ersparnis % (x). Je Codec eine
+  // Kurve; weiter oben-rechts = besser (mehr Qualität bei mehr Ersparnis).
+  function drawChartMultiCodec(vmaf) {
+    const ctx = $("vmaf-chart");
+    const col = chartColors();
+    const groups = {};
+    vmaf.results.forEach((r) => {
+      const key = r.codec_disp || r.codec;
+      (groups[key] = groups[key] || []).push(r);
+    });
+
+    const datasets = Object.keys(groups).map((name, gi) => {
+      const color = CHART_PALETTE[gi % CHART_PALETTE.length];
+      const pts = groups[name].slice().sort((a, b) => a.savings_percent - b.savings_percent);
+      return {
+        label: name,
+        data: pts.map((r) => ({ x: r.savings_percent, y: r.vmaf, _r: r })),
+        borderColor: color, backgroundColor: "transparent",
+        pointBackgroundColor: pts.map((r) => (r.recommended ? col.good : color)),
+        pointRadius: pts.map((r) => (r.recommended ? 8 : 4)),
+        pointHoverRadius: 9, tension: 0.25, borderWidth: 2.4, showLine: true,
+      };
+    });
+
+    if (state.vmafChart) state.vmafChart.destroy();
+    state.vmafChart = new Chart(ctx, {
+      type: "scatter",
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: col.text, font: { size: 12 } } },
+          tooltip: { callbacks: {
+            label: (c) => {
+              const r = c.raw._r;
+              return `${c.dataset.label} ${r.label.split("·").pop().trim()}: `
+                + `VMAF ${r.vmaf.toFixed(1)} · ${r.predicted_human} (${r.savings_percent}%)`
+                + (r.recommended ? "  ★" : "");
+            },
+          }},
+        },
+        scales: {
+          x: {
+            title: { display: true, text: "Ersparnis %", color: col.muted },
+            grid: { color: col.grid }, ticks: { color: col.muted },
+          },
+          y: {
+            title: { display: true, text: "VMAF", color: col.muted },
+            suggestedMin: 80, suggestedMax: 100,
+            grid: { color: col.grid }, ticks: { color: col.muted },
           },
         },
       },

@@ -277,6 +277,9 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
   font-weight: 700; font-size: 10.5px; min-width: 38px; text-align: center;
 }
 .track-extra { color: var(--text-muted); margin-left: auto; font-style: italic; }
+.track-pick { cursor: pointer; }
+.track-pick input { accent-color: var(--accent); width: 15px; height: 15px; flex: 0 0 auto; }
+.track-pick:has(input:not(:checked)) { opacity: .5; }
 
 /* ----------------------------- SETTINGS --------------------------------- */
 .settings { display: flex; flex-direction: column; gap: 14px; }
@@ -315,6 +318,19 @@ input[type="range"]::-moz-range-thumb {
 
 .badge-await { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); border-color: transparent; }
 
+/* Vergleichs-Encoder-Chips */
+.compare-encoders { display: flex; flex-wrap: wrap; gap: 8px; }
+.compare-encoders label {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 11px; font-size: 12px; user-select: none;
+}
+.compare-encoders label:has(input:checked) {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.compare-encoders input { accent-color: var(--accent); }
+.compare-encoders .empty { color: var(--text-muted); font-size: 12px; }
+
 .vmaf-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .pick-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .pick-btns .btn-pick { min-width: 120px; }
@@ -329,6 +345,20 @@ input[type="range"]::-moz-range-thumb {
 .screenshot-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--border); }
 .screenshot-pair img { width: 100%; display: block; background: #000; cursor: zoom-in; }
 .screenshot-cap { font-size: 9px; text-transform: uppercase; color: var(--text-muted); padding: 4px 6px; text-align: center; background: var(--surface-3); }
+
+/* Lightbox für Vergleichsbilder */
+.lightbox {
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
+  justify-content: center; background: rgba(0, 0, 0, .88); cursor: zoom-out;
+  padding: 24px; opacity: 0; transition: opacity .15s;
+}
+.lightbox.open { opacity: 1; }
+.lightbox img { max-width: 96vw; max-height: 88vh; border-radius: 6px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+.lightbox-cap {
+  position: absolute; top: 16px; left: 0; right: 0; text-align: center;
+  color: #fff; font-size: 13px; font-weight: 600; letter-spacing: .3px;
+}
+.lightbox-hint { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.6); font-size: 11px; }
 
 .data-head-actions { display: flex; align-items: center; gap: 8px; }
 .data-toolbar { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -425,6 +455,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .stat-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); }
 .stat-val { font-size: 16px; font-weight: 700; font-family: var(--mono); }
+
+.codec-badge {
+  display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .3px;
+  padding: 1px 7px; border-radius: 999px; margin-right: 4px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+}
 
 .queue-stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .status-cell { display: flex; align-items: center; gap: 6px; }

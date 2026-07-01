@@ -8,6 +8,7 @@ weiteren Dateien angewendet.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -44,6 +45,8 @@ class JobSettings:
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
     rate_mode: str = "cq"          # cq | bitrate | abr
+    # Zusätzliche Vergleichs-Encoder als "plattform:codec"-Strings (z. B. "cpu:hevc")
+    compare_encoders: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     generate_screenshots: bool = True
@@ -55,6 +58,7 @@ class JobSettings:
     audio_bitrate: int = 160       # kbit/s pro Stream
     audio_channels: int = 0        # 0 = Original, 1 = Mono, 2 = Stereo
     audio_normalize: bool = False
+    audio_tracks: list = field(default_factory=list)  # leer = alle Spuren
     selected_result_index: Optional[int] = None
 
 
@@ -198,6 +202,8 @@ class QueueManager:
             self._group_quality[item.group_id] = {
                 "value": res["value"],
                 "rate_mode": res.get("rate_mode", item.settings.rate_mode),
+                "codec": item.settings.codec,
+                "platform": item.settings.platform,
             }
             item.status = STATUS_WAITING
         self._wake.set()
@@ -218,6 +224,12 @@ class QueueManager:
     def _apply_vmaf_choice(settings: JobSettings, res: dict) -> None:
         settings.rate_mode = res.get("rate_mode", settings.rate_mode)
         settings.quality = res["value"]
+        # Falls ein anderer Codec gewählt wurde, für den Encode übernehmen.
+        if res.get("codec"):
+            settings.codec = res["codec"]
+            settings.suffix = "_" + settings.codec
+        if res.get("platform"):
+            settings.platform = res["platform"]
 
     def clear_finished(self) -> None:
         with self._lock:
@@ -359,6 +371,8 @@ class QueueManager:
                 clip_seconds=s.clip_seconds,
                 generate_screenshots=s.generate_screenshots,
                 item_id=item.id,
+                session_name=_session_name(item),
+                encoders=_parse_encoders(s.compare_encoders),
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
@@ -383,13 +397,20 @@ class QueueManager:
                 item.status = STATUS_AWAITING
                 return
 
-            # auto: empfohlenen Wert übernehmen
+            # auto: empfohlenen Wert (inkl. Gewinner-Codec) übernehmen
             if analysis.recommended_value is not None:
                 s.quality = analysis.recommended_value
+                if analysis.recommended_codec:
+                    s.codec = analysis.recommended_codec
+                    s.suffix = "_" + s.codec
+                if analysis.recommended_platform:
+                    s.platform = analysis.recommended_platform
                 with self._lock:
                     self._group_quality[item.group_id] = {
                         "value": analysis.recommended_value,
                         "rate_mode": s.rate_mode,
+                        "codec": s.codec,
+                        "platform": s.platform,
                     }
         else:
             with self._lock:
@@ -397,6 +418,9 @@ class QueueManager:
             if gq:
                 s.quality = gq["value"]
                 s.rate_mode = gq.get("rate_mode", s.rate_mode)
+                s.codec = gq.get("codec", s.codec)
+                s.platform = gq.get("platform", s.platform)
+                s.suffix = "_" + s.codec
 
         # --- Haupt-Encode -----------------------------------------------------
         item.status = STATUS_RUNNING
@@ -426,6 +450,7 @@ class QueueManager:
             "audio_bitrate_kbps": s.audio_bitrate,
             "audio_channels": s.audio_channels,
             "audio_normalize": s.audio_normalize,
+            "audio_tracks": list(s.audio_tracks),
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -485,6 +510,29 @@ class QueueManager:
                 if runner:
                     runner.cancel()
         self._wake.set()
+
+
+_VALID_CODECS = {"av1", "hevc", "h264"}
+_VALID_PLATFORMS = {"cpu", "nvidia", "intel", "amd"}
+
+
+def _session_name(item: QueueItem) -> str:
+    """Lesbarer, eindeutiger Ordnername für Previews/VMAF-Archiv."""
+    stem = Path(item.title).stem
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:60] or "clip"
+    return f"{safe}_{item.id[:6]}"
+
+
+def _parse_encoders(entries: list) -> list:
+    """"plattform:codec"-Strings zu geprüften (plattform, codec)-Tupeln."""
+    out: list[tuple[str, str]] = []
+    for e in entries or []:
+        if ":" not in str(e):
+            continue
+        p, c = str(e).split(":", 1)
+        if p in _VALID_PLATFORMS and c in _VALID_CODECS and (p, c) not in out:
+            out.append((p, c))
+    return out
 
 
 def _output_path(item: QueueItem) -> Path:

@@ -260,22 +260,26 @@ class HardwareMonitor:
         }
 
 
-# Grobe NVENC-Engine-Anzahl je GPU-Familie (nvidia-smi meldet sie nicht direkt).
-# Fallback ist 1; bekannte Mehr-Engine-Karten werden angehoben.
+# NVENC-Engine-Anzahl je GPU (nvidia-smi meldet sie nicht direkt).
+# Ein Eintrag matcht, wenn ALLE Teilstrings im GPU-Namen vorkommen; damit
+# greift z. B. ("RTX","4000","ADA") auch für "RTX 4000 SFF Ada Generation".
+# Multi-GPU-Boards (z. B. A16) listet nvidia-smi ohnehin je GPU einzeln,
+# daher nur Engines pro Einzel-GPU. Fallback = 1.
 _NVENC_MULTI = (
-    # (Teilstring im Namen, Anzahl NVENC-Engines)
-    ("RTX 6000 ADA", 3), ("RTX 5000 ADA", 2), ("L40", 3), ("L20", 3),
-    ("A100", 0), ("H100", 0),  # reine Rechen-GPUs ohne NVENC
-    ("A40", 2), ("A30", 1), ("A16", 4), ("A10", 1),
-    ("RTX A6000", 3), ("RTX A5000", 2), ("RTX A4500", 2),
-    ("QUADRO RTX 8000", 2), ("QUADRO RTX 6000", 2),
+    (("A100",), 0), (("H100",), 0),        # reine Rechen-GPUs ohne NVENC
+    (("L40",), 3), (("L20",), 3),          # Ada Datacenter
+    (("RTX", "6000", "ADA"), 2),
+    (("RTX", "5000", "ADA"), 2),
+    (("RTX", "4500", "ADA"), 2),
+    (("RTX", "4000", "ADA"), 2),           # inkl. RTX 4000 SFF Ada
+    (("RTX", "4090"), 2),
 )
 
 
 def _nvenc_engines(name: str) -> int:
     up = name.upper()
-    for token, count in _NVENC_MULTI:
-        if token in up:
+    for tokens, count in _NVENC_MULTI:
+        if all(t in up for t in tokens):
             return count
     return 1
 

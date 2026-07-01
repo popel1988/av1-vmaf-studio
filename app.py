@@ -165,6 +165,7 @@ class EnqueueRequest(BaseModel):
     vmaf_check: bool = True
     workflow: str = "auto"           # auto | manual | compare_only
     rate_mode: str = "cq"            # cq | bitrate | abr
+    compare_encoders: list[str] = []  # zusätzliche "plattform:codec"-Vergleiche
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     generate_screenshots: bool = True
@@ -175,6 +176,7 @@ class EnqueueRequest(BaseModel):
     audio_bitrate: int = 160
     audio_channels: int = 0          # 0 = Original, 1 = Mono, 2 = Stereo
     audio_normalize: bool = False
+    audio_tracks: list[int] = []     # leer = alle Tonspuren
 
 
 class ApproveRequest(BaseModel):
@@ -196,6 +198,7 @@ async def enqueue(req: EnqueueRequest):
         vmaf_check=req.vmaf_check,
         workflow=req.workflow,
         rate_mode=req.rate_mode,
+        compare_encoders=list(req.compare_encoders),
         test_values=req.test_values[:4],
         clip_seconds=max(5, min(120, req.clip_seconds)),
         generate_screenshots=req.generate_screenshots,
@@ -206,6 +209,7 @@ async def enqueue(req: EnqueueRequest):
         audio_bitrate=req.audio_bitrate,
         audio_channels=req.audio_channels,
         audio_normalize=req.audio_normalize,
+        audio_tracks=list(req.audio_tracks),
     )
     if req.is_batch:
         items = queue.add_batch(str(target), settings)
