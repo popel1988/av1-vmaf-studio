@@ -271,7 +271,16 @@
         <section class="card span-3" id="vmaf-card" style="display:none">
           <div class="card-head">
             <h3><span class="card-idx">★</span> VMAF-Analyse &amp; Größenprognose</h3>
-            <span class="badge" id="vmaf-model-badge"></span>
+            <div class="vmaf-head-right">
+              <select id="vmaf-history" class="select select-sm" title="Früheren Vergleich ansehen">
+                <option value="">Aktuelle Analyse</option>
+              </select>
+              <span class="badge" id="vmaf-model-badge"></span>
+            </div>
+          </div>
+          <div id="vmaf-archive-note" class="archive-note" style="display:none">
+            Archiv-Ansicht – gespeicherter Vergleich.
+            <button class="btn btn-ghost btn-sm" id="btn-vmaf-live">Zur aktuellen Analyse</button>
           </div>
           <div class="card-body vmaf-body">
             <div class="vmaf-chart-wrap">

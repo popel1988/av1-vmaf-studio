@@ -250,6 +250,23 @@ async def preview_image(path: str):
     return FileResponse(target, media_type="image/jpeg")
 
 
+@app.get("/api/vmaf/sessions")
+async def vmaf_sessions():
+    """Liste archivierter VMAF-Vergleiche für die Verlaufsauswahl."""
+    from core import vmaf as vmaf_mod
+    return {"sessions": vmaf_mod.list_sessions()}
+
+
+@app.get("/api/vmaf/session/{name}")
+async def vmaf_session(name: str):
+    """Gespeicherte Analyse eines früheren Vergleichs laden."""
+    from core import vmaf as vmaf_mod
+    data = vmaf_mod.load_session(name)
+    if data is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    return data
+
+
 @app.post("/api/queue/{item_id}/cancel")
 async def cancel(item_id: str):
     return {"ok": queue.cancel(item_id)}

@@ -70,6 +70,27 @@ VIDEO_EXTENSIONS = {
 ARCHIVE_DIRNAME = ".archiv"
 METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 
+# --- CQ-Sweetspot-Overrides ---------------------------------------------------
+# Optional per Env feinjustierbar. Format (kommagetrennt):
+#   CQ_SWEETSPOT="cpu:hevc=22,nvidia:av1=33"
+# Ohne Env läuft alles mit den in vmaf.py hinterlegten Standardwerten.
+def _parse_cq_overrides(raw: str) -> dict:
+    out: dict[tuple, int] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part or ":" not in part.split("=")[0]:
+            continue
+        key, _, val = part.partition("=")
+        plat, _, codec = key.strip().partition(":")
+        try:
+            out[(plat.strip(), codec.strip())] = int(val.strip())
+        except ValueError:
+            continue
+    return out
+
+
+CQ_SWEETSPOT_OVERRIDES = _parse_cq_overrides(os.getenv("CQ_SWEETSPOT", ""))
+
 # --- Parallele Encodes --------------------------------------------------------
 # MAX_PARALLEL_ENCODES = 0 -> beim Start automatisch aus der Hardware ableiten.
 # PARALLEL_ENCODES_LIMIT begrenzt, was der Nutzer im UI maximal wählen darf.

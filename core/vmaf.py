@@ -34,6 +34,7 @@ class VmafOptions:
     generate_screenshots: bool = True
     item_id: str = ""
     session_name: str = ""  # lesbarer Ordnername für Previews/Archiv
+    source_title: str = ""  # Anzeigename der Quelle (für Archiv-Liste)
     # Zusätzliche zu vergleichende Encoder als (plattform, codec)-Paare.
     # Der Basis-Encoder (Parameter platform/codec) wird immer mitgetestet.
     encoders: list = field(default_factory=list)
@@ -59,6 +60,8 @@ _CQ_SWEETSPOT = {
     ("intel", "av1"): 32, ("intel", "hevc"): 26, ("intel", "h264"): 24,
     ("amd", "av1"): 32, ("amd", "hevc"): 26, ("amd", "h264"): 24,
 }
+# Optionale Feinjustierung per Env (CQ_SWEETSPOT), Defaults bleiben sonst aktiv.
+_CQ_SWEETSPOT.update(getattr(config, "CQ_SWEETSPOT_OVERRIDES", {}) or {})
 
 
 def _cq_offset(base: tuple, target: tuple) -> int:
@@ -224,15 +227,18 @@ def _extract_screenshots(
     rel_enc = f"{session}/{key}_enc.jpg"
     ts = max(0.0, clip_len / 2.0)
 
+    # Framegenau: -ss NACH -i (dekodiert vom Clip-Anfang). Input-Seeking (-ss
+    # vor -i) würde bei Inter-Frame-Encodes zum nächsten Keyframe springen und
+    # damit einen anderen Frame als in der (Intra-)Referenz treffen.
     ref_cmd = [
         config.FFMPEG, "-y", "-hide_banner",
-        "-ss", str(ts), "-i", str(reference),
+        "-i", str(reference), "-ss", str(ts),
         "-frames:v", "1", "-q:v", "2",
         str(config.PREVIEW_DIR / rel_ref),
     ]
     enc_cmd = [
         config.FFMPEG, "-y", "-hide_banner",
-        "-ss", str(ts), "-i", str(test_file),
+        "-i", str(test_file), "-ss", str(ts),
         "-frames:v", "1", "-q:v", "2",
         str(config.PREVIEW_DIR / rel_enc),
     ]
@@ -361,10 +367,76 @@ def analyze(
                 ))
 
         _pick_recommended(analysis)
+        if analysis.results:
+            _save_session(sess, analysis, opts.source_title)
     finally:
         _finalize_work(work, sess)
 
     return analysis
+
+
+def _session_meta_path(sess: str) -> Path:
+    return config.PREVIEW_DIR / sess / "analysis.json"
+
+
+def _save_session(sess: str, analysis: VmafAnalysis, title: str) -> None:
+    """Analyse samt Metadaten neben den Screenshots ablegen (für Archiv-Ansicht)."""
+    import time
+
+    try:
+        target = _session_meta_path(sess)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "session": sess,
+            "title": title or sess,
+            "created": time.time(),
+            "analysis": analysis.to_dict(),
+        }
+        target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        logger.warning("VMAF-Session konnte nicht gespeichert werden: %s", e)
+
+
+def list_sessions() -> list[dict]:
+    """Alle archivierten VMAF-Vergleiche (neueste zuerst)."""
+    root = config.PREVIEW_DIR
+    if not root.exists():
+        return []
+    out: list[dict] = []
+    for meta in root.glob("*/analysis.json"):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        analysis = data.get("analysis", {})
+        results = analysis.get("results", [])
+        rec = next((r for r in results if r.get("recommended")), None)
+        out.append({
+            "session": data.get("session", meta.parent.name),
+            "title": data.get("title", meta.parent.name),
+            "created": data.get("created", meta.stat().st_mtime),
+            "model": analysis.get("model", ""),
+            "rate_mode": analysis.get("rate_mode", ""),
+            "count": len(results),
+            "multi_codec": analysis.get("multi_codec", False),
+            "recommended_label": (rec or {}).get("label", ""),
+        })
+    out.sort(key=lambda d: d.get("created", 0), reverse=True)
+    return out
+
+
+def load_session(name: str) -> Optional[dict]:
+    """Gespeicherte Analyse eines Vergleichs laden (oder None)."""
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return None
+    meta = _session_meta_path(name)
+    if not meta.exists():
+        return None
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data
 
 
 def _pick_recommended(analysis: VmafAnalysis) -> None:

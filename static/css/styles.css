@@ -336,9 +336,22 @@ input[type="range"]::-moz-range-thumb {
 .pick-btns .btn-pick { min-width: 120px; }
 
 .screenshot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 16px; }
+.vmaf-head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.select-sm {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 4px 8px; font-size: 12px; max-width: 260px;
+}
+.archive-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 20px 10px; padding: 6px 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--text-muted);
+}
+
 .screenshot-card {
   background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow: hidden; cursor: zoom-in;
 }
 .screenshot-card.recommended { border-color: var(--good); box-shadow: 0 0 12px color-mix(in srgb, var(--good) 25%, transparent); }
 .screenshot-head { padding: 8px 12px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
@@ -353,7 +366,11 @@ input[type="range"]::-moz-range-thumb {
   padding: 24px; opacity: 0; transition: opacity .15s;
 }
 .lightbox.open { opacity: 1; }
-.lightbox img { max-width: 96vw; max-height: 88vh; border-radius: 6px; box-shadow: 0 8px 40px rgba(0,0,0,.6); }
+.lightbox-pair { display: flex; gap: 10px; align-items: flex-start; max-width: 98vw; }
+.lightbox-pair figure { margin: 0; display: flex; flex-direction: column; gap: 6px; flex: 1 1 0; min-width: 0; }
+.lightbox-pair figcaption { text-align: center; color: rgba(255,255,255,.75); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.lightbox-pair img { width: 100%; max-height: 82vh; object-fit: contain; border-radius: 6px; box-shadow: 0 8px 40px rgba(0,0,0,.6); background: #000; }
+@media (max-width: 800px) { .lightbox-pair { flex-direction: column; } .lightbox-pair img { max-height: 40vh; } }
 .lightbox-cap {
   position: absolute; top: 16px; left: 0; right: 0; text-align: center;
   color: #fff; font-size: 13px; font-weight: 600; letter-spacing: .3px;

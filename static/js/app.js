@@ -12,6 +12,9 @@
     lastVmafKey: null,
     awaitingItemId: null,
     audioTracks: [],   // ausgewählte Audio-Indizes der aktuellen Datei
+    viewSession: null, // aktiver Archiv-Vergleich (null = Live-Ansicht)
+    lastItems: [],     // letzter Queue-Stand (für Rückkehr aus Archiv-Ansicht)
+    lastActiveId: null,
   };
 
   /* --------------------------------------------------------------- THEME */
@@ -490,6 +493,8 @@
     $("global-status").textContent = q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit");
 
     const activeIds = q.active_ids || (q.active_id ? [q.active_id] : []);
+    state.lastItems = q.items;
+    state.lastActiveId = q.active_id;
     renderQueueTable(q.items, activeIds);
     renderActiveProgress(q.items, activeIds);
     renderVmaf(q.items, q.active_id);
@@ -604,6 +609,7 @@
 
   /* ----------------------------------------------------------- VMAF CHART */
   function renderVmaf(items, activeId) {
+    if (state.viewSession) return; // Archiv-Ansicht nicht überschreiben
     let target = items.find((i) => i.id === activeId && i.vmaf);
     if (!target) target = [...items].reverse().find((i) => i.vmaf && i.vmaf.results && i.vmaf.results.length);
     const awaiting = items.find((i) => i.status === "auswahl" && i.vmaf);
@@ -646,6 +652,75 @@
       }
     }
     state.lastVmafKey = key;
+    refreshVmafHistory(); // neue Analyse ins Archiv-Dropdown aufnehmen
+  }
+
+  /* ------------------------------------------------ VMAF-VERLAUF (ARCHIV) */
+  async function initVmafHistory() {
+    const sel = $("vmaf-history");
+    if (sel) {
+      sel.addEventListener("change", () => {
+        if (sel.value) showArchivedSession(sel.value);
+        else showLiveVmaf();
+      });
+    }
+    const back = $("btn-vmaf-live");
+    if (back) back.addEventListener("click", showLiveVmaf);
+    refreshVmafHistory();
+  }
+
+  async function refreshVmafHistory() {
+    const sel = $("vmaf-history");
+    if (!sel) return;
+    try {
+      const r = await fetch("/api/vmaf/sessions");
+      const data = await r.json();
+      const sessions = data.sessions || [];
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Aktuelle Analyse</option>' +
+        sessions.map((s) => {
+          const d = s.created ? new Date(s.created * 1000) : null;
+          const when = d ? `${d.toLocaleDateString()} ${d.toLocaleTimeString().slice(0,5)}` : "";
+          const codec = s.multi_codec ? " · Multi-Codec" : "";
+          return `<option value="${escapeHtml(s.session)}">${escapeHtml(s.title)} — ${when}${codec}</option>`;
+        }).join("");
+      sel.value = cur; // Auswahl beibehalten, falls noch vorhanden
+      // Karte auch ohne Live-Analyse zeigen, wenn es Archive gibt.
+      if (sessions.length && $("vmaf-card").style.display === "none") {
+        $("vmaf-card").style.display = "";
+      }
+    } catch (e) { /* still leise */ }
+  }
+
+  async function showArchivedSession(name) {
+    try {
+      const r = await fetch(`/api/vmaf/session/${encodeURIComponent(name)}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      const vmaf = data.analysis;
+      if (!vmaf || !vmaf.results) return;
+      state.viewSession = name;
+      const note = $("vmaf-archive-note");
+      if (note) note.style.display = "";
+      const actions = $("vmaf-actions");
+      if (actions) actions.style.display = "none";
+      $("vmaf-card").style.display = "";
+      $("vmaf-model-badge").textContent =
+        `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+      drawChart(vmaf);
+      fillVmafTable(vmaf);
+      renderScreenshots(vmaf);
+    } catch (e) { /* ignorieren */ }
+  }
+
+  function showLiveVmaf() {
+    state.viewSession = null;
+    state.lastVmafKey = null; // Neuzeichnen der Live-Ansicht erzwingen
+    const note = $("vmaf-archive-note");
+    if (note) note.style.display = "none";
+    const sel = $("vmaf-history");
+    if (sel) sel.value = "";
+    renderVmaf(state.lastItems || [], state.lastActiveId);
   }
 
   function renderScreenshots(vmaf) {
@@ -657,37 +732,44 @@
     grid.innerHTML = withShots.map((r) => {
       const lbl = escapeHtml(r.label || ("Q" + r.quality));
       return `
-      <div class="screenshot-card ${r.recommended ? "recommended" : ""}">
+      <div class="screenshot-card ${r.recommended ? "recommended" : ""}"
+           data-ref="${r.screenshot_ref}" data-enc="${r.screenshot_enc}"
+           data-label="${lbl} · VMAF ${r.vmaf.toFixed(1)}">
         <div class="screenshot-head">
           <span>${lbl}</span>
           <span>VMAF ${r.vmaf.toFixed(1)}</span>
         </div>
         <div class="screenshot-pair">
           <div><div class="screenshot-cap">Original</div>
-            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" data-cap="Original · ${lbl}" /></div>
+            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" /></div>
           <div><div class="screenshot-cap">Encode</div>
-            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" data-cap="Encode · ${lbl}" /></div>
+            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" /></div>
         </div>
       </div>`;
     }).join("");
 
     if (!grid._lightboxBound) {
       grid.addEventListener("click", (e) => {
-        const img = e.target.closest("img");
-        if (img) openLightbox(img.src, img.dataset.cap || "");
+        const card = e.target.closest(".screenshot-card");
+        if (card) openLightbox(card.dataset.ref, card.dataset.enc, card.dataset.label || "");
       });
       grid._lightboxBound = true;
     }
   }
 
-  function openLightbox(src, caption) {
+  // Öffnet Original + Encode nebeneinander für den direkten Vergleich.
+  function openLightbox(refSrc, encSrc, caption) {
     let box = $("lightbox");
     if (!box) {
       box = document.createElement("div");
       box.id = "lightbox";
       box.className = "lightbox";
       box.innerHTML =
-        '<div class="lightbox-cap"></div><img alt="Vollansicht" />' +
+        '<div class="lightbox-cap"></div>' +
+        '<div class="lightbox-pair">' +
+        '  <figure><figcaption>Original</figcaption><img id="lb-ref" alt="Original" /></figure>' +
+        '  <figure><figcaption>Encode</figcaption><img id="lb-enc" alt="Encode" /></figure>' +
+        '</div>' +
         '<div class="lightbox-hint">Klick oder Esc zum Schließen</div>';
       document.body.appendChild(box);
       box.addEventListener("click", closeLightbox);
@@ -695,7 +777,8 @@
         if (e.key === "Escape") closeLightbox();
       });
     }
-    box.querySelector("img").src = src;
+    $("lb-ref").src = refSrc || "";
+    $("lb-enc").src = encSrc || "";
     box.querySelector(".lightbox-cap").textContent = caption;
     box.style.display = "flex";
     requestAnimationFrame(() => box.classList.add("open"));
@@ -1085,6 +1168,7 @@
     initSettings();
     initDataBrowser();
     initParallel();
+    initVmafHistory();
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

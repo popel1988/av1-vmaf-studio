@@ -372,6 +372,7 @@ class QueueManager:
                 generate_screenshots=s.generate_screenshots,
                 item_id=item.id,
                 session_name=_session_name(item),
+                source_title=item.title,
                 encoders=_parse_encoders(s.compare_encoders),
             )
             analysis = vmaf_mod.analyze(
