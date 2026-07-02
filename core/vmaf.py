@@ -214,36 +214,35 @@ def _extract_screenshots(
     session: str,
     key: str,
     clip_len: float,
+    fps: float = 0.0,
 ) -> tuple[str, str]:
-    """Screenshots aus Referenz-Clip und Test-Encode zur gleichen Position.
+    """Screenshots aus Referenz-Clip und Test-Encode zur exakt gleichen Position.
 
-    Beide Quellen sind bereits kurze Clips (Start = 0). Der Referenzclip hat
-    ein evtl. nötiges Tonemapping schon angewendet, daher sind Original- und
-    Encode-Screenshot direkt vergleichbar.
+    Beide Quellen sind derselbe kurze Clip (Start = Frame 0, identische FPS) –
+    der Referenzclip mit ggf. schon angewendetem Tonemapping. Um garantiert
+    denselben Frame zu treffen, wird die Bildnummer per `select`-Filter gewählt
+    (unabhängig von Keyframes/Zeitstempeln). Fällt die FPS-Angabe aus, wird auf
+    framegenaues Output-Seeking (-ss nach -i) zurückgegriffen.
     """
     # Unterordner je Session MUSS existieren, sonst kann FFmpeg nicht schreiben.
     (config.PREVIEW_DIR / session).mkdir(parents=True, exist_ok=True)
     rel_ref = f"{session}/{key}_ref.jpg"
     rel_enc = f"{session}/{key}_enc.jpg"
-    ts = max(0.0, clip_len / 2.0)
 
-    # Framegenau: -ss NACH -i (dekodiert vom Clip-Anfang). Input-Seeking (-ss
-    # vor -i) würde bei Inter-Frame-Encodes zum nächsten Keyframe springen und
-    # damit einen anderen Frame als in der (Intra-)Referenz treffen.
-    ref_cmd = [
-        config.FFMPEG, "-y", "-hide_banner",
-        "-i", str(reference), "-ss", str(ts),
-        "-frames:v", "1", "-q:v", "2",
-        str(config.PREVIEW_DIR / rel_ref),
-    ]
-    enc_cmd = [
-        config.FFMPEG, "-y", "-hide_banner",
-        "-i", str(test_file), "-ss", str(ts),
-        "-frames:v", "1", "-q:v", "2",
-        str(config.PREVIEW_DIR / rel_enc),
-    ]
-    ref_res = _run_logged(ref_cmd, f"Screenshot Ref {key}")
-    enc_res = _run_logged(enc_cmd, f"Screenshot Enc {key}")
+    def _cmd(src: Path, out_rel: str) -> list[str]:
+        base = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
+        if fps and fps > 0:
+            frame_no = max(0, int(round(fps * (clip_len / 2.0))))
+            # select=eq(n,N): exakt Bild Nr. N in Dekodier-/Anzeigereihenfolge.
+            base += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1",
+                     "-vsync", "0"]
+        else:
+            base += ["-ss", str(max(0.0, clip_len / 2.0)), "-frames:v", "1"]
+        base += ["-q:v", "2", str(config.PREVIEW_DIR / out_rel)]
+        return base
+
+    ref_res = _run_logged(_cmd(reference, rel_ref), f"Screenshot Ref {key}")
+    enc_res = _run_logged(_cmd(test_file, rel_enc), f"Screenshot Enc {key}")
     ok_ref = ref_res.returncode == 0 and (config.PREVIEW_DIR / rel_ref).exists()
     ok_enc = enc_res.returncode == 0 and (config.PREVIEW_DIR / rel_enc).exists()
     return (rel_ref if ok_ref else ""), (rel_enc if ok_enc else "")
@@ -349,7 +348,7 @@ def analyze(
                 scr_ref, scr_enc = "", ""
                 if opts.generate_screenshots:
                     scr_ref, scr_enc = _extract_screenshots(
-                        reference, test_file, sess, key, clip_len,
+                        reference, test_file, sess, key, clip_len, info.fps,
                     )
 
                 analysis.results.append(VmafResult(

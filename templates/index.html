@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AV1 / VMAF Compression Studio</title>
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_version }}" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 </head>
 <body>
@@ -391,6 +391,6 @@
       testQualities: {{ test_qualities|tojson }},
     };
   </script>
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

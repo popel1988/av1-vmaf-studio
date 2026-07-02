@@ -85,8 +85,22 @@ async def index(request: Request):
             "capacity": CAPACITY,
             "parallel_limit": config.PARALLEL_ENCODES_LIMIT,
             "parallel_current": queue.get_parallel(),
+            "asset_version": _asset_version(),
         },
     )
+
+
+def _asset_version() -> str:
+    """Cache-Busting-Token aus der Änderungszeit der statischen Assets."""
+    import os
+
+    latest = 0.0
+    for rel in ("static/js/app.js", "static/css/styles.css"):
+        try:
+            latest = max(latest, os.path.getmtime(BASE_DIR / rel))
+        except OSError:
+            continue
+    return str(int(latest)) if latest else "1"
 
 
 # ------------------------------------------------------------------- Browser
