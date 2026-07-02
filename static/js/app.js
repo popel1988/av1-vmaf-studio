@@ -15,7 +15,42 @@
     viewSession: null, // aktiver Archiv-Vergleich (null = Live-Ansicht)
     lastItems: [],     // letzter Queue-Stand (für Rückkehr aus Archiv-Ansicht)
     lastActiveId: null,
+    currentPage: "encode",
   };
+
+  /* --------------------------------------------------------- NAVIGATION */
+  function showCard(el, hasContent) {
+    if (!el) return;
+    el.dataset.hasContent = hasContent ? "1" : "";
+    el.style.display = (hasContent && el.dataset.page === state.currentPage) ? "" : "none";
+  }
+
+  function applyPageVisibility() {
+    document.querySelectorAll("[data-page]").forEach((el) => {
+      const onPage = el.dataset.page === state.currentPage;
+      if (el.id === "vmaf-card" || el.id === "progress-card") {
+        el.style.display = (onPage && el.dataset.hasContent === "1") ? "" : "none";
+      } else {
+        el.style.display = onPage ? "" : "none";
+      }
+    });
+  }
+
+  function initNav() {
+    const nav = $("nav");
+    if (!nav) return;
+    const go = (page) => {
+      state.currentPage = page;
+      localStorage.setItem("page", page);
+      nav.querySelectorAll(".nav-item").forEach((b) =>
+        b.classList.toggle("active", b.dataset.nav === page));
+      applyPageVisibility();
+      if (page === "stats") loadStats();
+    };
+    nav.querySelectorAll(".nav-item").forEach((b) =>
+      b.addEventListener("click", () => go(b.dataset.nav)));
+    go(localStorage.getItem("page") || "encode");
+  }
 
   /* --------------------------------------------------------------- THEME */
   function initTheme() {
@@ -138,7 +173,8 @@
         return;
       }
       renderFileDetails(f.name, info);
-      if (info.is_hdr) $("opt-tonemap").checked = false;
+      const hdrField = $("hdr-field");
+      if (hdrField) hdrField.style.display = info.is_hdr ? "" : "none";
     } catch (e) {
       $("selected-info").innerHTML = `<span class="bad">Analyse-Fehler: ${escapeHtml(String(e))}</span>`;
     }
@@ -168,15 +204,8 @@
     if (info.audio && info.audio.length) {
       // Standard: alle Spuren behalten.
       state.audioTracks = info.audio.map((a, i) => (a.index != null ? a.index : i));
-      audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length}) · zum Behalten anhaken</div>` +
-        info.audio.map((a, i) => {
-          const idx = a.index != null ? a.index : i;
-          return `<label class="track-row track-pick">` +
-            `<input type="checkbox" class="audio-track" value="${idx}" checked />` +
-            `<span class="track-lang">${escapeHtml((a.language || "und").toUpperCase())}</span>` +
-            `<span>${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}</span>` +
-            `${a.title ? `<span class="track-extra">${escapeHtml(a.title)}</span>` : ""}</label>`;
-        }).join("") +
+      audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length}) · einzeln konfigurierbar</div>` +
+        info.audio.map((a, i) => audioTrackRow(a, i)).join("") +
         `</div>`;
     }
     let subs = "";
@@ -192,6 +221,90 @@
     $("selected-info").innerHTML =
       `<div class="file-title">${escapeHtml(name)}</div>` +
       `<div class="chips">${chips.join("")}</div>${audio}${subs}`;
+    wireAudioRows();
+  }
+
+  const AUDIO_CODEC_OPTS = [
+    ["aac", "AAC"], ["opus", "Opus"], ["ac3", "AC3"], ["eac3", "E-AC3"], ["flac", "FLAC"],
+  ];
+
+  function audioTrackRow(a, i) {
+    const idx = a.index != null ? a.index : i;
+    const info = `${escapeHtml((a.language || "und").toUpperCase())} · ` +
+      `${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch` +
+      `${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}` +
+      `${a.title ? " · " + escapeHtml(a.title) : ""}`;
+    const codecOpts = AUDIO_CODEC_OPTS.map(([v, l]) =>
+      `<option value="${v}">${l}</option>`).join("");
+    return `<div class="track-audio" data-index="${idx}">
+      <div class="track-audio-head">
+        <label class="check track-enable">
+          <input type="checkbox" class="audio-track" value="${idx}" checked />
+          <span>${info}</span>
+        </label>
+        <select class="audio-t-mode select-sm">
+          <option value="std">Standard</option>
+          <option value="copy">Kopieren</option>
+          <option value="encode">Neu codieren</option>
+        </select>
+      </div>
+      <div class="audio-t-enc" style="display:none">
+        <select class="audio-t-codec select-sm">${codecOpts}</select>
+        <select class="audio-t-channels select-sm">
+          <option value="0">Kanäle: Original</option>
+          <option value="2">Stereo</option>
+          <option value="1">Mono</option>
+        </select>
+        <input type="number" class="audio-t-bitrate" min="32" max="640" step="16" value="160" title="kbit/s" />
+        <label class="check"><input type="checkbox" class="audio-t-norm" /><span>Normalisieren</span></label>
+      </div>
+    </div>`;
+  }
+
+  function wireAudioRows() {
+    document.querySelectorAll(".track-audio").forEach((row) => {
+      const mode = row.querySelector(".audio-t-mode");
+      const enc = row.querySelector(".audio-t-enc");
+      const enable = row.querySelector(".audio-track");
+      const sync = () => {
+        enc.style.display = (enable.checked && mode.value === "encode") ? "" : "none";
+        mode.disabled = !enable.checked;
+      };
+      mode.addEventListener("change", sync);
+      enable.addEventListener("change", sync);
+      sync();
+    });
+  }
+
+  // Per-Spur-Audio: liefert null bei fehlender Analyse (Batch), sonst eine
+  // Liste der behaltenen Spuren mit aufgelösten Einstellungen.
+  function gatherAudioTrackSettings() {
+    const rows = [...document.querySelectorAll(".track-audio")];
+    if (!rows.length) return null;
+    const gMode = $("opt-audio-mode").value;
+    const list = [];
+    for (const row of rows) {
+      if (!row.querySelector(".audio-track").checked) continue;
+      const idx = parseInt(row.dataset.index, 10);
+      const rawMode = row.querySelector(".audio-t-mode").value; // std|copy|encode
+      let mode = rawMode === "std" ? (gMode === "encode" ? "encode" : "copy") : rawMode;
+      const t = { index: idx, mode: mode };
+      if (mode === "encode") {
+        if (rawMode === "std") {
+          t.codec = $("opt-audio-codec").value;
+          t.bitrate = parseInt($("opt-audio-bitrate").value, 10);
+          t.channels = parseInt($("opt-audio-channels").value, 10);
+          t.normalize = $("opt-audio-normalize").checked;
+        } else {
+          t.codec = row.querySelector(".audio-t-codec").value;
+          t.bitrate = parseInt(row.querySelector(".audio-t-bitrate").value, 10) || 160;
+          t.channels = parseInt(row.querySelector(".audio-t-channels").value, 10);
+          t.normalize = row.querySelector(".audio-t-norm").checked;
+        }
+      }
+      list.push(t);
+    }
+    return list;
   }
 
   function selectFolder(path, isRoot) {
@@ -210,6 +323,9 @@
 
     const clip = $("opt-clip");
     clip.addEventListener("input", () => { $("clip-val").textContent = clip.value; });
+
+    const fg = $("opt-film-grain");
+    if (fg) fg.addEventListener("input", () => { $("film-grain-val").textContent = fg.value; });
 
     const vmaf = $("opt-vmaf");
     const manual = $("manual-quality");
@@ -251,6 +367,12 @@
     $("btn-enqueue").addEventListener("click", enqueue);
     $("btn-clear").addEventListener("click", async () => {
       await fetch("/api/queue/clear", { method: "POST" });
+    });
+    $("btn-pause").addEventListener("click", async () => {
+      await fetch("/api/queue/pause", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: !state.paused }),
+      });
     });
     $("btn-skip-encode").addEventListener("click", () => {
       if (state.awaitingItemId) skipEncode(state.awaitingItemId);
@@ -332,18 +454,26 @@
 
   function gatherSettings() {
     const res = $("opt-resolution").value;
+    const perTrack = gatherAudioTrackSettings();
     return {
       platform: $("opt-platform").value,
       codec: $("opt-codec").value,
       quality: parseInt($("opt-quality").value, 10),
       target_height: res ? parseInt(res, 10) : null,
-      tonemap: $("opt-tonemap").checked,
+      hdr_mode: $("opt-hdr-mode") ? $("opt-hdr-mode").value : "tonemap",
+      keep_subtitles: $("opt-keep-subs") ? $("opt-keep-subs").checked : true,
+      keep_chapters: $("opt-keep-chapters") ? $("opt-keep-chapters").checked : true,
+      keep_metadata: $("opt-keep-metadata") ? $("opt-keep-metadata").checked : true,
+      denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
+      film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
+      two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
       vmaf_check: $("opt-vmaf").checked,
       workflow: $("opt-workflow").value,
       rate_mode: $("opt-rate-mode").value,
       compare_encoders: getCompareEncoders(),
       test_values: gatherTestValues(),
       clip_seconds: parseInt($("opt-clip").value, 10),
+      samples: $("opt-samples") ? parseInt($("opt-samples").value, 10) : 1,
       generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
       suffix: "_" + $("opt-codec").value,
@@ -353,6 +483,8 @@
       audio_channels: parseInt($("opt-audio-channels").value, 10),
       audio_normalize: $("opt-audio-normalize").checked,
       audio_tracks: gatherAudioTracks(),
+      audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
+      audio_track_settings: perTrack || [],
     };
   }
 
@@ -490,7 +622,14 @@
     $("cnt-fail").textContent = `${c.failed} fehlgeschlagen`;
     if ($("cnt-await")) $("cnt-await").textContent = `${c.awaiting || 0} Auswahl`;
 
-    $("global-status").textContent = q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit");
+    state.paused = !!q.paused;
+    const pauseBtn = $("btn-pause");
+    if (pauseBtn) {
+      pauseBtn.textContent = state.paused ? "Fortsetzen" : "Pausieren";
+      pauseBtn.classList.toggle("btn-primary", state.paused);
+    }
+    $("global-status").textContent = q.paused ? "Pausiert"
+      : (q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit"));
 
     const activeIds = q.active_ids || (q.active_id ? [q.active_id] : []);
     state.lastItems = q.items;
@@ -541,6 +680,9 @@
       const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
+      const moveBtns = it.status === "wartend"
+        ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="Nach oben">↑</button>` +
+          `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="Nach unten">↓</button>` : "";
       const err = it.error ? `<div class="muted" style="font-size:11px">${escapeHtml(it.error.slice(0, 80))}</div>` : "";
       return `<tr>
         <td>${escapeHtml(it.title)}${err}</td>
@@ -548,12 +690,16 @@
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
         <td class="good">${it.saved_human}</td>
-        <td>${cancelBtn}</td>
+        <td class="row-actions">${moveBtns}${cancelBtn}</td>
       </tr>`;
     }).join("");
     body.querySelectorAll("[data-cancel]").forEach((b) => {
       b.addEventListener("click", () =>
         fetch(`/api/queue/${b.dataset.cancel}/cancel`, { method: "POST" }));
+    });
+    body.querySelectorAll("[data-move]").forEach((b) => {
+      b.addEventListener("click", () =>
+        fetch(`/api/queue/${b.dataset.move}/move?direction=${b.dataset.dir}`, { method: "POST" }));
     });
   }
 
@@ -563,11 +709,11 @@
     const active = new Set(activeIds || []);
     const jobs = items.filter((i) => active.has(i.id));
     if (!jobs.length) {
-      card.style.display = "none";
+      showCard(card, false);
       list.innerHTML = "";
       return;
     }
-    card.style.display = "";
+    showCard(card, true);
     const enc = jobs.filter((j) => j.status !== "vmaf-test").length;
     const ana = jobs.length - enc;
     const parts = [];
@@ -618,14 +764,14 @@
     const card = $("vmaf-card");
     const actions = $("vmaf-actions");
     if (!target || !target.vmaf || !target.vmaf.results.length) {
-      card.style.display = "none";
+      showCard(card, false);
       if (actions) actions.style.display = "none";
       return;
     }
 
     const vmaf = target.vmaf;
     const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status;
-    card.style.display = "";
+    showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
 
     // Nur neu rendern, wenn sich wirklich etwas geändert hat – sonst flackert
@@ -686,9 +832,7 @@
         }).join("");
       sel.value = cur; // Auswahl beibehalten, falls noch vorhanden
       // Karte auch ohne Live-Analyse zeigen, wenn es Archive gibt.
-      if (sessions.length && $("vmaf-card").style.display === "none") {
-        $("vmaf-card").style.display = "";
-      }
+      if (sessions.length) showCard($("vmaf-card"), true);
     } catch (e) { /* still leise */ }
   }
 
@@ -704,7 +848,7 @@
       if (note) note.style.display = "";
       const actions = $("vmaf-actions");
       if (actions) actions.style.display = "none";
-      $("vmaf-card").style.display = "";
+      showCard($("vmaf-card"), true);
       $("vmaf-model-badge").textContent =
         `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
       drawChart(vmaf);
@@ -1143,6 +1287,252 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  function formatBytes(n) {
+    n = Number(n) || 0;
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(1)} ${u[i]}`;
+  }
+
+  function formatDuration(sec) {
+    sec = Math.round(Number(sec) || 0);
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return h ? `${h}h ${m}m` : (m ? `${m}m ${s}s` : `${s}s`);
+  }
+
+  /* -------------------------------------------------------------- PROFILE */
+  function initProfiles() {
+    const sel = $("opt-profile");
+    if (!sel) return;
+    refreshProfiles();
+    sel.addEventListener("change", () => {
+      const p = state.profiles && state.profiles.find((x) => x.name === sel.value);
+      if (p) applyProfile(p.settings);
+    });
+    $("btn-profile-save").addEventListener("click", async () => {
+      const name = prompt("Profilname:");
+      if (!name) return;
+      const r = await fetch("/api/profiles", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, settings: gatherSettings() }),
+      });
+      const d = await r.json();
+      state.profiles = d.profiles || [];
+      renderProfileOptions(name);
+    });
+    $("btn-profile-delete").addEventListener("click", async () => {
+      const name = sel.value;
+      if (!name) return;
+      const r = await fetch(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const d = await r.json();
+      state.profiles = d.profiles || [];
+      renderProfileOptions("");
+    });
+  }
+
+  async function refreshProfiles() {
+    try {
+      const r = await fetch("/api/profiles");
+      const d = await r.json();
+      state.profiles = d.profiles || [];
+      renderProfileOptions($("opt-profile").value);
+    } catch (e) { /* ignorieren */ }
+  }
+
+  function renderProfileOptions(selected) {
+    const sel = $("opt-profile");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— kein Profil —</option>' +
+      (state.profiles || []).map((p) =>
+        `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+    if (selected) sel.value = selected;
+  }
+
+  function applyProfile(s) {
+    if (!s) return;
+    const set = (id, val, ev) => {
+      const el = $(id);
+      if (!el || val === undefined || val === null) return;
+      if (el.type === "checkbox") el.checked = !!val; else el.value = val;
+      el.dispatchEvent(new Event(ev || (el.tagName === "SELECT" ? "change" : "input")));
+    };
+    set("opt-platform", s.platform, "change");
+    set("opt-codec", s.codec, "change");
+    set("opt-rate-mode", s.rate_mode, "change");
+    set("opt-quality", s.quality);
+    set("opt-resolution", s.target_height ? String(s.target_height) : "");
+    set("opt-hdr-mode", s.hdr_mode, "change");
+    set("opt-keep-subs", s.keep_subtitles);
+    set("opt-keep-chapters", s.keep_chapters);
+    set("opt-keep-metadata", s.keep_metadata);
+    set("opt-denoise", s.denoise, "change");
+    set("opt-film-grain", s.film_grain);
+    set("opt-two-pass", s.two_pass);
+    set("opt-vmaf", s.vmaf_check);
+    set("opt-workflow", s.workflow, "change");
+    set("opt-clip", s.clip_seconds);
+    set("opt-samples", s.samples, "change");
+    set("opt-screenshots", s.generate_screenshots);
+    set("opt-post", s.post_processing, "change");
+    set("opt-audio-mode", s.audio_mode, "change");
+    set("opt-audio-codec", s.audio_codec, "change");
+    set("opt-audio-bitrate", s.audio_bitrate);
+    set("opt-audio-channels", s.audio_channels);
+    set("opt-audio-normalize", s.audio_normalize);
+    if (Array.isArray(s.test_values)) {
+      const inputs = [...document.querySelectorAll(".test-val")];
+      s.test_values.forEach((v, i) => { if (inputs[i]) inputs[i].value = v; });
+    }
+  }
+
+  /* ------------------------------------------------------------- STATISTIK */
+  function initStats() {
+    const btn = $("btn-stats-clear");
+    if (btn) btn.addEventListener("click", async () => {
+      if (!confirm("Gesamte Job-Historie löschen?")) return;
+      await fetch("/api/stats/clear", { method: "POST" });
+      loadStats();
+    });
+  }
+
+  async function loadStats() {
+    try {
+      const r = await fetch("/api/stats");
+      const d = await r.json();
+      renderStats(d.stats || {}, d.recent || []);
+    } catch (e) { /* ignorieren */ }
+  }
+
+  function renderStats(st, recent) {
+    const grid = $("stat-grid");
+    if (grid) {
+      const cards = [
+        ["Encodes fertig", st.count_done || 0],
+        ["Gesamt eingespart", formatBytes(st.saved_bytes)],
+        ["Ersparnis", `${st.saved_percent || 0}%`],
+        ["Original → Ergebnis", `${formatBytes(st.original_bytes)} → ${formatBytes(st.output_bytes)}`],
+        ["Ø VMAF", st.avg_vmaf != null ? st.avg_vmaf : "—"],
+        ["Encode-Zeit gesamt", formatDuration(st.encode_seconds)],
+        ["Fehlgeschlagen", st.count_failed || 0],
+      ];
+      grid.innerHTML = cards.map(([l, v]) =>
+        `<div class="stat-box"><span class="stat-val">${escapeHtml(String(v))}</span><span class="stat-lbl">${escapeHtml(l)}</span></div>`).join("");
+    }
+    const codecs = $("stat-codecs");
+    if (codecs) {
+      codecs.innerHTML = (st.by_codec || []).map((c) =>
+        `<span class="codec-chip">${escapeHtml((c.codec || "?").toUpperCase())}: ${c.count}× · ${formatBytes(c.saved_bytes)}</span>`).join("");
+    }
+    const body = $("stats-body");
+    if (body) {
+      body.innerHTML = recent.length ? recent.map((j) => `
+        <tr>
+          <td>${escapeHtml(j.title || "")}</td>
+          <td>${escapeHtml((j.codec || "").toUpperCase())}</td>
+          <td>${j.quality || "—"}</td>
+          <td>${j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—"}</td>
+          <td>${formatBytes(j.original_size)}</td>
+          <td>${formatBytes(j.output_size)}</td>
+          <td class="${(j.saved_bytes || 0) >= 0 ? "good" : "bad"}">${formatBytes(j.saved_bytes)}</td>
+          <td>${escapeHtml(j.status || "")}</td>
+        </tr>`).join("") :
+        '<tr class="empty-row"><td colspan="8">Noch keine Jobs.</td></tr>';
+    }
+  }
+
+  /* ------------------------------------------------------------ BIBLIOTHEK */
+  let libPoll = null;
+  function initLibrary() {
+    const scanBtn = $("btn-lib-scan");
+    if (!scanBtn) return;
+    scanBtn.addEventListener("click", startLibraryScan);
+    $("btn-lib-add").addEventListener("click", addLibrarySelection);
+    const all = $("lib-check-all");
+    if (all) all.addEventListener("change", () => {
+      document.querySelectorAll(".lib-check").forEach((c) => { c.checked = all.checked; });
+    });
+  }
+
+  function libFilters() {
+    const mode = $("lib-codec-mode").value;
+    const f = {
+      root: state.currentPath || "",
+      name_contains: $("lib-name").value.trim(),
+      min_size_mb: parseFloat($("lib-min-size").value) || 0,
+      min_bitrate_mbps: parseFloat($("lib-min-br").value) || 0,
+      min_height: parseInt($("lib-min-h").value, 10) || 0,
+      codecs_include: [],
+      codecs_exclude: [],
+    };
+    if (mode === "exclude-av1") f.codecs_exclude = ["av1"];
+    else if (mode === "include-h264") f.codecs_include = ["h264"];
+    else if (mode === "include-hevc") f.codecs_include = ["hevc"];
+    return f;
+  }
+
+  async function startLibraryScan() {
+    $("lib-scan-badge").textContent = "Scan läuft …";
+    await fetch("/api/library/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(libFilters()),
+    });
+    if (libPoll) clearInterval(libPoll);
+    libPoll = setInterval(pollLibrary, 1200);
+    pollLibrary();
+  }
+
+  async function pollLibrary() {
+    try {
+      const r = await fetch("/api/library/scan");
+      const st = await r.json();
+      $("lib-progress").textContent =
+        `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer`;
+      renderLibrary(st.matched);
+      if (!st.running) {
+        clearInterval(libPoll); libPoll = null;
+        $("lib-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
+        $("btn-lib-add").disabled = st.matched.length === 0;
+      }
+    } catch (e) { /* ignorieren */ }
+  }
+
+  function renderLibrary(rows) {
+    const body = $("lib-body");
+    if (!body) return;
+    body.innerHTML = rows.length ? rows.map((m) => `
+      <tr>
+        <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" /></td>
+        <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
+        <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
+        <td>${escapeHtml(m.resolution)}</td>
+        <td>${escapeHtml(m.video_bitrate_human)}</td>
+        <td>${escapeHtml(m.size_human)}</td>
+        <td>${escapeHtml(m.hdr_type)}</td>
+      </tr>`).join("") :
+      '<tr class="empty-row"><td colspan="7">Keine Treffer.</td></tr>';
+  }
+
+  async function addLibrarySelection() {
+    const paths = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
+    if (!paths.length) return;
+    const btn = $("btn-lib-add");
+    btn.disabled = true;
+    const base = gatherSettings();
+    let ok = 0;
+    for (const p of paths) {
+      try {
+        const r = await fetch("/api/enqueue", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: p, is_batch: false, ...base }),
+        });
+        if (r.ok) ok++;
+      } catch (e) { /* weiter */ }
+    }
+    btn.disabled = false;
+    $("lib-progress").textContent = `${ok} zur Warteschlange hinzugefügt.`;
+  }
+
   /* ------------------------------------------------------------------ INIT */
   function initParallel() {
     const sel = $("opt-parallel");
@@ -1163,12 +1553,120 @@
     });
   }
 
+  /* ------------------------------------------------------- BENACHRICHTIGUNG */
+  async function initNotify() {
+    const badge = $("notify-badge");
+    if (!$("btn-notify-save")) return;
+    try {
+      const d = await (await fetch("/api/notify")).json();
+      $("ntf-discord").value = d.discord_url || "";
+      $("ntf-tg-chat").value = d.telegram_chat || "";
+      $("ntf-webhook").value = d.webhook_url || "";
+      $("ntf-on-done").checked = !!d.on_done;
+      $("ntf-on-failed").checked = !!d.on_failed;
+      if ($("ntf-tg-token")) $("ntf-tg-token").placeholder =
+        d.telegram_token_set ? "gesetzt – leer lassen zum Beibehalten" : "Bot-Token";
+      const active = d.discord_url || d.webhook_url || d.telegram_token_set;
+      if (badge) { badge.textContent = active ? "Aktiv" : "Aus"; }
+    } catch (e) { /* ignorieren */ }
+
+    $("btn-notify-save").addEventListener("click", async () => {
+      const body = {
+        discord_url: $("ntf-discord").value.trim(),
+        telegram_token: $("ntf-tg-token").value.trim(),
+        telegram_chat: $("ntf-tg-chat").value.trim(),
+        webhook_url: $("ntf-webhook").value.trim(),
+        on_done: $("ntf-on-done").checked,
+        on_failed: $("ntf-on-failed").checked,
+      };
+      await fetch("/api/notify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      $("ntf-tg-token").value = "";
+      initNotify();
+    });
+    $("btn-notify-test").addEventListener("click", async () => {
+      await fetch("/api/notify/test", { method: "POST" });
+      const b = $("btn-notify-test");
+      const t = b.textContent; b.textContent = "Gesendet ✓";
+      setTimeout(() => { b.textContent = t; }, 2000);
+    });
+  }
+
+  /* ---------------------------------------------------------- WATCH-ORDNER */
+  async function initWatch() {
+    if (!$("btn-watch-save")) return;
+    // Profile-Dropdown befüllen (teilt sich die Liste mit den Encode-Profilen).
+    const fillProfiles = (sel) => {
+      const cur = $("wf-profile").value;
+      $("wf-profile").innerHTML = '<option value="">Standard-Einstellungen</option>' +
+        (state.profiles || []).map((p) =>
+          `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+      $("wf-profile").value = sel || cur || "";
+    };
+
+    const load = async () => {
+      try {
+        if (!state.profiles) {
+          try { state.profiles = (await (await fetch("/api/profiles")).json()).profiles || []; }
+          catch (e) { state.profiles = []; }
+        }
+        const d = await (await fetch("/api/watch")).json();
+        $("wf-enabled").checked = !!d.enabled;
+        $("wf-folder").value = d.folder || "";
+        $("wf-interval").value = d.interval_min || 15;
+        $("wf-start").value = (d.active_start === null || d.active_start === undefined) ? "" : d.active_start;
+        $("wf-end").value = (d.active_end === null || d.active_end === undefined) ? "" : d.active_end;
+        fillProfiles(d.profile || "");
+        const badge = $("watch-badge");
+        if (badge) badge.textContent = d.enabled ? "Aktiv" : "Aus";
+        const st = $("wf-status");
+        if (st) {
+          const last = d.last_run ? new Date(d.last_run * 1000).toLocaleString() : "noch nie";
+          st.textContent = `Letzte Prüfung: ${last} · zuletzt hinzugefügt: ${d.last_added || 0} · bekannt: ${d.processed_count || 0}`;
+        }
+      } catch (e) { /* ignorieren */ }
+    };
+    await load();
+
+    const parseHour = (v) => v.trim() === "" ? null : parseInt(v, 10);
+    const save = async () => {
+      await fetch("/api/watch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: $("wf-enabled").checked,
+          folder: $("wf-folder").value.trim(),
+          interval_min: parseInt($("wf-interval").value, 10) || 15,
+          profile: $("wf-profile").value,
+          active_start: parseHour($("wf-start").value),
+          active_end: parseHour($("wf-end").value),
+        }),
+      });
+    };
+    $("btn-watch-save").addEventListener("click", async () => { await save(); await load(); });
+    $("btn-watch-scan").addEventListener("click", async () => {
+      const b = $("btn-watch-scan"); const t = b.textContent; b.textContent = "Prüfe …";
+      await save();
+      const d = await (await fetch("/api/watch/scan", { method: "POST" })).json();
+      b.textContent = `+${d.added || 0} eingereiht`;
+      await load(); updateQueue();
+      setTimeout(() => { b.textContent = t; }, 2500);
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     initSettings();
     initDataBrowser();
     initParallel();
     initVmafHistory();
+    initNav();
+    initProfiles();
+    initStats();
+    initLibrary();
+    initNotify();
+    initWatch();
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

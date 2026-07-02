@@ -31,6 +31,7 @@ class VmafOptions:
     rate_mode: str = "cq"
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
+    samples: int = 1  # Anzahl Stichproben-Clips (1 = nur Mitte)
     generate_screenshots: bool = True
     item_id: str = ""
     session_name: str = ""  # lesbarer Ordnername für Previews/Archiv
@@ -159,21 +160,39 @@ def _middle_start(duration: float, clip_seconds: int) -> float:
     return max(0.0, duration / 2.0 - clip_seconds / 2.0)
 
 
+def _sample_starts(duration: float, clip_seconds: int, count: int) -> list[tuple[float, float]]:
+    """Startpositionen der Stichproben-Clips (start, clip_len).
+
+    count=1 → nur Mitte. Bei mehreren gleichmäßig über den Film verteilt
+    (z. B. 3 → 25/50/75 %). Ist der Film zu kurz für getrennte Clips, wird auf
+    eine einzelne Mittenstichprobe zurückgefallen.
+    """
+    clip_len = min(clip_seconds, duration) or 1.0
+    count = max(1, int(count))
+    if count <= 1 or duration <= clip_seconds * count:
+        return [(_middle_start(duration, clip_seconds), clip_len)]
+    out: list[tuple[float, float]] = []
+    for i in range(count):
+        frac = (i + 1) / (count + 1)
+        s = max(0.0, min(duration - clip_len, duration * frac - clip_len / 2))
+        out.append((s, clip_len))
+    return out
+
+
 def _extract_reference(
-    info: VideoInfo, work: Path, tonemap: bool, clip_seconds: int, status: StatusCb,
-) -> tuple[Path, float, float]:
-    ref = work / "reference.mkv"
-    start = _middle_start(info.duration, clip_seconds)
-    clip_len = min(clip_seconds, info.duration) or 1.0
+    info: VideoInfo, work: Path, tonemap: bool, start: float, clip_len: float,
+    idx: int, status: StatusCb,
+) -> Path:
+    ref = work / f"reference_{idx}.mkv"
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-ss", str(start), "-t", str(clip_len),
            "-i", str(info.path)]
     if tonemap and info.is_hdr:
         cmd += ["-vf", _TONEMAP_CHAIN]
     cmd += ["-an", "-sn", "-c:v", "ffv1", "-level", "3", str(ref)]
     if status:
-        status("Referenz-Clip wird extrahiert …")
-    _run_logged(cmd, "VMAF-Referenz")
-    return ref, start, clip_len
+        status(f"Referenz-Clip {idx + 1} wird extrahiert …")
+    _run_logged(cmd, f"VMAF-Referenz {idx}")
+    return ref
 
 
 def _vmaf_compare(
@@ -257,6 +276,9 @@ def analyze(
     opts: Optional[VmafOptions] = None,
     status: StatusCb = None,
     cancelled: Callable[[], bool] = lambda: False,
+    preserve_hdr: bool = False,
+    film_grain: int = 0,
+    denoise: str = "off",
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -293,9 +315,12 @@ def analyze(
     multi = len(enc_list) > 1
 
     try:
-        reference, start, clip_len = _extract_reference(
-            info, work, tonemap, opts.clip_seconds, status,
-        )
+        # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
+        sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
+        references: list[tuple[Path, float, float]] = []
+        for si, (start, clip_len) in enumerate(sample_specs):
+            ref = _extract_reference(info, work, tonemap, start, clip_len, si, status)
+            references.append((ref, start, clip_len))
 
         base_pc = enc_list[0]
         for p, c in enc_list:
@@ -310,46 +335,64 @@ def analyze(
                 key = f"{p}_{c}_{val}"
                 rate_lbl = _label(opts.rate_mode, val)
                 lbl = f"{disp} · {rate_lbl}" if multi else rate_lbl
-                if status:
-                    status(f"Test-Encode {disp} @ {rate_lbl} …")
 
-                test_file = work / f"test_{key}.mkv"
-                if use_bitrate:
-                    cmd = build_encode_cmd(
-                        info, test_file, p, c, 28,
-                        target_height, tonemap,
-                        duration_limit=clip_len, start_at=start,
-                        rate_mode=opts.rate_mode, bitrate_kbps=val,
-                        include_progress=False, audio_mode="copy",
-                    )
-                else:
-                    cmd = build_encode_cmd(
-                        info, test_file, p, c, val,
-                        target_height, tonemap,
-                        duration_limit=clip_len, start_at=start,
-                        include_progress=False, audio_mode="copy",
-                    )
-                _run_logged(cmd, f"VMAF-Test {lbl}")
-                if not test_file.exists() or test_file.stat().st_size == 0:
+                total_size = 0
+                total_dur = 0.0
+                scores: list[float] = []
+                scr_ref, scr_enc = "", ""
+
+                for si, (reference, start, clip_len) in enumerate(references):
+                    if cancelled():
+                        break
+                    skey = f"{key}_s{si}"
+                    smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
+                    if status:
+                        status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
+                    test_file = work / f"test_{skey}.mkv"
+                    if use_bitrate:
+                        cmd = build_encode_cmd(
+                            info, test_file, p, c, 28,
+                            target_height, tonemap,
+                            duration_limit=clip_len, start_at=start,
+                            rate_mode=opts.rate_mode, bitrate_kbps=val,
+                            include_progress=False, audio_mode="none",
+                            preserve_hdr=preserve_hdr, film_grain=film_grain,
+                            denoise=denoise,
+                        )
+                    else:
+                        cmd = build_encode_cmd(
+                            info, test_file, p, c, val,
+                            target_height, tonemap,
+                            duration_limit=clip_len, start_at=start,
+                            include_progress=False, audio_mode="none",
+                            preserve_hdr=preserve_hdr, film_grain=film_grain,
+                            denoise=denoise,
+                        )
+                    _run_logged(cmd, f"VMAF-Test {lbl}{smp}")
+                    if not test_file.exists() or test_file.stat().st_size == 0:
+                        continue
+                    if status:
+                        status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
+                    score = _vmaf_compare(test_file, reference, info, work, skey)
+                    if score is None:
+                        continue
+                    scores.append(score)
+                    total_size += test_file.stat().st_size
+                    total_dur += clip_len
+                    # Screenshots nur aus der ersten (mittleren) Stichprobe.
+                    if si == 0 and opts.generate_screenshots:
+                        scr_ref, scr_enc = _extract_screenshots(
+                            reference, test_file, sess, key, clip_len, info.fps,
+                        )
+
+                if not scores or total_dur <= 0:
                     continue
 
-                if status:
-                    status(f"VMAF-Vergleich {disp} @ {rate_lbl} …")
-                score = _vmaf_compare(test_file, reference, info, work, key)
-                if score is None:
-                    continue
-
-                clip_size = test_file.stat().st_size
-                predicted = int((clip_size / clip_len) * info.duration)
+                avg_score = sum(scores) / len(scores)
+                predicted = int((total_size / total_dur) * info.duration)
                 savings = 0.0
                 if info.size_bytes > 0:
                     savings = (info.size_bytes - predicted) / info.size_bytes * 100.0
-
-                scr_ref, scr_enc = "", ""
-                if opts.generate_screenshots:
-                    scr_ref, scr_enc = _extract_screenshots(
-                        reference, test_file, sess, key, clip_len, info.fps,
-                    )
 
                 analysis.results.append(VmafResult(
                     value=val,
@@ -357,8 +400,8 @@ def analyze(
                     label=lbl,
                     codec=c,
                     platform=p,
-                    vmaf=score,
-                    clip_size_bytes=clip_size,
+                    vmaf=avg_score,
+                    clip_size_bytes=total_size,
                     predicted_size_bytes=predicted,
                     savings_percent=savings,
                     screenshot_ref=scr_ref,
@@ -460,9 +503,11 @@ def _finalize_work(work: Path, item_id: str) -> None:
     """VMAF-Arbeitsordner löschen oder dauerhaft unter vmaf/ ablegen."""
     if not work.exists():
         return
-    # Die verlustfreie Referenz (FFV1) ist riesig (mehrere GB bei 4K/HDR) und
-    # nach der Analyse wertlos – vor dem Archivieren immer entfernen.
+    # Die verlustfreien Referenzen (FFV1) sind riesig (mehrere GB bei 4K/HDR)
+    # und nach der Analyse wertlos – vor dem Archivieren immer entfernen.
     try:
+        for ref in work.glob("reference_*.mkv"):
+            ref.unlink(missing_ok=True)
         (work / "reference.mkv").unlink(missing_ok=True)
     except OSError:
         pass

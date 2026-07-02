@@ -19,6 +19,15 @@
         </div>
       </div>
 
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-nav="encode"><span>▶</span> Encoden</button>
+        <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
+        <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
+        <button class="nav-item" data-nav="library"><span>🔍</span> Bibliothek</button>
+        <button class="nav-item" data-nav="data"><span>💾</span> Daten &amp; Archive</button>
+        <button class="nav-item" data-nav="settings"><span>⚙</span> Einstellungen</button>
+      </nav>
+
       <div class="theme-picker">
         <label for="theme-select">Design-Modus</label>
         <select id="theme-select">
@@ -84,7 +93,7 @@
 
       <div class="cards">
         <!-- CARD 1: Quellenauswahl & Analyse -->
-        <section class="card span-2">
+        <section class="card span-2" data-page="encode">
           <div class="card-head">
             <h3><span class="card-idx">1</span> Quellenauswahl &amp; Analyse</h3>
             <span class="badge" id="selection-badge">Nichts ausgewählt</span>
@@ -104,11 +113,21 @@
         </section>
 
         <!-- CARD 2: Encoding-Einstellungen -->
-        <section class="card">
+        <section class="card" data-page="encode">
           <div class="card-head">
             <h3><span class="card-idx">2</span> Enkodierung &amp; Workflow</h3>
           </div>
           <div class="card-body settings">
+            <div class="field profile-field">
+              <label>Profil</label>
+              <div class="profile-row">
+                <select id="opt-profile"><option value="">— kein Profil —</option></select>
+                <button class="btn btn-ghost btn-sm" id="btn-profile-save" title="Aktuelle Einstellungen als Profil speichern">Speichern</button>
+                <button class="btn btn-ghost btn-sm bad-btn" id="btn-profile-delete" title="Gewähltes Profil löschen">Löschen</button>
+              </div>
+            </div>
+            <div class="divider"></div>
+
             <div class="field-row">
               <div class="field">
                 <label>GPU / Plattform</label>
@@ -139,9 +158,51 @@
               </select>
             </div>
 
+            <div class="field" id="hdr-field" style="display:none">
+              <label>HDR-Behandlung</label>
+              <select id="opt-hdr-mode">
+                <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+                <option value="preserve">HDR beibehalten (10-bit)</option>
+              </select>
+              <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
+            </div>
+
+            <div class="field">
+              <label>Aus Quelle übernehmen</label>
+              <label class="check">
+                <input type="checkbox" id="opt-keep-subs" checked />
+                <span>Untertitel</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="opt-keep-chapters" checked />
+                <span>Kapitelmarken</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="opt-keep-metadata" checked />
+                <span>Metadaten (Titel, Tags)</span>
+              </label>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label>Rauschminderung (Denoise)</label>
+                <select id="opt-denoise">
+                  <option value="off">Aus</option>
+                  <option value="light">Leicht</option>
+                  <option value="medium">Mittel</option>
+                  <option value="strong">Stark</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
+                <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
+                <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
+              </div>
+            </div>
+
             <label class="check">
-              <input type="checkbox" id="opt-tonemap" />
-              <span>HDR &rarr; SDR Tone-Mapping anwenden</span>
+              <input type="checkbox" id="opt-two-pass" />
+              <span>Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)</span>
             </label>
 
             <div class="divider"></div>
@@ -180,6 +241,16 @@
               </div>
 
               <div class="field">
+                <label>Stichproben (Szenen)</label>
+                <select id="opt-samples">
+                  <option value="1">1 – nur Mitte (schnell)</option>
+                  <option value="2">2 Szenen</option>
+                  <option value="3">3 Szenen (robuster)</option>
+                </select>
+                <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
+              </div>
+
+              <div class="field">
                 <label>Nach VMAF-Ergebnis</label>
                 <select id="opt-workflow">
                   <option value="auto">Automatisch besten Wert encodieren</option>
@@ -209,12 +280,13 @@
             <div class="divider"></div>
 
             <div class="field">
-              <label>Ton</label>
+              <label>Ton – Standard für alle Spuren</label>
               <select id="opt-audio-mode">
                 <option value="copy">Original kopieren (verlustfrei, schnell)</option>
                 <option value="encode">Neu codieren</option>
                 <option value="none">Ohne Ton (entfernen)</option>
               </select>
+              <p class="hint">Gilt für Spuren auf „Standard". Einzelne Spuren lassen sich in der Quellanalyse abweichend einstellen.</p>
             </div>
 
             <div id="audio-encode-opts" class="disabled">
@@ -268,7 +340,7 @@
         </section>
 
         <!-- CARD 3: VMAF-Ergebnisse -->
-        <section class="card span-3" id="vmaf-card" style="display:none">
+        <section class="card span-3" id="vmaf-card" data-page="encode" style="display:none">
           <div class="card-head">
             <h3><span class="card-idx">★</span> VMAF-Analyse &amp; Größenprognose</h3>
             <div class="vmaf-head-right">
@@ -304,7 +376,7 @@
         </section>
 
         <!-- CARD 4: Live-Fortschritt (mehrere parallele Encodes möglich) -->
-        <section class="card span-3 progress-card" id="progress-card" style="display:none">
+        <section class="card span-3 progress-card" id="progress-card" data-page="queue" style="display:none">
           <div class="card-head">
             <h3><span class="card-idx">▶</span> Live-Verarbeitung</h3>
             <span class="badge badge-running" id="progress-count">—</span>
@@ -315,7 +387,7 @@
         </section>
 
         <!-- CARD 5: Warteschlange -->
-        <section class="card span-3">
+        <section class="card span-3" data-page="queue">
           <div class="card-head">
             <h3><span class="card-idx">≡</span> Warteschlange &amp; Status</h3>
             <div class="queue-stats">
@@ -332,6 +404,7 @@
               <span class="badge badge-done" id="cnt-done">0 fertig</span>
               <span class="badge badge-await" id="cnt-await">0 Auswahl</span>
               <span class="badge badge-fail" id="cnt-fail">0 fehlgeschlagen</span>
+              <button class="btn btn-ghost btn-sm" id="btn-pause">Pausieren</button>
               <button class="btn btn-ghost btn-sm" id="btn-clear">Erledigte entfernen</button>
             </div>
           </div>
@@ -348,7 +421,7 @@
         </section>
 
         <!-- CARD 6: Datenordner / VMAF-Archive -->
-        <section class="card span-3">
+        <section class="card span-3" data-page="data">
           <div class="card-head">
             <h3><span class="card-idx">💾</span> Datenordner &amp; VMAF-Archive</h3>
             <div class="data-head-actions">
@@ -378,6 +451,146 @@
                 <button class="btn btn-ghost btn-sm" id="btn-data-preview-close">Schließen</button>
               </div>
               <div id="data-preview-body" class="data-preview-body"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE: Statistik -->
+        <section class="card span-3" data-page="stats">
+          <div class="card-head">
+            <h3><span class="card-idx">📊</span> Statistik &amp; Historie</h3>
+            <button class="btn btn-ghost btn-sm" id="btn-stats-clear">Historie leeren</button>
+          </div>
+          <div class="card-body">
+            <div class="stat-grid" id="stat-grid"></div>
+            <div class="stat-codecs" id="stat-codecs"></div>
+            <h4 class="subhead">Letzte Jobs</h4>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Titel</th><th>Codec</th><th>Q</th><th>VMAF</th><th>Original</th><th>Ergebnis</th><th>Ersparnis</th><th>Status</th></tr>
+                </thead>
+                <tbody id="stats-body">
+                  <tr class="empty-row"><td colspan="8">Noch keine Jobs.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE: Bibliothek -->
+        <section class="card span-3" data-page="library">
+          <div class="card-head">
+            <h3><span class="card-idx">🔍</span> Bibliotheks-Scan</h3>
+            <span class="badge" id="lib-scan-badge">Bereit</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Durchsucht den Eingabeordner rekursiv und filtert Videos (z. B. „alle H.264 &gt; 10 Mbit/s"). Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.</p>
+            <div class="lib-filters">
+              <div class="field"><label>Name enthält</label><input type="text" id="lib-name" placeholder="optional" /></div>
+              <div class="field"><label>Min. Größe (MB)</label><input type="number" id="lib-min-size" min="0" value="0" /></div>
+              <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="lib-min-br" min="0" step="0.5" value="0" /></div>
+              <div class="field"><label>Min. Höhe (px)</label><input type="number" id="lib-min-h" min="0" value="0" /></div>
+              <div class="field"><label>Codec-Filter</label>
+                <select id="lib-codec-mode">
+                  <option value="">Alle Codecs</option>
+                  <option value="exclude-av1">Nur nicht-AV1 (AV1 überspringen)</option>
+                  <option value="include-h264">Nur H.264</option>
+                  <option value="include-hevc">Nur HEVC/H.265</option>
+                </select>
+              </div>
+            </div>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-lib-scan">Scan starten</button>
+              <span id="lib-progress" class="muted"></span>
+              <button class="btn btn-ghost btn-sm" id="btn-lib-add" disabled>Auswahl zur Warteschlange</button>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr><th><input type="checkbox" id="lib-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th><th>Dynamik</th></tr>
+                </thead>
+                <tbody id="lib-body">
+                  <tr class="empty-row"><td colspan="7">Noch kein Scan.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-2" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">🔔</span> Benachrichtigungen</h3>
+            <span class="badge" id="notify-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Bei Fertigstellung oder Fehler wird über die konfigurierten Kanäle informiert. Alle Felder sind optional.</p>
+            <div class="field">
+              <label>Discord Webhook-URL</label>
+              <input type="text" id="ntf-discord" placeholder="https://discord.com/api/webhooks/…" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Telegram Bot-Token</label>
+                <input type="password" id="ntf-tg-token" placeholder="unverändert lassen zum Beibehalten" />
+              </div>
+              <div class="field">
+                <label>Telegram Chat-ID</label>
+                <input type="text" id="ntf-tg-chat" placeholder="z. B. 123456789" />
+              </div>
+            </div>
+            <div class="field">
+              <label>Generischer Webhook (JSON POST)</label>
+              <input type="text" id="ntf-webhook" placeholder="https://…" />
+            </div>
+            <div class="field">
+              <label>Ereignisse</label>
+              <label class="check"><input type="checkbox" id="ntf-on-done" checked /><span>Bei Fertigstellung</span></label>
+              <label class="check"><input type="checkbox" id="ntf-on-failed" checked /><span>Bei Fehler</span></label>
+            </div>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-notify-save">Speichern</button>
+              <button class="btn btn-ghost btn-sm" id="btn-notify-test">Testnachricht senden</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">👁</span> Watch-Ordner</h3>
+            <span class="badge" id="watch-badge">Aus</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Überwacht einen Unterordner des Eingabeordners und legt neue Videos automatisch in die Warteschlange – optional nur in einem Zeitfenster.</p>
+            <label class="check"><input type="checkbox" id="wf-enabled" /><span>Watch-Ordner aktiv</span></label>
+            <div class="field">
+              <label>Ordner (relativ zum Eingabeordner)</label>
+              <input type="text" id="wf-folder" placeholder="leer = gesamter Eingabeordner" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Prüfintervall (Minuten)</label>
+                <input type="number" id="wf-interval" min="1" max="1440" value="15" />
+              </div>
+              <div class="field">
+                <label>Profil anwenden</label>
+                <select id="wf-profile"><option value="">Standard-Einstellungen</option></select>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Aktiv ab Stunde</label>
+                <input type="number" id="wf-start" min="0" max="23" placeholder="immer" />
+              </div>
+              <div class="field">
+                <label>Aktiv bis Stunde</label>
+                <input type="number" id="wf-end" min="0" max="23" placeholder="immer" />
+              </div>
+            </div>
+            <p class="hint" id="wf-status"></p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-watch-save">Speichern</button>
+              <button class="btn btn-ghost btn-sm" id="btn-watch-scan">Jetzt prüfen</button>
             </div>
           </div>
         </section>

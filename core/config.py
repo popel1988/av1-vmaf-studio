@@ -33,6 +33,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
 FFMPEG = _resolve_binary("ffmpeg")
 FFPROBE = _resolve_binary("ffprobe")
 
+# --- Optionaler Zugriffsschutz -----------------------------------------------
+# Ist APP_PASSWORD gesetzt, verlangt die App einen Login. Ohne Variable läuft
+# alles offen wie bisher (Standardverhalten).
+import hashlib as _hashlib
+
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+AUTH_COOKIE = "vc_auth"
+
+
+def auth_token() -> str:
+    """Cookie-Token, das nur bei korrektem Passwort reproduzierbar ist."""
+    return _hashlib.sha256(("vcompress:" + APP_PASSWORD).encode()).hexdigest()
+
 # --- Medien-Volumes (Quelle / fertige Encodes) --------------------------------
 INPUT_DIR = Path(os.getenv("INPUT_DIR", "/media/input"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/media/output"))

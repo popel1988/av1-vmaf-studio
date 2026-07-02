@@ -368,6 +368,37 @@ def audio_args(
     return args
 
 
+def audio_track_args(tracks: list) -> list[str]:
+    """Mapping + Codec-Argumente pro einzelner Ausgabe-Tonspur.
+
+    `tracks`: geordnete Liste ausgewählter Spuren, je Eintrag ein Dict mit
+    index (Quell-Audio-Index), mode ("copy"/"encode"), codec, bitrate,
+    channels, normalize. Die Ausgabe-Spur-Reihenfolge bestimmt die
+    Stream-Specifier (a:0, a:1, …).
+    """
+    if not tracks:
+        return ["-an"]
+    args: list[str] = []
+    for t in tracks:
+        args += ["-map", f"0:a:{int(t.get('index', 0))}?"]
+    for out_idx, t in enumerate(tracks):
+        mode = t.get("mode", "copy")
+        ch = int(t.get("channels", 0) or 0)
+        norm = bool(t.get("normalize"))
+        if mode != "encode" and ch == 0 and not norm:
+            args += [f"-c:a:{out_idx}", "copy"]
+            continue
+        enc = AUDIO_ENCODERS.get(t.get("codec", "aac"), "aac")
+        args += [f"-c:a:{out_idx}", enc]
+        if enc != "flac":
+            args += [f"-b:a:{out_idx}", f"{max(32, int(t.get('bitrate', 160) or 160))}k"]
+        if ch in (1, 2):
+            args += [f"-ac:a:{out_idx}", str(ch)]
+        if norm:
+            args += [f"-filter:a:{out_idx}", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    return args
+
+
 def hwaccel_input_args(platform: str) -> list[str]:
     """Hardware-Decode-/Init-Argumente, die VOR dem -i Input stehen."""
     if platform == "nvidia":

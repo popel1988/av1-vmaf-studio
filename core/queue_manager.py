@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,13 @@ class JobSettings:
     quality: int = 28
     target_height: Optional[int] = None
     tonemap: bool = False
+    preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
+    keep_subtitles: bool = True      # Untertitel-Spuren übernehmen
+    keep_chapters: bool = True       # Kapitelmarken übernehmen
+    keep_metadata: bool = True       # Container-/Stream-Metadaten übernehmen
+    film_grain: int = 0              # AV1 (SVT) Film-Grain-Synthese 0=aus..50
+    denoise: str = "off"             # off | light | medium | strong
+    two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
     rate_mode: str = "cq"          # cq | bitrate | abr
@@ -49,6 +57,7 @@ class JobSettings:
     compare_encoders: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
+    samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
@@ -59,6 +68,8 @@ class JobSettings:
     audio_channels: int = 0        # 0 = Original, 1 = Mono, 2 = Stereo
     audio_normalize: bool = False
     audio_tracks: list = field(default_factory=list)  # leer = alle Spuren
+    audio_per_track: bool = False                      # Audio pro Spur konfiguriert
+    audio_track_settings: list = field(default_factory=list)  # je Spur ein Dict
     selected_result_index: Optional[int] = None
 
 
@@ -79,6 +90,7 @@ class QueueItem:
     output_path: str = ""
     saved_bytes: int = 0
     message: str = ""
+    created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
         return {
@@ -117,9 +129,36 @@ class QueueManager:
         # Batch werden dann ebenfalls übersprungen statt mit Default zu encoden.
         self._group_skip: set[str] = set()
         self._status_msg = ""
+        self._paused = False
         self._stop = False
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+    # ------------------------------------------------------------- Pause / Reihenfolge
+    def set_paused(self, paused: bool) -> bool:
+        with self._lock:
+            self._paused = bool(paused)
+        if not paused:
+            self._wake.set()
+        return self._paused
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def move(self, item_id: str, direction: int) -> bool:
+        """Wartenden Job in der Reihenfolge nach oben (-1) / unten (+1) schieben."""
+        with self._lock:
+            idx = next((i for i, it in enumerate(self._items) if it.id == item_id), None)
+            if idx is None or self._items[idx].status != STATUS_WAITING:
+                return False
+            j = idx + direction
+            # Nur mit einem anderen wartenden Job tauschen.
+            while 0 <= j < len(self._items) and self._items[j].status != STATUS_WAITING:
+                j += direction
+            if not (0 <= j < len(self._items)):
+                return False
+            self._items[idx], self._items[j] = self._items[j], self._items[idx]
+            return True
 
     # ------------------------------------------------------------- Parallelität
     def set_parallel(self, n: int) -> int:
@@ -245,6 +284,7 @@ class QueueManager:
             active_ids = list(self._active.keys())
             msg = self._status_msg
             parallel = self._max_parallel
+            paused = self._paused
         total_saved = sum(i["saved_bytes"] for i in items if i["saved_bytes"] > 0)
         return {
             "items": items,
@@ -252,6 +292,7 @@ class QueueManager:
             "active_id": active_ids[0] if active_ids else None,  # Rückwärtskompat.
             "status_message": msg,
             "max_parallel": parallel,
+            "paused": paused,
             "total_saved_bytes": total_saved,
             "total_saved_human": ff.human_size(total_saved) if total_saved else "0 B",
             "counts": _counts(items),
@@ -260,6 +301,8 @@ class QueueManager:
     # ------------------------------------------------------------------ Worker
     def _claim_next_locked(self) -> Optional[QueueItem]:
         """Nächsten startbaren Job holen (Lock muss gehalten werden)."""
+        if self._paused:
+            return None
         for it in self._items:
             if it.status != STATUS_WAITING:
                 continue
@@ -322,6 +365,7 @@ class QueueManager:
         self._wake.set()
 
     def _run_job(self, item: QueueItem) -> None:
+        started = time.time()
         try:
             self._process(item)
         except Exception as e:  # pragma: no cover - Schutz vor Worker-Absturz
@@ -329,7 +373,24 @@ class QueueManager:
             item.error = f"Interner Fehler: {e}"
             logger.exception("Job abgestürzt: %s", item.title)
         finally:
+            self._record_history(item, time.time() - started)
             self._finish_active(item.id)
+
+    @staticmethod
+    def _record_history(item: QueueItem, duration: float) -> None:
+        """Echte Encodes und Fehler in die persistente Historie schreiben."""
+        try:
+            from . import history
+            encoded = item.status == STATUS_DONE and getattr(item, "output_size", 0)
+            if encoded or item.status == STATUS_FAILED:
+                history.record_job(item, duration=duration)
+                try:
+                    from . import notify
+                    notify.notify_job(item)
+                except Exception as ne:  # pragma: no cover
+                    logger.debug("Benachrichtigung übersprungen: %s", ne)
+        except Exception as e:  # pragma: no cover
+            logger.debug("Historie überspringen: %s", e)
 
     def _process(self, item: QueueItem) -> None:
         info, probe_err = probe_with_error(Path(item.path))
@@ -369,6 +430,7 @@ class QueueManager:
                 rate_mode=s.rate_mode,
                 test_values=list(s.test_values),
                 clip_seconds=s.clip_seconds,
+                samples=s.samples,
                 generate_screenshots=s.generate_screenshots,
                 item_id=item.id,
                 session_name=_session_name(item),
@@ -377,6 +439,8 @@ class QueueManager:
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
+                preserve_hdr=s.preserve_hdr,
+                film_grain=s.film_grain, denoise=s.denoise,
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
@@ -452,6 +516,14 @@ class QueueManager:
             "audio_channels": s.audio_channels,
             "audio_normalize": s.audio_normalize,
             "audio_tracks": list(s.audio_tracks),
+            "audio_per_track": s.audio_per_track,
+            "audio_track_settings": list(s.audio_track_settings),
+            "preserve_hdr": s.preserve_hdr,
+            "keep_subtitles": s.keep_subtitles,
+            "keep_chapters": s.keep_chapters,
+            "keep_metadata": s.keep_metadata,
+            "film_grain": s.film_grain,
+            "denoise": s.denoise,
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -460,11 +532,42 @@ class QueueManager:
         runner = EncodeRunner(on_progress=on_prog)
         with self._lock:
             self._active[item.id] = runner
-        cmd = build_encode_cmd(
-            info, out_path, s.platform, s.codec, s.quality,
-            s.target_height, s.tonemap, **enc_kw,
-        )
-        rc, stderr = runner.run(cmd, info.duration)
+
+        # Zwei-Pass (echt) nur für CPU-Encoder im Bitraten-Modus: erst Analyse-,
+        # dann Encode-Pass. NVENC nutzt stattdessen -multipass (ein Durchlauf).
+        do_two_pass = (s.two_pass and s.platform == "cpu"
+                       and s.rate_mode in ("bitrate", "abr"))
+        if do_two_pass:
+            passlog = str(config.WORK_DIR / f"pass_{item.id}")
+            config.WORK_DIR.mkdir(parents=True, exist_ok=True)
+            cmd = build_encode_cmd(
+                info, out_path, s.platform, s.codec, s.quality,
+                s.target_height, s.tonemap, two_pass=True, pass_num=1,
+                passlog=passlog, **enc_kw,
+            )
+            item.message = "Zwei-Pass: Analyse-Durchlauf (1/2) …"
+            rc, stderr = runner.run(cmd, info.duration)
+            if rc == 0 and not runner._cancel:
+                item.message = "Zwei-Pass: Encode-Durchlauf (2/2) …"
+                cmd = build_encode_cmd(
+                    info, out_path, s.platform, s.codec, s.quality,
+                    s.target_height, s.tonemap, two_pass=True, pass_num=2,
+                    passlog=passlog, **enc_kw,
+                )
+                rc, stderr = runner.run(cmd, info.duration)
+            self._cleanup_passlog(passlog)
+        elif s.two_pass and s.platform == "nvidia":
+            cmd = build_encode_cmd(
+                info, out_path, s.platform, s.codec, s.quality,
+                s.target_height, s.tonemap, two_pass=True, **enc_kw,
+            )
+            rc, stderr = runner.run(cmd, info.duration)
+        else:
+            cmd = build_encode_cmd(
+                info, out_path, s.platform, s.codec, s.quality,
+                s.target_height, s.tonemap, **enc_kw,
+            )
+            rc, stderr = runner.run(cmd, info.duration)
 
         if runner._cancel:
             item.status = STATUS_CANCELLED
@@ -483,6 +586,16 @@ class QueueManager:
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
         item.message = ""
+
+    @staticmethod
+    def _cleanup_passlog(passlog: str) -> None:
+        """FFmpeg-2-Pass-Logdateien (*.log, *.log.mbtree) entfernen."""
+        base = Path(passlog)
+        for p in base.parent.glob(base.name + "*"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------ Postprocessing
     @staticmethod
@@ -515,6 +628,44 @@ class QueueManager:
 
 _VALID_CODECS = {"av1", "hevc", "h264"}
 _VALID_PLATFORMS = {"cpu", "nvidia", "intel", "amd"}
+
+
+def build_job_settings(d: dict) -> JobSettings:
+    """UI-/Profil-Dict → JobSettings (zentrale Zuordnung inkl. HDR-Modus)."""
+    hdr_mode = d.get("hdr_mode", "tonemap")
+    codec = d.get("codec", "av1")
+    return JobSettings(
+        platform=d.get("platform", "cpu"),
+        codec=codec,
+        quality=int(d.get("quality", 28) or 28),
+        target_height=d.get("target_height"),
+        tonemap=(hdr_mode == "tonemap") or bool(d.get("tonemap")),
+        preserve_hdr=(hdr_mode == "preserve"),
+        keep_subtitles=bool(d.get("keep_subtitles", True)),
+        keep_chapters=bool(d.get("keep_chapters", True)),
+        keep_metadata=bool(d.get("keep_metadata", True)),
+        film_grain=max(0, min(50, int(d.get("film_grain", 0) or 0))),
+        denoise=d.get("denoise", "off"),
+        two_pass=bool(d.get("two_pass", False)),
+        vmaf_check=bool(d.get("vmaf_check", True)),
+        workflow=d.get("workflow", "auto"),
+        rate_mode=d.get("rate_mode", "cq"),
+        compare_encoders=list(d.get("compare_encoders", [])),
+        test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
+        clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
+        samples=max(1, min(5, int(d.get("samples", 1) or 1))),
+        generate_screenshots=bool(d.get("generate_screenshots", True)),
+        post_processing=d.get("post_processing", "keep"),
+        suffix=d.get("suffix", "_" + codec),
+        audio_mode=d.get("audio_mode", "copy"),
+        audio_codec=d.get("audio_codec", "aac"),
+        audio_bitrate=int(d.get("audio_bitrate", 160) or 160),
+        audio_channels=int(d.get("audio_channels", 0) or 0),
+        audio_normalize=bool(d.get("audio_normalize", False)),
+        audio_tracks=list(d.get("audio_tracks", [])),
+        audio_per_track=bool(d.get("audio_per_track", False)),
+        audio_track_settings=list(d.get("audio_track_settings", [])),
+    )
 
 
 def _session_name(item: QueueItem) -> str:

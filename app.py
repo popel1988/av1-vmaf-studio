@@ -38,6 +38,60 @@ from core.queue_manager import JobSettings, QueueManager
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="AV1/VMAF Compression Studio")
 
+
+def _is_authed(request: Request) -> bool:
+    if not config.APP_PASSWORD:
+        return True
+    return request.cookies.get(config.AUTH_COOKIE) == config.auth_token()
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    if config.APP_PASSWORD:
+        path = request.url.path
+        allow = path.startswith("/static") or path in ("/login", "/favicon.ico")
+        if not allow and not _is_authed(request):
+            if path.startswith("/api"):
+                return JSONResponse({"error": "Nicht angemeldet"}, status_code=401)
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/login", status_code=302)
+    return await call_next(request)
+
+
+_LOGIN_HTML = """<!DOCTYPE html><html lang=de><head><meta charset=UTF-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Login</title><link rel=stylesheet href="/static/css/styles.css"></head>
+<body style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+<form method=post action=/login style="background:var(--surface);padding:32px;border-radius:12px;border:1px solid var(--border);min-width:300px">
+<h2 style="margin-top:0">Compression Studio</h2>
+<p style="color:var(--text-muted);font-size:13px">Bitte Passwort eingeben.</p>
+{error}
+<input type=password name=password placeholder=Passwort autofocus
+ style="width:100%;padding:10px;margin:12px 0;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+<button class="btn btn-primary btn-block" type=submit>Anmelden</button>
+</form></body></html>"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request):
+    if _is_authed(request):
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/", status_code=302)
+    return HTMLResponse(_LOGIN_HTML.format(error=""))
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    from starlette.responses import RedirectResponse
+    form = await request.form()
+    if form.get("password") == config.APP_PASSWORD:
+        resp = RedirectResponse("/", status_code=302)
+        resp.set_cookie(config.AUTH_COOKIE, config.auth_token(),
+                        httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)
+        return resp
+    err = '<p style="color:var(--bad,#e5484d);font-size:13px">Falsches Passwort.</p>'
+    return HTMLResponse(_LOGIN_HTML.format(error=err), status_code=401)
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -53,6 +107,11 @@ queue = QueueManager(max_parallel=_initial_parallel)
 @app.on_event("startup")
 async def _startup() -> None:
     config.ensure_dirs()
+    from core import history
+    history.init_db()
+    from core.watcher import watcher
+    watcher.attach(queue)
+    watcher.start()
     logger = logging.getLogger("vcompress.startup")
     logger.info("FFmpeg-Binary: %s | FFprobe: %s", config.FFMPEG, config.FFPROBE)
     logger.info("Datenordner: %s", config.data_paths_dict())
@@ -69,6 +128,8 @@ async def _startup() -> None:
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     queue.shutdown()
+    from core.watcher import watcher
+    watcher.stop()
 
 
 # ----------------------------------------------------------------------- Views
@@ -176,12 +237,20 @@ class EnqueueRequest(BaseModel):
     quality: int = 28
     target_height: Optional[int] = None
     tonemap: bool = False
+    hdr_mode: str = "tonemap"        # tonemap (HDR->SDR) | preserve (HDR behalten)
+    keep_subtitles: bool = True
+    keep_chapters: bool = True
+    keep_metadata: bool = True
+    film_grain: int = 0
+    denoise: str = "off"             # off | light | medium | strong
+    two_pass: bool = False
     vmaf_check: bool = True
     workflow: str = "auto"           # auto | manual | compare_only
     rate_mode: str = "cq"            # cq | bitrate | abr
     compare_encoders: list[str] = []  # zusätzliche "plattform:codec"-Vergleiche
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
+    samples: int = 1
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
@@ -191,6 +260,8 @@ class EnqueueRequest(BaseModel):
     audio_channels: int = 0          # 0 = Original, 1 = Mono, 2 = Stereo
     audio_normalize: bool = False
     audio_tracks: list[int] = []     # leer = alle Tonspuren
+    audio_per_track: bool = False    # Audio pro Spur konfiguriert
+    audio_track_settings: list[dict] = []  # je Spur: index/mode/codec/bitrate/…
 
 
 class ApproveRequest(BaseModel):
@@ -203,28 +274,8 @@ async def enqueue(req: EnqueueRequest):
     if target is None or not target.exists():
         return JSONResponse({"error": "Pfad nicht gefunden"}, status_code=404)
 
-    settings = JobSettings(
-        platform=req.platform,
-        codec=req.codec,
-        quality=req.quality,
-        target_height=req.target_height,
-        tonemap=req.tonemap,
-        vmaf_check=req.vmaf_check,
-        workflow=req.workflow,
-        rate_mode=req.rate_mode,
-        compare_encoders=list(req.compare_encoders),
-        test_values=req.test_values[:4],
-        clip_seconds=max(5, min(120, req.clip_seconds)),
-        generate_screenshots=req.generate_screenshots,
-        post_processing=req.post_processing,
-        suffix=req.suffix,
-        audio_mode=req.audio_mode,
-        audio_codec=req.audio_codec,
-        audio_bitrate=req.audio_bitrate,
-        audio_channels=req.audio_channels,
-        audio_normalize=req.audio_normalize,
-        audio_tracks=list(req.audio_tracks),
-    )
+    from core.queue_manager import build_job_settings
+    settings = build_job_settings(req.model_dump())
     if req.is_batch:
         items = queue.add_batch(str(target), settings)
         if not items:
@@ -264,6 +315,144 @@ async def preview_image(path: str):
     return FileResponse(target, media_type="image/jpeg")
 
 
+class ProfileRequest(BaseModel):
+    name: str
+    settings: dict
+
+
+@app.get("/api/profiles")
+async def list_profiles():
+    from core import profiles
+    return {"profiles": profiles.load()}
+
+
+@app.post("/api/profiles")
+async def save_profile(req: ProfileRequest):
+    from core import profiles
+    return {"profiles": profiles.save_profile(req.name, req.settings)}
+
+
+@app.delete("/api/profiles/{name}")
+async def delete_profile(name: str):
+    from core import profiles
+    return {"profiles": profiles.delete(name)}
+
+
+class LibraryScanRequest(BaseModel):
+    root: str = ""
+    name_contains: str = ""
+    min_size_mb: float = 0
+    min_bitrate_mbps: float = 0
+    min_height: int = 0
+    codecs_include: list[str] = []
+    codecs_exclude: list[str] = []
+
+
+@app.post("/api/library/scan")
+async def library_scan(req: LibraryScanRequest):
+    from core import library
+    started = library.start_scan(req.root, req.model_dump())
+    return {"started": started, "state": library.get_state()}
+
+
+@app.get("/api/library/scan")
+async def library_scan_state():
+    from core import library
+    return library.get_state()
+
+
+@app.get("/api/notify")
+async def get_notify():
+    from core import notify
+    cfg = notify.load()
+    # Secrets nicht im Klartext an die UI zurückgeben – nur ob gesetzt.
+    return {
+        "webhook_url": cfg["webhook_url"],
+        "discord_url": cfg["discord_url"],
+        "telegram_chat": cfg["telegram_chat"],
+        "telegram_token_set": bool(cfg["telegram_token"]),
+        "on_done": cfg["on_done"],
+        "on_failed": cfg["on_failed"],
+    }
+
+
+class NotifyRequest(BaseModel):
+    webhook_url: str = ""
+    discord_url: str = ""
+    telegram_token: str = ""
+    telegram_chat: str = ""
+    on_done: bool = True
+    on_failed: bool = True
+
+
+@app.post("/api/notify")
+async def set_notify(req: NotifyRequest):
+    from core import notify
+    payload = req.model_dump()
+    # Leeres Telegram-Token bedeutet „unverändert lassen" (UI kennt es nicht).
+    if not payload.get("telegram_token"):
+        payload.pop("telegram_token", None)
+    notify.save(payload)
+    return {"ok": True}
+
+
+@app.post("/api/notify/test")
+async def test_notify():
+    from core import notify
+    notify.send("🔔 Testbenachrichtigung", "Verbindung von Compression Studio funktioniert.")
+    return {"ok": True}
+
+
+@app.get("/api/watch")
+async def get_watch():
+    from core.watcher import watcher
+    return watcher.status()
+
+
+class WatchRequest(BaseModel):
+    enabled: bool = False
+    folder: str = ""
+    interval_min: int = 15
+    profile: str = ""
+    active_start: Optional[int] = None
+    active_end: Optional[int] = None
+
+
+@app.post("/api/watch")
+async def set_watch(req: WatchRequest):
+    from core import watcher as watcher_mod
+    data = req.model_dump()
+    data["interval_min"] = max(1, min(1440, data["interval_min"]))
+    for k in ("active_start", "active_end"):
+        if data[k] is not None:
+            data[k] = max(0, min(23, int(data[k])))
+    watcher_mod.save_config(data)
+    watcher_mod.watcher.reconfigure()
+    return {"ok": True}
+
+
+@app.post("/api/watch/scan")
+async def watch_scan_now():
+    """Watch-Ordner sofort einmalig prüfen (unabhängig vom Zeitfenster)."""
+    from core.watcher import watcher, load_config
+    cfg = load_config()
+    watcher._scan(cfg)
+    return {"ok": True, "added": watcher._last_added}
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """Aggregierte Kennzahlen + letzte Jobs aus der persistenten Historie."""
+    from core import history
+    return {"stats": history.stats(), "recent": history.recent(100)}
+
+
+@app.post("/api/stats/clear")
+async def clear_stats():
+    from core import history
+    return {"deleted": history.clear()}
+
+
 @app.get("/api/vmaf/sessions")
 async def vmaf_sessions():
     """Liste archivierter VMAF-Vergleiche für die Verlaufsauswahl."""
@@ -290,6 +479,20 @@ async def cancel(item_id: str):
 async def clear():
     queue.clear_finished()
     return {"ok": True}
+
+
+class PauseRequest(BaseModel):
+    paused: bool
+
+
+@app.post("/api/queue/pause")
+async def pause_queue(req: PauseRequest):
+    return {"paused": queue.set_paused(req.paused)}
+
+
+@app.post("/api/queue/{item_id}/move")
+async def move_item(item_id: str, direction: int = 1):
+    return {"ok": queue.move(item_id, -1 if direction < 0 else 1)}
 
 
 class ParallelRequest(BaseModel):
@@ -388,6 +591,9 @@ async def hardware():
 # ------------------------------------------------------------------- WebSocket
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
+    if config.APP_PASSWORD and websocket.cookies.get(config.AUTH_COOKIE) != config.auth_token():
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     try:
         while True:
