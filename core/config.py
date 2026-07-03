@@ -91,6 +91,13 @@ METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 # --device /dev/dri/renderD129`.
 VAAPI_DEVICE = os.getenv("VAAPI_DEVICE", "/dev/dri/renderD128")
 
+# Intel-Encoder-Backend: "vaapi" (Standard) oder "qsv".
+# QSV/oneVPL benötigt VA-API >= 1.15; das Basis-Image (Ubuntu 22.04, libva 1.14)
+# unterstützt das NICHT → QSV-Init schlägt fehl. VAAPI läuft mit libva 1.14 und
+# nutzt dieselbe Intel-Hardware. Nur auf "qsv" stellen, wenn die libva-Version
+# im Image tatsächlich >= 1.15 ist.
+INTEL_ENCODER = os.getenv("INTEL_ENCODER", "vaapi").strip().lower()
+
 # --- CQ-Sweetspot-Overrides ---------------------------------------------------
 # Optional per Env feinjustierbar. Format (kommagetrennt):
 #   CQ_SWEETSPOT="cpu:hevc=22,nvidia:av1=33"

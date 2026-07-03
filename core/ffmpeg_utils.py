@@ -269,25 +269,42 @@ def ffprobe(path: Path) -> Optional[VideoInfo]:
 
 # ----------------------------------------------------------------- Encoder-Map
 
-# Encoder-Name pro Plattform/Codec
+# Encoder-Name pro Plattform/Codec. Intel gibt es in zwei Ausprägungen:
+# QSV (oneVPL, braucht VA-API >= 1.15) und VAAPI (läuft mit libva 1.14).
 ENCODERS = {
     "nvidia": {"av1": "av1_nvenc", "hevc": "hevc_nvenc", "h264": "h264_nvenc"},
     "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
+    "intel_vaapi": {"av1": "av1_vaapi", "hevc": "hevc_vaapi", "h264": "h264_vaapi"},
     "amd": {"av1": "av1_vaapi", "hevc": "hevc_vaapi", "h264": "h264_vaapi"},
     "cpu": {"av1": "libsvtav1", "hevc": "libx265", "h264": "libx264"},
 }
 
-# Qualitäts-Flag pro Plattform (herstellerspezifisch)
-QUALITY_FLAG = {
-    "nvidia": "-cq",
-    "intel": "-global_quality",
-    "amd": "-qp",
-    "cpu": "-crf",
-}
+
+def intel_uses_vaapi() -> bool:
+    """True, wenn die Intel-Plattform über VAAPI (statt QSV) encodieren soll."""
+    from . import config
+    return getattr(config, "INTEL_ENCODER", "vaapi") != "qsv"
+
+
+def _encoder_map(platform: str) -> dict:
+    if platform == "intel" and intel_uses_vaapi():
+        return ENCODERS["intel_vaapi"]
+    return ENCODERS.get(platform, ENCODERS["cpu"])
 
 
 def encoder_name(platform: str, codec: str) -> str:
-    return ENCODERS.get(platform, ENCODERS["cpu"]).get(codec, "libsvtav1")
+    return _encoder_map(platform).get(codec, "libsvtav1")
+
+
+def encoder_backend(platform: str) -> str:
+    """Konkretes HW-Backend: 'nvenc' | 'qsv' | 'vaapi' | 'cpu'."""
+    if platform == "nvidia":
+        return "nvenc"
+    if platform == "amd":
+        return "vaapi"
+    if platform == "intel":
+        return "vaapi" if intel_uses_vaapi() else "qsv"
+    return "cpu"
 
 
 @functools.lru_cache(maxsize=1)
@@ -332,9 +349,21 @@ def encoder_available(platform: str, codec: str) -> bool:
 
 
 def quality_args(platform: str, value: int) -> list[str]:
-    """Liefert die herstellerspezifischen Qualitäts-Argumente."""
-    flag = QUALITY_FLAG.get(platform, "-crf")
-    return [flag, str(value)]
+    """Liefert die herstellerspezifischen Qualitäts-Argumente.
+
+    - NVENC: -cq
+    - QSV:   -global_quality
+    - VAAPI (AMD und Intel-VAAPI): -rc_mode CQP -qp
+    - CPU:   -crf
+    """
+    backend = encoder_backend(platform)
+    if backend == "nvenc":
+        return ["-cq", str(value)]
+    if backend == "qsv":
+        return ["-global_quality", str(value)]
+    if backend == "vaapi":
+        return ["-rc_mode", "CQP", "-qp", str(value)]
+    return ["-crf", str(value)]
 
 
 def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> list[str]:
@@ -429,11 +458,12 @@ def audio_track_args(tracks: list) -> list[str]:
 def hwaccel_input_args(platform: str) -> list[str]:
     """Hardware-Decode-/Init-Argumente, die VOR dem -i Input stehen."""
     from . import config
+    backend = encoder_backend(platform)
     if platform == "nvidia":
         return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    if platform == "intel":
+    if backend == "qsv":
         return ["-hwaccel", "qsv", "-qsv_device", config.VAAPI_DEVICE]
-    if platform == "amd":
+    if backend == "vaapi":
         return ["-hwaccel", "vaapi", "-vaapi_device", config.VAAPI_DEVICE]
     return []
 

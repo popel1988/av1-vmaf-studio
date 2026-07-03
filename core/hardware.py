@@ -307,7 +307,11 @@ class HardwareMonitor:
                 nvenc_engines += eng
                 gpus.append({"vendor": "nvidia", "name": name, "encoders": eng})
         for card in self._drm_cards:
-            label = "Intel GPU (QSV)" if card["vendor"] == "intel" else "AMD GPU (VAAPI)"
+            if card["vendor"] == "intel":
+                from . import ffmpeg_utils as _ff
+                label = "Intel GPU (%s)" % ("VAAPI" if _ff.intel_uses_vaapi() else "QSV")
+            else:
+                label = "AMD GPU (VAAPI)"
             gpus.append({"vendor": card["vendor"], "name": label, "encoders": 1})
 
         cpu_threads = psutil.cpu_count(logical=True) or 2

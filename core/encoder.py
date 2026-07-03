@@ -69,10 +69,10 @@ def build_video_filters(
         filters.append(f"scale=-2:{target_height}:flags=lanczos")
 
     # Plattformspezifischer Upload/Pixelformat-Schritt.
-    # AMD (VAAPI) und Intel (QSV/VPL) benötigen Frames auf einer HW-Surface.
+    # AMD/Intel benötigen Frames auf einer HW-Surface.
     # Für HDR-Erhalt 10-bit (p010le), sonst nv12 (8-bit).
     hw_fmt = "p010le" if keep_hdr else "nv12"
-    if platform == "amd":
+    if platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
         filters.append(f"format={hw_fmt},hwupload")
     elif platform == "intel":
         filters.append(f"format={hw_fmt},hwupload=extra_hw_frames=64")
@@ -157,14 +157,14 @@ def build_encode_cmd(
             # Komplett auf der GPU: Decode -> (scale_cuda) -> NVENC.
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
             nvidia_cuda_frames = True
-    elif platform == "amd":
-        # VAAPI-Device als Upload-Ziel für den Software-Filterpfad.
+    elif platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
+        # VAAPI-Device als Upload-Ziel für den Software-Filterpfad (AMD sowie
+        # Intel im VAAPI-Modus – läuft mit libva 1.14, im Gegensatz zu QSV).
         cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-filter_hw_device", "va"]
     elif platform == "intel":
         # QSV (oneVPL) wird unter Linux aus einem VAAPI-Device abgeleitet
-        # (dokumentierter, robuster Weg: qsv=qs@va). Render-Node konfigurierbar,
-        # da bei mehreren GPUs nicht zwingend renderD128 die Intel-iGPU ist.
+        # (dokumentierter Weg: qsv=qs@va). Benötigt VA-API >= 1.15.
         cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-init_hw_device", "qsv=qs@va",
                 "-filter_hw_device", "qs"]

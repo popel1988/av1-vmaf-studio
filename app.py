@@ -134,12 +134,17 @@ async def _shutdown() -> None:
 
 
 # ----------------------------------------------------------------------- Views
-_PLATFORM_LABELS = {
-    "nvidia": "NVIDIA (GPU · NVENC)",
-    "intel": "Intel (GPU · QSV)",
-    "amd": "AMD (GPU · VAAPI)",
-    "cpu": "CPU (Software)",
-}
+def _platform_label(p: str) -> str:
+    if p == "nvidia":
+        return "NVIDIA (GPU · NVENC)"
+    if p == "amd":
+        return "AMD (GPU · VAAPI)"
+    if p == "intel":
+        backend = "VAAPI" if ff.intel_uses_vaapi() else "QSV"
+        return f"Intel (GPU · {backend})"
+    return "CPU (Software)"
+
+
 _CODEC_LABELS = {"av1": "AV1", "hevc": "HEVC / H.265", "h264": "H.264"}
 _ALL_CODECS = ("av1", "hevc", "h264")
 
@@ -160,7 +165,7 @@ def _encoder_options() -> list[dict]:
                 "platform": p,
                 "codec": c,
                 "value": f"{p}:{c}",
-                "platform_label": _PLATFORM_LABELS.get(p, p.upper()),
+                "platform_label": _platform_label(p),
                 "codec_label": _CODEC_LABELS.get(c, c.upper()),
                 "encoder": ff.encoder_name(p, c),
                 "kind": "cpu" if p == "cpu" else "gpu",
@@ -178,7 +183,7 @@ async def index(request: Request):
             "request": request,
             "platforms": plats,
             "platform_options": [
-                {"value": p, "label": _PLATFORM_LABELS.get(p, p.upper())}
+                {"value": p, "label": _platform_label(p)}
                 for p in plats
             ],
             "encoder_options": _encoder_options(),
