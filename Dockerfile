@@ -5,10 +5,10 @@
 #  FFmpeg wird als moderner statischer GPL-Build (mit libvmaf, NVENC, VAAPI,
 #  QSV/VPL) eingebunden – die Distro-Version ist zu alt für av1_nvenc/av1_qsv.
 #
-#  Ubuntu 24.04 (noble): liefert libva 2.20 (VA-API 1.21). Das ist zwingend,
-#  weil der BtbN-FFmpeg-Build libva dynamisch lädt und das Symbol `vaMapBuffer2`
-#  (VA-API >= 1.15) erwartet – Ubuntu 22.04 (libva 2.12) crasht deshalb bei
-#  jedem Intel/AMD-Hardware-Encode ("undefined symbol: vaMapBuffer2").
+#  Basis Ubuntu 24.04 (noble) wegen neuem iHD-Treiber + oneVPL. WICHTIG: Der
+#  BtbN-FFmpeg-Build verlangt das libva-Symbol `vaMapBuffer2` (erst ab libva
+#  2.21 / VA-API 1.21). Da 24.04 nur libva 2.20 mitbringt, wird libva unten aus
+#  dem Quelltext (2.22) gebaut – sonst crasht jeder Intel/AMD-HW-Encode.
 #  Hinweis: CUDA-Images für ubuntu24.04 gibt es erst ab CUDA 12.6.
 # =============================================================================
 # Basis-Image überschreibbar – z. B. andere CUDA-Version, falls der (auf QNAP
@@ -32,9 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget xz-utils tar pciutils \
         python3 python3-pip python3-dev \
         # --- VAAPI / Intel QSV / AMD Userspace-Treiber ---
-        # libva2 (2.20 auf noble) + iHD-Treiber für Intel, mesa-va für AMD.
-        # QSV läuft über oneVPL: libvpl2 (Dispatcher) + libmfx-gen1.2
-        # (Gen-Runtime, z. B. UHD 730/Gen12). libmfx1 als Legacy-Fallback.
+        # libva2 (wird unten durch Quellbau 2.22 ersetzt) + iHD-Treiber für
+        # Intel, mesa-va für AMD. QSV läuft über oneVPL: libvpl2 (Dispatcher) +
+        # libmfx-gen1.2 (Gen-Runtime, z. B. UHD 730/Gen12). libmfx1 als Fallback.
         libva2 libva-drm2 vainfo \
         intel-media-va-driver-non-free \
         mesa-va-drivers \
@@ -42,6 +42,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # --- GPU-Monitoring-Werkzeuge ---
         intel-gpu-tools radeontop \
         libdrm2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------ Neueres libva bauen
+# Der statische BtbN-FFmpeg-Build lädt libva dynamisch und ist gegen libva >=
+# 2.21 gebaut (er verlangt das Symbol `vaMapBuffer2`, eingeführt in libva
+# 2.21.0 / VA-API 1.21). KEINE gängige Distro liefert das aktuell: Ubuntu 24.04
+# hat nur 2.20.0, Ubuntu 22.04 nur 2.12 → jeder Intel/AMD-Hardware-Encode
+# stürzt sonst mit "undefined symbol: vaMapBuffer2" ab (BtbN-Issue #457).
+# Wir bauen daher libva 2.22 aus dem Quelltext und überschreiben die
+# Distro-Version am Standard-Pfad. Der per apt installierte iHD-Treiber ist
+# abwärtskompatibel; fehlt ihm der neue Backend-Hook, fällt libva intern auf
+# vaMapBuffer zurück.
+ARG LIBVA_VERSION=2.22.0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential meson ninja-build pkg-config libdrm-dev \
+    && wget -q "https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz" \
+        -O /tmp/libva.tar.gz \
+    && tar -xf /tmp/libva.tar.gz -C /tmp \
+    && cd /tmp/libva-${LIBVA_VERSION} \
+    && meson setup build \
+        --prefix=/usr --libdir=/usr/lib/x86_64-linux-gnu \
+        -Dwith_x11=no -Dwith_glx=no -Dwith_wayland=no \
+    && meson install -C build \
+    && ldconfig \
+    # Verifizieren, dass das neue libva das benötigte Symbol exportiert:
+    && ( nm -D --defined-only /usr/lib/x86_64-linux-gnu/libva.so.2 | grep -q vaMapBuffer2 \
+         || (echo "FEHLER: libva ohne vaMapBuffer2 gebaut!" && exit 1) ) \
+    && cd / && rm -rf /tmp/libva* \
+    # Build-Werkzeuge wieder entfernen, damit das Image schlank bleibt:
+    && apt-get purge -y build-essential meson ninja-build pkg-config libdrm-dev \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------ Moderner FFmpeg (BtbN)
