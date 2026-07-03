@@ -51,9 +51,9 @@ services:
       # dann auf renderD129 o. Ä. setzen. Im Container prüfen mit:
       #   vainfo --display drm --device /dev/dri/renderD128
       - VAAPI_DEVICE=/dev/dri/renderD128
-      # Intel encodiert über VAAPI (Standard). QSV/oneVPL bräuchte VA-API >=1.15,
-      # was das Image (libva 1.14) nicht bietet. Nur ändern, wenn libva >=1.15.
-      # - INTEL_ENCODER=vaapi
+      # Intel-Encoder-Backend: "vaapi" (Standard) oder "qsv". Das Image (Ubuntu
+      # 24.04, libva 2.20 + oneVPL) unterstützt beide. QSV nur bei Bedarf setzen.
+      # - INTEL_ENCODER=qsv
 
     # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
     # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.

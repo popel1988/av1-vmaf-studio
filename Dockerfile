@@ -4,11 +4,19 @@
 #  nvidia-container-toolkit). Zusätzlich Intel-QSV/VAAPI- und AMD-VAAPI-Stacks.
 #  FFmpeg wird als moderner statischer GPL-Build (mit libvmaf, NVENC, VAAPI,
 #  QSV/VPL) eingebunden – die Distro-Version ist zu alt für av1_nvenc/av1_qsv.
+#
+#  Ubuntu 24.04 (noble): liefert libva 2.20 (VA-API 1.21). Das ist zwingend,
+#  weil der BtbN-FFmpeg-Build libva dynamisch lädt und das Symbol `vaMapBuffer2`
+#  (VA-API >= 1.15) erwartet – Ubuntu 22.04 (libva 2.12) crasht deshalb bei
+#  jedem Intel/AMD-Hardware-Encode ("undefined symbol: vaMapBuffer2").
+#  Hinweis: CUDA-Images für ubuntu24.04 gibt es erst ab CUDA 12.6.
 # =============================================================================
-# Basis-Image überschreibbar – z. B. ältere CUDA-Version, falls der (auf QNAP
+# Basis-Image überschreibbar – z. B. andere CUDA-Version, falls der (auf QNAP
 # gemountete) Nvidia-Treiber nicht zur Default-CUDA-Version passt:
-#   docker build --build-arg CUDA_IMAGE=nvidia/cuda:12.0.0-runtime-ubuntu22.04 .
-ARG CUDA_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04
+#   docker build --build-arg CUDA_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 .
+# WICHTIG: Bei einem Downgrade eine ubuntu24.04-Variante wählen (>= 12.6),
+# sonst ist libva zu alt (siehe oben).
+ARG CUDA_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -24,10 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget xz-utils tar pciutils \
         python3 python3-pip python3-dev \
         # --- VAAPI / Intel QSV / AMD Userspace-Treiber ---
+        # libva2 (2.20 auf noble) + iHD-Treiber für Intel, mesa-va für AMD.
+        # QSV läuft über oneVPL: libvpl2 (Dispatcher) + libmfx-gen1.2
+        # (Gen-Runtime, z. B. UHD 730/Gen12). libmfx1 als Legacy-Fallback.
         libva2 libva-drm2 vainfo \
         intel-media-va-driver-non-free \
         mesa-va-drivers \
-        libmfx1 \
+        libmfx1 libmfx-gen1.2 libvpl2 \
         # --- GPU-Monitoring-Werkzeuge ---
         intel-gpu-tools radeontop \
         libdrm2 \
@@ -62,7 +73,10 @@ RUN mkdir -p ${VMAF_MODEL_DIR} \
 # --------------------------------------------------------------- Python-App
 WORKDIR /app
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Ubuntu 24.04 markiert das System-Python als "externally managed" (PEP 668)
+# und blockiert systemweites pip. Im Container ist das unkritisch, daher
+# --break-system-packages statt eines separaten venv.
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY . .
 

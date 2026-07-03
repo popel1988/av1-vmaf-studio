@@ -159,12 +159,12 @@ def build_encode_cmd(
             nvidia_cuda_frames = True
     elif platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
         # VAAPI-Device als Upload-Ziel für den Software-Filterpfad (AMD sowie
-        # Intel im VAAPI-Modus – läuft mit libva 1.14, im Gegensatz zu QSV).
+        # Intel im VAAPI-Modus).
         cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-filter_hw_device", "va"]
     elif platform == "intel":
         # QSV (oneVPL) wird unter Linux aus einem VAAPI-Device abgeleitet
-        # (dokumentierter Weg: qsv=qs@va). Benötigt VA-API >= 1.15.
+        # (dokumentierter Weg: qsv=qs@va).
         cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-init_hw_device", "qsv=qs@va",
                 "-filter_hw_device", "qs"]

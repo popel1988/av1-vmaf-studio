@@ -270,7 +270,7 @@ def ffprobe(path: Path) -> Optional[VideoInfo]:
 # ----------------------------------------------------------------- Encoder-Map
 
 # Encoder-Name pro Plattform/Codec. Intel gibt es in zwei Ausprägungen:
-# QSV (oneVPL, braucht VA-API >= 1.15) und VAAPI (läuft mit libva 1.14).
+# QSV (oneVPL) und VAAPI – beide laufen mit dem Image (Ubuntu 24.04, libva 2.20).
 ENCODERS = {
     "nvidia": {"av1": "av1_nvenc", "hevc": "hevc_nvenc", "h264": "h264_nvenc"},
     "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
