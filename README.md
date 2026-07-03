@@ -1,5 +1,8 @@
 # AV1 / VMAF Compression Studio
 
+**Repository:** [github.com/popel1988/av1-vmaf-studio](https://github.com/popel1988/av1-vmaf-studio)  
+**Container-Image (GHCR):** `ghcr.io/popel1988/av1-vmaf-studio:latest`
+
 Ein produktionsbereites All-in-One-Tool zur platzsparenden Video-Komprimierung
 mit **VMAF-gesteuerter Qualitätsfindung**, modernem Dashboard, Live-Hardware-
 Metriken und Hardware-Encoding für **Nvidia (NVENC)**, **Intel (QSV/VAAPI)**,
@@ -37,18 +40,17 @@ Metriken und Hardware-Encoding für **Nvidia (NVENC)**, **Intel (QSV/VAAPI)**,
 Portainer klont das Repo selbst auf den Docker-Host und baut das Image dort.
 Du musst also **nichts** manuell auf den Server kopieren.
 
-1. Projekt in ein Git-Repo pushen (GitHub/GitLab, kann privat sein).
-2. In Portainer: **Stacks → Add stack → Build method: _Repository_**.
-3. Felder ausfüllen:
-   - **Repository URL**: z. B. `https://github.com/<user>/av1convert-vmaf`
+1. In Portainer: **Stacks → Add stack → Build method: _Repository_**.
+2. Felder ausfüllen:
+   - **Repository URL**: `https://github.com/popel1988/av1-vmaf-studio`
    - **Repository reference**: `refs/heads/main`
    - **Compose path**: `docker-compose.yml`
    - (privates Repo: Authentifizierung/Token aktivieren)
-4. Unter **Environment variables** die Pfade setzen (kein Datei-Editieren nötig):
+3. Unter **Environment variables** die Pfade setzen (kein Datei-Editieren nötig):
    - `INPUT_PATH = /mnt/videos`
    - `OUTPUT_PATH = /mnt/output`
    - optional `WEB_PORT = 8080`
-5. **Deploy the stack** – Portainer baut das Image und startet den Container.
+4. **Deploy the stack** – Portainer baut das Image und startet den Container.
 
 > Kein Nvidia im Host? Entferne in `docker-compose.yml` die Zeilen `runtime: nvidia`
 > und den kompletten `deploy:`-Block, sonst schlägt der Start fehl.
@@ -66,12 +68,17 @@ INPUT_PATH=/mnt/videos OUTPUT_PATH=/mnt/output docker compose up -d --build
 ### C) Image in eine Registry pushen (für mehrere Hosts)
 
 ```bash
-docker build -t ghcr.io/<user>/av1-vmaf-studio:latest .
-docker push ghcr.io/<user>/av1-vmaf-studio:latest
+git clone https://github.com/popel1988/av1-vmaf-studio.git
+cd av1-vmaf-studio
+docker build -t ghcr.io/popel1988/av1-vmaf-studio:latest .
+docker push ghcr.io/popel1988/av1-vmaf-studio:latest
 ```
 
-Danach in `docker-compose.yml` `build: .` durch `image: ghcr.io/<user>/av1-vmaf-studio:latest`
+Danach in `docker-compose.yml` `build: .` durch `image: ghcr.io/popel1988/av1-vmaf-studio:latest`
 ersetzen – Portainer zieht dann nur noch das fertige Image.
+
+Bei Push auf `main` baut GitHub Actions das Image automatisch und veröffentlicht es unter
+`ghcr.io/popel1988/av1-vmaf-studio` (siehe `.github/workflows/docker-build.yml`).
 
 ### Hinweise zur Hardware
 

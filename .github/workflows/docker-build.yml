@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Ergibt z. B. ghcr.io/<user>/av1convert-vmaf
+  # Ergibt ghcr.io/popel1988/av1-vmaf-studio
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:

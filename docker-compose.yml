@@ -9,8 +9,8 @@
 services:
   av1-vmaf-studio:
     build: .
-    # Alternativ direkt ein vorgebautes Image angeben:
-    # image: ghcr.io/<user>/av1-vmaf-studio:latest
+    # Alternativ direkt das GHCR-Image nutzen (ohne lokalen Build):
+    # image: ghcr.io/popel1988/av1-vmaf-studio:latest
     container_name: av1-vmaf-studio
     restart: unless-stopped
 
