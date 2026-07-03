@@ -266,17 +266,6 @@
               </div>
 
               <div class="field">
-                <label>VMAF-Berechnung</label>
-                <select id="opt-vmaf-engine">
-                  <option value="auto">Automatisch (GPU falls verfügbar)</option>
-                  <option value="cpu">CPU (genauer)</option>
-                  <option value="gpu">GPU (schneller, Fallback CPU)</option>
-                  <option value="both">Beide – CPU &amp; GPU vergleichen</option>
-                </select>
-                <p class="hint">„Beide" rechnet jeden Testwert doppelt (CPU-Referenz + GPU). GPU entfällt bei „HDR beibehalten" (10-bit).</p>
-              </div>
-
-              <div class="field">
                 <label>Nach VMAF-Ergebnis</label>
                 <select id="opt-workflow">
                   <option value="auto">Automatisch besten Wert encodieren</option>
@@ -379,15 +368,6 @@
           <div id="vmaf-archive-note" class="archive-note" style="display:none">
             Archiv-Ansicht – gespeicherter Vergleich.
             <button class="btn btn-ghost btn-sm" id="btn-vmaf-live">Zur aktuellen Analyse</button>
-            <span id="vmaf-reanalyze" style="display:none">
-              · Erneut analysieren mit
-              <select id="vmaf-re-engine" class="select select-sm">
-                <option value="cpu">CPU</option>
-                <option value="gpu">GPU</option>
-                <option value="both">Beide</option>
-              </select>
-              <button class="btn btn-primary btn-sm" id="btn-vmaf-reanalyze">Start</button>
-            </span>
           </div>
           <div class="card-body vmaf-body">
             <div class="vmaf-chart-wrap">
@@ -523,6 +503,7 @@
             <p class="hint">Durchsucht den Eingabeordner rekursiv und filtert Videos (z. B. „alle H.264 &gt; 10 Mbit/s"). Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.</p>
             <div class="lib-filters">
               <div class="field"><label>Name enthält</label><input type="text" id="lib-name" placeholder="optional" /></div>
+              <div class="field"><label>Name ausschließen</label><input type="text" id="lib-exclude" placeholder="z. B. sample, trailer, .archiv" title="Kommagetrennt – Dateien, deren Pfad einen dieser Begriffe enthält, werden übersprungen" /></div>
               <div class="field"><label>Min. Größe (MB)</label><input type="number" id="lib-min-size" min="0" value="0" /></div>
               <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="lib-min-br" min="0" step="0.5" value="0" /></div>
               <div class="field"><label>Min. Höhe (px)</label><input type="number" id="lib-min-h" min="0" value="0" /></div>

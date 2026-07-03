@@ -58,7 +58,6 @@ class JobSettings:
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
-    vmaf_engine: str = "auto"      # auto | cpu | gpu | both
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
@@ -455,7 +454,6 @@ class QueueManager:
                 source_title=item.title,
                 source_path=item.path,
                 params=asdict(s),
-                vmaf_engine=s.vmaf_engine,
                 encoders=_parse_encoders(s.compare_encoders),
             )
             analysis = vmaf_mod.analyze(
@@ -677,7 +675,6 @@ def build_job_settings(d: dict) -> JobSettings:
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
-        vmaf_engine=d.get("vmaf_engine", "auto"),
         generate_screenshots=bool(d.get("generate_screenshots", True)),
         post_processing=d.get("post_processing", "keep"),
         suffix=d.get("suffix", "_" + codec),

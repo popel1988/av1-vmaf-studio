@@ -556,7 +556,6 @@
       test_values: gatherTestValues(),
       clip_seconds: parseInt($("opt-clip").value, 10),
       samples: $("opt-samples") ? parseInt($("opt-samples").value, 10) : 1,
-      vmaf_engine: $("opt-vmaf-engine") ? $("opt-vmaf-engine").value : "auto",
       generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
       suffix: "_" + $("opt-codec").value,
@@ -985,31 +984,6 @@
     }
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
-    const reBtn = $("btn-vmaf-reanalyze");
-    if (reBtn) reBtn.addEventListener("click", async () => {
-      if (!state.viewSession) return;
-      const engine = $("vmaf-re-engine") ? $("vmaf-re-engine").value : "cpu";
-      reBtn.disabled = true;
-      const orig = reBtn.textContent;
-      reBtn.textContent = "Startet …";
-      try {
-        const r = await fetch("/api/vmaf/reanalyze", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session: state.viewSession, vmaf_engine: engine }),
-        });
-        const d = await r.json();
-        if (!r.ok) {
-          reBtn.textContent = d.error || "Fehler";
-        } else {
-          reBtn.textContent = "Läuft – siehe Warteschlange";
-          showLiveVmaf();
-          updateQueue();
-        }
-      } catch (e) {
-        reBtn.textContent = "Fehler";
-      }
-      setTimeout(() => { reBtn.disabled = false; reBtn.textContent = orig; }, 3000);
-    });
     refreshVmafHistory();
   }
 
@@ -1062,8 +1036,6 @@
       state.viewSession = name;
       const note = $("vmaf-archive-note");
       if (note) note.style.display = "";
-      const reBox = $("vmaf-reanalyze");
-      if (reBox) reBox.style.display = data.source_available ? "" : "none";
       const actions = $("vmaf-actions");
       if (actions) actions.style.display = "none";
       showCard($("vmaf-card"), true);
@@ -1229,16 +1201,7 @@
   }
 
   function vmafCell(r) {
-    // Primärwert plus – falls „Beide" gerechnet wurde – GPU-Wert & Differenz.
     let s = `${r.vmaf.toFixed(2)}`;
-    if (r.engine === "gpu") s += ' <span class="engine-tag gpu">GPU</span>';
-    if (r.vmaf_gpu != null) {
-      const d = r.vmaf_delta != null ? r.vmaf_delta : (r.vmaf - r.vmaf_gpu);
-      const sign = d >= 0 ? "+" : "";
-      s = `${r.vmaf.toFixed(2)} <span class="engine-tag cpu">CPU</span>`
-        + `<br><span class="muted">${r.vmaf_gpu.toFixed(2)} <span class="engine-tag gpu">GPU</span>`
-        + ` · Δ ${sign}${d.toFixed(2)}</span>`;
-    }
     // Mehrere Szenen: Mittelwert oben, Streuung (min–max) je Szene darunter.
     if (r.vmaf_min != null && r.vmaf_max != null) {
       const perScene = (r.scene_scores || [])
@@ -1687,7 +1650,6 @@
     set("opt-workflow", s.workflow, "change");
     set("opt-clip", s.clip_seconds);
     set("opt-samples", s.samples, "change");
-    set("opt-vmaf-engine", s.vmaf_engine, "change");
     set("opt-screenshots", s.generate_screenshots);
     set("opt-post", s.post_processing, "change");
     set("opt-audio-mode", s.audio_mode, "change");
@@ -1778,6 +1740,8 @@
     const f = {
       root: state.currentPath || "",
       name_contains: $("lib-name").value.trim(),
+      name_exclude: ($("lib-exclude") ? $("lib-exclude").value : "")
+        .split(",").map((s) => s.trim()).filter(Boolean),
       min_size_mb: parseFloat($("lib-min-size").value) || 0,
       min_bitrate_mbps: parseFloat($("lib-min-br").value) || 0,
       min_height: parseInt($("lib-min-h").value, 10) || 0,

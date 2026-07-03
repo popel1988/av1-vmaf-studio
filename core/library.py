@@ -71,6 +71,8 @@ def _run(root_rel: str, filters: dict) -> None:
         min_bitrate = float(filters.get("min_bitrate_mbps") or 0) * 1_000_000
         min_height = int(filters.get("min_height") or 0)
         name_contains = str(filters.get("name_contains") or "").lower()
+        name_exclude = [str(t).lower() for t in (filters.get("name_exclude") or [])
+                        if str(t).strip()]
         inc = {c.lower() for c in (filters.get("codecs_include") or [])}
         exc = {c.lower() for c in (filters.get("codecs_exclude") or [])}
 
@@ -80,6 +82,15 @@ def _run(root_rel: str, filters: dict) -> None:
             try:
                 if name_contains and name_contains not in f.name.lower():
                     continue
+                # Ausschluss: greift auf den gesamten (relativen) Pfad, damit auch
+                # ganze Ordner wie „.archiv" übersprungen werden können.
+                if name_exclude:
+                    try:
+                        rel_low = str(f.relative_to(base)).replace("\\", "/").lower()
+                    except ValueError:
+                        rel_low = f.name.lower()
+                    if any(t in rel_low for t in name_exclude):
+                        continue
                 if min_size and f.stat().st_size < min_size:
                     continue
             except OSError:
