@@ -145,6 +145,7 @@ class VmafAnalysis:
     model: str = ""
     rate_mode: str = "cq"
     clip_seconds: int = 30
+    error: str = ""            # Grund, falls keine Ergebnisse zustande kamen
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -158,6 +159,7 @@ class VmafAnalysis:
             "model": self.model,
             "rate_mode": self.rate_mode,
             "clip_seconds": self.clip_seconds,
+            "error": self.error,
         }
 
 
@@ -344,6 +346,7 @@ def analyze(
             d["sub_percent"] = round(sub, 1)
         progress(d)
 
+    last_error = ""  # letzter Test-Encode-Fehler (für Diagnose, falls 0 Ergebnisse)
     try:
         # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
         sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
@@ -410,9 +413,18 @@ def analyze(
                     # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
                     runner = EncodeRunner(on_progress=lambda pr: emit(
                         "encode", fps=pr.fps, sub=pr.percent))
-                    runner.run(cmd, clip_len)
+                    rc, enc_err = runner.run(cmd, clip_len)
                     prog["done"] += 1
                     if not test_file.exists() or test_file.stat().st_size == 0:
+                        # Test-Encode fehlgeschlagen – Grund merken/loggen, sonst
+                        # bliebe die Analyse ohne Ergebnis und ohne Hinweis stehen.
+                        tail = (enc_err or "").strip().splitlines()
+                        last_error = (
+                            f"Test-Encode fehlgeschlagen ({disp} @ {rate_lbl}, "
+                            f"FFmpeg Exit {rc}): {tail[-1] if tail else 'keine Ausgabe'}"
+                        )
+                        logger.warning("%s\nCMD: %s\nSTDERR:\n%s",
+                                       last_error, " ".join(cmd), enc_err)
                         continue
                     if status:
                         status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
@@ -468,6 +480,12 @@ def analyze(
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
                           source_path=opts.source_path, params=opts.params)
+        elif not cancelled():
+            # Kein einziges Ergebnis – Grund weiterreichen, damit der Job nicht
+            # kommentarlos „fertig"/leer wird.
+            analysis.error = last_error or (
+                "VMAF-Analyse ohne Ergebnis: alle Test-Encodes sind "
+                "fehlgeschlagen (Encoder/Plattform prüfen).")
     finally:
         _finalize_work(work, sess)
 

@@ -822,7 +822,9 @@
       const moveBtns = it.status === "wartend"
         ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="Nach oben">↑</button>` +
           `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="Nach unten">↓</button>` : "";
-      const err = it.error ? `<div class="muted" style="font-size:11px">${escapeHtml(it.error.slice(0, 80))}</div>` : "";
+      const err = it.error
+        ? `<div class="queue-err" title="${escapeHtml(it.error)}">${escapeHtml(it.error.slice(0, 200))}${it.error.length > 200 ? " …" : ""}</div>`
+        : "";
       // Dauer: laufend (aktiv) oder final (abgeschlossen).
       const dur = (active.has(it.id) || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
       const finished = DONE.includes(it.status) && it.finished_at

@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,7 +283,12 @@ class EncodeRunner:
                 pass
 
     def run(self, cmd: list[str], duration: float) -> tuple[int, str]:
-        """Startet das Kommando, parst `-progress`. Gibt (returncode, stderr)."""
+        """Startet das Kommando, parst `-progress`. Gibt (returncode, stderr).
+
+        stderr wird in einem eigenen Thread geleert, damit ein voller stderr-
+        Puffer (z. B. gesprächiger QSV/VAAPI-Init) nicht mit dem stdout-Lesen
+        deadlockt und der komplette Fehlertext für die Diagnose erhalten bleibt.
+        """
         self.proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -291,7 +297,16 @@ class EncodeRunner:
             bufsize=1,
         )
         prog = EncodeProgress()
-        stderr_tail: list[str] = []
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            if self.proc is None or self.proc.stderr is None:
+                return
+            for err_line in self.proc.stderr:
+                stderr_lines.append(err_line.rstrip("\n"))
+
+        err_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        err_thread.start()
 
         assert self.proc.stdout is not None
         for line in self.proc.stdout:
@@ -306,10 +321,9 @@ class EncodeRunner:
                 self.on_progress(prog)
 
         self.proc.wait()
-        # Stderr-Reste (für Fehlerdiagnose)
-        if self.proc.stderr is not None:
-            stderr_tail = self.proc.stderr.read().splitlines()[-20:]
-        return self.proc.returncode, "\n".join(stderr_tail)
+        err_thread.join(timeout=5)
+        stderr_tail = "\n".join(stderr_lines[-40:])
+        return self.proc.returncode, stderr_tail
 
     @staticmethod
     def _apply(prog: EncodeProgress, key: str, val: str, duration: float) -> None:

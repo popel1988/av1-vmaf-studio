@@ -473,6 +473,18 @@ class QueueManager:
                 item.status = STATUS_CANCELLED
                 return
 
+            # Keine VMAF-Ergebnisse → Analyse ist fehlgeschlagen. Nicht still
+            # weiterlaufen/„fertig" melden, sondern den Grund anzeigen.
+            if not analysis.results:
+                item.status = STATUS_FAILED
+                item.error = analysis.error or (
+                    "VMAF-Analyse lieferte keine Ergebnisse. Bitte Encoder/"
+                    "Plattform prüfen (Logs beachten).")
+                logger.error("VMAF ohne Ergebnis: %s | %s", item.title, item.error)
+                with self._lock:
+                    self._group_skip.add(item.group_id)
+                return
+
             if s.workflow == "compare_only":
                 item.status = STATUS_DONE
                 with self._lock:
