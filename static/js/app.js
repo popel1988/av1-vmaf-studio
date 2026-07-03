@@ -16,6 +16,8 @@
     lastItems: [],     // letzter Queue-Stand (für Rückkehr aus Archiv-Ansicht)
     lastActiveId: null,
     currentPage: "encode",
+    hasArchive: false, // es existieren archivierte VMAF-Vergleiche
+    shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
   };
 
   /* --------------------------------------------------------- NAVIGATION */
@@ -367,8 +369,15 @@
     $("opt-rate-mode").addEventListener("change", () => updateTestValueHints(true));
     updateTestValueHints(false);
 
-    $("opt-platform").addEventListener("change", buildCompareOptions);
-    $("opt-codec").addEventListener("change", buildCompareOptions);
+    $("opt-platform").addEventListener("change", () => {
+      updateCodecAvailability();
+      buildCompareOptions();
+    });
+    $("opt-codec").addEventListener("change", () => {
+      updateCodecAvailability();
+      buildCompareOptions();
+    });
+    updateCodecAvailability();
     buildCompareOptions();
 
     const audioMode = $("opt-audio-mode");
@@ -439,28 +448,78 @@
     "amd:av1": "AV1 (VAAPI)", "amd:hevc": "HEVC (VAAPI)", "amd:h264": "H.264 (VAAPI)",
     "cpu:av1": "SVT-AV1 (CPU)", "cpu:hevc": "x265 (CPU)", "cpu:h264": "x264 (CPU)",
   };
+  const CODEC_LABELS = { av1: "AV1", hevc: "HEVC / H.265", h264: "H.264" };
 
+  // Vom Server gelieferte Liste tatsächlich verfügbarer Encoder-Kombinationen.
+  function encoderMatrix() {
+    return (window.APP_CONFIG && window.APP_CONFIG.encoders) || [];
+  }
+  function encoderInfo(platform, codec) {
+    return encoderMatrix().find((e) => e.platform === platform && e.codec === codec);
+  }
+  function isEncoderAvailable(platform, codec) {
+    const e = encoderInfo(platform, codec);
+    return e ? !!e.available : true; // unbekannt -> nicht blockieren
+  }
+
+  // Codec-Dropdown je nach gewählter Plattform kennzeichnen (nicht verfügbare
+  // Codecs werden deaktiviert), damit klar ist, was die Plattform kann.
+  function updateCodecAvailability() {
+    const sel = $("opt-codec");
+    const plat = $("opt-platform").value;
+    if (!sel) return;
+    let firstAvail = null;
+    [...sel.options].forEach((opt) => {
+      const ok = isEncoderAvailable(plat, opt.value);
+      opt.disabled = !ok;
+      opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
+        + (ok ? "" : " — nicht verfügbar");
+      if (ok && firstAvail === null) firstAvail = opt.value;
+    });
+    // Falls der aktuell gewählte Codec auf dieser Plattform fehlt -> umschalten.
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) {
+      sel.value = firstAvail;
+    }
+    const hint = $("codec-hint");
+    if (hint) {
+      const e = encoderInfo(plat, sel.value);
+      hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
+    }
+  }
+
+  function compareLabel(v, info) {
+    if (info) return `${info.codec_label} · ${info.platform_label}`;
+    return COMPARE_LABELS[v] || v;
+  }
+
+  // Zeigt ALLE verfügbaren Encoder-Kombinationen (Plattform × Codec) als
+  // Vergleichsziele an – außer dem aktuell gewählten Basis-Encoder. So ist auf
+  // einen Blick sichtbar, was zur Verfügung steht.
   function buildCompareOptions() {
     const cont = $("compare-encoders");
     if (!cont) return;
-    const plat = $("opt-platform").value;
-    const codec = $("opt-codec").value;
-    const cands = [];
-    // Gleiche GPU-Plattform mit anderen Codecs (falls GPU gewählt)
-    if (plat !== "cpu") ["av1", "hevc"].forEach((c) => cands.push(`${plat}:${c}`));
-    // CPU-Qualitätsreferenzen
-    cands.push("cpu:hevc", "cpu:av1");
-    const base = `${plat}:${codec}`;
-    const seen = new Set();
-    const list = cands.filter((v) => v !== base && !seen.has(v) && seen.add(v));
+    const base = `${$("opt-platform").value}:${$("opt-codec").value}`;
     const prev = new Set(getCompareEncoders());
-    if (!list.length) {
-      cont.innerHTML = '<span class="empty">Keine sinnvollen Zusatz-Encoder.</span>';
+    const all = encoderMatrix().filter((e) => e.available && e.value !== base);
+    if (!all.length) {
+      cont.innerHTML = '<span class="empty">Keine weiteren Encoder verfügbar.</span>';
       return;
     }
-    cont.innerHTML = list.map((v) =>
-      `<label><input type="checkbox" class="compare-enc" value="${v}" ${prev.has(v) ? "checked" : ""}/>` +
-      `<span>${COMPARE_LABELS[v] || v}</span></label>`).join("");
+    // Nach Art gruppieren: GPU-Encoder zuerst, dann CPU (Software).
+    const groups = [
+      { key: "gpu", title: "GPU / Hardware" },
+      { key: "cpu", title: "CPU / Software" },
+    ];
+    cont.innerHTML = groups.map((g) => {
+      const items = all.filter((e) => e.kind === g.key);
+      if (!items.length) return "";
+      return `<div class="cmp-group"><span class="cmp-title">${g.title}</span>` +
+        items.map((e) =>
+          `<label><input type="checkbox" class="compare-enc" value="${e.value}" ` +
+          `${prev.has(e.value) ? "checked" : ""}/>` +
+          `<span>${escapeHtml(compareLabel(e.value, e))}</span></label>`
+        ).join("") + `</div>`;
+    }).join("");
   }
 
   function getCompareEncoders() {
@@ -866,8 +925,19 @@
     const card = $("vmaf-card");
     const actions = $("vmaf-actions");
     if (!target || !target.vmaf || !target.vmaf.results.length) {
-      showCard(card, false);
       if (actions) actions.style.display = "none";
+      // Gibt es archivierte Vergleiche, Karte + Dropdown sichtbar lassen, damit
+      // ältere Analysen auch ohne aktuelle Analyse abrufbar sind.
+      if (state.hasArchive) {
+        showCard(card, true);
+        if (state.lastVmafKey !== "__placeholder__") {
+          showArchivePlaceholder();
+          state.lastVmafKey = "__placeholder__";
+        }
+      } else {
+        showCard(card, false);
+        state.lastVmafKey = null;
+      }
       return;
     }
 
@@ -960,8 +1030,26 @@
         }).join("");
       sel.value = cur; // Auswahl beibehalten, falls noch vorhanden
       // Karte auch ohne Live-Analyse zeigen, wenn es Archive gibt.
-      if (sessions.length) showCard($("vmaf-card"), true);
+      const had = state.hasArchive;
+      state.hasArchive = sessions.length > 0;
+      if (state.hasArchive) showCard($("vmaf-card"), true);
+      // Beim ersten Erkennen von Archiven ohne Live-Analyse Platzhalter zeigen.
+      if (state.hasArchive && !had && !state.viewSession) {
+        renderVmaf(state.lastItems || [], state.lastActiveId);
+      }
     } catch (e) { /* still leise */ }
+  }
+
+  // Karte ohne aktuelle Analyse: Chart/Tabelle/Screenshots leeren und Hinweis,
+  // dass oben im Dropdown ein früherer Vergleich gewählt werden kann.
+  function showArchivePlaceholder() {
+    if (state.vmafChart) { state.vmafChart.destroy(); state.vmafChart = null; }
+    const tb = $("vmaf-table") && $("vmaf-table").querySelector("tbody");
+    if (tb) tb.innerHTML = "";
+    const sc = $("vmaf-screenshots"); if (sc) sc.innerHTML = "";
+    const note = $("vmaf-archive-note"); if (note) note.style.display = "none";
+    const badge = $("vmaf-model-badge");
+    if (badge) badge.textContent = "Kein aktueller Vergleich – oben einen früheren auswählen";
   }
 
   async function showArchivedSession(name) {

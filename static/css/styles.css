@@ -334,7 +334,12 @@ input[type="range"]::-moz-range-thumb {
 .badge-await { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); border-color: transparent; }
 
 /* Vergleichs-Encoder-Chips */
-.compare-encoders { display: flex; flex-wrap: wrap; gap: 8px; }
+.compare-encoders { display: flex; flex-direction: column; gap: 10px; }
+.cmp-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cmp-title {
+  flex: 0 0 100%; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--text-muted); font-weight: 600;
+}
 .compare-encoders label {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   background: var(--surface-2); border: 1px solid var(--border);

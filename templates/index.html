@@ -145,8 +145,8 @@
               <div class="field">
                 <label>GPU / Plattform</label>
                 <select id="opt-platform">
-                  {% for p in platforms %}
-                  <option value="{{ p }}">{{ p|upper }}</option>
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
                   {% endfor %}
                 </select>
               </div>
@@ -157,6 +157,7 @@
                   <option value="hevc">HEVC / H.265</option>
                   <option value="h264">H.264</option>
                 </select>
+                <p class="hint" id="codec-hint"></p>
               </div>
             </div>
 
@@ -287,7 +288,7 @@
               <div class="field">
                 <label>Zusätzlich vergleichen mit</label>
                 <div id="compare-encoders" class="compare-encoders"></div>
-                <p class="hint">Mehr Encoder = längerer Vergleich. Der effizienteste gewinnt und wird encodiert.</p>
+                <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich. Der effizienteste gewinnt und wird encodiert.</p>
               </div>
 
               <label class="check">
@@ -636,6 +637,7 @@
     window.APP_CONFIG = {
       sweetspot: [{{ sweetspot[0] }}, {{ sweetspot[1] }}],
       testQualities: {{ test_qualities|tojson }},
+      encoders: {{ encoder_options|tojson }},
     };
   </script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>

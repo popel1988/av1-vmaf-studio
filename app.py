@@ -137,13 +137,54 @@ async def _shutdown() -> None:
 
 
 # ----------------------------------------------------------------------- Views
+_PLATFORM_LABELS = {
+    "nvidia": "NVIDIA (GPU · NVENC)",
+    "intel": "Intel (GPU · QSV)",
+    "amd": "AMD (GPU · VAAPI)",
+    "cpu": "CPU (Software)",
+}
+_CODEC_LABELS = {"av1": "AV1", "hevc": "HEVC / H.265", "h264": "H.264"}
+_ALL_CODECS = ("av1", "hevc", "h264")
+
+
+def _encoder_options() -> list[dict]:
+    """Alle tatsächlich nutzbaren Encoder (erkannte Plattform × im Build vorhanden).
+
+    Damit weiß das UI zuverlässig, welche Plattform/Codec-Kombination verfügbar
+    ist – statt fest verdrahteter Annahmen. CPU ist immer dabei (Software-Fallback).
+    """
+    plats = monitor.available_platforms()
+    if "cpu" not in plats:
+        plats = plats + ["cpu"]
+    out: list[dict] = []
+    for p in plats:
+        for c in _ALL_CODECS:
+            out.append({
+                "platform": p,
+                "codec": c,
+                "value": f"{p}:{c}",
+                "platform_label": _PLATFORM_LABELS.get(p, p.upper()),
+                "codec_label": _CODEC_LABELS.get(c, c.upper()),
+                "encoder": ff.encoder_name(p, c),
+                "kind": "cpu" if p == "cpu" else "gpu",
+                "available": ff.encoder_available(p, c),
+            })
+    return out
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    plats = monitor.available_platforms()
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "platforms": monitor.available_platforms(),
+            "platforms": plats,
+            "platform_options": [
+                {"value": p, "label": _PLATFORM_LABELS.get(p, p.upper())}
+                for p in plats
+            ],
+            "encoder_options": _encoder_options(),
             "input_dir": str(config.INPUT_DIR),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
