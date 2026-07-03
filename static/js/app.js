@@ -1212,7 +1212,7 @@
       });
     }
     const gal = box.querySelector(".lightbox-grid");
-    gal.dataset.count = Math.min(items.length, 4);
+    gal.dataset.count = Math.min(items.length, 6);
     gal.innerHTML = items.map((it) =>
       `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
       `<img src="${it.src}" alt="" /></figure>`
