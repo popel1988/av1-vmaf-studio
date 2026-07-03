@@ -159,12 +159,13 @@ def build_encode_cmd(
             nvidia_cuda_frames = True
     elif platform == "amd":
         # VAAPI-Device als Upload-Ziel für den Software-Filterpfad.
-        cmd += ["-init_hw_device", "vaapi=va:/dev/dri/renderD128",
+        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-filter_hw_device", "va"]
     elif platform == "intel":
         # QSV (oneVPL) wird unter Linux aus einem VAAPI-Device abgeleitet
-        # (dokumentierter, robuster Weg: qsv=qs@va).
-        cmd += ["-init_hw_device", "vaapi=va:/dev/dri/renderD128",
+        # (dokumentierter, robuster Weg: qsv=qs@va). Render-Node konfigurierbar,
+        # da bei mehreren GPUs nicht zwingend renderD128 die Intel-iGPU ist.
+        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
                 "-init_hw_device", "qsv=qs@va",
                 "-filter_hw_device", "qs"]
 

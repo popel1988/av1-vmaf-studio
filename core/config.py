@@ -83,6 +83,14 @@ VIDEO_EXTENSIONS = {
 ARCHIVE_DIRNAME = ".archiv"
 METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 
+# --- GPU-Render-Node (Intel QSV / AMD VAAPI) ---------------------------------
+# Der DRM-Render-Knoten der zu nutzenden GPU. Auf Systemen mit MEHREREN GPUs
+# (z. B. Nvidia-Karte + Intel-iGPU) ist /dev/dri/renderD128 evtl. NICHT die
+# Intel-iGPU – dann hier den richtigen Knoten setzen (z. B. renderD129).
+# Ermitteln im Container: `ls -l /dev/dri/by-path/` bzw. `vainfo --display drm
+# --device /dev/dri/renderD129`.
+VAAPI_DEVICE = os.getenv("VAAPI_DEVICE", "/dev/dri/renderD128")
+
 # --- CQ-Sweetspot-Overrides ---------------------------------------------------
 # Optional per Env feinjustierbar. Format (kommagetrennt):
 #   CQ_SWEETSPOT="cpu:hevc=22,nvidia:av1=33"

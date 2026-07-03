@@ -43,6 +43,14 @@ services:
       - METRICS_INTERVAL=1.5
       - DATA_DIR=/data
       - RETAIN_VMAF_SESSIONS=true
+      # --- Intel QSV / AMD VAAPI --------------------------------------------
+      # Intel-Media-Treiber erzwingen (nötig für Intel-iGPU wie UHD 730).
+      - LIBVA_DRIVER_NAME=iHD
+      # DRM-Render-Knoten der zu nutzenden GPU. WICHTIG bei mehreren GPUs
+      # (Nvidia + Intel-iGPU): renderD128 ist evtl. NICHT die Intel-iGPU –
+      # dann auf renderD129 o. Ä. setzen. Im Container prüfen mit:
+      #   vainfo --display drm --device /dev/dri/renderD129
+      - VAAPI_DEVICE=/dev/dri/renderD128
 
     # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
     # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.

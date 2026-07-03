@@ -428,12 +428,13 @@ def audio_track_args(tracks: list) -> list[str]:
 
 def hwaccel_input_args(platform: str) -> list[str]:
     """Hardware-Decode-/Init-Argumente, die VOR dem -i Input stehen."""
+    from . import config
     if platform == "nvidia":
         return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
     if platform == "intel":
-        return ["-hwaccel", "qsv", "-qsv_device", "/dev/dri/renderD128"]
+        return ["-hwaccel", "qsv", "-qsv_device", config.VAAPI_DEVICE]
     if platform == "amd":
-        return ["-hwaccel", "vaapi", "-vaapi_device", "/dev/dri/renderD128"]
+        return ["-hwaccel", "vaapi", "-vaapi_device", config.VAAPI_DEVICE]
     return []
 
 
