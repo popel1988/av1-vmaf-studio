@@ -83,6 +83,11 @@ VIDEO_EXTENSIONS = {
 ARCHIVE_DIRNAME = ".archiv"
 METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 
+# --- VMAF-Beschleunigung ------------------------------------------------------
+# auto = CUDA nutzen, falls FFmpeg den Filter libvmaf_cuda kennt (Fallback CPU);
+# cpu  = immer auf der CPU rechnen; cuda = erzwingen.
+VMAF_HWACCEL = os.getenv("VMAF_HWACCEL", "auto").strip().lower()
+
 # --- CQ-Sweetspot-Overrides ---------------------------------------------------
 # Optional per Env feinjustierbar. Format (kommagetrennt):
 #   CQ_SWEETSPOT="cpu:hevc=22,nvidia:av1=33"

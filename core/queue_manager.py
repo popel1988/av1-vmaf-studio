@@ -12,7 +12,7 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -58,6 +58,7 @@ class JobSettings:
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
+    vmaf_engine: str = "auto"      # auto | cpu | gpu | both
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
@@ -91,8 +92,18 @@ class QueueItem:
     saved_bytes: int = 0
     message: str = ""
     created_at: float = field(default_factory=time.time)
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    duration: float = 0.0
 
     def to_dict(self) -> dict:
+        # Laufende Dauer bei aktiven Jobs live mitzählen, sonst die Endzeit.
+        if self.duration:
+            dur = self.duration
+        elif self.started_at:
+            dur = (self.finished_at or time.time()) - self.started_at
+        else:
+            dur = 0.0
         return {
             "id": self.id,
             "title": self.title,
@@ -111,6 +122,10 @@ class QueueItem:
             "saved_bytes": self.saved_bytes,
             "saved_human": ff.human_size(self.saved_bytes) if self.saved_bytes else "—",
             "output_path": self.output_path,
+            "created_at": self.created_at,
+            "finished_at": self.finished_at,
+            "duration": round(dur, 1),
+            "duration_human": ff.human_duration(dur) if dur else "—",
         }
 
 
@@ -366,6 +381,7 @@ class QueueManager:
 
     def _run_job(self, item: QueueItem) -> None:
         started = time.time()
+        item.started_at = started
         try:
             self._process(item)
         except Exception as e:  # pragma: no cover - Schutz vor Worker-Absturz
@@ -373,7 +389,9 @@ class QueueManager:
             item.error = f"Interner Fehler: {e}"
             logger.exception("Job abgestürzt: %s", item.title)
         finally:
-            self._record_history(item, time.time() - started)
+            item.finished_at = time.time()
+            item.duration = item.finished_at - started
+            self._record_history(item, item.duration)
             self._finish_active(item.id)
 
     @staticmethod
@@ -435,6 +453,9 @@ class QueueManager:
                 item_id=item.id,
                 session_name=_session_name(item),
                 source_title=item.title,
+                source_path=item.path,
+                params=asdict(s),
+                vmaf_engine=s.vmaf_engine,
                 encoders=_parse_encoders(s.compare_encoders),
             )
             analysis = vmaf_mod.analyze(
@@ -444,7 +465,9 @@ class QueueManager:
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
+                progress=lambda d: setattr(item, "progress", d),
             )
+            item.progress = {}
             item.vmaf = analysis.to_dict()
             item.message = ""
 
@@ -654,6 +677,7 @@ def build_job_settings(d: dict) -> JobSettings:
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
+        vmaf_engine=d.get("vmaf_engine", "auto"),
         generate_screenshots=bool(d.get("generate_screenshots", True)),
         post_processing=d.get("post_processing", "keep"),
         suffix=d.get("suffix", "_" + codec),

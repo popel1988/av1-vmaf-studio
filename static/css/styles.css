@@ -172,6 +172,21 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 .ring-pct { font-size: 20px; font-weight: 700; }
 .ring-name { font-size: 12px; color: var(--text-muted); font-weight: 600; }
 .ring-sub { font-size: 10.5px; color: var(--text-muted); }
+.ring-sub2 { font-size: 10px; opacity: 0.85; }
+
+.engine-tag { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 6px;
+  vertical-align: middle; letter-spacing: 0.03em; border: 1px solid var(--border); }
+.engine-tag.cpu { color: var(--accent); }
+.engine-tag.gpu { color: var(--good); }
+
+/* ------------------------------- SPARKLINES ------------------------------ */
+.spark-wrap { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.spark-head { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+.spark-item { display: flex; align-items: center; gap: 8px; }
+.spark-tag { font-size: 10px; font-weight: 700; width: 28px; color: var(--text-muted); }
+.spark-cpu-tag { color: var(--accent); }
+.spark-gpu-tag { color: var(--good); }
+.spark { flex: 1; height: 34px; border-radius: 6px; background: var(--surface); }
 
 /* ---------------------------- SIDEBAR FOOTER ---------------------------- */
 .sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
@@ -415,6 +430,40 @@ input[type="range"]::-moz-range-thumb {
   color: #fff; font-size: 13px; font-weight: 600; letter-spacing: .3px;
 }
 .lightbox-hint { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.6); font-size: 11px; }
+
+/* Mehrbild-Vergleich (Referenz + n Qualitäten nebeneinander) */
+.lightbox-grid { display: grid; gap: 10px; max-width: 98vw; align-items: start;
+  grid-template-columns: repeat(2, 1fr); }
+.lightbox-grid[data-count="1"] { grid-template-columns: 1fr; }
+.lightbox-grid[data-count="3"], .lightbox-grid[data-count="4"] { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 1200px) {
+  .lightbox-grid[data-count="3"] { grid-template-columns: repeat(3, 1fr); }
+  .lightbox-grid[data-count="4"] { grid-template-columns: repeat(4, 1fr); }
+}
+.lightbox-grid figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lightbox-grid figcaption { text-align: center; color: rgba(255,255,255,.8); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.lightbox-grid img { width: 100%; max-height: 78vh; object-fit: contain; border-radius: 6px; box-shadow: 0 8px 40px rgba(0,0,0,.6); background: #000; }
+@media (max-width: 700px) { .lightbox-grid { grid-template-columns: 1fr !important; } .lightbox-grid img { max-height: 40vh; } }
+
+/* Screenshot-Galerie mit Szenen-Auswahl und Mehrfachvergleich */
+.shot-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 16px 0 10px; }
+.shot-scenes { display: flex; gap: 6px; }
+.shot-scene { padding: 5px 12px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; }
+.shot-scene.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.shot-hint { font-size: 11px; color: var(--text-muted); flex: 1 1 auto; }
+.shot-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.shot-tile { position: relative; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2); }
+.shot-tile.recommended { border-color: var(--good); box-shadow: 0 0 12px color-mix(in srgb, var(--good) 25%, transparent); }
+.shot-tile.is-ref { border-color: var(--accent); }
+.shot-tile img { width: 100%; display: block; background: #000; cursor: zoom-in; aspect-ratio: 16 / 9; object-fit: cover; }
+.shot-badge { position: absolute; top: 6px; left: 6px; z-index: 2; display: flex; flex-direction: column;
+  padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.66); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.3; }
+.shot-badge small { font-size: 9px; font-weight: 500; opacity: .85; text-transform: uppercase; letter-spacing: .3px; }
+.shot-check { position: absolute; top: 6px; right: 6px; z-index: 2; background: rgba(0,0,0,.66);
+  border-radius: 6px; padding: 3px 5px; cursor: pointer; display: flex; }
+.shot-check input { cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent); }
 
 .data-head-actions { display: flex; align-items: center; gap: 8px; }
 .data-toolbar { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }

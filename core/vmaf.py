@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from typing import Callable, Optional
 
 from . import config
 from . import ffmpeg_utils as ff
-from .encoder import build_encode_cmd, _TONEMAP_CHAIN
+from .encoder import build_encode_cmd, EncodeRunner, _TONEMAP_CHAIN
 from .ffmpeg_utils import VideoInfo
 
 logger = logging.getLogger("vcompress.vmaf")
@@ -36,6 +37,9 @@ class VmafOptions:
     item_id: str = ""
     session_name: str = ""  # lesbarer Ordnername für Previews/Archiv
     source_title: str = ""  # Anzeigename der Quelle (für Archiv-Liste)
+    source_path: str = ""   # Quelldatei (für spätere Neu-Analyse)
+    params: dict = field(default_factory=dict)  # Job-Settings-Snapshot
+    vmaf_engine: str = "auto"  # auto | cpu | gpu | both
     # Zusätzliche zu vergleichende Encoder als (plattform, codec)-Paare.
     # Der Basis-Encoder (Parameter platform/codec) wird immer mitgetestet.
     encoders: list = field(default_factory=list)
@@ -86,8 +90,12 @@ class VmafResult:
     codec: str = "av1"
     platform: str = "cpu"
     recommended: bool = False
-    screenshot_ref: str = ""
+    screenshot_ref: str = ""            # Szene 0 (Rückwärtskompatibilität)
     screenshot_enc: str = ""
+    screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
+    scene_scores: list = field(default_factory=list)  # [{scene, vmaf}] je Stichprobe
+    engine: str = "cpu"                 # Engine des primären VMAF-Werts
+    vmaf_gpu: Optional[float] = None    # zweiter (GPU-)Wert im „Beide"-Modus
 
     def to_dict(self) -> dict:
         d = {
@@ -99,16 +107,38 @@ class VmafResult:
             "platform": self.platform,
             "codec_disp": _codec_disp(self.platform, self.codec),
             "vmaf": round(self.vmaf, 2),
+            "engine": self.engine,
             "clip_size_bytes": self.clip_size_bytes,
             "predicted_size_bytes": self.predicted_size_bytes,
             "predicted_human": ff.human_size(self.predicted_size_bytes),
             "savings_percent": round(self.savings_percent, 1),
             "recommended": self.recommended,
         }
+        if self.vmaf_gpu is not None:
+            d["vmaf_gpu"] = round(self.vmaf_gpu, 2)
+            d["vmaf_delta"] = round(self.vmaf - self.vmaf_gpu, 2)
         if self.screenshot_ref:
             d["screenshot_ref"] = f"/api/preview/{self.screenshot_ref}"
         if self.screenshot_enc:
             d["screenshot_enc"] = f"/api/preview/{self.screenshot_enc}"
+        if self.screenshots:
+            d["screenshots"] = [
+                {
+                    "scene": s.get("scene", 0),
+                    "ref": f"/api/preview/{s['ref']}" if s.get("ref") else "",
+                    "enc": f"/api/preview/{s['enc']}" if s.get("enc") else "",
+                }
+                for s in self.screenshots
+            ]
+        if self.scene_scores and len(self.scene_scores) > 1:
+            d["scene_scores"] = [
+                {"scene": s.get("scene", 0), "vmaf": round(s.get("vmaf", 0.0), 2)}
+                for s in self.scene_scores
+            ]
+            vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
+            if vals:
+                d["vmaf_min"] = round(min(vals), 2)
+                d["vmaf_max"] = round(max(vals), 2)
         return d
 
 
@@ -195,22 +225,63 @@ def _extract_reference(
     return ref
 
 
+def _vmaf_threads() -> int:
+    """libvmaf profitiert stark von mehreren Threads – an CPU koppeln."""
+    return max(2, min(16, os.cpu_count() or 4))
+
+
+_CUDA_VMAF: Optional[bool] = None
+
+
+def vmaf_cuda_available() -> bool:
+    """Prüft (einmalig, gecached), ob FFmpeg den Filter libvmaf_cuda kennt."""
+    global _CUDA_VMAF
+    if _CUDA_VMAF is None:
+        out = _run_capture([config.FFMPEG, "-hide_banner", "-filters"])
+        _CUDA_VMAF = bool(out and "libvmaf_cuda" in out)
+    return _CUDA_VMAF
+
+
+def _run_capture(cmd: list[str]) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15, check=False)
+        return (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _vmaf_compare(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
+    use_cuda: bool = False,
 ) -> Optional[float]:
     _, model_path = _model_for(info)
     log = work / f"vmaf_{key}.json"
-    scale = f"scale={info.width}:{info.height}:flags=bicubic"
-    fc = (
-        f"[0:v]{scale},setpts=PTS-STARTPTS[dist];"
-        f"[1:v]setpts=PTS-STARTPTS[ref];"
-        f"[dist][ref]libvmaf=model=path={model_path}:"
-        f"log_fmt=json:log_path={log}:n_threads=4"
-    )
-    cmd = [config.FFMPEG, "-y", "-hide_banner",
-           "-i", str(distorted), "-i", str(reference),
-           "-filter_complex", fc, "-f", "null", "-"]
-    _run_logged(cmd, f"VMAF-Vergleich {key}")
+    if use_cuda:
+        # GPU-Pfad: Distorted per NVDEC dekodieren, Referenz (FFV1, CPU-Decode)
+        # auf dieselbe CUDA-Device hochladen, beide auf Referenzauflösung
+        # skalieren und VMAF auf der GPU berechnen.
+        fc = (
+            f"[0:v]scale_cuda={info.width}:{info.height}:format=yuv420p[dist];"
+            f"[1:v]format=yuv420p,hwupload_cuda[ref];"
+            f"[dist][ref]libvmaf_cuda=model=path={model_path}:"
+            f"log_fmt=json:log_path={log}"
+        )
+        cmd = [config.FFMPEG, "-y", "-hide_banner",
+               "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", str(distorted),
+               "-i", str(reference),
+               "-filter_complex", fc, "-f", "null", "-"]
+    else:
+        scale = f"scale={info.width}:{info.height}:flags=bicubic"
+        fc = (
+            f"[0:v]{scale},setpts=PTS-STARTPTS[dist];"
+            f"[1:v]setpts=PTS-STARTPTS[ref];"
+            f"[dist][ref]libvmaf=model=path={model_path}:"
+            f"log_fmt=json:log_path={log}:n_threads={_vmaf_threads()}"
+        )
+        cmd = [config.FFMPEG, "-y", "-hide_banner",
+               "-i", str(distorted), "-i", str(reference),
+               "-filter_complex", fc, "-f", "null", "-"]
+    _run_logged(cmd, f"VMAF-Vergleich {key}{' [CUDA]' if use_cuda else ''}")
     if not log.exists():
         return None
     try:
@@ -227,44 +298,26 @@ def _vmaf_compare(
     return float(score) if score is not None else None
 
 
-def _extract_screenshots(
-    reference: Path,
-    test_file: Path,
-    session: str,
-    key: str,
-    clip_len: float,
-    fps: float = 0.0,
-) -> tuple[str, str]:
-    """Screenshots aus Referenz-Clip und Test-Encode zur exakt gleichen Position.
+def _extract_frame(
+    src: Path, out_rel: str, clip_len: float, fps: float = 0.0, label: str = "frame",
+) -> str:
+    """Ein Einzelbild aus einem kurzen Clip an dessen Mitte extrahieren.
 
-    Beide Quellen sind derselbe kurze Clip (Start = Frame 0, identische FPS) –
-    der Referenzclip mit ggf. schon angewendetem Tonemapping. Um garantiert
-    denselben Frame zu treffen, wird die Bildnummer per `select`-Filter gewählt
-    (unabhängig von Keyframes/Zeitstempeln). Fällt die FPS-Angabe aus, wird auf
-    framegenaues Output-Seeking (-ss nach -i) zurückgegriffen.
+    Referenz-Clip und Test-Encode teilen denselben Frame-Index (beide starten bei
+    Frame 0, identische FPS). Über `select=eq(n,N)` wird framegenau derselbe Frame
+    getroffen (unabhängig von Keyframes/Zeitstempeln). Fehlt die FPS-Angabe, wird
+    auf Output-Seeking zurückgegriffen. Gibt den relativen Pfad oder "" zurück.
     """
-    # Unterordner je Session MUSS existieren, sonst kann FFmpeg nicht schreiben.
-    (config.PREVIEW_DIR / session).mkdir(parents=True, exist_ok=True)
-    rel_ref = f"{session}/{key}_ref.jpg"
-    rel_enc = f"{session}/{key}_enc.jpg"
-
-    def _cmd(src: Path, out_rel: str) -> list[str]:
-        base = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
-        if fps and fps > 0:
-            frame_no = max(0, int(round(fps * (clip_len / 2.0))))
-            # select=eq(n,N): exakt Bild Nr. N in Dekodier-/Anzeigereihenfolge.
-            base += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1",
-                     "-vsync", "0"]
-        else:
-            base += ["-ss", str(max(0.0, clip_len / 2.0)), "-frames:v", "1"]
-        base += ["-q:v", "2", str(config.PREVIEW_DIR / out_rel)]
-        return base
-
-    ref_res = _run_logged(_cmd(reference, rel_ref), f"Screenshot Ref {key}")
-    enc_res = _run_logged(_cmd(test_file, rel_enc), f"Screenshot Enc {key}")
-    ok_ref = ref_res.returncode == 0 and (config.PREVIEW_DIR / rel_ref).exists()
-    ok_enc = enc_res.returncode == 0 and (config.PREVIEW_DIR / rel_enc).exists()
-    return (rel_ref if ok_ref else ""), (rel_enc if ok_enc else "")
+    (config.PREVIEW_DIR / out_rel).parent.mkdir(parents=True, exist_ok=True)
+    base = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
+    if fps and fps > 0:
+        frame_no = max(0, int(round(fps * (clip_len / 2.0))))
+        base += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-vsync", "0"]
+    else:
+        base += ["-ss", str(max(0.0, clip_len / 2.0)), "-frames:v", "1"]
+    base += ["-q:v", "2", str(config.PREVIEW_DIR / out_rel)]
+    res = _run_logged(base, f"Screenshot {label}")
+    return out_rel if res.returncode == 0 and (config.PREVIEW_DIR / out_rel).exists() else ""
 
 
 def analyze(
@@ -279,6 +332,7 @@ def analyze(
     preserve_hdr: bool = False,
     film_grain: int = 0,
     denoise: str = "off",
+    progress: Optional[Callable[[dict], None]] = None,
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -314,13 +368,57 @@ def analyze(
 
     multi = len(enc_list) > 1
 
+    # --- VMAF-Engine planen ------------------------------------------------
+    # want: cpu | gpu | both. "auto" richtet sich nach VMAF_HWACCEL.
+    # 10-bit-Referenzen (HDR beibehalten) laufen immer auf der CPU.
+    keep_hdr = bool(preserve_hdr and info.is_hdr)
+    want = (opts.vmaf_engine or "auto").lower()
+    if want == "auto":
+        want = "gpu" if config.VMAF_HWACCEL in ("auto", "cuda") else "cpu"
+    gpu_feasible = vmaf_cuda_available() and not keep_hdr
+    engine_state = {"want": want, "gpu_ok": gpu_feasible}
+    if want in ("gpu", "both") and not gpu_feasible:
+        reason = "10-bit/HDR-Referenz" if keep_hdr else "libvmaf_cuda nicht verfügbar"
+        logger.info("GPU-VMAF nicht möglich (%s) – CPU wird genutzt.", reason)
+        if want == "gpu":
+            want = "cpu"
+            engine_state["want"] = "cpu"
+    if engine_state["gpu_ok"] and want in ("gpu", "both"):
+        logger.info("VMAF-Engine: %s (libvmaf_cuda aktiv).", want)
+
+    # --- Fortschritts-Tracking --------------------------------------------
+    n_samples = len(_sample_starts(info.duration, opts.clip_seconds, opts.samples))
+    compares_per = 2 if want == "both" else 1
+    total_steps = max(1, len(enc_list) * len(values))
+    # „Einheiten" = pro (Encoder,Wert,Sample): 1 Encode + N Vergleiche.
+    total_units = max(1, total_steps * n_samples * (1 + compares_per))
+    prog = {"done": 0, "step": 0}
+
+    def emit(phase: str, fps=None, sub=None) -> None:
+        if not progress:
+            return
+        pct = round(min(100.0, prog["done"] / total_units * 100.0), 1)
+        d = {"percent": pct, "phase": phase,
+             "step": prog["step"], "steps": total_steps}
+        if fps is not None:
+            d["fps"] = round(fps, 1)
+        if sub is not None:
+            d["sub_percent"] = round(sub, 1)
+        progress(d)
+
     try:
         # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
         sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
         references: list[tuple[Path, float, float]] = []
+        ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
         for si, (start, clip_len) in enumerate(sample_specs):
+            emit("reference")
             ref = _extract_reference(info, work, tonemap, start, clip_len, si, status)
             references.append((ref, start, clip_len))
+            if opts.generate_screenshots:
+                ref_shots.append(_extract_frame(
+                    ref, f"{sess}/scene{si}_ref.jpg", clip_len, info.fps,
+                    label=f"Ref Szene {si}"))
 
         base_pc = enc_list[0]
         for p, c in enc_list:
@@ -335,11 +433,14 @@ def analyze(
                 key = f"{p}_{c}_{val}"
                 rate_lbl = _label(opts.rate_mode, val)
                 lbl = f"{disp} · {rate_lbl}" if multi else rate_lbl
+                prog["step"] += 1
 
                 total_size = 0
                 total_dur = 0.0
                 scores: list[float] = []
-                scr_ref, scr_enc = "", ""
+                gpu_scores: list[float] = []
+                shots: list[dict] = []  # je Szene ein {scene, ref, enc}
+                scene_scores: list[dict] = []  # je Szene ein {scene, vmaf}
 
                 for si, (reference, start, clip_len) in enumerate(references):
                     if cancelled():
@@ -348,6 +449,7 @@ def analyze(
                     smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
                     if status:
                         status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
+                    emit("encode")
                     test_file = work / f"test_{skey}.mkv"
                     if use_bitrate:
                         cmd = build_encode_cmd(
@@ -355,7 +457,7 @@ def analyze(
                             target_height, tonemap,
                             duration_limit=clip_len, start_at=start,
                             rate_mode=opts.rate_mode, bitrate_kbps=val,
-                            include_progress=False, audio_mode="none",
+                            include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
                             denoise=denoise,
                         )
@@ -364,31 +466,71 @@ def analyze(
                             info, test_file, p, c, val,
                             target_height, tonemap,
                             duration_limit=clip_len, start_at=start,
-                            include_progress=False, audio_mode="none",
+                            include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
                             denoise=denoise,
                         )
-                    _run_logged(cmd, f"VMAF-Test {lbl}{smp}")
+                    # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
+                    runner = EncodeRunner(on_progress=lambda pr: emit(
+                        "encode", fps=pr.fps, sub=pr.percent))
+                    runner.run(cmd, clip_len)
+                    prog["done"] += 1
                     if not test_file.exists() or test_file.stat().st_size == 0:
                         continue
                     if status:
                         status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
-                    score = _vmaf_compare(test_file, reference, info, work, skey)
+                    emit("vmaf")
+
+                    want_now = engine_state["want"]
+                    score = None
+                    if want_now == "gpu" and engine_state["gpu_ok"]:
+                        score = _vmaf_compare(test_file, reference, info, work,
+                                              skey + "_g", use_cuda=True)
+                        prog["done"] += 1
+                        if score is None:
+                            logger.warning("CUDA-VMAF fehlgeschlagen – Fallback CPU.")
+                            engine_state["gpu_ok"] = False
+                            engine_state["want"] = "cpu"
+                            score = _vmaf_compare(test_file, reference, info, work,
+                                                  skey + "_c", use_cuda=False)
+                    else:
+                        score = _vmaf_compare(test_file, reference, info, work,
+                                              skey + "_c", use_cuda=False)
+                        prog["done"] += 1
+                        # „Beide": zusätzlich GPU-Wert zum Vergleich berechnen.
+                        if want_now == "both" and engine_state["gpu_ok"]:
+                            g = _vmaf_compare(test_file, reference, info, work,
+                                              skey + "_g", use_cuda=True)
+                            prog["done"] += 1
+                            if g is None:
+                                engine_state["gpu_ok"] = False
+                            else:
+                                gpu_scores.append(g)
+                    emit("vmaf")
+
                     if score is None:
                         continue
                     scores.append(score)
+                    scene_scores.append({"scene": si, "vmaf": score})
                     total_size += test_file.stat().st_size
                     total_dur += clip_len
-                    # Screenshots nur aus der ersten (mittleren) Stichprobe.
-                    if si == 0 and opts.generate_screenshots:
-                        scr_ref, scr_enc = _extract_screenshots(
-                            reference, test_file, sess, key, clip_len, info.fps,
-                        )
+                    # Screenshot je Szene: Referenz (einmalig) + dieser Encode.
+                    if opts.generate_screenshots:
+                        enc_rel = _extract_frame(
+                            test_file, f"{sess}/{key}_s{si}_enc.jpg",
+                            clip_len, info.fps, label=f"Enc {lbl} S{si}")
+                        shots.append({
+                            "scene": si,
+                            "ref": ref_shots[si] if si < len(ref_shots) else "",
+                            "enc": enc_rel,
+                        })
 
                 if not scores or total_dur <= 0:
                     continue
 
                 avg_score = sum(scores) / len(scores)
+                gpu_avg = (sum(gpu_scores) / len(gpu_scores)) if gpu_scores else None
+                primary_engine = "gpu" if engine_state["want"] == "gpu" else "cpu"
                 predicted = int((total_size / total_dur) * info.duration)
                 savings = 0.0
                 if info.size_bytes > 0:
@@ -401,16 +543,21 @@ def analyze(
                     codec=c,
                     platform=p,
                     vmaf=avg_score,
+                    engine=primary_engine,
+                    vmaf_gpu=gpu_avg,
                     clip_size_bytes=total_size,
                     predicted_size_bytes=predicted,
                     savings_percent=savings,
-                    screenshot_ref=scr_ref,
-                    screenshot_enc=scr_enc,
+                    screenshot_ref=shots[0]["ref"] if shots else "",
+                    screenshot_enc=shots[0]["enc"] if shots else "",
+                    screenshots=shots,
+                    scene_scores=scene_scores,
                 ))
 
         _pick_recommended(analysis)
         if analysis.results:
-            _save_session(sess, analysis, opts.source_title)
+            _save_session(sess, analysis, opts.source_title,
+                          source_path=opts.source_path, params=opts.params)
     finally:
         _finalize_work(work, sess)
 
@@ -421,18 +568,24 @@ def _session_meta_path(sess: str) -> Path:
     return config.PREVIEW_DIR / sess / "analysis.json"
 
 
-def _save_session(sess: str, analysis: VmafAnalysis, title: str) -> None:
+def _save_session(sess: str, analysis: VmafAnalysis, title: str,
+                  source_path: str = "", params: Optional[dict] = None) -> None:
     """Analyse samt Metadaten neben den Screenshots ablegen (für Archiv-Ansicht)."""
     import time
 
     try:
         target = _session_meta_path(sess)
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Prüfen, ob die Quelle für eine spätere Neu-Analyse noch existiert.
+        src_ok = bool(source_path) and Path(source_path).is_file()
         payload = {
             "session": sess,
             "title": title or sess,
             "created": time.time(),
             "analysis": analysis.to_dict(),
+            "source_path": source_path,
+            "source_available": src_ok,
+            "params": params or {},
         }
         target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except OSError as e:
@@ -453,6 +606,12 @@ def list_sessions() -> list[dict]:
         analysis = data.get("analysis", {})
         results = analysis.get("results", [])
         rec = next((r for r in results if r.get("recommended")), None)
+        engines = {r.get("engine", "cpu") for r in results}
+        if any(r.get("vmaf_gpu") is not None for r in results):
+            engines.add("gpu")
+        # Quelle ggf. neu prüfen (könnte inzwischen verschoben/gelöscht sein).
+        src = data.get("source_path", "")
+        src_ok = bool(src) and Path(src).is_file()
         out.append({
             "session": data.get("session", meta.parent.name),
             "title": data.get("title", meta.parent.name),
@@ -462,6 +621,8 @@ def list_sessions() -> list[dict]:
             "count": len(results),
             "multi_codec": analysis.get("multi_codec", False),
             "recommended_label": (rec or {}).get("label", ""),
+            "engines": sorted(engines),
+            "source_available": src_ok,
         })
     out.sort(key=lambda d: d.get("created", 0), reverse=True)
     return out

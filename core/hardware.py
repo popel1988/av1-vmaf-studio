@@ -10,6 +10,7 @@ import json
 import re
 import shutil
 import subprocess
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -31,14 +32,56 @@ class GpuMetric:
 class HardwareSnapshot:
     cpu_percent: float = 0.0
     cpu_cores: int = 0
+    cpu_temp: Optional[float] = None       # °C (falls Sensor lesbar)
+    cpu_freq_mhz: Optional[float] = None   # aktuelle Taktfrequenz
+    load_avg: Optional[list] = None        # [1m, 5m, 15m]
+    cpu_per_core: list = field(default_factory=list)  # Auslastung je Thread
     ram_percent: float = 0.0
     ram_used_gb: float = 0.0
     ram_total_gb: float = 0.0
     gpus: list = field(default_factory=list)
+    history: dict = field(default_factory=dict)  # {t, cpu, ram, gpu}
 
     def to_dict(self) -> dict:
         d = asdict(self)
         return d
+
+
+def _cpu_extra() -> tuple[Optional[float], Optional[float], Optional[list]]:
+    """CPU-Temperatur (°C), Taktfrequenz (MHz) und Load-Average – best effort."""
+    temp: Optional[float] = None
+    freq: Optional[float] = None
+    load: Optional[list] = None
+    sensors = getattr(psutil, "sensors_temperatures", None)
+    if sensors:
+        try:
+            temps = sensors() or {}
+            # Bevorzugte Quellen für die eigentliche CPU-Package-Temperatur.
+            for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal",
+                        "acpitz", "cpu-thermal"):
+                arr = temps.get(key)
+                if arr:
+                    vals = [t.current for t in arr if t.current]
+                    if vals:
+                        temp = round(max(vals), 1)
+                        break
+            if temp is None and temps:
+                vals = [t.current for arr in temps.values() for t in arr if t.current]
+                if vals:
+                    temp = round(max(vals), 1)
+        except Exception:  # pragma: no cover - Sensoren sind optional
+            pass
+    try:
+        f = psutil.cpu_freq()
+        if f and f.current:
+            freq = round(f.current)
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        load = [round(x, 2) for x in psutil.getloadavg()]
+    except (OSError, AttributeError):
+        pass
+    return temp, freq, load
 
 
 def _run(cmd: list[str], timeout: float = 4.0) -> Optional[str]:
@@ -66,12 +109,18 @@ class HardwareMonitor:
         "/usr/bin/nvidia-smi",
     )
 
+    # Verlaufspuffer: ~2 Minuten bei METRICS_INTERVAL ~1,5 s.
+    _HISTORY_MAX = 160
+
     def __init__(self) -> None:
         self._nvidia_smi = self._find_nvidia_smi()
         self._has_nvidia = self._nvidia_smi is not None
         self._has_radeontop = shutil.which("radeontop") is not None
         self._has_intel_gpu_top = shutil.which("intel_gpu_top") is not None
         self._drm_cards = self._discover_drm_cards()
+        self._hist: deque = deque(maxlen=self._HISTORY_MAX)
+        import time as _t
+        self._time = _t
         # Erstaufruf, damit cpu_percent beim nächsten Mal sinnvolle Werte liefert
         psutil.cpu_percent(interval=None)
 
@@ -178,9 +227,19 @@ class HardwareMonitor:
     # --------------------------------------------------------------- Snapshot
     def snapshot(self) -> HardwareSnapshot:
         vm = psutil.virtual_memory()
+        cpu_pct = round(psutil.cpu_percent(interval=None), 1)
+        temp, freq, load = _cpu_extra()
+        try:
+            per_core = [round(x, 1) for x in psutil.cpu_percent(interval=None, percpu=True)]
+        except Exception:  # pragma: no cover
+            per_core = []
         snap = HardwareSnapshot(
-            cpu_percent=round(psutil.cpu_percent(interval=None), 1),
+            cpu_percent=cpu_pct,
             cpu_cores=psutil.cpu_count(logical=True) or 0,
+            cpu_temp=temp,
+            cpu_freq_mhz=freq,
+            load_avg=load,
+            cpu_per_core=per_core,
             ram_percent=round(vm.percent, 1),
             ram_used_gb=round((vm.total - vm.available) / (1024 ** 3), 2),
             ram_total_gb=round(vm.total / (1024 ** 3), 2),
@@ -196,6 +255,18 @@ class HardwareMonitor:
                 gpus.append(self._intel(card["path"]))
 
         snap.gpus = [asdict(g) for g in gpus]
+
+        # Verlaufspuffer fortschreiben (max. GPU-Auslastung als Sammelwert).
+        gpu_utils = [g.util for g in gpus if g.util is not None]
+        gpu_val = round(max(gpu_utils), 1) if gpu_utils else None
+        self._hist.append((round(self._time.time(), 1), cpu_pct, snap.ram_percent, gpu_val))
+        snap.history = {
+            "t": [h[0] for h in self._hist],
+            "cpu": [h[1] for h in self._hist],
+            "ram": [h[2] for h in self._hist],
+            "gpu": [h[3] for h in self._hist],
+            "has_gpu": bool(gpus),
+        }
         return snap
 
     def available_platforms(self) -> list[str]:

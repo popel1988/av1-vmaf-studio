@@ -175,6 +175,7 @@
       renderFileDetails(f.name, info);
       const hdrField = $("hdr-field");
       if (hdrField) hdrField.style.display = info.is_hdr ? "" : "none";
+      applyDolbyVision(info);
     } catch (e) {
       $("selected-info").innerHTML = `<span class="bad">Analyse-Fehler: ${escapeHtml(String(e))}</span>`;
     }
@@ -182,6 +183,28 @@
 
   function chip(label, value, cls) {
     return `<div class="chip ${cls || ""}"><span class="chip-k">${label}</span><span class="chip-v">${value}</span></div>`;
+  }
+
+  // Dolby Vision: Hinweis anzeigen und bei Profilen ohne HDR10-Basis (z. B. 5)
+  // automatisch Tone-Mapping voreinstellen, damit die Farben stimmen.
+  function applyDolbyVision(info) {
+    const dvNote = $("dv-note");
+    const modeSel = $("opt-hdr-mode");
+    if (!info.dolby_vision) {
+      if (dvNote) dvNote.style.display = "none";
+      return;
+    }
+    const prof = info.dv_profile || 0;
+    // Profil 8.1 hat eine HDR10-kompatible Basis -> „beibehalten" ist ok.
+    const hasHdr10Base = prof === 8 || prof === 0;
+    if (modeSel && !hasHdr10Base) modeSel.value = "tonemap";
+    if (dvNote) {
+      dvNote.style.display = "";
+      const p = prof ? `Profil ${prof}` : "Dolby Vision";
+      dvNote.textContent = hasHdr10Base
+        ? `${p} erkannt: Die dynamische DV-Schicht (RPU) kann beim Re-Encode nicht übernommen werden. Die HDR10-Basis bleibt bei „HDR beibehalten" erhalten.`
+        : `${p} erkannt: keine HDR10-kompatible Basis – daher ist Tone-Mapping voreingestellt. „HDR beibehalten" würde hier zu Farbfehlern führen. Die DV-Schicht (RPU) kann ohnehin nicht übernommen werden.`;
+    }
   }
 
   function renderFileDetails(name, info) {
@@ -474,6 +497,7 @@
       test_values: gatherTestValues(),
       clip_seconds: parseInt($("opt-clip").value, 10),
       samples: $("opt-samples") ? parseInt($("opt-samples").value, 10) : 1,
+      vmaf_engine: $("opt-vmaf-engine") ? $("opt-vmaf-engine").value : "auto",
       generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
       suffix: "_" + $("opt-codec").value,
@@ -567,11 +591,66 @@
     $("cpu-sub").textContent = `${hw.cpu_cores} Threads`;
     setRing("ring-cpu", hw.cpu_percent);
 
+    const sub2 = $("cpu-sub2");
+    if (sub2) {
+      const parts = [];
+      if (hw.cpu_temp != null) parts.push(`${Math.round(hw.cpu_temp)}°C`);
+      if (hw.cpu_freq_mhz != null) parts.push(`${(hw.cpu_freq_mhz / 1000).toFixed(1)} GHz`);
+      if (Array.isArray(hw.load_avg) && hw.load_avg.length) parts.push(`load ${hw.load_avg[0]}`);
+      sub2.textContent = parts.join(" · ");
+    }
+
     $("ram-pct").textContent = `${Math.round(hw.ram_percent)}%`;
     $("ram-sub").textContent = `${hw.ram_used_gb} / ${hw.ram_total_gb} GB`;
     setRing("ring-ram", hw.ram_percent);
 
     renderGpus(hw.gpus || []);
+
+    if (hw.history) {
+      drawSpark("spark-cpu", hw.history.cpu, cssVar("--accent") || "#39d");
+      const gpuItem = $("spark-gpu-item");
+      if (hw.history.has_gpu) {
+        if (gpuItem) gpuItem.style.display = "";
+        drawSpark("spark-gpu", (hw.history.gpu || []).map((v) => v == null ? 0 : v),
+                  cssVar("--good") || "#4c8");
+      } else if (gpuItem) {
+        gpuItem.style.display = "none";
+      }
+    }
+  }
+
+  function drawSpark(id, data, color) {
+    const cv = $(id);
+    if (!cv || !Array.isArray(data) || !data.length) return;
+    const ctx = cv.getContext("2d");
+    const w = cv.width, h = cv.height;
+    ctx.clearRect(0, 0, w, h);
+    const n = data.length;
+    const x = (i) => (n <= 1 ? 0 : (i / (n - 1)) * w);
+    const y = (v) => h - (Math.max(0, Math.min(100, v)) / 100) * (h - 2) - 1;
+    // Fläche
+    ctx.beginPath();
+    ctx.moveTo(x(0), h);
+    data.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+    ctx.lineTo(x(n - 1), h);
+    ctx.closePath();
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = color;
+    ctx.fill();
+    // Linie
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    data.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // aktueller Wert
+    const last = Math.round(data[n - 1]);
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = color;
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(`${last}%`, w - 2, 10);
   }
 
   function renderGpus(gpus) {
@@ -614,6 +693,7 @@
 
   /* --------------------------------------------------------------- QUEUE */
   function updateQueue(q) {
+    if (!q) return; // ohne Daten nichts tun – der WS-Poll aktualisiert gleich
     $("total-saved").textContent = q.total_saved_human;
     const c = q.counts;
     $("cnt-wait").textContent = `${c.waiting} wartend`;
@@ -672,9 +752,10 @@
     const body = $("queue-body");
     const active = new Set(activeIds || []);
     if (!items.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="6">Warteschlange ist leer.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>';
       return;
     }
+    const DONE = ["fertig", "fehlgeschlagen", "abgebrochen"];
     body.innerHTML = items.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
       const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
@@ -684,11 +765,16 @@
         ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="Nach oben">↑</button>` +
           `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="Nach unten">↓</button>` : "";
       const err = it.error ? `<div class="muted" style="font-size:11px">${escapeHtml(it.error.slice(0, 80))}</div>` : "";
+      // Dauer: laufend (aktiv) oder final (abgeschlossen).
+      const dur = (active.has(it.id) || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
+      const finished = DONE.includes(it.status) && it.finished_at
+        ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
       return `<tr>
         <td>${escapeHtml(it.title)}${err}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
+        <td>${dur}${finished}</td>
         <td class="good">${it.saved_human}</td>
         <td class="row-actions">${moveBtns}${cancelBtn}</td>
       </tr>`;
@@ -723,22 +809,38 @@
     list.innerHTML = jobs.map(progressBlock).join("");
   }
 
+  const VMAF_PHASE = {
+    reference: "Referenz-Clip", encode: "Test-Encode", vmaf: "VMAF-Vergleich",
+  };
+
   function progressBlock(job) {
     const analyzing = job.status === "vmaf-test";
     const p = job.progress || {};
-    const pct = analyzing ? 100 : (p.percent || 0);
-    const stage = analyzing
-      ? (job.message || "VMAF-Test läuft …")
-      : (job.message || "Encode");
-    const stats = analyzing ? "" : `
-      <div class="stat-grid">
-        <div class="stat"><span class="stat-label">Geschwindigkeit</span><span class="stat-val">${p.fps || 0} fps</span></div>
-        <div class="stat"><span class="stat-label">Bitrate</span><span class="stat-val">${p.bitrate || "—"}</span></div>
-        <div class="stat"><span class="stat-label">ETA</span><span class="stat-val">${p.eta_human || "—"}</span></div>
-        <div class="stat"><span class="stat-label">Aktuelle Größe</span><span class="stat-val">${p.current_human || "—"}</span></div>
-        <div class="stat"><span class="stat-label">Eingespart</span><span class="stat-val good">${p.saved_human || "—"}</span></div>
-        <div class="stat"><span class="stat-label">Speed</span><span class="stat-val">${p.speed || "—"}</span></div>
-      </div>`;
+    const pct = p.percent != null ? p.percent : (analyzing ? 0 : 0);
+    const stage = job.message || (analyzing ? "VMAF-Analyse läuft …" : "Encode");
+
+    let stats;
+    if (analyzing) {
+      const phase = VMAF_PHASE[p.phase] || "Analyse";
+      const step = p.steps ? `${p.step || 0}/${p.steps}` : "—";
+      const fps = p.fps ? `${p.fps} fps` : "—";
+      stats = `
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-label">Phase</span><span class="stat-val">${escapeHtml(phase)}</span></div>
+          <div class="stat"><span class="stat-label">Testpunkt</span><span class="stat-val">${step}</span></div>
+          <div class="stat"><span class="stat-label">Encode-Speed</span><span class="stat-val">${fps}</span></div>
+        </div>`;
+    } else {
+      stats = `
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-label">Geschwindigkeit</span><span class="stat-val">${p.fps || 0} fps</span></div>
+          <div class="stat"><span class="stat-label">Bitrate</span><span class="stat-val">${p.bitrate || "—"}</span></div>
+          <div class="stat"><span class="stat-label">ETA</span><span class="stat-val">${p.eta_human || "—"}</span></div>
+          <div class="stat"><span class="stat-label">Aktuelle Größe</span><span class="stat-val">${p.current_human || "—"}</span></div>
+          <div class="stat"><span class="stat-label">Eingespart</span><span class="stat-val good">${p.saved_human || "—"}</span></div>
+          <div class="stat"><span class="stat-label">Speed</span><span class="stat-val">${p.speed || "—"}</span></div>
+        </div>`;
+    }
     return `
       <div class="job-progress ${analyzing ? "analyzing" : ""}">
         <div class="job-progress-head">
@@ -747,7 +849,7 @@
         </div>
         <div class="big-progress">
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-          <div class="bar-pct">${analyzing ? "…" : Math.round(pct) + "%"}</div>
+          <div class="bar-pct">${Math.round(pct)}%</div>
         </div>
         ${stats}
       </div>`;
@@ -780,6 +882,7 @@
 
     drawChart(vmaf);
     fillVmafTable(vmaf);
+    state.shotScene = null; // bei neuer Analyse mit erster Szene starten
     renderScreenshots(vmaf);
 
     const showPick = target.status === "auswahl";
@@ -812,6 +915,31 @@
     }
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
+    const reBtn = $("btn-vmaf-reanalyze");
+    if (reBtn) reBtn.addEventListener("click", async () => {
+      if (!state.viewSession) return;
+      const engine = $("vmaf-re-engine") ? $("vmaf-re-engine").value : "cpu";
+      reBtn.disabled = true;
+      const orig = reBtn.textContent;
+      reBtn.textContent = "Startet …";
+      try {
+        const r = await fetch("/api/vmaf/reanalyze", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session: state.viewSession, vmaf_engine: engine }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          reBtn.textContent = d.error || "Fehler";
+        } else {
+          reBtn.textContent = "Läuft – siehe Warteschlange";
+          showLiveVmaf();
+          updateQueue();
+        }
+      } catch (e) {
+        reBtn.textContent = "Fehler";
+      }
+      setTimeout(() => { reBtn.disabled = false; reBtn.textContent = orig; }, 3000);
+    });
     refreshVmafHistory();
   }
 
@@ -846,6 +974,8 @@
       state.viewSession = name;
       const note = $("vmaf-archive-note");
       if (note) note.style.display = "";
+      const reBox = $("vmaf-reanalyze");
+      if (reBox) reBox.style.display = data.source_available ? "" : "none";
       const actions = $("vmaf-actions");
       if (actions) actions.style.display = "none";
       showCard($("vmaf-card"), true);
@@ -853,6 +983,7 @@
         `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
       drawChart(vmaf);
       fillVmafTable(vmaf);
+      state.shotScene = null;
       renderScreenshots(vmaf);
     } catch (e) { /* ignorieren */ }
   }
@@ -867,53 +998,124 @@
     renderVmaf(state.lastItems || [], state.lastActiveId);
   }
 
+  // Ergebnisse auf eine einheitliche Szenen-Screenshotliste normalisieren.
+  // Ältere Sessions kennen nur screenshot_ref/enc (= Szene 0).
+  function shotsOf(r) {
+    if (Array.isArray(r.screenshots) && r.screenshots.length) return r.screenshots;
+    if (r.screenshot_ref || r.screenshot_enc)
+      return [{ scene: 0, ref: r.screenshot_ref, enc: r.screenshot_enc }];
+    return [];
+  }
+
   function renderScreenshots(vmaf) {
     const grid = $("vmaf-screenshots");
     if (!grid) return;
-    const withShots = vmaf.results.filter((r) => r.screenshot_ref && r.screenshot_enc);
-    if (!withShots.length) { grid.innerHTML = ""; return; }
+    const results = (vmaf.results || [])
+      .map((r) => ({ r, shots: shotsOf(r) }))
+      .filter((x) => x.shots.length);
+    if (!results.length) { grid.innerHTML = ""; return; }
 
-    grid.innerHTML = withShots.map((r) => {
-      const lbl = escapeHtml(r.label || ("Q" + r.quality));
-      return `
-      <div class="screenshot-card ${r.recommended ? "recommended" : ""}"
-           data-ref="${r.screenshot_ref}" data-enc="${r.screenshot_enc}"
-           data-label="${lbl} · VMAF ${r.vmaf.toFixed(1)}">
-        <div class="screenshot-head">
-          <span>${lbl}</span>
-          <span>VMAF ${r.vmaf.toFixed(1)}</span>
-        </div>
-        <div class="screenshot-pair">
-          <div><div class="screenshot-cap">Original</div>
-            <img src="${r.screenshot_ref}" alt="Referenz" loading="lazy" /></div>
-          <div><div class="screenshot-cap">Encode</div>
-            <img src="${r.screenshot_enc}" alt="Encode" loading="lazy" /></div>
-        </div>
+    // Verfügbare Szenen (Vereinigung) und aktuell gewählte Szene.
+    const scenes = [...new Set(
+      results.flatMap((x) => x.shots.map((s) => s.scene))
+    )].sort((a, b) => a - b);
+    if (state.shotScene == null || !scenes.includes(state.shotScene))
+      state.shotScene = scenes[0];
+    const sc = state.shotScene;
+
+    // Kacheln der aktuellen Szene: eine Referenz + je Qualität ein Encode.
+    let refSrc = "";
+    results.forEach((x) => {
+      const s = x.shots.find((s) => s.scene === sc);
+      if (s && s.ref && !refSrc) refSrc = s.ref;
+    });
+
+    const tiles = [];
+    if (refSrc)
+      tiles.push({ src: refSrc, label: "Original", sub: `Szene ${sc + 1}`, ref: true });
+    results.forEach((x) => {
+      const s = x.shots.find((s) => s.scene === sc);
+      if (s && s.enc) {
+        // VMAF dieser konkreten Szene (nicht der Mittelwert), falls vorhanden.
+        const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
+        const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
+        tiles.push({
+          src: s.enc,
+          label: x.r.label || ("Q" + x.r.quality),
+          sub: `VMAF ${v.toFixed(1)}`,
+          recommended: x.r.recommended,
+        });
+      }
+    });
+    if (!tiles.length) { grid.innerHTML = ""; return; }
+
+    const sceneTabs = scenes.length > 1
+      ? `<div class="shot-scenes">${scenes.map((n) =>
+          `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">Szene ${n + 1}</button>`
+        ).join("")}</div>`
+      : "";
+
+    grid.innerHTML = `
+      <div class="shot-toolbar">
+        ${sceneTabs}
+        <span class="shot-hint">Bilder ankreuzen und vergleichen – oder anklicken zum Vergrößern.</span>
+        <button class="btn small" id="shot-compare" disabled>Auswahl vergleichen</button>
+      </div>
+      <div class="shot-gallery">
+        ${tiles.map((t) => {
+          const cap = `${t.label} · ${t.sub}`;
+          return `
+          <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""}"
+               data-src="${t.src}" data-cap="${escapeHtml(cap)}">
+            <label class="shot-check" title="Für Vergleich auswählen">
+              <input type="checkbox" ${t.ref ? "checked" : ""} />
+            </label>
+            <span class="shot-badge">${escapeHtml(t.label)}<small>${escapeHtml(t.sub)}</small></span>
+            <img src="${t.src}" alt="${escapeHtml(t.label)}" loading="lazy" />
+          </div>`;
+        }).join("")}
       </div>`;
-    }).join("");
 
-    if (!grid._lightboxBound) {
-      grid.addEventListener("click", (e) => {
-        const card = e.target.closest(".screenshot-card");
-        if (card) openLightbox(card.dataset.ref, card.dataset.enc, card.dataset.label || "");
-      });
-      grid._lightboxBound = true;
-    }
+    grid.querySelectorAll(".shot-scene").forEach((b) =>
+      b.addEventListener("click", () => {
+        state.shotScene = +b.dataset.scene;
+        renderScreenshots(vmaf);
+      }));
+
+    const cmpBtn = $("shot-compare");
+    const selected = () => [...grid.querySelectorAll(".shot-tile")]
+      .filter((t) => t.querySelector(".shot-check input").checked)
+      .map((t) => ({ src: t.dataset.src, label: t.dataset.cap }));
+    const updateCmp = () => {
+      const n = selected().length;
+      cmpBtn.disabled = n < 1;
+      cmpBtn.textContent = n > 0 ? `Auswahl vergleichen (${n})` : "Auswahl vergleichen";
+    };
+    grid.querySelectorAll(".shot-check input").forEach((c) => {
+      c.addEventListener("click", (e) => e.stopPropagation());
+      c.addEventListener("change", updateCmp);
+    });
+    cmpBtn.addEventListener("click", () => {
+      const items = selected();
+      if (items.length) openGallery(items);
+    });
+    grid.querySelectorAll(".shot-tile img").forEach((img) =>
+      img.addEventListener("click", () => {
+        const tile = img.closest(".shot-tile");
+        openGallery([{ src: tile.dataset.src, label: tile.dataset.cap }]);
+      }));
+    updateCmp();
   }
 
-  // Öffnet Original + Encode nebeneinander für den direkten Vergleich.
-  function openLightbox(refSrc, encSrc, caption) {
+  // Öffnet beliebig viele Bilder nebeneinander (Referenz + gewählte Qualitäten).
+  function openGallery(items) {
     let box = $("lightbox");
     if (!box) {
       box = document.createElement("div");
       box.id = "lightbox";
       box.className = "lightbox";
       box.innerHTML =
-        '<div class="lightbox-cap"></div>' +
-        '<div class="lightbox-pair">' +
-        '  <figure><figcaption>Original</figcaption><img id="lb-ref" alt="Original" /></figure>' +
-        '  <figure><figcaption>Encode</figcaption><img id="lb-enc" alt="Encode" /></figure>' +
-        '</div>' +
+        '<div class="lightbox-grid"></div>' +
         '<div class="lightbox-hint">Klick oder Esc zum Schließen</div>';
       document.body.appendChild(box);
       box.addEventListener("click", closeLightbox);
@@ -921,9 +1123,12 @@
         if (e.key === "Escape") closeLightbox();
       });
     }
-    $("lb-ref").src = refSrc || "";
-    $("lb-enc").src = encSrc || "";
-    box.querySelector(".lightbox-cap").textContent = caption;
+    const gal = box.querySelector(".lightbox-grid");
+    gal.dataset.count = Math.min(items.length, 4);
+    gal.innerHTML = items.map((it) =>
+      `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
+      `<img src="${it.src}" alt="" /></figure>`
+    ).join("");
     box.style.display = "flex";
     requestAnimationFrame(() => box.classList.add("open"));
   }
@@ -935,12 +1140,33 @@
     setTimeout(() => { box.style.display = "none"; }, 150);
   }
 
+  function vmafCell(r) {
+    // Primärwert plus – falls „Beide" gerechnet wurde – GPU-Wert & Differenz.
+    let s = `${r.vmaf.toFixed(2)}`;
+    if (r.engine === "gpu") s += ' <span class="engine-tag gpu">GPU</span>';
+    if (r.vmaf_gpu != null) {
+      const d = r.vmaf_delta != null ? r.vmaf_delta : (r.vmaf - r.vmaf_gpu);
+      const sign = d >= 0 ? "+" : "";
+      s = `${r.vmaf.toFixed(2)} <span class="engine-tag cpu">CPU</span>`
+        + `<br><span class="muted">${r.vmaf_gpu.toFixed(2)} <span class="engine-tag gpu">GPU</span>`
+        + ` · Δ ${sign}${d.toFixed(2)}</span>`;
+    }
+    // Mehrere Szenen: Mittelwert oben, Streuung (min–max) je Szene darunter.
+    if (r.vmaf_min != null && r.vmaf_max != null) {
+      const perScene = (r.scene_scores || [])
+        .map((sc) => `Szene ${sc.scene + 1}: ${sc.vmaf.toFixed(1)}`).join("\n");
+      s += `<br><span class="muted" title="${escapeHtml(perScene)}">`
+        + `Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}</span>`;
+    }
+    return s;
+  }
+
   function fillVmafTable(vmaf) {
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r) => `
       <tr class="${r.recommended ? "row-recommended" : ""}">
         <td>${escapeHtml(r.label || ("Q" + r.quality))}</td>
-        <td>${r.vmaf.toFixed(2)}</td>
+        <td>${vmafCell(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td>${r.recommended ? '<span class="badge recommended">Empfohlen</span>' : ""}</td>
@@ -1373,6 +1599,7 @@
     set("opt-workflow", s.workflow, "change");
     set("opt-clip", s.clip_seconds);
     set("opt-samples", s.samples, "change");
+    set("opt-vmaf-engine", s.vmaf_engine, "change");
     set("opt-screenshots", s.generate_screenshots);
     set("opt-post", s.post_processing, "change");
     set("opt-audio-mode", s.audio_mode, "change");
@@ -1426,7 +1653,9 @@
     }
     const body = $("stats-body");
     if (body) {
-      body.innerHTML = recent.length ? recent.map((j) => `
+      body.innerHTML = recent.length ? recent.map((j) => {
+        const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
+        return `
         <tr>
           <td>${escapeHtml(j.title || "")}</td>
           <td>${escapeHtml((j.codec || "").toUpperCase())}</td>
@@ -1435,9 +1664,11 @@
           <td>${formatBytes(j.original_size)}</td>
           <td>${formatBytes(j.output_size)}</td>
           <td class="${(j.saved_bytes || 0) >= 0 ? "good" : "bad"}">${formatBytes(j.saved_bytes)}</td>
+          <td>${formatDuration(j.duration || 0)}</td>
+          <td class="muted">${escapeHtml(when)}</td>
           <td>${escapeHtml(j.status || "")}</td>
-        </tr>`).join("") :
-        '<tr class="empty-row"><td colspan="8">Noch keine Jobs.</td></tr>';
+        </tr>`; }).join("") :
+        '<tr class="empty-row"><td colspan="10">Noch keine Jobs.</td></tr>';
     }
   }
 

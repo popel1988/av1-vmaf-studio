@@ -38,6 +38,7 @@ class VideoInfo:
     bit_depth: int = 8
     hdr_type: str = "SDR"
     dolby_vision: bool = False
+    dv_profile: int = 0
     overall_bitrate: int = 0
     container: str = ""
     audio: list = field(default_factory=list)
@@ -87,6 +88,7 @@ class VideoInfo:
             "bit_depth": self.bit_depth,
             "hdr_type": self.hdr_type,
             "dolby_vision": self.dolby_vision,
+            "dv_profile": self.dv_profile,
             "overall_bitrate": self.overall_bitrate,
             "overall_bitrate_human": _bitrate_human(self.overall_bitrate),
             "video_bitrate": self.video_bitrate,
@@ -139,7 +141,7 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
 
     pix_fmt = video.get("pix_fmt", "?") or "?"
     transfer = (video.get("color_transfer", "") or "").lower()
-    hdr_type, dovi = _detect_hdr(transfer, video)
+    hdr_type, dovi, dv_profile = _detect_hdr(transfer, video)
 
     # Audio-/Untertitel-Spuren strukturiert sammeln
     audio = [_audio_entry(s, i) for i, s in
@@ -164,6 +166,7 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
         bit_depth=_bit_depth(pix_fmt, video),
         hdr_type=hdr_type,
         dolby_vision=dovi,
+        dv_profile=dv_profile,
         overall_bitrate=overall_bitrate,
         container=fmt.get("format_name", "") or "",
         audio=audio,
@@ -172,13 +175,21 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     return info, None
 
 
-def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool]:
-    """Bestimmt HDR-Typ und ob Dolby Vision vorliegt."""
+def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int]:
+    """Bestimmt HDR-Typ, ob Dolby Vision vorliegt und ggf. das DV-Profil."""
     dovi = False
+    dv_profile = 0
     for sd in video.get("side_data_list", []) or []:
         t = str(sd.get("side_data_type", "")).lower()
         if "dolby vision" in t or "dovi" in t:
             dovi = True
+            # ffprobe liefert bei DV-Konfig-Records das Feld "dv_profile".
+            raw = sd.get("dv_profile")
+            if raw is not None:
+                try:
+                    dv_profile = int(raw)
+                except (TypeError, ValueError):
+                    pass
     if transfer in ("smpte2084", "smptest2084"):
         base = "HDR10 (PQ)"
     elif transfer == "arib-std-b67":
@@ -186,8 +197,9 @@ def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool]:
     else:
         base = "SDR"
     if dovi:
-        return (f"Dolby Vision + {base}" if base != "SDR" else "Dolby Vision"), True
-    return base, False
+        label = f"Dolby Vision {dv_profile}" if dv_profile else "Dolby Vision"
+        return (f"{label} + {base}" if base != "SDR" else label), True, dv_profile
+    return base, False, 0
 
 
 def _bit_depth(pix_fmt: str, video: dict) -> int:
@@ -276,6 +288,21 @@ QUALITY_FLAG = {
 
 def encoder_name(platform: str, codec: str) -> str:
     return ENCODERS.get(platform, ENCODERS["cpu"]).get(codec, "libsvtav1")
+
+
+@functools.lru_cache(maxsize=1)
+def ffmpeg_version() -> str:
+    """Erste Zeile von `ffmpeg -version` (z. B. 'ffmpeg version n8.1 …')."""
+    from . import config
+    try:
+        out = subprocess.run(
+            [config.FFMPEG, "-hide_banner", "-version"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        first = (out.stdout or "").splitlines()
+        return first[0].strip() if first else "unbekannt"
+    except (OSError, subprocess.SubprocessError):
+        return "unbekannt"
 
 
 @functools.lru_cache(maxsize=1)

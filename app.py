@@ -114,6 +114,10 @@ async def _startup() -> None:
     watcher.start()
     logger = logging.getLogger("vcompress.startup")
     logger.info("FFmpeg-Binary: %s | FFprobe: %s", config.FFMPEG, config.FFPROBE)
+    logger.info("FFmpeg-Version: %s", ff.ffmpeg_version())
+    from core import vmaf as _vmaf
+    logger.info("VMAF-Beschleunigung: %s (libvmaf_cuda verfügbar: %s)",
+                config.VMAF_HWACCEL, _vmaf.vmaf_cuda_available())
     logger.info("Datenordner: %s", config.data_paths_dict())
     encs = sorted(e for e in ff.available_encoders()
                   if any(x in e for x in ("nvenc", "qsv", "vaapi", "svt", "x264", "x265")))
@@ -251,6 +255,7 @@ class EnqueueRequest(BaseModel):
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     samples: int = 1
+    vmaf_engine: str = "auto"
     generate_screenshots: bool = True
     post_processing: str = "keep"
     suffix: str = "_av1"
@@ -468,6 +473,46 @@ async def vmaf_session(name: str):
     if data is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     return data
+
+
+class ReanalyzeRequest(BaseModel):
+    session: str
+    vmaf_engine: str = "cpu"   # cpu | gpu | both
+
+
+@app.post("/api/vmaf/reanalyze")
+async def vmaf_reanalyze(req: ReanalyzeRequest):
+    """Einen früheren Vergleich erneut rechnen (z. B. jetzt per GPU).
+
+    Referenz und Test-Encodes werden aus der Quelle neu erzeugt – dafür muss die
+    Originaldatei noch am selben Pfad liegen. Läuft als reiner Vergleich
+    (compare_only), es wird also nichts encodiert/überschrieben.
+    """
+    from core import vmaf as vmaf_mod
+    from core.queue_manager import JobSettings
+    import dataclasses
+
+    data = vmaf_mod.load_session(req.session)
+    if data is None:
+        return JSONResponse({"error": "Vergleich nicht gefunden"}, status_code=404)
+    src = data.get("source_path", "")
+    if not src or not Path(src).is_file():
+        return JSONResponse(
+            {"error": "Quelldatei nicht mehr verfügbar – Neu-Analyse nicht möglich."},
+            status_code=400)
+
+    params = data.get("params", {}) or {}
+    valid = {f.name for f in dataclasses.fields(JobSettings)}
+    settings = JobSettings(**{k: v for k, v in params.items() if k in valid})
+    # Als reinen Vergleich mit gewählter Engine ausführen.
+    settings.workflow = "compare_only"
+    settings.vmaf_check = True
+    settings.vmaf_engine = req.vmaf_engine if req.vmaf_engine in ("cpu", "gpu", "both") else "cpu"
+
+    item = queue.add_file(src, settings)
+    if item is None:
+        return JSONResponse({"error": "Konnte nicht eingereiht werden."}, status_code=400)
+    return {"ok": True, "item_id": item.id}
 
 
 @app.post("/api/queue/{item_id}/cancel")
