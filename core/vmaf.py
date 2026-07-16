@@ -42,6 +42,9 @@ class VmafOptions:
     # Zusätzliche zu vergleichende Encoder als (plattform, codec)-Paare.
     # Der Basis-Encoder (Parameter platform/codec) wird immer mitgetestet.
     encoders: list = field(default_factory=list)
+    # >0: Ziel-VMAF (Super-Tool) – dann wird der effizienteste Wert mit
+    # VMAF >= Ziel empfohlen statt des Standard-Sweetspots.
+    target_vmaf: float = 0.0
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -476,7 +479,7 @@ def analyze(
                     scene_scores=scene_scores,
                 ))
 
-        _pick_recommended(analysis)
+        _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
                           source_path=opts.source_path, params=opts.params)
@@ -566,10 +569,11 @@ def load_session(name: str) -> Optional[dict]:
     return data
 
 
-def _pick_recommended(analysis: VmafAnalysis) -> None:
+def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return
-    lo, _ = config.VMAF_SWEETSPOT
+    # Ziel-VMAF (Super-Tool) hat Vorrang; sonst untere Sweetspot-Grenze.
+    lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
     candidates = [r for r in analysis.results if r.vmaf >= lo]
     # Codec-übergreifend: beste Effizienz = kleinste prognostizierte Datei bei
     # noch gutem VMAF. Das wählt automatisch den effizientesten Encoder.

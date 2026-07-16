@@ -187,6 +187,7 @@ async def index(request: Request):
                 for p in plats
             ],
             "encoder_options": _encoder_options(),
+            "video_extensions": sorted(e.lstrip(".") for e in config.VIDEO_EXTENSIONS),
             "input_dir": str(config.INPUT_DIR),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
@@ -286,6 +287,8 @@ class EnqueueRequest(BaseModel):
     tonemap: bool = False
     hdr_mode: str = "tonemap"        # tonemap (HDR->SDR) | preserve (HDR behalten)
     keep_subtitles: bool = True
+    subtitle_per_track: bool = False
+    subtitle_track_settings: list[dict] = []  # je Spur: index/default/forced
     keep_chapters: bool = True
     keep_metadata: bool = True
     film_grain: int = 0
@@ -293,6 +296,7 @@ class EnqueueRequest(BaseModel):
     two_pass: bool = False
     vmaf_check: bool = True
     workflow: str = "auto"           # auto | manual | compare_only
+    target_vmaf: float = 0.0         # >0: Ziel-VMAF (Super-Tool)
     rate_mode: str = "cq"            # cq | bitrate | abr
     compare_encoders: list[str] = []  # zusätzliche "plattform:codec"-Vergleiche
     test_values: list[int] = [20, 24, 28, 32]
@@ -407,6 +411,59 @@ async def library_scan(req: LibraryScanRequest):
 async def library_scan_state():
     from core import library
     return library.get_state()
+
+
+# ---------------------------------------------------------------- Super-Tool
+class SuperScanRequest(BaseModel):
+    folder: str = ""
+    extensions: list[str] = []       # z. B. ["mkv","mp4"] – leer = alle
+    name_contains: str = ""
+    name_exclude: list[str] = []
+    min_size_mb: float = 0
+    min_bitrate_mbps: float = 0
+    min_height: int = 0
+    codecs_include: list[str] = []
+    codecs_exclude: list[str] = []
+
+
+@app.post("/api/supertool/scan")
+async def supertool_scan(req: SuperScanRequest):
+    from core import supertool
+    started = supertool.start_scan(req.model_dump())
+    return {"started": started, "state": supertool.get_state()}
+
+
+@app.get("/api/supertool/scan")
+async def supertool_scan_state():
+    from core import supertool
+    return supertool.get_state()
+
+
+class SuperStartRequest(BaseModel):
+    paths: list[str] = []
+    mode: str = "representative"      # target_vmaf | representative | fixed
+    settings: dict = {}
+
+
+@app.post("/api/supertool/start")
+async def supertool_start(req: SuperStartRequest):
+    from core import supertool
+    if not req.paths:
+        return JSONResponse({"error": "Keine Dateien ausgewählt"}, status_code=400)
+    added, group_id, err = supertool.start_batch(
+        queue, req.paths, req.settings or {}, req.mode)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    return {"added": added, "group_id": group_id}
+
+
+@app.get("/api/supertool/status")
+async def supertool_status(batch_id: str = ""):
+    """Fortschritt eines Super-Tool-Stapels (aus der Queue nach batch_id)."""
+    st = queue.state()
+    items = [it for it in st["items"]
+             if not batch_id or it["settings"].get("batch_id") == batch_id]
+    return {"items": items, "counts": st["counts"]}
 
 
 @app.get("/api/notify")

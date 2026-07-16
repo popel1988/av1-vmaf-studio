@@ -20,7 +20,9 @@
       </div>
 
       <nav class="nav" id="nav">
-        <button class="nav-item active" data-nav="encode"><span>▶</span> Encoden</button>
+        <button class="nav-item active" data-nav="encode"><span>▶</span> Encoding</button>
+        <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
+        <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
         <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
         <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
         <button class="nav-item" data-nav="library"><span>🔍</span> Bibliothek</button>
@@ -105,8 +107,8 @@
       </header>
 
       <div class="cards">
-        <!-- CARD 1: Quellenauswahl & Analyse -->
-        <section class="card span-2" data-page="encode">
+        <!-- CARD 1: Quellenauswahl & Analyse (Encoding + VMAF-Tool) -->
+        <section class="card span-2" data-page="encode vmaf">
           <div class="card-head">
             <h3><span class="card-idx">1</span> Quellenauswahl &amp; Analyse</h3>
             <span class="badge" id="selection-badge">Nichts ausgewählt</span>
@@ -222,75 +224,31 @@
 
             <div class="divider"></div>
 
-            <h4 class="subsection">VMAF-Vergleich</h4>
+            <h4 class="subsection">Qualität</h4>
 
-            <label class="check check-accent">
-              <input type="checkbox" id="opt-vmaf" checked />
-              <span>VMAF-Check durchführen</span>
-            </label>
-
-            <div id="vmaf-options">
-              <div class="field">
-                <label>Steuerungsmodus</label>
-                <select id="opt-rate-mode">
-                  <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
-                  <option value="bitrate">Festbitrate (CBR)</option>
-                  <option value="abr">Average Bitrate (VBR-Ziel)</option>
-                </select>
-              </div>
-
-              <div class="field" id="test-values-block">
-                <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
-                <div class="test-values-grid" id="test-values-grid">
-                  <input type="number" class="test-val" value="20" min="1" max="51" />
-                  <input type="number" class="test-val" value="24" min="1" max="51" />
-                  <input type="number" class="test-val" value="28" min="1" max="51" />
-                  <input type="number" class="test-val" value="32" min="1" max="51" />
-                </div>
-                <p class="hint" id="test-values-hint">CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei</p>
-              </div>
-
-              <div class="field">
-                <label>Vergleichsclip-Länge: <strong id="clip-val">30</strong> Sek.</label>
-                <input type="range" id="opt-clip" min="5" max="120" value="30" step="5" />
-              </div>
-
-              <div class="field">
-                <label>Stichproben (Szenen)</label>
-                <select id="opt-samples">
-                  <option value="1">1 – nur Mitte (schnell)</option>
-                  <option value="2">2 Szenen</option>
-                  <option value="3">3 Szenen (robuster)</option>
-                </select>
-                <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
-              </div>
-
-              <div class="field">
-                <label>Nach VMAF-Ergebnis</label>
-                <select id="opt-workflow">
-                  <option value="auto">Automatisch besten Wert encodieren</option>
-                  <option value="manual">Manuell wählen, dann encodieren</option>
-                  <option value="compare_only">Nur Vergleich (kein Encode)</option>
-                </select>
-              </div>
-
-              <div class="field">
-                <label>Zusätzlich vergleichen mit</label>
-                <div id="compare-encoders" class="compare-encoders"></div>
-                <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich. Der effizienteste gewinnt und wird encodiert.</p>
-              </div>
-
-              <label class="check">
-                <input type="checkbox" id="opt-screenshots" checked />
-                <span>Screenshots für optischen Vergleich erstellen</span>
-              </label>
+            <div class="field">
+              <label>Steuerungsmodus</label>
+              <select id="opt-rate-mode">
+                <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
+                <option value="bitrate">Festbitrate (CBR)</option>
+                <option value="abr">Average Bitrate (VBR-Ziel)</option>
+              </select>
             </div>
 
-            <div class="field manual-quality" id="manual-quality">
-              <label>Manuelle Qualität (ohne VMAF): <strong id="quality-val">28</strong></label>
+            <div class="field" id="enc-cq-field">
+              <label>Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
               <input type="range" id="opt-quality" min="10" max="51" value="28" />
               <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
             </div>
+
+            <div class="field" id="enc-br-field" style="display:none">
+              <label>Ziel-Bitrate</label>
+              <input type="number" id="opt-bitrate" min="500" max="50000" step="500" value="6000" />
+              <p class="hint">kbit/s · CBR = feste Rate, ABR = variables Ziel.</p>
+            </div>
+
+            <p class="hint">Reines Encoding ohne Test-Encodes. Für Vergleiche und automatische
+              Wertfindung das <strong>VMAF-Tool</strong> nutzen und den Gewinner übernehmen.</p>
 
             <div class="divider"></div>
 
@@ -354,8 +312,90 @@
           </div>
         </section>
 
-        <!-- CARD 3: VMAF-Ergebnisse -->
-        <section class="card span-3" id="vmaf-card" data-page="encode" style="display:none">
+        <!-- VMAF-TOOL: Vergleichs-Einstellungen -->
+        <section class="card" data-page="vmaf">
+          <div class="card-head">
+            <h3><span class="card-idx">★</span> VMAF-Vergleich</h3>
+          </div>
+          <div class="card-body settings">
+            <p class="hint">Reiner Vergleich mehrerer Encoder/Codecs und Qualitätsstufen –
+              es wird <strong>nicht</strong> encodiert. Der Gewinner lässt sich anschließend
+              ins Encoding übernehmen.</p>
+
+            <div class="field-row">
+              <div class="field">
+                <label>GPU / Plattform (Basis)</label>
+                <select id="vt-platform">
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label>Codec (Basis)</label>
+                <select id="vt-codec">
+                  <option value="av1">AV1</option>
+                  <option value="hevc">HEVC / H.265</option>
+                  <option value="h264">H.264</option>
+                </select>
+                <p class="hint" id="vt-codec-hint"></p>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Steuerungsmodus</label>
+              <select id="vt-rate-mode">
+                <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
+                <option value="bitrate">Festbitrate (CBR)</option>
+                <option value="abr">Average Bitrate (VBR-Ziel)</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
+              <div class="test-values-grid" id="vt-test-grid">
+                <input type="number" class="vt-test-val" value="20" min="1" max="51" />
+                <input type="number" class="vt-test-val" value="24" min="1" max="51" />
+                <input type="number" class="vt-test-val" value="28" min="1" max="51" />
+                <input type="number" class="vt-test-val" value="32" min="1" max="51" />
+              </div>
+              <p class="hint" id="vt-test-hint">CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei</p>
+            </div>
+
+            <div class="field">
+              <label>Vergleichsclip-Länge: <strong id="vt-clip-val">30</strong> Sek.</label>
+              <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
+            </div>
+
+            <div class="field">
+              <label>Stichproben (Szenen)</label>
+              <select id="vt-samples">
+                <option value="1">1 – nur Mitte (schnell)</option>
+                <option value="2">2 Szenen</option>
+                <option value="3">3 Szenen (robuster)</option>
+              </select>
+              <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
+            </div>
+
+            <div class="field">
+              <label>Zusätzlich vergleichen mit</label>
+              <div id="vt-compare" class="compare-encoders"></div>
+              <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.</p>
+            </div>
+
+            <label class="check">
+              <input type="checkbox" id="vt-screenshots" checked />
+              <span>Screenshots für optischen Vergleich erstellen</span>
+            </label>
+
+            <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
+              VMAF-Vergleich starten
+            </button>
+          </div>
+        </section>
+
+        <!-- CARD 3: VMAF-Ergebnisse (VMAF-Tool) -->
+        <section class="card span-3" id="vmaf-card" data-page="vmaf" style="display:none">
           <div class="card-head">
             <h3><span class="card-idx">★</span> VMAF-Analyse &amp; Größenprognose</h3>
             <div class="vmaf-head-right">
@@ -534,6 +574,151 @@
           </div>
         </section>
 
+        <!-- PAGE: Super-Tool -->
+        <section class="card span-3" data-page="supertool">
+          <div class="card-head">
+            <h3><span class="card-idx">✨</span> Super-Tool – Stapel-Assistent</h3>
+            <span class="badge" id="st-scan-badge">Bereit</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Ganze Ordner automatisch prüfen und neu encodieren: Ordner + Filter
+              wählen, Qualitätsmodus festlegen, scannen und starten. Der Fortschritt je Datei
+              erscheint unten.</p>
+
+            <div class="lib-filters">
+              <div class="field"><label>Ordner (relativ zum Eingabeordner)</label>
+                <input type="text" id="st-folder" placeholder="leer = gesamter Eingabeordner" /></div>
+              <div class="field"><label>Name enthält</label><input type="text" id="st-name" placeholder="optional" /></div>
+              <div class="field"><label>Name ausschließen</label>
+                <input type="text" id="st-exclude" placeholder="z. B. sample, trailer, .archiv"
+                  title="Kommagetrennt – Pfade mit einem dieser Begriffe werden übersprungen" /></div>
+              <div class="field"><label>Min. Größe (MB)</label><input type="number" id="st-min-size" min="0" value="0" /></div>
+              <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="st-min-br" min="0" step="0.5" value="0" /></div>
+              <div class="field"><label>Min. Höhe (px)</label><input type="number" id="st-min-h" min="0" value="0" /></div>
+              <div class="field"><label>Codec-Filter</label>
+                <select id="st-codec-mode">
+                  <option value="">Alle Codecs</option>
+                  <option value="exclude-av1">Nur nicht-AV1 (AV1 überspringen)</option>
+                  <option value="include-h264">Nur H.264</option>
+                  <option value="include-hevc">Nur HEVC/H.265</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Container / Formate</label>
+              <div id="st-formats" class="compare-encoders"></div>
+              <p class="hint">Nichts auswählen = alle unterstützten Formate.</p>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="field-row">
+              <div class="field">
+                <label>GPU / Plattform</label>
+                <select id="st-platform">
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label>Codec</label>
+                <select id="st-codec">
+                  <option value="av1">AV1</option>
+                  <option value="hevc">HEVC / H.265</option>
+                  <option value="h264">H.264</option>
+                </select>
+                <p class="hint" id="st-codec-hint"></p>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Qualitätsmodus</label>
+              <select id="st-mode">
+                <option value="target_vmaf">Ziel-VMAF – pro Datei Test-Encodes (autonom)</option>
+                <option value="representative">Repräsentativ – 1 VMAF-Check für alle</option>
+                <option value="fixed">Feste Qualität – ohne VMAF</option>
+              </select>
+            </div>
+
+            <div class="field" id="st-target-field">
+              <label>Ziel-VMAF: <strong id="st-target-val">94</strong></label>
+              <input type="range" id="st-target" min="80" max="99" value="94" />
+              <p class="hint">Es wird der effizienteste Wert mit VMAF ≥ Ziel gewählt.
+                Rechenintensiv – Test-Encodes je Datei.</p>
+            </div>
+
+            <div class="field-row" id="st-quality-field" style="display:none">
+              <div class="field">
+                <label>Steuerungsmodus</label>
+                <select id="st-rate-mode">
+                  <option value="cq">CQ / QP / CRF</option>
+                  <option value="bitrate">Festbitrate (CBR)</option>
+                  <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                </select>
+              </div>
+              <div class="field" id="st-cq-field">
+                <label>Qualität (CQ/QP/CRF): <strong id="st-quality-val">28</strong></label>
+                <input type="range" id="st-quality" min="10" max="51" value="28" />
+              </div>
+              <div class="field" id="st-br-field" style="display:none">
+                <label>Ziel-Bitrate (kbit/s)</label>
+                <input type="number" id="st-bitrate" min="500" max="50000" step="500" value="6000" />
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label>Nach erfolgreichem Encode</label>
+                <select id="st-post">
+                  <option value="keep">Original behalten + Suffix</option>
+                  <option value="inplace">Inplace ersetzen (Original löschen)</option>
+                  <option value="archive">Original nach .archiv/ verschieben</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Ton</label>
+                <select id="st-audio-mode">
+                  <option value="copy">Original kopieren</option>
+                  <option value="encode">Neu codieren (AAC 160k)</option>
+                  <option value="none">Ohne Ton</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-st-scan">Scannen &amp; Vorschau</button>
+              <span id="st-progress" class="muted"></span>
+              <button class="btn btn-ghost btn-sm" id="btn-st-start" disabled>Stapel starten</button>
+            </div>
+
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th></tr>
+                </thead>
+                <tbody id="st-body">
+                  <tr class="empty-row"><td colspan="6">Noch kein Scan.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div id="st-dash" style="display:none">
+              <h4 class="subhead">Stapel-Fortschritt</h4>
+              <div class="stat-grid" id="st-dash-grid"></div>
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Datei</th><th>Status</th><th>Q</th><th>Dauer</th><th>Ersparnis</th></tr>
+                  </thead>
+                  <tbody id="st-dash-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="card span-2" data-page="settings">
           <div class="card-head">
             <h3><span class="card-idx">🔔</span> Benachrichtigungen</h3>
@@ -619,6 +804,7 @@
       sweetspot: [{{ sweetspot[0] }}, {{ sweetspot[1] }}],
       testQualities: {{ test_qualities|tojson }},
       encoders: {{ encoder_options|tojson }},
+      videoExtensions: {{ video_extensions|tojson }},
     };
   </script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>

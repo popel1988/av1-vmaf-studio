@@ -146,7 +146,8 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     # Audio-/Untertitel-Spuren strukturiert sammeln
     audio = [_audio_entry(s, i) for i, s in
              enumerate(s for s in streams if s.get("codec_type") == "audio")]
-    subs = [_subtitle_entry(s) for s in streams if s.get("codec_type") == "subtitle"]
+    subs = [_subtitle_entry(s, i) for i, s in
+            enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
 
     info = VideoInfo(
         path=str(path),
@@ -229,10 +230,11 @@ def _audio_entry(s: dict, index: int = 0) -> dict:
     }
 
 
-def _subtitle_entry(s: dict) -> dict:
+def _subtitle_entry(s: dict, index: int = 0) -> dict:
     tags = s.get("tags", {}) or {}
     disp = s.get("disposition", {}) or {}
     return {
+        "index": index,  # relativer Untertitel-Index (0:s:index)
         "codec": s.get("codec_name", "?"),
         "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
         "title": tags.get("title", "") or tags.get("TITLE", "") or "",
@@ -452,6 +454,31 @@ def audio_track_args(tracks: list) -> list[str]:
             args += [f"-ac:a:{out_idx}", str(ch)]
         if norm:
             args += [f"-filter:a:{out_idx}", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+    return args
+
+
+def subtitle_track_args(tracks: list) -> list[str]:
+    """Mapping + Disposition (Default/Forced) pro gewählter Untertitelspur.
+
+    `tracks`: geordnete Liste ausgewählter Untertitel, je Eintrag ein Dict mit
+    index (Quell-Untertitel-Index) und optional default/forced (bool). Alle
+    Spuren werden verlustfrei kopiert (`-c:s copy`). Leere Liste => keine
+    Untertitel im Output.
+    """
+    if not tracks:
+        return []
+    args: list[str] = []
+    for t in tracks:
+        args += ["-map", f"0:s:{int(t.get('index', 0))}?"]
+    args += ["-c:s", "copy"]
+    for out_idx, t in enumerate(tracks):
+        flags = []
+        if t.get("default"):
+            flags.append("default")
+        if t.get("forced"):
+            flags.append("forced")
+        # "0" setzt alle Dispositions-Flags zurück (kein Default/Forced).
+        args += [f"-disposition:s:{out_idx}", "+".join(flags) if flags else "0"]
     return args
 
 

@@ -18,18 +18,25 @@
     currentPage: "encode",
     hasArchive: false, // es existieren archivierte VMAF-Vergleiche
     shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
+    superBatch: null,  // aktive Super-Tool-Stapelkennung
   };
 
   /* --------------------------------------------------------- NAVIGATION */
+  // data-page kann mehrere (leerzeichengetrennte) Seiten listen (z. B.
+  // "encode vmaf" für die geteilte Quellenauswahl).
+  function pagesOf(el) {
+    return (el.dataset.page || "").split(/\s+/).filter(Boolean);
+  }
+
   function showCard(el, hasContent) {
     if (!el) return;
     el.dataset.hasContent = hasContent ? "1" : "";
-    el.style.display = (hasContent && el.dataset.page === state.currentPage) ? "" : "none";
+    el.style.display = (hasContent && pagesOf(el).includes(state.currentPage)) ? "" : "none";
   }
 
   function applyPageVisibility() {
     document.querySelectorAll("[data-page]").forEach((el) => {
-      const onPage = el.dataset.page === state.currentPage;
+      const onPage = pagesOf(el).includes(state.currentPage);
       if (el.id === "vmaf-card" || el.id === "progress-card") {
         el.style.display = (onPage && el.dataset.hasContent === "1") ? "" : "none";
       } else {
@@ -38,20 +45,23 @@
     });
   }
 
+  function navTo(page) {
+    state.currentPage = page;
+    localStorage.setItem("page", page);
+    const nav = $("nav");
+    if (nav) nav.querySelectorAll(".nav-item").forEach((b) =>
+      b.classList.toggle("active", b.dataset.nav === page));
+    applyPageVisibility();
+    if (page === "stats") loadStats();
+    if (page === "supertool") pollSuperStatus();
+  }
+
   function initNav() {
     const nav = $("nav");
     if (!nav) return;
-    const go = (page) => {
-      state.currentPage = page;
-      localStorage.setItem("page", page);
-      nav.querySelectorAll(".nav-item").forEach((b) =>
-        b.classList.toggle("active", b.dataset.nav === page));
-      applyPageVisibility();
-      if (page === "stats") loadStats();
-    };
     nav.querySelectorAll(".nav-item").forEach((b) =>
-      b.addEventListener("click", () => go(b.dataset.nav)));
-    go(localStorage.getItem("page") || "encode");
+      b.addEventListener("click", () => navTo(b.dataset.nav)));
+    navTo(localStorage.getItem("page") || "encode");
   }
 
   /* --------------------------------------------------------------- THEME */
@@ -160,10 +170,17 @@
     return row;
   }
 
+  function enableActionButtons() {
+    ["btn-enqueue", "btn-vmaf-start"].forEach((id) => {
+      const b = $(id);
+      if (b) b.disabled = false;
+    });
+  }
+
   async function selectFile(f) {
     state.selected = { path: f.rel, name: f.name, isBatch: false };
     $("selection-badge").textContent = "Datei ausgewählt";
-    $("btn-enqueue").disabled = false;
+    enableActionButtons();
     $("selected-info").innerHTML = `<strong>${escapeHtml(f.name)}</strong> · analysiere …`;
     document.querySelectorAll(".row-item.selected").forEach((r) => r.classList.remove("selected"));
     try {
@@ -235,11 +252,8 @@
     }
     let subs = "";
     if (info.subtitles && info.subtitles.length) {
-      subs = `<div class="track-block"><div class="track-title">Untertitel (${info.subtitles.length})</div>` +
-        info.subtitles.map((s) =>
-          `<div class="track-row"><span class="track-lang">${escapeHtml((s.language || "und").toUpperCase())}</span>` +
-          `<span>${escapeHtml(s.codec.toUpperCase())}${s.forced ? " · forced" : ""}${s.default ? " · default" : ""}</span>` +
-          `${s.title ? `<span class="track-extra">${escapeHtml(s.title)}</span>` : ""}</div>`).join("") +
+      subs = `<div class="track-block"><div class="track-title">Untertitel (${info.subtitles.length}) · einzeln wählbar</div>` +
+        info.subtitles.map((s, i) => subtitleTrackRow(s, i)).join("") +
         `</div>`;
     }
 
@@ -247,6 +261,38 @@
       `<div class="file-title">${escapeHtml(name)}</div>` +
       `<div class="chips">${chips.join("")}</div>${audio}${subs}`;
     wireAudioRows();
+  }
+
+  function subtitleTrackRow(s, i) {
+    const idx = s.index != null ? s.index : i;
+    const info = `${escapeHtml((s.language || "und").toUpperCase())} · ` +
+      `${escapeHtml((s.codec || "?").toUpperCase())}` +
+      `${s.title ? " · " + escapeHtml(s.title) : ""}`;
+    return `<div class="track-sub" data-index="${idx}">
+      <label class="check track-enable">
+        <input type="checkbox" class="sub-track" value="${idx}" checked />
+        <span>${info}</span>
+      </label>
+      <label class="check sub-flag"><input type="checkbox" class="sub-default" ${s.default ? "checked" : ""} /><span>Default</span></label>
+      <label class="check sub-flag"><input type="checkbox" class="sub-forced" ${s.forced ? "checked" : ""} /><span>Forced</span></label>
+    </div>`;
+  }
+
+  // Per-Spur-Untertitel: null bei fehlender Analyse (Batch), sonst Liste der
+  // behaltenen Spuren mit Default/Forced-Flags.
+  function gatherSubtitleTracks() {
+    const rows = [...document.querySelectorAll(".track-sub")];
+    if (!rows.length) return null;
+    const list = [];
+    for (const row of rows) {
+      if (!row.querySelector(".sub-track").checked) continue;
+      list.push({
+        index: parseInt(row.dataset.index, 10),
+        default: row.querySelector(".sub-default").checked,
+        forced: row.querySelector(".sub-forced").checked,
+      });
+    }
+    return list;
   }
 
   const AUDIO_CODEC_OPTS = [
@@ -336,7 +382,7 @@
     const name = isRoot ? "/media/input (alle Unterordner)" : path.split("/").pop();
     state.selected = { path: path, name: name, isBatch: true };
     $("selection-badge").textContent = "Ordner ausgewählt (Batch)";
-    $("btn-enqueue").disabled = false;
+    enableActionButtons();
     $("selected-info").innerHTML =
       `<strong>${escapeHtml(name)}</strong> · Batch-Modus (VMAF-Test repräsentativ für die erste Datei)`;
   }
@@ -346,39 +392,22 @@
     const quality = $("opt-quality");
     quality.addEventListener("input", () => { $("quality-val").textContent = quality.value; });
 
-    const clip = $("opt-clip");
-    clip.addEventListener("input", () => { $("clip-val").textContent = clip.value; });
-
     const fg = $("opt-film-grain");
     if (fg) fg.addEventListener("input", () => { $("film-grain-val").textContent = fg.value; });
 
-    const vmaf = $("opt-vmaf");
-    const manual = $("manual-quality");
-    const vmafOpts = $("vmaf-options");
-    const syncVmaf = () => {
-      const on = vmaf.checked;
-      manual.classList.toggle("disabled", on);
-      vmafOpts.classList.toggle("disabled", !on);
-      $("btn-enqueue").textContent = on && $("opt-workflow").value === "compare_only"
-        ? "VMAF-Vergleich starten" : "Zur Warteschlange hinzufügen";
+    // Encode-Ratemodus: CQ-Slider vs. Bitrate-Feld.
+    const rate = $("opt-rate-mode");
+    const syncRate = () => {
+      const cq = rate.value === "cq";
+      $("enc-cq-field").style.display = cq ? "" : "none";
+      $("enc-br-field").style.display = cq ? "none" : "";
     };
-    vmaf.addEventListener("change", syncVmaf);
-    $("opt-workflow").addEventListener("change", syncVmaf);
-    syncVmaf();
+    rate.addEventListener("change", syncRate);
+    syncRate();
 
-    $("opt-rate-mode").addEventListener("change", () => updateTestValueHints(true));
-    updateTestValueHints(false);
-
-    $("opt-platform").addEventListener("change", () => {
-      updateCodecAvailability();
-      buildCompareOptions();
-    });
-    $("opt-codec").addEventListener("change", () => {
-      updateCodecAvailability();
-      buildCompareOptions();
-    });
+    $("opt-platform").addEventListener("change", updateCodecAvailability);
+    $("opt-codec").addEventListener("change", updateCodecAvailability);
     updateCodecAvailability();
-    buildCompareOptions();
 
     const audioMode = $("opt-audio-mode");
     const audioCodec = $("opt-audio-codec");
@@ -406,40 +435,10 @@
         body: JSON.stringify({ paused: !state.paused }),
       });
     });
-    $("btn-skip-encode").addEventListener("click", () => {
+    const skip = $("btn-skip-encode");
+    if (skip) skip.addEventListener("click", () => {
       if (state.awaitingItemId) skipEncode(state.awaitingItemId);
     });
-  }
-
-  let prevRateFamily = null;
-  const rateFamily = (mode) => (mode === "cq" ? "cq" : "bitrate");
-
-  function updateTestValueHints(refill) {
-    const mode = $("opt-rate-mode").value;
-    const inputs = document.querySelectorAll(".test-val");
-    const hint = $("test-values-hint");
-    const fam = rateFamily(mode);
-    if (mode === "cq") {
-      hint.textContent = "CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei · leere Felder werden ignoriert";
-      inputs.forEach((i) => { i.min = 1; i.max = 51; });
-    } else {
-      hint.textContent = "Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000) · leere Felder werden ignoriert";
-      inputs.forEach((i) => { i.min = 500; i.max = 50000; });
-    }
-    // Beim Wechsel der Wert-Familie (CQ <-> Bitrate) sinnvolle Defaults setzen.
-    // Zwischen Bitrate und ABR bleiben die eingegebenen Werte erhalten.
-    if (refill && fam !== prevRateFamily) {
-      const defaults = mode === "cq" ? [20, 24, 28, 32] : [8000, 6000, 4000, 2000];
-      inputs.forEach((inp, idx) => { inp.value = defaults[idx]; });
-    }
-    prevRateFamily = fam;
-  }
-
-  function gatherTestValues() {
-    return [...document.querySelectorAll(".test-val")]
-      .map((i) => parseInt(i.value, 10))
-      .filter((v) => !isNaN(v) && v > 0)
-      .slice(0, 4);
   }
 
   const COMPARE_LABELS = {
@@ -493,12 +492,11 @@
   }
 
   // Zeigt ALLE verfügbaren Encoder-Kombinationen (Plattform × Codec) als
-  // Vergleichsziele an – außer dem aktuell gewählten Basis-Encoder. So ist auf
-  // einen Blick sichtbar, was zur Verfügung steht.
+  // Vergleichsziele im VMAF-Tool an – außer dem gewählten Basis-Encoder.
   function buildCompareOptions() {
-    const cont = $("compare-encoders");
+    const cont = $("vt-compare");
     if (!cont) return;
-    const base = `${$("opt-platform").value}:${$("opt-codec").value}`;
+    const base = `${$("vt-platform").value}:${$("vt-codec").value}`;
     const prev = new Set(getCompareEncoders());
     const all = encoderMatrix().filter((e) => e.available && e.value !== base);
     if (!all.length) {
@@ -534,31 +532,25 @@
     return sel.length === boxes.length ? [] : sel;
   }
 
-  function gatherSettings() {
+  // Gemeinsame Ausgabe-Optionen (Auflösung, HDR, Audio, Untertitel, Post),
+  // von Encoding und VMAF-Tool geteilt.
+  function gatherOutputCommon() {
     const res = $("opt-resolution").value;
     const perTrack = gatherAudioTrackSettings();
+    const subTracks = gatherSubtitleTracks();
     return {
-      platform: $("opt-platform").value,
-      codec: $("opt-codec").value,
-      quality: parseInt($("opt-quality").value, 10),
       target_height: res ? parseInt(res, 10) : null,
       hdr_mode: $("opt-hdr-mode") ? $("opt-hdr-mode").value : "tonemap",
-      keep_subtitles: $("opt-keep-subs") ? $("opt-keep-subs").checked : true,
+      keep_subtitles: subTracks === null
+        ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
+      subtitle_per_track: subTracks !== null,
+      subtitle_track_settings: subTracks || [],
       keep_chapters: $("opt-keep-chapters") ? $("opt-keep-chapters").checked : true,
       keep_metadata: $("opt-keep-metadata") ? $("opt-keep-metadata").checked : true,
       denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
-      vmaf_check: $("opt-vmaf").checked,
-      workflow: $("opt-workflow").value,
-      rate_mode: $("opt-rate-mode").value,
-      compare_encoders: getCompareEncoders(),
-      test_values: gatherTestValues(),
-      clip_seconds: parseInt($("opt-clip").value, 10),
-      samples: $("opt-samples") ? parseInt($("opt-samples").value, 10) : 1,
-      generate_screenshots: $("opt-screenshots").checked,
       post_processing: $("opt-post").value,
-      suffix: "_" + $("opt-codec").value,
       audio_mode: $("opt-audio-mode").value,
       audio_codec: $("opt-audio-codec").value,
       audio_bitrate: parseInt($("opt-audio-bitrate").value, 10),
@@ -567,6 +559,24 @@
       audio_tracks: gatherAudioTracks(),
       audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
       audio_track_settings: perTrack || [],
+    };
+  }
+
+  // Encoding-Seite: reines Encoden mit manuellem Wert (keine Test-Encodes).
+  function gatherSettings() {
+    const rateMode = $("opt-rate-mode").value;
+    const quality = rateMode === "cq"
+      ? parseInt($("opt-quality").value, 10)
+      : parseInt($("opt-bitrate").value, 10);
+    return {
+      platform: $("opt-platform").value,
+      codec: $("opt-codec").value,
+      quality: quality,
+      vmaf_check: false,
+      workflow: "auto",
+      rate_mode: rateMode,
+      suffix: "_" + $("opt-codec").value,
+      ...gatherOutputCommon(),
     };
   }
 
@@ -611,6 +621,141 @@
     } finally {
       btn.disabled = false;
     }
+  }
+
+  /* ----------------------------------------------------------- VMAF-TOOL */
+  let vtPrevRateFamily = null;
+
+  function initVmafTool() {
+    if (!$("btn-vmaf-start")) return;
+    const clip = $("vt-clip");
+    if (clip) clip.addEventListener("input", () => { $("vt-clip-val").textContent = clip.value; });
+
+    $("vt-rate-mode").addEventListener("change", () => vtUpdateTestHints(true));
+    vtUpdateTestHints(false);
+
+    $("vt-platform").addEventListener("change", () => {
+      vtUpdateCodecAvailability();
+      buildCompareOptions();
+    });
+    $("vt-codec").addEventListener("change", () => {
+      vtUpdateCodecAvailability();
+      buildCompareOptions();
+    });
+    vtUpdateCodecAvailability();
+    buildCompareOptions();
+
+    $("btn-vmaf-start").addEventListener("click", vtEnqueue);
+  }
+
+  function vtUpdateCodecAvailability() {
+    const sel = $("vt-codec");
+    const plat = $("vt-platform").value;
+    if (!sel) return;
+    let firstAvail = null;
+    [...sel.options].forEach((opt) => {
+      const ok = isEncoderAvailable(plat, opt.value);
+      opt.disabled = !ok;
+      opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
+        + (ok ? "" : " — nicht verfügbar");
+      if (ok && firstAvail === null) firstAvail = opt.value;
+    });
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) {
+      sel.value = firstAvail;
+    }
+    const hint = $("vt-codec-hint");
+    if (hint) {
+      const e = encoderInfo(plat, sel.value);
+      hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
+    }
+  }
+
+  function vtUpdateTestHints(refill) {
+    const mode = $("vt-rate-mode").value;
+    const inputs = document.querySelectorAll(".vt-test-val");
+    const hint = $("vt-test-hint");
+    const fam = mode === "cq" ? "cq" : "bitrate";
+    if (mode === "cq") {
+      hint.textContent = "CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei · leere Felder werden ignoriert";
+      inputs.forEach((i) => { i.min = 1; i.max = 51; });
+    } else {
+      hint.textContent = "Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000) · leere Felder werden ignoriert";
+      inputs.forEach((i) => { i.min = 500; i.max = 50000; });
+    }
+    if (refill && fam !== vtPrevRateFamily) {
+      const defaults = mode === "cq" ? [20, 24, 28, 32] : [8000, 6000, 4000, 2000];
+      inputs.forEach((inp, idx) => { inp.value = defaults[idx]; });
+    }
+    vtPrevRateFamily = fam;
+  }
+
+  function vtGatherTestValues() {
+    return [...document.querySelectorAll(".vt-test-val")]
+      .map((i) => parseInt(i.value, 10))
+      .filter((v) => !isNaN(v) && v > 0)
+      .slice(0, 4);
+  }
+
+  function vtGatherSettings() {
+    return {
+      platform: $("vt-platform").value,
+      codec: $("vt-codec").value,
+      vmaf_check: true,
+      workflow: "compare_only",
+      rate_mode: $("vt-rate-mode").value,
+      compare_encoders: getCompareEncoders(),
+      test_values: vtGatherTestValues(),
+      clip_seconds: parseInt($("vt-clip").value, 10),
+      samples: parseInt($("vt-samples").value, 10),
+      generate_screenshots: $("vt-screenshots").checked,
+      suffix: "_" + $("vt-codec").value,
+      ...gatherOutputCommon(),
+    };
+  }
+
+  async function vtEnqueue() {
+    if (!state.selected) return;
+    const btn = $("btn-vmaf-start");
+    btn.disabled = true;
+    const payload = {
+      path: state.selected.path,
+      is_batch: state.selected.isBatch,
+      ...vtGatherSettings(),
+    };
+    try {
+      const res = await fetch("/api/enqueue", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      $("selected-info").innerHTML = data.error
+        ? `<span class="bad">${escapeHtml(data.error)}</span>`
+        : `<span class="good">VMAF-Vergleich gestartet (${data.added} Auftrag/Aufträge).</span>`;
+    } catch (e) {
+      $("selected-info").innerHTML = `<span class="bad">Fehler: ${e}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Gewinner (oder gewählte Zeile) ins Encoding übernehmen und dorthin wechseln.
+  function transferToEncode(r) {
+    if (!r) return;
+    const setSel = (id, val) => {
+      const el = $(id);
+      if (el && val != null) { el.value = String(val); el.dispatchEvent(new Event("change")); }
+    };
+    setSel("opt-platform", r.platform);
+    setSel("opt-codec", r.codec);
+    setSel("opt-rate-mode", r.rate_mode || "cq");
+    if ((r.rate_mode || "cq") === "cq") {
+      setSel("opt-quality", r.value);
+      $("quality-val").textContent = r.value;
+    } else {
+      setSel("opt-bitrate", r.value);
+    }
+    updateCodecAvailability();
+    navTo("encode");
   }
 
   /* ------------------------------------------------------------ WEBSOCKET */
@@ -1216,14 +1361,20 @@
 
   function fillVmafTable(vmaf) {
     const body = $("vmaf-table").querySelector("tbody");
-    body.innerHTML = vmaf.results.map((r) => `
+    body.innerHTML = vmaf.results.map((r, idx) => `
       <tr class="${r.recommended ? "row-recommended" : ""}">
         <td>${escapeHtml(r.label || ("Q" + r.quality))}</td>
         <td>${vmafCell(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
-        <td>${r.recommended ? '<span class="badge recommended">Empfohlen</span>' : ""}</td>
+        <td class="vmaf-row-actions">
+          ${r.recommended ? '<span class="badge recommended">Empfohlen</span>' : ""}
+          <button class="btn btn-ghost btn-sm" data-take="${idx}" title="Diese Einstellung ins Encoding übernehmen">→ Encoding</button>
+        </td>
       </tr>`).join("");
+    body.querySelectorAll("[data-take]").forEach((b) =>
+      b.addEventListener("click", () =>
+        transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
   }
 
   function chartColors() {
@@ -1639,7 +1790,8 @@
     set("opt-platform", s.platform, "change");
     set("opt-codec", s.codec, "change");
     set("opt-rate-mode", s.rate_mode, "change");
-    set("opt-quality", s.quality);
+    if (s.rate_mode === "cq") set("opt-quality", s.quality);
+    else set("opt-bitrate", s.quality);
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
     set("opt-keep-subs", s.keep_subtitles);
@@ -1648,21 +1800,12 @@
     set("opt-denoise", s.denoise, "change");
     set("opt-film-grain", s.film_grain);
     set("opt-two-pass", s.two_pass);
-    set("opt-vmaf", s.vmaf_check);
-    set("opt-workflow", s.workflow, "change");
-    set("opt-clip", s.clip_seconds);
-    set("opt-samples", s.samples, "change");
-    set("opt-screenshots", s.generate_screenshots);
     set("opt-post", s.post_processing, "change");
     set("opt-audio-mode", s.audio_mode, "change");
     set("opt-audio-codec", s.audio_codec, "change");
     set("opt-audio-bitrate", s.audio_bitrate);
     set("opt-audio-channels", s.audio_channels);
     set("opt-audio-normalize", s.audio_normalize);
-    if (Array.isArray(s.test_values)) {
-      const inputs = [...document.querySelectorAll(".test-val")];
-      s.test_values.forEach((v, i) => { if (inputs[i]) inputs[i].value = v; });
-    }
   }
 
   /* ------------------------------------------------------------- STATISTIK */
@@ -1818,6 +1961,222 @@
     $("lib-progress").textContent = `${ok} zur Warteschlange hinzugefügt.`;
   }
 
+  /* ------------------------------------------------------------- SUPER-TOOL */
+  let superScanPoll = null;
+  let superStatusPoll = null;
+
+  function initSuperTool() {
+    if (!$("btn-st-scan")) return;
+    stBuildFormats();
+
+    const mode = $("st-mode");
+    const syncMode = () => {
+      const m = mode.value;
+      $("st-target-field").style.display = m === "target_vmaf" ? "" : "none";
+      $("st-quality-field").style.display = m === "fixed" ? "" : "none";
+    };
+    mode.addEventListener("change", syncMode);
+    syncMode();
+
+    const target = $("st-target");
+    if (target) target.addEventListener("input", () => { $("st-target-val").textContent = target.value; });
+    const q = $("st-quality");
+    if (q) q.addEventListener("input", () => { $("st-quality-val").textContent = q.value; });
+
+    const rate = $("st-rate-mode");
+    const syncRate = () => {
+      const cq = rate.value === "cq";
+      $("st-cq-field").style.display = cq ? "" : "none";
+      $("st-br-field").style.display = cq ? "none" : "";
+    };
+    rate.addEventListener("change", syncRate);
+    syncRate();
+
+    $("st-platform").addEventListener("change", stUpdateCodec);
+    $("st-codec").addEventListener("change", stUpdateCodec);
+    stUpdateCodec();
+
+    $("btn-st-scan").addEventListener("click", startSuperScan);
+    $("btn-st-start").addEventListener("click", startSuperBatch);
+    const all = $("st-check-all");
+    if (all) all.addEventListener("change", () => {
+      document.querySelectorAll(".st-check").forEach((c) => { c.checked = all.checked; });
+    });
+  }
+
+  function stUpdateCodec() {
+    const sel = $("st-codec");
+    const plat = $("st-platform").value;
+    if (!sel) return;
+    let firstAvail = null;
+    [...sel.options].forEach((opt) => {
+      const ok = isEncoderAvailable(plat, opt.value);
+      opt.disabled = !ok;
+      opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
+        + (ok ? "" : " — nicht verfügbar");
+      if (ok && firstAvail === null) firstAvail = opt.value;
+    });
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) sel.value = firstAvail;
+    const hint = $("st-codec-hint");
+    if (hint) {
+      const e = encoderInfo(plat, sel.value);
+      hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
+    }
+  }
+
+  function stBuildFormats() {
+    const cont = $("st-formats");
+    if (!cont) return;
+    const exts = (window.APP_CONFIG && window.APP_CONFIG.videoExtensions) || [];
+    cont.innerHTML = exts.map((e) =>
+      `<label><input type="checkbox" class="st-fmt" value="${escapeHtml(e)}" /><span>${escapeHtml(e)}</span></label>`
+    ).join("") || '<span class="empty">Keine Formate.</span>';
+  }
+
+  function stFilters() {
+    const codecMode = $("st-codec-mode").value;
+    const f = {
+      folder: $("st-folder").value.trim(),
+      extensions: [...document.querySelectorAll(".st-fmt:checked")].map((c) => c.value),
+      name_contains: $("st-name").value.trim(),
+      name_exclude: $("st-exclude").value.split(",").map((s) => s.trim()).filter(Boolean),
+      min_size_mb: parseFloat($("st-min-size").value) || 0,
+      min_bitrate_mbps: parseFloat($("st-min-br").value) || 0,
+      min_height: parseInt($("st-min-h").value, 10) || 0,
+      codecs_include: [],
+      codecs_exclude: [],
+    };
+    if (codecMode === "exclude-av1") f.codecs_exclude = ["av1"];
+    else if (codecMode === "include-h264") f.codecs_include = ["h264"];
+    else if (codecMode === "include-hevc") f.codecs_include = ["hevc"];
+    return f;
+  }
+
+  async function startSuperScan() {
+    $("st-scan-badge").textContent = "Scan läuft …";
+    $("btn-st-start").disabled = true;
+    await fetch("/api/supertool/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(stFilters()),
+    });
+    if (superScanPoll) clearInterval(superScanPoll);
+    superScanPoll = setInterval(pollSuperScan, 1200);
+    pollSuperScan();
+  }
+
+  async function pollSuperScan() {
+    try {
+      const st = await (await fetch("/api/supertool/scan")).json();
+      $("st-progress").textContent =
+        `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer`;
+      renderSuperMatches(st.matched);
+      if (!st.running) {
+        clearInterval(superScanPoll); superScanPoll = null;
+        $("st-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
+        $("btn-st-start").disabled = st.matched.length === 0;
+      }
+    } catch (e) { /* ignorieren */ }
+  }
+
+  function renderSuperMatches(rows) {
+    const body = $("st-body");
+    if (!body) return;
+    body.innerHTML = rows.length ? rows.map((m) => `
+      <tr>
+        <td><input type="checkbox" class="st-check" value="${escapeHtml(m.path)}" checked /></td>
+        <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
+        <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
+        <td>${escapeHtml(m.resolution)}</td>
+        <td>${escapeHtml(m.video_bitrate_human)}</td>
+        <td>${escapeHtml(m.size_human)}</td>
+      </tr>`).join("") :
+      '<tr class="empty-row"><td colspan="6">Keine Treffer.</td></tr>';
+  }
+
+  function stGatherSettings() {
+    const mode = $("st-mode").value;
+    const rateMode = $("st-rate-mode").value;
+    const s = {
+      platform: $("st-platform").value,
+      codec: $("st-codec").value,
+      suffix: "_" + $("st-codec").value,
+      post_processing: $("st-post").value,
+      audio_mode: $("st-audio-mode").value,
+      rate_mode: "cq",
+    };
+    if (mode === "target_vmaf") {
+      s.target_vmaf = parseInt($("st-target").value, 10);
+    } else if (mode === "fixed") {
+      s.rate_mode = rateMode;
+      s.quality = rateMode === "cq"
+        ? parseInt($("st-quality").value, 10) : parseInt($("st-bitrate").value, 10);
+    }
+    return s;
+  }
+
+  async function startSuperBatch() {
+    const paths = [...document.querySelectorAll(".st-check:checked")].map((c) => c.value);
+    if (!paths.length) return;
+    const btn = $("btn-st-start");
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/supertool/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths, mode: $("st-mode").value, settings: stGatherSettings() }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        $("st-progress").textContent = data.error;
+      } else {
+        state.superBatch = data.group_id;
+        $("st-progress").textContent = `${data.added} Datei(en) eingereiht.`;
+        $("st-dash").style.display = "";
+        pollSuperStatus();
+      }
+    } catch (e) {
+      $("st-progress").textContent = "Fehler: " + e;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function pollSuperStatus() {
+    if (!state.superBatch || !$("st-dash-body")) return;
+    try {
+      const d = await (await fetch(
+        `/api/supertool/status?batch_id=${encodeURIComponent(state.superBatch)}`)).json();
+      renderSuperDash(d.items || []);
+    } catch (e) { /* ignorieren */ }
+    if (superStatusPoll) clearTimeout(superStatusPoll);
+    if (state.currentPage === "supertool") superStatusPoll = setTimeout(pollSuperStatus, 2500);
+  }
+
+  function renderSuperDash(items) {
+    const grid = $("st-dash-grid");
+    if (grid) {
+      const done = items.filter((i) => i.status === "fertig").length;
+      const saved = items.reduce((a, i) => a + (i.saved_bytes > 0 ? i.saved_bytes : 0), 0);
+      const failed = items.filter((i) => i.status === "fehlgeschlagen" || i.status === "abgebrochen").length;
+      const cards = [
+        ["Dateien", items.length], ["Fertig", done],
+        ["Eingespart", formatBytes(saved)], ["Fehler", failed],
+      ];
+      grid.innerHTML = cards.map(([l, v]) =>
+        `<div class="stat-box"><span class="stat-val">${escapeHtml(String(v))}</span><span class="stat-lbl">${escapeHtml(l)}</span></div>`).join("");
+    }
+    const body = $("st-dash-body");
+    if (!body) return;
+    body.innerHTML = items.length ? items.map((it) => `
+      <tr>
+        <td title="${escapeHtml(it.path)}">${escapeHtml(it.title)}</td>
+        <td class="status-cell">${statusBadge(it.status)}</td>
+        <td>${settingsLabel(it)}</td>
+        <td>${it.duration_human || "—"}</td>
+        <td class="good">${it.saved_human}</td>
+      </tr>`).join("") :
+      '<tr class="empty-row"><td colspan="5">Noch nichts.</td></tr>';
+  }
+
   /* ------------------------------------------------------------------ INIT */
   function initParallel() {
     const sel = $("opt-parallel");
@@ -1943,6 +2302,8 @@
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     initSettings();
+    initVmafTool();
+    initSuperTool();
     initDataBrowser();
     initParallel();
     initVmafHistory();

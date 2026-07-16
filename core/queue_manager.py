@@ -44,7 +44,9 @@ class JobSettings:
     target_height: Optional[int] = None
     tonemap: bool = False
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
-    keep_subtitles: bool = True      # Untertitel-Spuren übernehmen
+    keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
+    subtitle_per_track: bool = False # Untertitel pro Spur konfiguriert
+    subtitle_track_settings: list = field(default_factory=list)  # je Spur: index/default/forced
     keep_chapters: bool = True       # Kapitelmarken übernehmen
     keep_metadata: bool = True       # Container-/Stream-Metadaten übernehmen
     film_grain: int = 0              # AV1 (SVT) Film-Grain-Synthese 0=aus..50
@@ -52,6 +54,7 @@ class JobSettings:
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
+    target_vmaf: float = 0.0       # >0: Ziel-VMAF (Super-Tool), sonst Sweetspot
     rate_mode: str = "cq"          # cq | bitrate | abr
     # Zusätzliche Vergleichs-Encoder als "plattform:codec"-Strings (z. B. "cpu:hevc")
     compare_encoders: list = field(default_factory=list)
@@ -71,6 +74,7 @@ class JobSettings:
     audio_per_track: bool = False                      # Audio pro Spur konfiguriert
     audio_track_settings: list = field(default_factory=list)  # je Spur ein Dict
     selected_result_index: Optional[int] = None
+    batch_id: str = ""             # Super-Tool-Stapelkennung (Dashboard-Filter)
 
 
 @dataclass
@@ -107,6 +111,7 @@ class QueueItem:
             "id": self.id,
             "title": self.title,
             "path": self.path,
+            "group_id": self.group_id,
             "status": self.status,
             "settings": self.settings.__dict__,
             "info": self.info,
@@ -455,6 +460,7 @@ class QueueManager:
                 source_path=item.path,
                 params=asdict(s),
                 encoders=_parse_encoders(s.compare_encoders),
+                target_vmaf=s.target_vmaf,
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
@@ -553,6 +559,8 @@ class QueueManager:
             "audio_track_settings": list(s.audio_track_settings),
             "preserve_hdr": s.preserve_hdr,
             "keep_subtitles": s.keep_subtitles,
+            "subtitle_per_track": s.subtitle_per_track,
+            "subtitle_track_settings": list(s.subtitle_track_settings),
             "keep_chapters": s.keep_chapters,
             "keep_metadata": s.keep_metadata,
             "film_grain": s.film_grain,
@@ -675,6 +683,8 @@ def build_job_settings(d: dict) -> JobSettings:
         tonemap=(hdr_mode == "tonemap") or bool(d.get("tonemap")),
         preserve_hdr=(hdr_mode == "preserve"),
         keep_subtitles=bool(d.get("keep_subtitles", True)),
+        subtitle_per_track=bool(d.get("subtitle_per_track", False)),
+        subtitle_track_settings=list(d.get("subtitle_track_settings", [])),
         keep_chapters=bool(d.get("keep_chapters", True)),
         keep_metadata=bool(d.get("keep_metadata", True)),
         film_grain=max(0, min(50, int(d.get("film_grain", 0) or 0))),
@@ -682,6 +692,7 @@ def build_job_settings(d: dict) -> JobSettings:
         two_pass=bool(d.get("two_pass", False)),
         vmaf_check=bool(d.get("vmaf_check", True)),
         workflow=d.get("workflow", "auto"),
+        target_vmaf=float(d.get("target_vmaf", 0) or 0),
         rate_mode=d.get("rate_mode", "cq"),
         compare_encoders=list(d.get("compare_encoders", [])),
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
@@ -698,6 +709,7 @@ def build_job_settings(d: dict) -> JobSettings:
         audio_tracks=list(d.get("audio_tracks", [])),
         audio_per_track=bool(d.get("audio_per_track", False)),
         audio_track_settings=list(d.get("audio_track_settings", [])),
+        batch_id=str(d.get("batch_id", "") or ""),
     )
 
 

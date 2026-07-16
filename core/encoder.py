@@ -131,6 +131,8 @@ def build_encode_cmd(
     audio_track_settings: Optional[list] = None,
     preserve_hdr: bool = False,
     keep_subtitles: bool = False,
+    subtitle_per_track: bool = False,
+    subtitle_track_settings: Optional[list] = None,
     keep_chapters: bool = False,
     keep_metadata: bool = False,
     film_grain: int = 0,
@@ -239,7 +241,11 @@ def build_encode_cmd(
         )
 
     # Untertitel/Kapitel/Metadaten aus der Quelle übernehmen (optional).
-    if keep_subtitles:
+    if subtitle_per_track:
+        # Gezielte Spurauswahl inkl. Default/Forced-Flags (Einzeldatei).
+        # Leere Liste => keine Untertitel.
+        cmd += ff.subtitle_track_args(subtitle_track_settings or [])
+    elif keep_subtitles:
         cmd += ["-map", "0:s?", "-c:s", "copy"]
     if not keep_chapters:
         cmd += ["-map_chapters", "-1"]
