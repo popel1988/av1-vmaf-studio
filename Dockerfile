@@ -93,6 +93,17 @@ RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FF
     && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q av1_nvenc \
        || (echo "FEHLER: av1_nvenc fehlt im FFmpeg-Build!" && exit 1)
 
+# ------------------------------------------------------------- dovi_tool
+# Für die (experimentelle) Dolby-Vision-RPU-Erhaltung bei HEVC. Statisches
+# musl-Binary aus den GitHub-Releases (quietvoid/dovi_tool).
+ARG DOVI_TOOL_VERSION=2.3.3
+RUN wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        -O /tmp/dovi_tool.tar.gz \
+    && tar -xf /tmp/dovi_tool.tar.gz -C /usr/local/bin dovi_tool \
+    && chmod +x /usr/local/bin/dovi_tool \
+    && rm -f /tmp/dovi_tool.tar.gz \
+    && /usr/local/bin/dovi_tool --version
+
 # ------------------------------------------------------------- VMAF-Modelle
 # libvmaf ist im FFmpeg-Build enthalten, die Modelle werden separat bereitgestellt.
 RUN mkdir -p ${VMAF_MODEL_DIR} \

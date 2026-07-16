@@ -44,6 +44,7 @@ class JobSettings:
     target_height: Optional[int] = None
     tonemap: bool = False
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
+    preserve_dv: bool = False        # Dolby-Vision-RPU nach Encode re-injizieren (nur HEVC)
     keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
     subtitle_per_track: bool = False # Untertitel pro Spur konfiguriert
     subtitle_track_settings: list = field(default_factory=list)  # je Spur: index/default/forced
@@ -620,6 +621,10 @@ class QueueManager:
                          item.title, rc, " ".join(cmd), stderr)
             out_path.unlink(missing_ok=True)
         else:
+            # Dolby Vision (experimentell): RPU aus der Quelle re-injizieren,
+            # bevor Post-Processing/Verschieben greift.
+            if s.preserve_dv and s.codec == "hevc":
+                self._reinject_dv(item, out_path)
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
@@ -627,6 +632,39 @@ class QueueManager:
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
         item.message = ""
+
+    def _reinject_dv(self, item: QueueItem, out_path: Path) -> None:
+        """DV-RPU nach dem HEVC-Encode übernehmen (best-effort, mit Fallback)."""
+        import shutil
+        from . import dolby_vision as dv
+
+        if not (item.info and item.info.get("dolby_vision")):
+            return  # Quelle hat kein Dolby Vision – nichts zu tun
+        if not dv.available():
+            item.error = ("Dolby Vision: dovi_tool nicht verfügbar – "
+                          "Ausgabe als HDR10 gespeichert.")
+            logger.warning("dovi_tool fehlt – DV nicht übernommen: %s", item.title)
+            return
+        item.message = "Dolby Vision: RPU wird übernommen …"
+        work = config.WORK_DIR / f"dv_{item.id}"
+        fps = float((item.info or {}).get("fps") or 0.0)
+        try:
+            final, err = dv.reinject(
+                Path(item.path), out_path, work, fps=fps,
+                status=lambda m: setattr(item, "message", m))
+            if final and final.exists():
+                out_path.unlink(missing_ok=True)
+                final.replace(out_path)
+                logger.info("Dolby Vision übernommen: %s", item.title)
+            else:
+                item.error = (f"Dolby Vision nicht übernommen ({err}) – "
+                              f"Ausgabe als HDR10 gespeichert.")
+                logger.warning("DV-Reinjektion fehlgeschlagen (%s): %s", err, item.title)
+        except Exception as e:  # pragma: no cover - Fallback darf Encode nicht kippen
+            item.error = f"Dolby Vision Fehler: {e} – Ausgabe als HDR10 gespeichert."
+            logger.exception("DV-Reinjektion abgestürzt: %s", item.title)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     @staticmethod
     def _cleanup_passlog(passlog: str) -> None:
@@ -675,13 +713,19 @@ def build_job_settings(d: dict) -> JobSettings:
     """UI-/Profil-Dict → JobSettings (zentrale Zuordnung inkl. HDR-Modus)."""
     hdr_mode = d.get("hdr_mode", "tonemap")
     codec = d.get("codec", "av1")
+    # Dolby-Vision-Erhaltung geht nur mit HEVC-Basis (Profil 8.1) und impliziert
+    # HDR-Beibehaltung (kein Tonemapping).
+    preserve_dv = bool(d.get("preserve_dv", False)) and codec == "hevc"
+    preserve_hdr = (hdr_mode == "preserve") or preserve_dv
+    tonemap = ((hdr_mode == "tonemap") or bool(d.get("tonemap"))) and not preserve_dv
     return JobSettings(
         platform=d.get("platform", "cpu"),
         codec=codec,
         quality=int(d.get("quality", 28) or 28),
         target_height=d.get("target_height"),
-        tonemap=(hdr_mode == "tonemap") or bool(d.get("tonemap")),
-        preserve_hdr=(hdr_mode == "preserve"),
+        tonemap=tonemap,
+        preserve_hdr=preserve_hdr,
+        preserve_dv=preserve_dv,
         keep_subtitles=bool(d.get("keep_subtitles", True)),
         subtitle_per_track=bool(d.get("subtitle_per_track", False)),
         subtitle_track_settings=list(d.get("subtitle_track_settings", [])),

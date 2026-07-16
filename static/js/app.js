@@ -207,10 +207,12 @@
   // Dolby Vision: Hinweis anzeigen und bei Profilen ohne HDR10-Basis (z. B. 5)
   // automatisch Tone-Mapping voreinstellen, damit die Farben stimmen.
   function applyDolbyVision(info) {
+    state.currentInfo = info || null;
     const dvNote = $("dv-note");
     const modeSel = $("opt-hdr-mode");
     if (!info.dolby_vision) {
       if (dvNote) dvNote.style.display = "none";
+      syncDvOption();
       return;
     }
     const prof = info.dv_profile || 0;
@@ -221,9 +223,28 @@
       dvNote.style.display = "";
       const p = prof ? `Profil ${prof}` : "Dolby Vision";
       dvNote.textContent = hasHdr10Base
-        ? `${p} erkannt: Die dynamische DV-Schicht (RPU) kann beim Re-Encode nicht übernommen werden. Die HDR10-Basis bleibt bei „HDR beibehalten" erhalten.`
-        : `${p} erkannt: keine HDR10-kompatible Basis – daher ist Tone-Mapping voreingestellt. „HDR beibehalten" würde hier zu Farbfehlern führen. Die DV-Schicht (RPU) kann ohnehin nicht übernommen werden.`;
+        ? `${p} erkannt: Die dynamische DV-Schicht (RPU) kann optional per dovi_tool übernommen werden (nur HEVC, experimentell). Die HDR10-Basis bleibt bei „HDR beibehalten" erhalten.`
+        : `${p} erkannt: keine HDR10-kompatible Basis – daher ist Tone-Mapping voreingestellt. „HDR beibehalten" würde hier zu Farbfehlern führen. Die DV-Schicht (RPU) kann nicht übernommen werden.`;
     }
+    syncDvOption();
+  }
+
+  // Blendet die experimentelle DV-Erhaltung nur ein, wenn die Quelle Dolby
+  // Vision mit HDR10-Basis (Profil 8.1) hat UND als HEVC codiert wird.
+  function syncDvOption() {
+    const wrap = $("dv-preserve-wrap");
+    const hint = $("dv-preserve-hint");
+    const cb = $("opt-preserve-dv");
+    const modeSel = $("opt-hdr-mode");
+    const info = state.currentInfo;
+    const codec = $("opt-codec") ? $("opt-codec").value : "";
+    const prof = info && info.dv_profile ? info.dv_profile : 0;
+    const eligible = !!(info && info.dolby_vision && (prof === 8 || prof === 0) && codec === "hevc");
+    if (wrap) wrap.style.display = eligible ? "" : "none";
+    if (hint) hint.style.display = eligible ? "" : "none";
+    if (!eligible && cb) cb.checked = false;
+    // DV-Erhaltung erzwingt „HDR beibehalten".
+    if (eligible && cb && cb.checked && modeSel) modeSel.value = "preserve";
   }
 
   function renderFileDetails(name, info) {
@@ -409,6 +430,11 @@
     $("opt-codec").addEventListener("change", updateCodecAvailability);
     updateCodecAvailability();
 
+    const dvCb = $("opt-preserve-dv");
+    if (dvCb) dvCb.addEventListener("change", () => {
+      if (dvCb.checked && $("opt-hdr-mode")) $("opt-hdr-mode").value = "preserve";
+    });
+
     const audioMode = $("opt-audio-mode");
     const audioCodec = $("opt-audio-codec");
     const audioBr = $("opt-audio-bitrate");
@@ -484,6 +510,7 @@
       const e = encoderInfo(plat, sel.value);
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
     }
+    syncDvOption();
   }
 
   function compareLabel(v, info) {
@@ -541,6 +568,7 @@
     return {
       target_height: res ? parseInt(res, 10) : null,
       hdr_mode: $("opt-hdr-mode") ? $("opt-hdr-mode").value : "tonemap",
+      preserve_dv: $("opt-preserve-dv") ? $("opt-preserve-dv").checked : false,
       keep_subtitles: subTracks === null
         ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
       subtitle_per_track: subTracks !== null,
@@ -1794,6 +1822,7 @@
     else set("opt-bitrate", s.quality);
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
+    set("opt-preserve-dv", s.preserve_dv, "change");
     set("opt-keep-subs", s.keep_subtitles);
     set("opt-keep-chapters", s.keep_chapters);
     set("opt-keep-metadata", s.keep_metadata);

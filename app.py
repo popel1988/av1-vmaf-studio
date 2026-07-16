@@ -286,6 +286,7 @@ class EnqueueRequest(BaseModel):
     target_height: Optional[int] = None
     tonemap: bool = False
     hdr_mode: str = "tonemap"        # tonemap (HDR->SDR) | preserve (HDR behalten)
+    preserve_dv: bool = False        # Dolby-Vision-RPU beibehalten (nur HEVC/Profil 8.1)
     keep_subtitles: bool = True
     subtitle_per_track: bool = False
     subtitle_track_settings: list[dict] = []  # je Spur: index/default/forced
