@@ -957,10 +957,14 @@ async def queue_details(item_id: str):
 
 
 @app.get("/api/diagnostics")
-async def diagnostics():
-    """Selbsttest: FFmpeg/Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI, Ordner."""
+async def diagnostics(deep: bool = False):
+    """Selbsttest: FFmpeg/Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI, Ordner.
+
+    deep=1 führt echte Mini-Encodes je Encoder aus (prüft die tatsächliche
+    Hardware-Fähigkeit, dauert etwas länger)."""
     from core import diagnostics as diag
-    return diag.run_diagnostics(monitor)
+    # Blockierende ffmpeg-Aufrufe im Threadpool, damit der Event-Loop frei bleibt.
+    return await asyncio.to_thread(diag.run_diagnostics, monitor, deep)
 
 
 @app.get("/api/config/paths")

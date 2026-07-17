@@ -96,7 +96,59 @@ def _models_section() -> dict:
     return _section("VMAF-Modelle", checks)
 
 
-def _encoder_section(monitor) -> dict:
+def _last_error_line(stderr: str) -> str:
+    """Kurze, aussagekräftige Fehlerzeile aus FFmpeg-stderr herausziehen."""
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    keys = ("not supported", "Error", "error", "Failed", "failed", "Invalid",
+            "No capable", "Cannot load", "Unknown", "unsupported")
+    for ln in reversed(lines):
+        if any(k in ln for k in keys):
+            return ln[:160]
+    return (lines[-1][:160] if lines else "unbekannter Fehler")
+
+
+def _test_encode(platform: str, codec: str, timeout: int = 40) -> tuple[bool, str]:
+    """Führt einen winzigen echten Encode (5 Frames, 320x240) mit dem konkreten
+    Encoder aus und meldet, ob er WIRKLICH läuft. So werden HW-Grenzen erkannt,
+    die die reine `-encoders`-Liste nicht zeigt (z. B. Intel-iGPU ohne AV1)."""
+    enc = ff.encoder_name(platform, codec)
+    backend = ff.encoder_backend(platform)
+    src = "color=c=black:s=320x240:r=25"
+    cmd = [config.FFMPEG, "-hide_banner", "-y"]
+    vf = None
+    if backend == "vaapi":
+        cmd += ["-vaapi_device", config.VAAPI_DEVICE,
+                "-f", "lavfi", "-i", src, "-frames:v", "5"]
+        vf = "format=nv12,hwupload"
+    elif backend == "qsv":
+        # QSV über VAAPI initialisieren (wie im Encoder-Pfad des Projekts).
+        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs",
+                "-f", "lavfi", "-i", src, "-frames:v", "5"]
+        vf = "format=nv12,hwupload=extra_hw_frames=64"
+    else:  # nvenc (lädt Systemframes selbst hoch) / cpu
+        cmd += ["-f", "lavfi", "-i", src, "-frames:v", "5"]
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-c:v", enc]
+    if enc == "libsvtav1":
+        cmd += ["-preset", "12"]
+    elif enc in ("libx264", "libx265"):
+        cmd += ["-preset", "ultrafast"]
+    cmd += ["-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, check=False)
+        if r.returncode == 0:
+            return True, ""
+        return False, _last_error_line(r.stderr)
+    except subprocess.TimeoutExpired:
+        return False, "Zeitüberschreitung beim Test-Encode"
+    except OSError as e:
+        return False, str(e)
+
+
+def _encoder_section(monitor, deep: bool = False) -> dict:
     checks: list[dict] = []
     try:
         platforms = monitor.available_platforms()
@@ -113,16 +165,40 @@ def _encoder_section(monitor) -> dict:
 
     for p in platforms:
         codec_states = []
+        codec_status = []  # pro Codec: "ok" | "warn" | "skip"
         for c in _CODECS:
             enc = ff.encoder_name(p, c)
-            ok = enc in avail
-            codec_states.append(f"{c.upper()}={'✓' if ok else '✗'} ({enc})")
-        # Auf einer HW-Plattform sollte mind. ein Codec verfügbar sein.
-        any_ok = any(ff.encoder_name(p, c) in avail for c in _CODECS)
-        checks.append(_check(
-            _PLATFORM_LABELS.get(p, p), "ok" if any_ok else "warn",
-            " · ".join(codec_states)))
-    return _section("Encoder-Verfügbarkeit", checks)
+            present = enc in avail
+            if not present:
+                codec_states.append(f"{c.upper()}=✗ ({enc}, nicht im Build)")
+                codec_status.append("skip")
+                continue
+            if not deep:
+                codec_states.append(f"{c.upper()}=✓ ({enc})")
+                codec_status.append("ok")
+                continue
+            # Echter Mini-Encode: prüft die tatsächliche HW-Fähigkeit.
+            ok, err = _test_encode(p, c)
+            if ok:
+                codec_states.append(f"{c.upper()}=✓ ({enc})")
+                codec_status.append("ok")
+            else:
+                codec_states.append(f"{c.upper()}=✗ ({enc}: {err})")
+                codec_status.append("warn")
+
+        present_any = any(s != "skip" for s in codec_status)
+        if not present_any:
+            status = "warn"
+        elif deep and any(s == "warn" for s in codec_status):
+            status = "warn"
+        else:
+            status = "ok"
+        checks.append(_check(_PLATFORM_LABELS.get(p, p), status,
+                             " · ".join(codec_states)))
+
+    title = ("Encoder-Funktionstest (echte Mini-Encodes)"
+             if deep else "Encoder-Verfügbarkeit")
+    return _section(title, checks)
 
 
 def _hardware_section(monitor) -> dict:
@@ -181,12 +257,15 @@ def _storage_section() -> dict:
     return _section("Datenordner", checks)
 
 
-def run_diagnostics(monitor) -> dict:
-    """Führt alle Prüfungen aus und liefert den Gesamtreport."""
+def run_diagnostics(monitor, deep: bool = False) -> dict:
+    """Führt alle Prüfungen aus und liefert den Gesamtreport.
+
+    deep=True führt zusätzlich echte Mini-Encodes je Plattform/Codec aus, um die
+    tatsächliche Hardware-Fähigkeit zu prüfen (dauert einige Sekunden länger)."""
     sections = [
         _tools_section(),
         _models_section(),
-        _encoder_section(monitor),
+        _encoder_section(monitor, deep=deep),
         _hardware_section(monitor),
         _storage_section(),
     ]

@@ -47,6 +47,9 @@
     "Keine Analyse verfügbar.": "No analysis available.",
     "Keine abspielbare Datei gefunden.": "No playable file found.",
     "🎞 Im A/B-Vergleich öffnen (alt vs. neu)": "🎞 Open in A/B compare (old vs. new)",
+    "Encoder wirklich testen": "Really test encoders",
+    "Encoder-Funktionstest läuft (kann etwas dauern) …": "Encoder function test running (may take a while) …",
+    "Encoder werden real getestet …": "Encoders are being tested for real …",
     "Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.":
       "If playback fails, your browser may not support the codec (e.g. HEVC/AV1) directly.",
 

@@ -1157,9 +1157,12 @@
           <div class="card-body">
             <p class="hint">Prüft, ob alle Bausteine vorhanden und nutzbar sind: FFmpeg &amp;
               Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI und die Datenordner. Hilfreich nach
-              einem Update oder bei Encode-Fehlern.</p>
+              einem Update oder bei Encode-Fehlern. Der <strong>Funktionstest</strong> führt
+              zusätzlich echte Mini-Encodes aus und erkennt so, was die Hardware wirklich kann
+              (z. B. iGPU ohne AV1) – dauert einige Sekunden länger.</p>
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-diag-run">Selbsttest ausführen</button>
+              <button class="btn btn-ghost btn-sm" id="btn-diag-deep">Encoder wirklich testen</button>
               <span id="diag-progress" class="muted"></span>
             </div>
             <div id="diag-report"></div>

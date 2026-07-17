@@ -59,6 +59,9 @@
   }
 
   function navTo(page) {
+    // Beim Verlassen der A/B-Seite die Wiedergabe stoppen, damit im Hintergrund
+    // kein Ton/Video weiterläuft.
+    if (state.currentPage === "abcompare" && page !== "abcompare") pauseAbVideos();
     state.currentPage = page;
     localStorage.setItem("page", page);
     const nav = $("nav");
@@ -859,6 +862,12 @@
       if ($("quality-val")) $("quality-val").textContent = r.value;
     } else {
       setSel("opt-bitrate", r.value);
+    }
+    // Anime-Modus aus dem VMAF-Tool übernehmen (VMAF-NEG + 10-bit).
+    const vtAnime = $("vt-anime"), optAnime = $("opt-anime");
+    if (vtAnime && optAnime) {
+      optAnime.checked = vtAnime.checked;
+      optAnime.dispatchEvent(new Event("change"));
     }
     updateCodecAvailability();
   }
@@ -2827,21 +2836,32 @@
     const synced = () => $("ab-sync").checked;
     const offset = () => parseFloat($("ab-offset").value) || 0;
 
+    // B exakt auf A (+ Versatz) ziehen. Wird beim Suchen und laufend genutzt.
+    const alignB = (force) => {
+      if (!synced()) return;
+      const t = Math.max(0, va.currentTime + offset());
+      // Kleine, unhörbare Abweichungen nicht ständig „nachziehen" (Ruckeln),
+      // aber nach einem Sprung präzise ausrichten.
+      if (force || Math.abs(vb.currentTime - t) > 0.05) vb.currentTime = t;
+    };
+
     // A ist Master; B folgt (mit Versatz).
     va.addEventListener("play", () => { if (synced()) vb.play().catch(() => {}); });
     va.addEventListener("pause", () => { if (synced()) vb.pause(); });
-    va.addEventListener("seeking", () => {
-      if (synced()) vb.currentTime = Math.max(0, va.currentTime + offset());
-    });
+    va.addEventListener("ratechange", () => { vb.playbackRate = va.playbackRate; });
+    // Beim Springen: sofort grob (seeking) und nach Abschluss exakt (seeked).
+    // Keyframe-Suche in unterschiedlichen Containern kann sonst leicht driften.
+    va.addEventListener("seeking", () => alignB(true));
+    va.addEventListener("seeked", () => alignB(true));
     va.addEventListener("timeupdate", () => {
       const seek = $("ab-seek"), time = $("ab-time");
       if (va.duration) {
         if (seek) seek.value = String(Math.round((va.currentTime / va.duration) * 1000));
         if (time) time.textContent = fmtClock(va.currentTime) + " / " + fmtClock(va.duration);
       }
-      // Drift korrigieren.
-      if (synced() && Math.abs((vb.currentTime - offset()) - va.currentTime) > 0.35) {
-        vb.currentTime = Math.max(0, va.currentTime + offset());
+      // Laufende Drift korrigieren (engere Toleranz für sauberere Sync).
+      if (synced() && Math.abs((vb.currentTime - offset()) - va.currentTime) > 0.15) {
+        alignB(true);
       }
     });
 
@@ -2850,6 +2870,14 @@
     });
     $("ab-seek").addEventListener("input", (e) => {
       if (va.duration) va.currentTime = (parseInt(e.target.value, 10) / 1000) * va.duration;
+    });
+  }
+
+  // Beide A/B-Videos pausieren (z. B. beim Verlassen der Seite).
+  function pauseAbVideos() {
+    ["ab-video-a", "ab-video-b"].forEach((id) => {
+      const v = $(id);
+      if (v) { try { v.pause(); } catch (e) {} }
     });
   }
 
@@ -2862,20 +2890,22 @@
   /* ------------------------------------------------------------- DIAGNOSE */
   function initDiagnostics() {
     const btn = $("btn-diag-run");
-    if (btn) btn.addEventListener("click", loadDiagnostics);
+    if (btn) btn.addEventListener("click", () => loadDiagnostics(false));
+    const deep = $("btn-diag-deep");
+    if (deep) deep.addEventListener("click", () => loadDiagnostics(true));
   }
 
   const DIAG_ICON = { ok: "✓", warn: "!", fail: "✗" };
   const DIAG_LABEL = { ok: "OK", warn: "Warnung", fail: "Fehler" };
 
-  async function loadDiagnostics() {
+  async function loadDiagnostics(deep) {
     const report = $("diag-report");
     const badge = $("diag-badge");
     const prog = $("diag-progress");
-    if (prog) prog.textContent = "Prüfe …";
-    if (report) report.innerHTML = '<div class="browser-loading">Selbsttest läuft …</div>';
+    if (prog) prog.textContent = deep ? "Encoder-Funktionstest läuft (kann etwas dauern) …" : "Prüfe …";
+    if (report) report.innerHTML = `<div class="browser-loading">${deep ? "Encoder werden real getestet …" : "Selbsttest läuft …"}</div>`;
     try {
-      const d = await (await fetch("/api/diagnostics")).json();
+      const d = await (await fetch("/api/diagnostics" + (deep ? "?deep=1" : ""))).json();
       state.diagLoaded = true;
       if (badge) {
         badge.textContent = DIAG_LABEL[d.overall] || "—";
