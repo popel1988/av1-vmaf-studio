@@ -45,6 +45,8 @@ class VmafOptions:
     # >0: Ziel-VMAF (Super-Tool) – dann wird der effizienteste Wert mit
     # VMAF >= Ziel empfohlen statt des Standard-Sweetspots.
     target_vmaf: float = 0.0
+    # Anime-Modus: NEG-Modell für die Bewertung + 10-bit-Test-Encodes.
+    anime: bool = False
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -177,7 +179,13 @@ def _label(rate_mode: str, value: int) -> str:
     return f"{value} kbit/s"
 
 
-def _model_for(info: VideoInfo) -> tuple[str, Path]:
+def _model_for(info: VideoInfo, neg: bool = False) -> tuple[str, Path]:
+    if neg:
+        name = config.VMAF_MODEL_4K_NEG if info.is_4k else config.VMAF_MODEL_1080P_NEG
+        path = config.VMAF_MODEL_DIR / name
+        if path.exists():
+            return name, path
+        logger.warning("NEG-VMAF-Modell fehlt (%s) – Standardmodell wird genutzt.", name)
     name = config.VMAF_MODEL_4K if info.is_4k else config.VMAF_MODEL_1080P
     return name, config.VMAF_MODEL_DIR / name
 
@@ -230,8 +238,9 @@ def _vmaf_threads() -> int:
 
 def _vmaf_compare(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
+    neg: bool = False,
 ) -> Optional[float]:
-    _, model_path = _model_for(info)
+    _, model_path = _model_for(info, neg)
     log = work / f"vmaf_{key}.json"
     scale = f"scale={info.width}:{info.height}:flags=bicubic"
     fc = (
@@ -282,6 +291,53 @@ def _extract_frame(
     return out_rel if res.returncode == 0 and (config.PREVIEW_DIR / out_rel).exists() else ""
 
 
+def measure_output_vmaf(
+    info: VideoInfo,
+    output: Path,
+    *,
+    tonemap: bool = False,
+    preserve_hdr: bool = False,
+    samples: int = 1,
+    clip_seconds: int = 15,
+    anime: bool = False,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> Optional[float]:
+    """Misst den echten VMAF der fertigen Ausgabedatei gegen die Quelle.
+
+    Für die Qualitäts-Guardrail: es werden dieselben Stichproben-Positionen wie
+    bei der Analyse genutzt. Aus Quelle (ggf. getonemappt) und Ausgabe werden
+    verlustfreie Clips gezogen und verglichen; der Mittelwert wird gemittelt.
+    Downscale wird im Vergleich (scale auf Quellauflösung) berücksichtigt.
+    """
+    output = Path(output)
+    if not output.exists():
+        return None
+    work = config.WORK_DIR / f"verify_{uuid.uuid4().hex[:8]}"
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        specs = _sample_starts(info.duration, clip_seconds, samples)
+        scores: list[float] = []
+        for idx, (start, clip_len) in enumerate(specs):
+            if cancelled():
+                break
+            ref = _extract_reference(info, work, tonemap, start, clip_len, idx, None)
+            dist = work / f"out_{idx}.mkv"
+            # Denselben Ausschnitt verlustfrei aus der Ausgabe ziehen.
+            _run_logged(
+                [config.FFMPEG, "-y", "-hide_banner", "-ss", str(start),
+                 "-t", str(clip_len), "-i", str(output),
+                 "-an", "-sn", "-c:v", "ffv1", "-level", "3", str(dist)],
+                f"Verify-Clip {idx}")
+            if not dist.exists():
+                continue
+            score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}", neg=anime)
+            if score is not None:
+                scores.append(score)
+        return round(sum(scores) / len(scores), 2) if scores else None
+    finally:
+        _cleanup(work)
+
+
 def analyze(
     info: VideoInfo,
     platform: str,
@@ -304,7 +360,7 @@ def analyze(
     work = config.WORK_DIR / f"vmaf_{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True, exist_ok=True)
 
-    model_name, _ = _model_for(info)
+    model_name, _ = _model_for(info, opts.anime)
     analysis = VmafAnalysis(
         model=model_name,
         rate_mode=opts.rate_mode,
@@ -402,7 +458,7 @@ def analyze(
                             rate_mode=opts.rate_mode, bitrate_kbps=val,
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise,
+                            denoise=denoise, force_10bit=opts.anime,
                         )
                     else:
                         cmd = build_encode_cmd(
@@ -411,7 +467,7 @@ def analyze(
                             duration_limit=clip_len, start_at=start,
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise,
+                            denoise=denoise, force_10bit=opts.anime,
                         )
                     # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
                     runner = EncodeRunner(on_progress=lambda pr: emit(
@@ -433,7 +489,7 @@ def analyze(
                         status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
                     emit("vmaf")
 
-                    score = _vmaf_compare(test_file, reference, info, work, skey)
+                    score = _vmaf_compare(test_file, reference, info, work, skey, opts.anime)
                     prog["done"] += 1
                     emit("vmaf")
 

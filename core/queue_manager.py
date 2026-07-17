@@ -53,6 +53,22 @@ class JobSettings:
     film_grain: int = 0              # AV1 (SVT) Film-Grain-Synthese 0=aus..50
     denoise: str = "off"             # off | light | medium | strong
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
+    anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
+    # Audio-Optimierung: video_mode="copy" => nur Remux (Video 1:1), Tonspuren
+    # werden je nach scope (bloated|all) transcodiert. Kein VMAF/Encode.
+    video_mode: str = "encode"       # encode | copy
+    audio_opt_scope: str = "bloated" # bloated | all
+    audio_min_bitrate_kbps: int = 700
+    # Per-Szene / Chunked Adaptive Encoding (nur CQ-Modus): Segmente mit
+    # komplexitätsabhängigem CQ, danach verlustfrei zusammengefügt.
+    chunked: bool = False
+    chunk_seconds: int = 60
+    chunk_cq_range: int = 6
+    # Qualitäts-Guardrail: echten VMAF nach dem Encode messen und optional
+    # bei Unterschreiten des Ziels automatisch mit höherer Qualität neu encoden.
+    verify_vmaf: bool = False
+    verify_min: float = 93.0
+    verify_retry: bool = False
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
     target_vmaf: float = 0.0       # >0: Ziel-VMAF (Super-Tool), sonst Sweetspot
@@ -94,6 +110,8 @@ class QueueItem:
     output_size: int = 0
     output_path: str = ""
     saved_bytes: int = 0
+    vmaf_verify: Optional[float] = None  # gemessener VMAF der Ausgabe (Guardrail)
+    verify_attempts: int = 0             # Anzahl Encode-Versuche (>1 = Retry lief)
     message: str = ""
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
@@ -126,6 +144,8 @@ class QueueItem:
             "output_human": ff.human_size(self.output_size) if self.output_size else "—",
             "saved_bytes": self.saved_bytes,
             "saved_human": ff.human_size(self.saved_bytes) if self.saved_bytes else "—",
+            "vmaf_verify": self.vmaf_verify,
+            "verify_attempts": self.verify_attempts,
             "output_path": self.output_path,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
@@ -151,8 +171,17 @@ class QueueManager:
         self._status_msg = ""
         self._paused = False
         self._stop = False
+        # Scheduler-Gate: liefert (darf_starten, Grund). Blockiert nur NEUE Jobs,
+        # laufende Encodes werden nie unterbrochen.
+        self._gate = None
+        self._gate_msg = ""
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+    def set_gate(self, fn) -> None:
+        """Callable setzen, das (bool, str) liefert und neue Jobs freigibt/sperrt."""
+        self._gate = fn
+        self._wake.set()
 
     # ------------------------------------------------------------- Pause / Reihenfolge
     def set_paused(self, paused: bool) -> bool:
@@ -305,12 +334,14 @@ class QueueManager:
             msg = self._status_msg
             parallel = self._max_parallel
             paused = self._paused
+            gate_msg = self._gate_msg
         total_saved = sum(i["saved_bytes"] for i in items if i["saved_bytes"] > 0)
         return {
             "items": items,
             "active_ids": active_ids,
             "active_id": active_ids[0] if active_ids else None,  # Rückwärtskompat.
             "status_message": msg,
+            "gate_message": gate_msg,
             "max_parallel": parallel,
             "paused": paused,
             "total_saved_bytes": total_saved,
@@ -323,6 +354,18 @@ class QueueManager:
         """Nächsten startbaren Job holen (Lock muss gehalten werden)."""
         if self._paused:
             return None
+        # Scheduler-Gate prüfen (Zeitfenster/Last). Läuft ein Job bereits,
+        # nicht durch das Gate blockieren – nur den Start neuer Jobs steuern.
+        if self._gate is not None and not self._active:
+            try:
+                allowed, reason = self._gate()
+            except Exception:  # pragma: no cover - Gate darf Worker nicht kippen
+                allowed, reason = True, ""
+            self._gate_msg = "" if allowed else (reason or "")
+            if not allowed:
+                return None
+        else:
+            self._gate_msg = ""
         for it in self._items:
             if it.status != STATUS_WAITING:
                 continue
@@ -424,6 +467,16 @@ class QueueManager:
 
         s = item.settings
 
+        # --- Audio-Optimierung: nur Remux (Video 1:1 kopieren) ----------------
+        if s.video_mode == "copy":
+            self._process_audio_remux(item, info)
+            return
+
+        # --- Chunked Adaptive Encoding (nur CQ-Modus) -------------------------
+        if s.chunked and s.rate_mode == "cq":
+            self._process_chunked(item, info)
+            return
+
         # --- Batch-Folgedatei einer übersprungenen Gruppe → nicht encodieren -
         if item.group_id in self._group_skip and not s.vmaf_check:
             item.status = STATUS_DONE
@@ -462,6 +515,7 @@ class QueueManager:
                 params=asdict(s),
                 encoders=_parse_encoders(s.compare_encoders),
                 target_vmaf=s.target_vmaf,
+                anime=s.anime,
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
@@ -549,6 +603,175 @@ class QueueManager:
                 "saved_human": ff.human_size(saved),
             }
 
+        # Guardrail: nach dem Encode den echten VMAF messen; bei Unterschreiten
+        # des Ziels optional automatisch mit höherer Qualität neu encoden.
+        do_verify = bool(s.verify_vmaf and s.workflow != "compare_only")
+        max_attempts = 1 + (config.VERIFY_MAX_RETRIES if (do_verify and s.verify_retry) else 0)
+
+        rc, stderr, cmd, cancelled = 0, "", [], False
+        for attempt in range(1, max_attempts + 1):
+            item.verify_attempts = attempt
+            if attempt > 1:
+                item.message = (f"Encode-Wiederholung {attempt}/{max_attempts} "
+                                f"({_quality_label(s)})")
+            rc, stderr, cmd, cancelled = self._encode_to(item, s, info, out_path, on_prog)
+            if cancelled or rc != 0:
+                break
+            # Dolby Vision (experimentell): RPU aus der Quelle re-injizieren.
+            if s.preserve_dv and s.codec == "hevc":
+                self._reinject_dv(item, out_path)
+            if not do_verify:
+                break
+            score = self._verify_output(item, s, info, out_path)
+            item.vmaf_verify = score
+            if (score is not None and score < s.verify_min
+                    and s.verify_retry and attempt < max_attempts):
+                logger.info("Guardrail: VMAF %.1f < Ziel %.1f – höhere Qualität (%s)",
+                            score, s.verify_min, item.title)
+                _bump_quality(s)
+                out_path.unlink(missing_ok=True)
+                continue
+            break
+
+        if cancelled:
+            item.status = STATUS_CANCELLED
+            out_path.unlink(missing_ok=True)
+        elif rc != 0:
+            item.status = STATUS_FAILED
+            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+            logger.error("Encode fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
+                         item.title, rc, " ".join(cmd), stderr)
+            out_path.unlink(missing_ok=True)
+        else:
+            item.output_path = str(out_path)
+            item.output_size = out_path.stat().st_size if out_path.exists() else 0
+            item.saved_bytes = max(0, item.original_size - item.output_size)
+            # Trotz ausgeschöpfter Versuche unter Ziel? Als Warnung vermerken.
+            if (do_verify and item.vmaf_verify is not None
+                    and item.vmaf_verify < s.verify_min):
+                item.error = (f"Qualitätswarnung: gemessener VMAF "
+                              f"{item.vmaf_verify:.1f} < Ziel {s.verify_min:.0f}.")
+            self._post_process(item, out_path)
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+        item.message = ""
+
+    def _process_chunked(self, item: "QueueItem", info) -> None:
+        """Per-Szene/Chunked Adaptive Encoding: Segmente mit adaptivem CQ."""
+        from . import chunked
+        s = item.settings
+        item.status = STATUS_RUNNING
+        item.message = "Chunked Adaptive Encoding …"
+        self._refresh_global_msg()
+        out_path = _output_path(item)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        enc_kw = {
+            "preserve_hdr": s.preserve_hdr,
+            "film_grain": s.film_grain,
+            "denoise": s.denoise,
+            "force_10bit": s.anime,
+            "audio_mode": s.audio_mode,
+            "audio_codec": s.audio_codec,
+            "audio_bitrate_kbps": s.audio_bitrate,
+            "audio_channels": s.audio_channels,
+            "audio_normalize": s.audio_normalize,
+            "audio_tracks": list(s.audio_tracks),
+        }
+
+        def set_active(runner) -> None:
+            with self._lock:
+                self._active[item.id] = runner
+
+        ok, err = chunked.encode(
+            info, out_path, s,
+            set_active=set_active,
+            cancelled=lambda: item.id in self._cancel_ids,
+            status=lambda m: setattr(item, "message", m),
+            progress=lambda d: setattr(item, "progress", d),
+            enc_kw=enc_kw,
+        )
+        if item.id in self._cancel_ids or (not ok and err == "Abgebrochen"):
+            item.status = STATUS_CANCELLED
+            out_path.unlink(missing_ok=True)
+        elif not ok:
+            item.status = STATUS_FAILED
+            item.error = err or "Chunked-Encode fehlgeschlagen"
+            logger.error("Chunked fehlgeschlagen: %s | %s", item.title, err)
+            out_path.unlink(missing_ok=True)
+        else:
+            item.output_path = str(out_path)
+            item.output_size = out_path.stat().st_size if out_path.exists() else 0
+            item.saved_bytes = max(0, item.original_size - item.output_size)
+            self._post_process(item, out_path)
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+        item.message = ""
+
+    def _process_audio_remux(self, item: "QueueItem", info) -> None:
+        """Nur-Audio-Optimierung: Video/Untertitel/Kapitel kopieren, aufgeblähte
+        Tonspuren transcodieren. Kein VMAF, kein Video-Encode."""
+        from . import audio_opt
+        s = item.settings
+        settings = {
+            "audio_codec": s.audio_codec,
+            "audio_channels": s.audio_channels,
+            "audio_bitrate": s.audio_bitrate,
+            "audio_normalize": s.audio_normalize,
+            "scope": s.audio_opt_scope,
+            "min_bitrate_kbps": s.audio_min_bitrate_kbps,
+        }
+        if not audio_opt.has_candidates(info, settings):
+            item.status = STATUS_DONE
+            item.message = "Keine optimierbaren Tonspuren – übersprungen."
+            return
+
+        item.status = STATUS_RUNNING
+        item.message = "Audio-Optimierung (Remux) …"
+        self._refresh_global_msg()
+        out_path = _output_path(item)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def on_prog(p: EncodeProgress) -> None:
+            saved = max(0, item.original_size - p.current_size)
+            item.progress = {
+                "percent": p.percent, "fps": round(p.fps, 1),
+                "bitrate": p.bitrate, "speed": p.speed,
+                "eta": round(p.eta, 0), "eta_human": ff.human_duration(p.eta),
+                "current_size": p.current_size,
+                "current_human": ff.human_size(p.current_size),
+                "saved_human": ff.human_size(saved),
+            }
+
+        cmd = audio_opt.build_remux_cmd(info, out_path, settings)
+        runner = EncodeRunner(on_progress=on_prog)
+        with self._lock:
+            self._active[item.id] = runner
+        rc, stderr = runner.run(cmd, info.duration)
+
+        if runner._cancel:
+            item.status = STATUS_CANCELLED
+            out_path.unlink(missing_ok=True)
+        elif rc != 0:
+            item.status = STATUS_FAILED
+            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+            logger.error("Audio-Remux fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
+                         item.title, rc, " ".join(cmd), stderr)
+            out_path.unlink(missing_ok=True)
+        else:
+            item.output_path = str(out_path)
+            item.output_size = out_path.stat().st_size if out_path.exists() else 0
+            item.saved_bytes = max(0, item.original_size - item.output_size)
+            self._post_process(item, out_path)
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+        item.message = ""
+
+    def _encode_to(self, item: "QueueItem", s: "JobSettings", info,
+                   out_path: Path, on_prog) -> tuple:
+        """Ein Encode-Durchlauf (Ein-/Zwei-Pass). Liefert
+        (rc, stderr, cmd, cancelled). enc_kw wird je Aufruf frisch aus `s`
+        gebaut, damit ein Guardrail-Retry die erhöhte Qualität übernimmt."""
         enc_kw: dict = {
             "audio_mode": s.audio_mode,
             "audio_codec": s.audio_codec,
@@ -566,6 +789,7 @@ class QueueManager:
             "keep_metadata": s.keep_metadata,
             "film_grain": s.film_grain,
             "denoise": s.denoise,
+            "force_10bit": s.anime,
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -610,28 +834,26 @@ class QueueManager:
                 s.target_height, s.tonemap, **enc_kw,
             )
             rc, stderr = runner.run(cmd, info.duration)
+        return rc, stderr, cmd, runner._cancel
 
-        if runner._cancel:
-            item.status = STATUS_CANCELLED
-            out_path.unlink(missing_ok=True)
-        elif rc != 0:
-            item.status = STATUS_FAILED
-            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
-            logger.error("Encode fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
-                         item.title, rc, " ".join(cmd), stderr)
-            out_path.unlink(missing_ok=True)
-        else:
-            # Dolby Vision (experimentell): RPU aus der Quelle re-injizieren,
-            # bevor Post-Processing/Verschieben greift.
-            if s.preserve_dv and s.codec == "hevc":
-                self._reinject_dv(item, out_path)
-            item.output_path = str(out_path)
-            item.output_size = out_path.stat().st_size if out_path.exists() else 0
-            item.saved_bytes = max(0, item.original_size - item.output_size)
-            self._post_process(item, out_path)
-            item.status = STATUS_DONE
-            item.progress["percent"] = 100.0
-        item.message = ""
+    def _verify_output(self, item: "QueueItem", s: "JobSettings", info,
+                       out_path: Path) -> Optional[float]:
+        """Misst den echten VMAF der fertigen Ausgabe (stichprobenartig)."""
+        try:
+            item.message = "Qualitätsprüfung: VMAF der Ausgabe wird gemessen …"
+            score = vmaf_mod.measure_output_vmaf(
+                info, out_path,
+                tonemap=s.tonemap, preserve_hdr=s.preserve_hdr,
+                samples=min(3, max(1, s.samples)),
+                clip_seconds=config.VERIFY_CLIP_SECONDS,
+                anime=s.anime,
+            )
+            if score is not None:
+                logger.info("Guardrail-VMAF %.2f (%s)", score, item.title)
+            return score
+        except Exception as e:  # pragma: no cover - Messfehler darf Job nicht kippen
+            logger.warning("Guardrail-Messung fehlgeschlagen (%s): %s", item.title, e)
+            return None
 
     def _reinject_dv(self, item: QueueItem, out_path: Path) -> None:
         """DV-RPU nach dem HEVC-Encode übernehmen (best-effort, mit Fallback)."""
@@ -709,6 +931,14 @@ _VALID_CODECS = {"av1", "hevc", "h264"}
 _VALID_PLATFORMS = {"cpu", "nvidia", "intel", "amd"}
 
 
+def _bump_quality(s: JobSettings) -> None:
+    """Qualität für einen Guardrail-Retry erhöhen: CQ senken bzw. Bitrate anheben."""
+    if s.rate_mode in ("bitrate", "abr"):
+        s.quality = int(round(s.quality * config.VERIFY_BITRATE_FACTOR))
+    else:
+        s.quality = max(1, s.quality - config.VERIFY_CQ_STEP)
+
+
 def build_job_settings(d: dict) -> JobSettings:
     """UI-/Profil-Dict → JobSettings (zentrale Zuordnung inkl. HDR-Modus)."""
     hdr_mode = d.get("hdr_mode", "tonemap")
@@ -734,6 +964,16 @@ def build_job_settings(d: dict) -> JobSettings:
         film_grain=max(0, min(50, int(d.get("film_grain", 0) or 0))),
         denoise=d.get("denoise", "off"),
         two_pass=bool(d.get("two_pass", False)),
+        anime=bool(d.get("anime", False)),
+        video_mode=d.get("video_mode", "encode"),
+        audio_opt_scope=d.get("audio_opt_scope", "bloated"),
+        audio_min_bitrate_kbps=int(d.get("audio_min_bitrate_kbps", 700) or 700),
+        chunked=bool(d.get("chunked", False)),
+        chunk_seconds=max(15, int(d.get("chunk_seconds", 60) or 60)),
+        chunk_cq_range=max(0, min(12, int(d.get("chunk_cq_range", 6) or 6))),
+        verify_vmaf=bool(d.get("verify_vmaf", False)),
+        verify_min=float(d.get("verify_min", 93) or 93),
+        verify_retry=bool(d.get("verify_retry", False)),
         vmaf_check=bool(d.get("vmaf_check", True)),
         workflow=d.get("workflow", "auto"),
         target_vmaf=float(d.get("target_vmaf", 0) or 0),

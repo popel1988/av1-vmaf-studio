@@ -23,11 +23,14 @@
         <button class="nav-item active" data-nav="encode"><span>▶</span> Encoding</button>
         <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
+        <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
+        <button class="nav-item" data-nav="abcompare"><span>🎞</span> A/B-Vergleich</button>
         <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
         <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
         <button class="nav-item" data-nav="library"><span>🔍</span> Bibliothek</button>
         <button class="nav-item" data-nav="data"><span>💾</span> Daten &amp; Archive</button>
         <button class="nav-item" data-nav="settings"><span>⚙</span> Einstellungen</button>
+        <button class="nav-item" data-nav="diag"><span>🩺</span> Diagnose</button>
       </nav>
 
       <div class="theme-picker">
@@ -37,6 +40,14 @@
           <option value="dark">Dark Mode</option>
           <option value="light">Light Mode</option>
           <option value="cyberpunk">Cyberpunk / Neon</option>
+        </select>
+      </div>
+
+      <div class="theme-picker">
+        <label for="lang-select" data-no-i18n>Sprache / Language</label>
+        <select id="lang-select">
+          <option value="de">Deutsch</option>
+          <option value="en">English</option>
         </select>
       </div>
 
@@ -227,6 +238,52 @@
               <span>Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)</span>
             </label>
 
+            <label class="check">
+              <input type="checkbox" id="opt-anime" />
+              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="opt-chunked" />
+              <span>Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)</span>
+            </label>
+            <div id="chunked-config" style="display:none">
+              <div class="field-row">
+                <div class="field">
+                  <label>Segmentlänge (Sekunden)</label>
+                  <input type="number" id="opt-chunk-seconds" min="15" max="600" value="60" />
+                </div>
+                <div class="field">
+                  <label>CQ-Spanne (±)</label>
+                  <input type="number" id="opt-chunk-range" min="0" max="12" value="6" />
+                </div>
+              </div>
+              <p class="hint">Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige
+                Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.</p>
+            </div>
+
+            <label class="check">
+              <input type="checkbox" id="opt-verify-vmaf" />
+              <span>Qualitäts-Guardrail: echten VMAF nach dem Encode messen</span>
+            </label>
+            <div id="verify-config" style="display:none">
+              <div class="field-row">
+                <div class="field">
+                  <label>Ziel-VMAF (min.)</label>
+                  <input type="number" id="opt-verify-min" min="60" max="100" step="0.5" value="93" />
+                </div>
+                <div class="field verify-retry-field">
+                  <label class="check">
+                    <input type="checkbox" id="opt-verify-retry" />
+                    <span>Bei Unterschreiten automatisch mit höherer Qualität neu encoden</span>
+                  </label>
+                </div>
+              </div>
+              <p class="hint">Nach dem Encode werden Stichproben-Clips der Ausgabe gegen die
+                Quelle gemessen. Liegt der VMAF darunter, wird (falls aktiviert) mit
+                besserer Qualität wiederholt – sonst als Warnung markiert.</p>
+            </div>
+
             <div class="divider"></div>
 
             <h4 class="subsection">Qualität</h4>
@@ -391,6 +448,11 @@
             <label class="check">
               <input type="checkbox" id="vt-screenshots" checked />
               <span>Screenshots für optischen Vergleich erstellen</span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="vt-anime" />
+              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
             </label>
 
             <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
@@ -560,6 +622,22 @@
                   <option value="include-hevc">Nur HEVC/H.265</option>
                 </select>
               </div>
+              <div class="field"><label>Projektion für Ziel-Codec</label>
+                <select id="lib-target-codec">
+                  <option value="av1">AV1</option>
+                  <option value="hevc">HEVC/H.265</option>
+                </select>
+              </div>
+            </div>
+            <div class="lib-checks">
+              <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span>Bereits effiziente Dateien ausblenden</span></label>
+              <label class="check"><input type="checkbox" id="lib-skip-processed" /><span>Bereits verarbeitete Dateien ausblenden</span></label>
+            </div>
+            <div class="lib-projection" id="lib-projection" style="display:none">
+              <div class="stat-box"><span class="stat-val" id="lib-proj-count">0</span><span class="stat-lbl">Treffer</span></div>
+              <div class="stat-box"><span class="stat-val" id="lib-proj-size">0 B</span><span class="stat-lbl">Gesamtgröße</span></div>
+              <div class="stat-box"><span class="stat-val good" id="lib-proj-saved">0 B</span><span class="stat-lbl">Einsparung (ca.)</span></div>
+              <div class="stat-box"><span class="stat-val" id="lib-proj-pct">0%</span><span class="stat-lbl">Anteil</span></div>
             </div>
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-lib-scan">Scan starten</button>
@@ -569,7 +647,7 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th><input type="checkbox" id="lib-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th><th>Dynamik</th></tr>
+                  <tr><th><input type="checkbox" id="lib-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th><th>Einsparung (ca.)</th></tr>
                 </thead>
                 <tbody id="lib-body">
                   <tr class="empty-row"><td colspan="7">Noch kein Scan.</td></tr>
@@ -590,14 +668,24 @@
               wählen, Qualitätsmodus festlegen, scannen und starten. Der Fortschritt je Datei
               erscheint unten.</p>
 
-            <div class="field">
-              <label>Ordner auswählen</label>
-              <div class="breadcrumb" id="st-breadcrumb"></div>
-              <div class="browser browser-sm" id="st-browser">
-                <div class="browser-loading">Lade Verzeichnis …</div>
+            <div class="st-folder-area">
+              <div class="field">
+                <label>Ordner auswählen</label>
+                <div class="breadcrumb" id="st-breadcrumb"></div>
+                <div class="browser browser-sm" id="st-browser">
+                  <div class="browser-loading">Lade Verzeichnis …</div>
+                </div>
+                <p class="hint" id="st-folder-info">Aktuell: gesamter Eingabeordner (alle Unterordner)</p>
+                <input type="hidden" id="st-folder" value="" />
               </div>
-              <p class="hint" id="st-folder-info">Aktuell: gesamter Eingabeordner (alle Unterordner)</p>
-              <input type="hidden" id="st-folder" value="" />
+              <div class="field">
+                <label>Passende Dateien <span class="badge" id="st-list-count">0</span></label>
+                <div class="browser browser-sm" id="st-file-panel">
+                  <div class="browser-loading">Ordner wählen …</div>
+                </div>
+                <p class="hint">Vorschau nach Ordner/Name/Format/Größe (ohne Codec-/Bitraten-/Höhen-Filter –
+                  diese greifen erst beim Scan).</p>
+              </div>
             </div>
 
             <div class="lib-filters">
@@ -700,6 +788,11 @@
               </div>
             </div>
 
+            <label class="check">
+              <input type="checkbox" id="st-anime" />
+              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
+            </label>
+
             <div class="field-row" id="st-quality-field" style="display:none">
               <div class="field">
                 <label>Steuerungsmodus</label>
@@ -739,7 +832,7 @@
             </div>
 
             <div class="lib-actions">
-              <button class="btn btn-primary btn-sm" id="btn-st-scan">Scannen &amp; Vorschau</button>
+              <button class="btn btn-primary btn-sm" id="btn-st-scan">Scan – Codec/Bitrate ermitteln</button>
               <span id="st-progress" class="muted"></span>
               <button class="btn btn-ghost btn-sm" id="btn-st-start" disabled>Stapel starten</button>
             </div>
@@ -747,10 +840,10 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th></tr>
+                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Container</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th></tr>
                 </thead>
                 <tbody id="st-body">
-                  <tr class="empty-row"><td colspan="6">Noch kein Scan.</td></tr>
+                  <tr class="empty-row"><td colspan="7">Noch kein Scan.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -809,6 +902,66 @@
 
         <section class="card" data-page="settings">
           <div class="card-head">
+            <h3><span class="card-idx">🕒</span> Zeitplan &amp; Last</h3>
+            <span class="badge" id="sched-badge">Aus</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Steuert, wann neue Encodes starten dürfen. Laufende Jobs werden
+              nie unterbrochen.</p>
+            <label class="check"><input type="checkbox" id="sched-enabled" /><span>Zeitplan aktiv</span></label>
+            <div class="divider"></div>
+            <label class="check"><input type="checkbox" id="sched-window" /><span>Nur in Zeitfenster encoden</span></label>
+            <div class="field-row">
+              <div class="field">
+                <label>Ab Stunde</label>
+                <input type="number" id="sched-start" min="0" max="23" value="22" />
+              </div>
+              <div class="field">
+                <label>Bis Stunde</label>
+                <input type="number" id="sched-end" min="0" max="24" value="6" />
+              </div>
+            </div>
+            <p class="hint">Fenster über Mitternacht ist erlaubt (z. B. 22 → 6).</p>
+            <div class="divider"></div>
+            <label class="check"><input type="checkbox" id="sched-throttle" /><span>Last-Drosselung aktiv</span></label>
+            <div class="field">
+              <label>Keine neuen Jobs über CPU-Auslastung (%)</label>
+              <input type="number" id="sched-maxcpu" min="10" max="100" value="85" />
+            </div>
+            <p class="hint" id="sched-status"></p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-sched-save">Speichern</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-2" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">🔌</span> API &amp; Integration</h3>
+            <span class="badge" id="api-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">REST-API für Automatisierung (Sonarr/Radarr/Skripte). Requests an
+              <code>/api/v1/*</code> benötigen den Header <code>X-API-Key</code> (oder
+              <code>?apikey=</code>), sobald mindestens ein Schlüssel existiert.</p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-apikey-new">Neuen Schlüssel erzeugen</button>
+            </div>
+            <p class="hint" id="apikey-new" style="display:none"></p>
+            <div id="apikey-list" class="apikey-list"></div>
+            <div class="divider"></div>
+            <p class="hint"><strong>*arr-Webhook:</strong> In Sonarr/Radarr unter
+              <em>Connect → Webhook</em> als URL eintragen (Trigger „On Import"/„On Upgrade"):</p>
+            <div class="field">
+              <input type="text" id="arr-webhook-url" readonly value="" onclick="this.select()" />
+              <p class="hint">Optional Profil anhängen: <code>…/api/v1/webhook/arr?profile=NAME&amp;apikey=SCHLÜSSEL</code>.
+                Weichen die Pfade ab, per Env <code>ARR_PATH_MAP=/movies:/media/input/Filme</code> remappen.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" data-page="settings">
+          <div class="card-head">
             <h3><span class="card-idx">👁</span> Watch-Ordner</h3>
             <span class="badge" id="watch-badge">Aus</span>
           </div>
@@ -846,6 +999,172 @@
             </div>
           </div>
         </section>
+
+        <!-- PAGE: Audio-Optimierung -->
+        <section class="card span-3" data-page="audio">
+          <div class="card-head">
+            <h3><span class="card-idx">🔊</span> Audio-Optimierung</h3>
+            <span class="badge" id="audio-saved-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Verkleinert aufgeblähte Tonspuren (TrueHD, DTS-HD MA, PCM, FLAC …)
+              ohne das Video neu zu encoden – das Video wird 1:1 kopiert (<code>-c:v copy</code>).
+              Spart bei Blu-ray-Remuxes oft mehrere GB in Sekunden.</p>
+
+            <div class="st-folder-area">
+              <div class="field">
+                <label>Ordner auswählen</label>
+                <div class="breadcrumb" id="audio-breadcrumb"></div>
+                <div class="browser browser-sm" id="audio-browser">
+                  <div class="browser-loading">Lade Verzeichnis …</div>
+                </div>
+                <p class="hint" id="audio-folder-info">Aktuell: gesamter Eingabeordner</p>
+                <input type="hidden" id="audio-folder" value="" />
+              </div>
+              <div class="field">
+                <label>Zieleinstellungen</label>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Ziel-Codec</label>
+                    <select id="audio-codec">
+                      <option value="eac3">E-AC3 (Dolby Digital+)</option>
+                      <option value="ac3">AC3 (Dolby Digital)</option>
+                      <option value="opus">Opus</option>
+                      <option value="aac">AAC</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Kanäle</label>
+                    <select id="audio-channels">
+                      <option value="0">Original behalten</option>
+                      <option value="6">5.1 (6)</option>
+                      <option value="2">Stereo (2)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Bitrate (kbit/s, 0 = automatisch)</label>
+                    <input type="number" id="audio-bitrate" min="0" max="1536" step="32" value="0" />
+                  </div>
+                  <div class="field">
+                    <label>Umfang</label>
+                    <select id="audio-scope">
+                      <option value="bloated">Nur aufgeblähte Spuren</option>
+                      <option value="all">Alle Tonspuren</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Als „aufgebläht" ab (kbit/s)</label>
+                  <input type="number" id="audio-min-br" min="128" max="5000" step="64" value="700" />
+                  <p class="hint">Verlustfreie Codecs (TrueHD/DTS-HD/PCM/FLAC) gelten immer als aufgebläht.</p>
+                </div>
+                <label class="check"><input type="checkbox" id="audio-normalize" /><span>Lautheit normalisieren (EBU R128)</span></label>
+                <div class="field">
+                  <label>Nach Erfolg</label>
+                  <select id="audio-post">
+                    <option value="keep">Original behalten (Suffix)</option>
+                    <option value="replace">Original ersetzen</option>
+                    <option value="archive">Original ins .archiv verschieben</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-audio-scan">Ordner scannen</button>
+              <span id="audio-scan-info" class="muted"></span>
+            </div>
+
+            <div class="table-wrap">
+              <table class="queue-table">
+                <thead>
+                  <tr><th><input type="checkbox" id="audio-check-all" /></th><th>Datei</th><th>Aufgeblähte Spuren</th><th>Größe</th><th>Einsparung (ca.)</th></tr>
+                </thead>
+                <tbody id="audio-results">
+                  <tr class="empty-row"><td colspan="5">Noch kein Scan.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="lib-actions">
+              <button class="btn btn-primary" id="btn-audio-start" disabled>Auswahl optimieren</button>
+              <span id="audio-start-info" class="muted"></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE: A/B-Vergleichsplayer -->
+        <section class="card span-3" data-page="abcompare">
+          <div class="card-head">
+            <h3><span class="card-idx">🎞</span> A/B-Vergleichsplayer</h3>
+            <span class="badge" id="ab-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Spielt zwei Videos synchron nebeneinander ab – ideal für Vorher/Nachher.
+              Hinweis: Der Browser muss den Codec abspielen können (AV1/VP9/H.264 meist ja,
+              HEVC oft nicht). Bei nicht abspielbaren Dateien den Screenshot-Vergleich im
+              VMAF-Tool nutzen.</p>
+            <div class="ab-pickers">
+              <div class="field">
+                <label>Video A</label>
+                <div class="field-row">
+                  <select id="ab-root-a">
+                    <option value="input">Eingang</option>
+                    <option value="output">Ausgang</option>
+                  </select>
+                  <input type="text" id="ab-path-a" placeholder="relativer Pfad, z. B. Filme/film.mkv" />
+                </div>
+              </div>
+              <div class="field">
+                <label>Video B</label>
+                <div class="field-row">
+                  <select id="ab-root-b">
+                    <option value="output">Ausgang</option>
+                    <option value="input">Eingang</option>
+                  </select>
+                  <input type="text" id="ab-path-b" placeholder="relativer Pfad, z. B. Filme/film_av1.mkv" />
+                </div>
+              </div>
+            </div>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-ab-load">Laden</button>
+              <label class="check" style="margin:0"><input type="checkbox" id="ab-sync" checked /><span>Synchron</span></label>
+              <div class="field" style="margin:0">
+                <label style="font-size:11px">Versatz B (s)</label>
+                <input type="number" id="ab-offset" value="0" step="0.1" style="width:90px" />
+              </div>
+            </div>
+            <div class="ab-videos">
+              <div class="ab-pane"><span class="ab-tag">A</span><video id="ab-video-a" controls preload="metadata"></video></div>
+              <div class="ab-pane"><span class="ab-tag">B</span><video id="ab-video-b" controls preload="metadata"></video></div>
+            </div>
+            <div class="ab-controls">
+              <button class="btn btn-primary btn-sm" id="ab-play">▶ / ⏸ (beide)</button>
+              <input type="range" id="ab-seek" min="0" max="1000" value="0" style="flex:1" />
+              <span id="ab-time" class="muted">0:00</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE: Diagnose / Self-Test -->
+        <section class="card span-3" data-page="diag">
+          <div class="card-head">
+            <h3><span class="card-idx">🩺</span> Diagnose &amp; Selbsttest</h3>
+            <span class="badge" id="diag-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Prüft, ob alle Bausteine vorhanden und nutzbar sind: FFmpeg &amp;
+              Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI und die Datenordner. Hilfreich nach
+              einem Update oder bei Encode-Fehlern.</p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-diag-run">Selbsttest ausführen</button>
+              <span id="diag-progress" class="muted"></span>
+            </div>
+            <div id="diag-report"></div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -858,6 +1177,7 @@
       videoExtensions: {{ video_extensions|tojson }},
     };
   </script>
+  <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

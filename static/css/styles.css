@@ -240,6 +240,80 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
   max-height: 300px; overflow-y: auto; background: var(--surface-2);
 }
 .browser-sm { max-height: 220px; }
+
+/* A/B-Vergleichsplayer */
+.ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+.ab-videos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+.ab-pane { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
+.ab-pane video { width: 100%; display: block; max-height: 60vh; background: #000; }
+.ab-tag {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  background: rgba(0,0,0,.6); color: #fff; font-weight: 700;
+  padding: 2px 9px; border-radius: 6px; font-size: 12px;
+}
+.ab-controls { display: flex; align-items: center; gap: 12px; }
+@media (max-width: 900px) { .ab-videos, .ab-pickers { grid-template-columns: 1fr; } }
+
+/* API-Schlüssel-Liste */
+.apikey-list { margin: 10px 0; }
+.apikey-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 6px; font-size: 12.5px;
+}
+
+/* Bibliothek: Einspar-Projektion + Status */
+.lib-checks { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0; }
+.lib-projection { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0; }
+.lib-opt-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 11px;
+  font-weight: 700; background: var(--surface-2); color: var(--text-muted);
+}
+
+/* Qualitäts-Guardrail: gemessener VMAF in Tabellen */
+.vmaf-verify {
+  display: inline-block; padding: 1px 6px; border-radius: 6px;
+  font-size: 11px; font-weight: 700; margin-left: 4px; white-space: nowrap;
+}
+.vmaf-verify.vv-ok { background: color-mix(in srgb, var(--good, #2ecc71) 22%, transparent); color: var(--good, #2ecc71); }
+.vmaf-verify.vv-bad { background: color-mix(in srgb, var(--bad, #e74c3c) 22%, transparent); color: var(--bad, #e74c3c); }
+
+/* Diagnose / Selbsttest */
+.diag-section { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.diag-sec-head {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  font-weight: 600; font-size: 13px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.diag-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.diag-row:last-child { border-bottom: none; }
+.diag-name { min-width: 190px; color: var(--text); }
+.diag-detail { color: var(--text-muted); font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.diag-dot {
+  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #fff;
+}
+.diag-dot.diag-ok { background: var(--good, #2ecc71); }
+.diag-dot.diag-warn { background: var(--warn, #f39c12); }
+.diag-dot.diag-fail { background: var(--bad, #e74c3c); }
+.badge.diag-ok { color: var(--good, #2ecc71); }
+.badge.diag-warn { color: var(--warn, #f39c12); }
+.badge.diag-fail { color: var(--bad, #e74c3c); }
+
+/* Super-Tool: Ordnerwahl + Live-Dateiliste nebeneinander */
+.st-folder-area { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+@media (max-width: 900px) { .st-folder-area { grid-template-columns: 1fr; } }
+.st-file-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.st-file-row:last-child { border-bottom: none; }
+.st-file-row .row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-file-row .row-size { color: var(--text-muted); font-size: 11.5px; font-family: var(--mono); }
 .browser-loading { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .row-item {
   display: flex; align-items: center; gap: 10px; padding: 9px 14px;

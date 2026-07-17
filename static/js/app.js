@@ -54,6 +54,8 @@
     applyPageVisibility();
     if (page === "stats") loadStats();
     if (page === "supertool") pollSuperStatus();
+    if (page === "audio" && !state.audioLoaded) { state.audioLoaded = true; auLoadDir(""); }
+    if (page === "diag" && !state.diagLoaded) loadDiagnostics();
   }
 
   function initNav() {
@@ -435,6 +437,26 @@
       if (dvCb.checked && $("opt-hdr-mode")) $("opt-hdr-mode").value = "preserve";
     });
 
+    const verifyCb = $("opt-verify-vmaf");
+    if (verifyCb) {
+      const syncVerify = () => {
+        const cfg = $("verify-config");
+        if (cfg) cfg.style.display = verifyCb.checked ? "" : "none";
+      };
+      verifyCb.addEventListener("change", syncVerify);
+      syncVerify();
+    }
+
+    const chunkedCb = $("opt-chunked");
+    if (chunkedCb) {
+      const syncChunked = () => {
+        const cfg = $("chunked-config");
+        if (cfg) cfg.style.display = chunkedCb.checked ? "" : "none";
+      };
+      chunkedCb.addEventListener("change", syncChunked);
+      syncChunked();
+    }
+
     const audioMode = $("opt-audio-mode");
     const audioCodec = $("opt-audio-codec");
     const audioBr = $("opt-audio-bitrate");
@@ -605,6 +627,13 @@
       rate_mode: rateMode,
       suffix: "_" + $("opt-codec").value,
       ...gatherOutputCommon(),
+      anime: $("opt-anime") ? $("opt-anime").checked : false,
+      verify_vmaf: $("opt-verify-vmaf") ? $("opt-verify-vmaf").checked : false,
+      verify_min: $("opt-verify-min") ? parseFloat($("opt-verify-min").value) || 93 : 93,
+      verify_retry: $("opt-verify-retry") ? $("opt-verify-retry").checked : false,
+      chunked: $("opt-chunked") ? $("opt-chunked").checked : false,
+      chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
+      chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
     };
   }
 
@@ -738,6 +767,7 @@
       generate_screenshots: $("vt-screenshots").checked,
       suffix: "_" + $("vt-codec").value,
       ...gatherOutputCommon(),
+      anime: $("vt-anime") ? $("vt-anime").checked : false,
     };
   }
 
@@ -940,7 +970,8 @@
       pauseBtn.classList.toggle("btn-primary", state.paused);
     }
     $("global-status").textContent = q.paused ? "Pausiert"
-      : (q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit"));
+      : (q.gate_message && c.waiting ? `⏸ ${q.gate_message}`
+        : (q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit")));
 
     const activeIds = q.active_ids || (q.active_id ? [q.active_id] : []);
     state.lastItems = q.items;
@@ -976,7 +1007,15 @@
     if (s.rate_mode === "bitrate") val = `${s.quality} kbit/s`;
     else if (s.rate_mode === "abr") val = `ABR ${s.quality}`;
     else val = `CQ ${s.quality}`;
-    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}`;
+    let verify = "";
+    if (it.vmaf_verify != null) {
+      const min = (s.verify_min != null) ? s.verify_min : 93;
+      const ok = it.vmaf_verify >= min;
+      const retry = it.verify_attempts > 1 ? ` ·${it.verify_attempts}×` : "";
+      verify = ` <span class="vmaf-verify ${ok ? "vv-ok" : "vv-bad"}" `
+        + `title="Gemessener VMAF der Ausgabe (Ziel ≥ ${min})">VMAF ${it.vmaf_verify.toFixed(1)}${retry}</span>`;
+    }
+    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}${verify}`;
   }
 
   function renderQueueTable(items, activeIds) {
@@ -1829,6 +1868,10 @@
     set("opt-denoise", s.denoise, "change");
     set("opt-film-grain", s.film_grain);
     set("opt-two-pass", s.two_pass);
+    set("opt-anime", s.anime);
+    set("opt-verify-vmaf", s.verify_vmaf, "change");
+    set("opt-verify-min", s.verify_min);
+    set("opt-verify-retry", s.verify_retry);
     set("opt-post", s.post_processing, "change");
     set("opt-audio-mode", s.audio_mode, "change");
     set("opt-audio-codec", s.audio_codec, "change");
@@ -1921,11 +1964,28 @@
       min_height: parseInt($("lib-min-h").value, 10) || 0,
       codecs_include: [],
       codecs_exclude: [],
+      target_codec: $("lib-target-codec") ? $("lib-target-codec").value : "av1",
+      skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
+      skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
     };
     if (mode === "exclude-av1") f.codecs_exclude = ["av1"];
     else if (mode === "include-h264") f.codecs_include = ["h264"];
     else if (mode === "include-hevc") f.codecs_include = ["hevc"];
     return f;
+  }
+
+  function renderLibProjection(st) {
+    const box = $("lib-projection");
+    if (!box) return;
+    const rows = st.matched || [];
+    if (!rows.length) { box.style.display = "none"; return; }
+    box.style.display = "";
+    $("lib-proj-count").textContent = String(rows.length);
+    $("lib-proj-size").textContent = st.total_size_human || formatBytes(st.total_size_bytes || 0);
+    $("lib-proj-saved").textContent = st.total_saved_human || formatBytes(st.total_saved_bytes || 0);
+    const pct = st.total_size_bytes
+      ? Math.round((st.total_saved_bytes / st.total_size_bytes) * 100) : 0;
+    $("lib-proj-pct").textContent = `${pct}%`;
   }
 
   async function startLibraryScan() {
@@ -1944,8 +2004,9 @@
       const r = await fetch("/api/library/scan");
       const st = await r.json();
       $("lib-progress").textContent =
-        `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer`;
+        `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer · ca. ${st.total_saved_human || "0 B"} einsparbar`;
       renderLibrary(st.matched);
+      renderLibProjection(st);
       if (!st.running) {
         clearInterval(libPoll); libPoll = null;
         $("lib-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
@@ -1957,16 +2018,21 @@
   function renderLibrary(rows) {
     const body = $("lib-body");
     if (!body) return;
-    body.innerHTML = rows.length ? rows.map((m) => `
+    body.innerHTML = rows.length ? rows.map((m) => {
+      const opt = m.already_optimized
+        ? '<span class="lib-opt-badge">schon optimiert</span>'
+        : `<span class="good">${escapeHtml(m.est_saved_human || "—")}</span>`;
+      return `
       <tr>
-        <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" /></td>
+        <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
         <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
         <td>${escapeHtml(m.size_human)}</td>
-        <td>${escapeHtml(m.hdr_type)}</td>
-      </tr>`).join("") :
+        <td>${opt}</td>
+      </tr>`;
+    }).join("") :
       '<tr class="empty-row"><td colspan="7">Keine Treffer.</td></tr>';
   }
 
@@ -1993,6 +2059,7 @@
   /* ------------------------------------------------------------- SUPER-TOOL */
   let superScanPoll = null;
   let superStatusPoll = null;
+  let stListTimer = null;
 
   const ST_MODE_HINTS = {
     target_vmaf: "Pro Datei werden Test-Encodes mit den CQ-Werten unten erstellt, per VMAF " +
@@ -2051,6 +2118,14 @@
     if (all) all.addEventListener("change", () => {
       document.querySelectorAll(".st-check").forEach((c) => { c.checked = all.checked; });
     });
+
+    // Live-Vorschau bei Änderung der günstigen Filter aktualisieren.
+    ["st-name", "st-exclude", "st-min-size"].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("input", stRefreshListDebounced);
+    });
+    const fmts = $("st-formats");
+    if (fmts) fmts.addEventListener("change", stRefreshListDebounced);
   }
 
   function stUpdateCodec() {
@@ -2082,6 +2157,43 @@
     ).join("") || '<span class="empty">Keine Formate.</span>';
   }
 
+  // Live-Vorschau: schnelle Dateiliste (ohne Probe) zum aktuellen Ordner + Filter.
+  function stRefreshListDebounced() {
+    if (stListTimer) clearTimeout(stListTimer);
+    stListTimer = setTimeout(stRefreshList, 350);
+  }
+
+  async function stRefreshList() {
+    const panel = $("st-file-panel");
+    if (!panel) return;
+    panel.innerHTML = '<div class="browser-loading">Lade …</div>';
+    try {
+      const d = await (await fetch("/api/supertool/list", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stFilters()),
+      })).json();
+      renderQuickList(d);
+    } catch (e) {
+      panel.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function renderQuickList(d) {
+    const panel = $("st-file-panel");
+    const cnt = $("st-list-count");
+    const files = (d && d.files) || [];
+    if (cnt) cnt.textContent = (d && d.truncated) ? `${files.length}+` : String((d && d.count) || 0);
+    if (!panel) return;
+    if (d && d.error) { panel.innerHTML = `<div class="browser-loading">${escapeHtml(d.error)}</div>`; return; }
+    if (!files.length) { panel.innerHTML = '<div class="browser-loading">Keine passenden Dateien.</div>'; return; }
+    panel.innerHTML = files.map((f) =>
+      `<div class="st-file-row" title="${escapeHtml(f.path)}">` +
+      `<span class="row-name">🎬 ${escapeHtml(f.name)}</span>` +
+      `<span class="row-size">${escapeHtml(f.size_human)}</span></div>`
+    ).join("") + (d.truncated
+      ? '<div class="browser-loading">… weitere ausgeblendet (Limit 1000)</div>' : "");
+  }
+
   // Eigener Ordner-Browser des Super-Tools: der aktuell geöffnete Ordner ist
   // zugleich der zu scannende Ordner (rekursiv, inkl. Unterordner).
   async function stLoadDir(path) {
@@ -2094,6 +2206,7 @@
     if (info) info.textContent = path
       ? `Aktuell: /${path} (inkl. Unterordner)`
       : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
+    stRefreshList(); // Live-Dateiliste zum neuen Ordner
     el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
     try {
       const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
@@ -2202,12 +2315,13 @@
       <tr>
         <td><input type="checkbox" class="st-check" value="${escapeHtml(m.path)}" checked /></td>
         <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
+        <td>${escapeHtml((m.container || "—").toUpperCase())}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
         <td>${escapeHtml(m.size_human)}</td>
       </tr>`).join("") :
-      '<tr class="empty-row"><td colspan="6">Keine Treffer.</td></tr>';
+      '<tr class="empty-row"><td colspan="7">Keine Treffer.</td></tr>';
   }
 
   // Passt Beschriftung, Grenzen und (optional) die Vorgabewerte des Test-Grids
@@ -2253,6 +2367,7 @@
       post_processing: $("st-post").value,
       audio_mode: $("st-audio-mode").value,
       rate_mode: "cq",
+      anime: $("st-anime") ? $("st-anime").checked : false,
     };
     if (mode === "target_vmaf" || mode === "representative") {
       // Test-Encode-Konfiguration für die VMAF-Analyse (CQ oder Bitrate).
@@ -2333,6 +2448,249 @@
       '<tr class="empty-row"><td colspan="5">Noch nichts.</td></tr>';
   }
 
+  /* --------------------------------------------------- AUDIO-OPTIMIERUNG */
+  let audioScanPoll = null;
+
+  function initAudioOpt() {
+    const scan = $("btn-audio-scan");
+    if (scan) scan.addEventListener("click", audioStartScan);
+    const start = $("btn-audio-start");
+    if (start) start.addEventListener("click", audioStart);
+    const all = $("audio-check-all");
+    if (all) all.addEventListener("change", () => {
+      document.querySelectorAll(".audio-pick").forEach((c) => { c.checked = all.checked; });
+      audioSyncStart();
+    });
+  }
+
+  function audioSettings() {
+    return {
+      audio_codec: $("audio-codec").value,
+      audio_channels: parseInt($("audio-channels").value, 10) || 0,
+      audio_bitrate: parseInt($("audio-bitrate").value, 10) || 0,
+      scope: $("audio-scope").value,
+      min_bitrate_kbps: parseInt($("audio-min-br").value, 10) || 700,
+      audio_normalize: $("audio-normalize").checked,
+      post_processing: $("audio-post").value,
+    };
+  }
+
+  async function auLoadDir(path) {
+    const el = $("audio-browser");
+    if (!el) return;
+    $("audio-folder").value = path;
+    const info = $("audio-folder-info");
+    if (info) info.textContent = path ? `Aktuell: /${path} (inkl. Unterordner)`
+      : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
+    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+    try {
+      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
+      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      auRenderCrumb(data);
+      el.innerHTML = "";
+      if (!data.is_root) el.appendChild(stDirRow("..", () => auLoadDir(data.parent || "")));
+      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => auLoadDir(d.rel))));
+    } catch (e) {
+      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function auRenderCrumb(data) {
+    const bc = $("audio-breadcrumb");
+    if (!bc) return;
+    bc.innerHTML = "";
+    const root = document.createElement("a");
+    root.textContent = "/media/input";
+    root.onclick = () => auLoadDir("");
+    bc.appendChild(root);
+    if (data.path) {
+      let acc = "";
+      data.path.split("/").forEach((p) => {
+        acc = acc ? `${acc}/${p}` : p;
+        const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
+        const a = document.createElement("a"); a.textContent = p;
+        const target = acc; a.onclick = () => auLoadDir(target); bc.appendChild(a);
+      });
+    }
+  }
+
+  async function audioStartScan() {
+    const info = $("audio-scan-info");
+    if (info) info.textContent = "Scan gestartet …";
+    $("audio-results").innerHTML = '<tr class="empty-row"><td colspan="5">Scanne …</td></tr>';
+    await fetch("/api/audio/scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder: $("audio-folder").value.trim(),
+        settings: audioSettings(),
+      }),
+    });
+    if (audioScanPoll) clearTimeout(audioScanPoll);
+    audioPollScan();
+  }
+
+  async function audioPollScan() {
+    try {
+      const d = await (await fetch("/api/audio/scan")).json();
+      renderAudioScan(d);
+      if (d.running) { audioScanPoll = setTimeout(audioPollScan, 1500); }
+    } catch (e) { /* ignore */ }
+  }
+
+  function renderAudioScan(d) {
+    const info = $("audio-scan-info");
+    if (info) info.textContent = d.running
+      ? `Scanne … ${d.scanned}/${d.total}`
+      : `${(d.matched || []).length} Treffer · ca. ${d.total_saved_human} einsparbar`;
+    const badge = $("audio-saved-badge");
+    if (badge) badge.textContent = d.total_saved_human || "—";
+    const body = $("audio-results");
+    const files = d.matched || [];
+    if (!files.length) {
+      body.innerHTML = `<tr class="empty-row"><td colspan="5">${d.running ? "Scanne …" : "Keine optimierbaren Dateien."}</td></tr>`;
+      audioSyncStart();
+      return;
+    }
+    body.innerHTML = files.map((f) => `
+      <tr>
+        <td><input type="checkbox" class="audio-pick" value="${escapeHtml(f.path)}" checked /></td>
+        <td title="${escapeHtml(f.path)}">${escapeHtml(f.name)}</td>
+        <td class="muted" style="font-size:12px">${escapeHtml((f.tracks || []).join(", "))}</td>
+        <td>${escapeHtml(f.size_human)}</td>
+        <td class="good">${escapeHtml(f.est_saved_human)}</td>
+      </tr>`).join("");
+    body.querySelectorAll(".audio-pick").forEach((c) =>
+      c.addEventListener("change", audioSyncStart));
+    audioSyncStart();
+  }
+
+  function audioSyncStart() {
+    const picked = [...document.querySelectorAll(".audio-pick:checked")];
+    const btn = $("btn-audio-start");
+    if (btn) btn.disabled = picked.length === 0;
+    const info = $("audio-start-info");
+    if (info) info.textContent = picked.length ? `${picked.length} Datei(en) ausgewählt` : "";
+  }
+
+  async function audioStart() {
+    const paths = [...document.querySelectorAll(".audio-pick:checked")].map((c) => c.value);
+    if (!paths.length) return;
+    const btn = $("btn-audio-start");
+    if (btn) { btn.disabled = true; btn.textContent = "Wird eingereiht …"; }
+    try {
+      const r = await (await fetch("/api/audio/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths, settings: audioSettings() }),
+      })).json();
+      const info = $("audio-start-info");
+      if (info) info.textContent = r.error ? r.error : `${r.added} Job(s) in der Warteschlange.`;
+    } finally {
+      if (btn) { btn.textContent = "Auswahl optimieren"; }
+      audioSyncStart();
+    }
+  }
+
+  /* --------------------------------------------------- A/B-VERGLEICHSPLAYER */
+  function initAbCompare() {
+    const load = $("btn-ab-load");
+    if (!load) return;
+    const va = $("ab-video-a"), vb = $("ab-video-b");
+    const mediaUrl = (root, path) =>
+      `/api/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
+
+    load.addEventListener("click", () => {
+      const pa = $("ab-path-a").value.trim(), pb = $("ab-path-b").value.trim();
+      const badge = $("ab-badge");
+      if (pa) va.src = mediaUrl($("ab-root-a").value, pa);
+      if (pb) vb.src = mediaUrl($("ab-root-b").value, pb);
+      if (badge) badge.textContent = "Geladen";
+      va.load(); vb.load();
+    });
+
+    const synced = () => $("ab-sync").checked;
+    const offset = () => parseFloat($("ab-offset").value) || 0;
+
+    // A ist Master; B folgt (mit Versatz).
+    va.addEventListener("play", () => { if (synced()) vb.play().catch(() => {}); });
+    va.addEventListener("pause", () => { if (synced()) vb.pause(); });
+    va.addEventListener("seeking", () => {
+      if (synced()) vb.currentTime = Math.max(0, va.currentTime + offset());
+    });
+    va.addEventListener("timeupdate", () => {
+      const seek = $("ab-seek"), time = $("ab-time");
+      if (va.duration) {
+        if (seek) seek.value = String(Math.round((va.currentTime / va.duration) * 1000));
+        if (time) time.textContent = fmtClock(va.currentTime) + " / " + fmtClock(va.duration);
+      }
+      // Drift korrigieren.
+      if (synced() && Math.abs((vb.currentTime - offset()) - va.currentTime) > 0.35) {
+        vb.currentTime = Math.max(0, va.currentTime + offset());
+      }
+    });
+
+    $("ab-play").addEventListener("click", () => {
+      if (va.paused) { va.play().catch(() => {}); } else { va.pause(); }
+    });
+    $("ab-seek").addEventListener("input", (e) => {
+      if (va.duration) va.currentTime = (parseInt(e.target.value, 10) / 1000) * va.duration;
+    });
+  }
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  /* ------------------------------------------------------------- DIAGNOSE */
+  function initDiagnostics() {
+    const btn = $("btn-diag-run");
+    if (btn) btn.addEventListener("click", loadDiagnostics);
+  }
+
+  const DIAG_ICON = { ok: "✓", warn: "!", fail: "✗" };
+  const DIAG_LABEL = { ok: "OK", warn: "Warnung", fail: "Fehler" };
+
+  async function loadDiagnostics() {
+    const report = $("diag-report");
+    const badge = $("diag-badge");
+    const prog = $("diag-progress");
+    if (prog) prog.textContent = "Prüfe …";
+    if (report) report.innerHTML = '<div class="browser-loading">Selbsttest läuft …</div>';
+    try {
+      const d = await (await fetch("/api/diagnostics")).json();
+      state.diagLoaded = true;
+      if (badge) {
+        badge.textContent = DIAG_LABEL[d.overall] || "—";
+        badge.className = "badge diag-" + (d.overall || "ok");
+      }
+      renderDiagnostics(d);
+    } catch (e) {
+      if (report) report.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    } finally {
+      if (prog) prog.textContent = "";
+    }
+  }
+
+  function renderDiagnostics(d) {
+    const report = $("diag-report");
+    if (!report) return;
+    const sections = (d && d.sections) || [];
+    report.innerHTML = sections.map((sec) => `
+      <div class="diag-section">
+        <div class="diag-sec-head diag-${sec.status}">
+          <span class="diag-dot diag-${sec.status}">${DIAG_ICON[sec.status] || "?"}</span>
+          ${escapeHtml(sec.title)}
+        </div>
+        ${sec.checks.map((c) => `
+          <div class="diag-row">
+            <span class="diag-dot diag-${c.status}">${DIAG_ICON[c.status] || "?"}</span>
+            <span class="diag-name">${escapeHtml(c.name)}</span>
+            <span class="diag-detail">${escapeHtml(c.detail || "")}</span>
+          </div>`).join("")}
+      </div>`).join("");
+  }
+
   /* ------------------------------------------------------------------ INIT */
   function initParallel() {
     const sel = $("opt-parallel");
@@ -2395,6 +2753,83 @@
   }
 
   /* ---------------------------------------------------------- WATCH-ORDNER */
+  async function initApiKeys() {
+    if (!$("btn-apikey-new")) return;
+    const url = $("arr-webhook-url");
+    if (url) url.value = `${location.origin}/api/v1/webhook/arr`;
+    const load = async () => {
+      try {
+        const d = await (await fetch("/api/apikeys")).json();
+        const badge = $("api-badge");
+        if (badge) badge.textContent = d.any ? "Geschützt" : "Offen";
+        const list = $("apikey-list");
+        const items = d.file_keys || [];
+        list.innerHTML = (d.env_count
+          ? `<div class="apikey-row"><span class="muted">${d.env_count} Schlüssel via Env (API_KEYS)</span></div>` : "")
+          + (items.length ? items.map((k) =>
+            `<div class="apikey-row"><code>${escapeHtml(k.masked)}</code>` +
+            `<button class="btn btn-ghost btn-sm" data-revoke="${k.index}">Widerrufen</button></div>`).join("")
+            : '<div class="apikey-row muted">Keine gespeicherten Schlüssel.</div>');
+        list.querySelectorAll("[data-revoke]").forEach((b) =>
+          b.addEventListener("click", async () => {
+            await fetch("/api/apikeys/revoke", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ index: parseInt(b.dataset.revoke, 10) }),
+            });
+            load();
+          }));
+      } catch (e) { /* ignorieren */ }
+    };
+    await load();
+    $("btn-apikey-new").addEventListener("click", async () => {
+      const r = await (await fetch("/api/apikeys/generate", { method: "POST" })).json();
+      const el = $("apikey-new");
+      if (el && r.key) {
+        el.style.display = "";
+        el.innerHTML = `Neuer Schlüssel (nur jetzt sichtbar): <code>${escapeHtml(r.key)}</code>`;
+      }
+      load();
+    });
+  }
+
+  async function initScheduler() {
+    if (!$("btn-sched-save")) return;
+    const load = async () => {
+      try {
+        const d = await (await fetch("/api/scheduler")).json();
+        $("sched-enabled").checked = !!d.enabled;
+        $("sched-window").checked = !!d.window_enabled;
+        $("sched-start").value = d.start_hour;
+        $("sched-end").value = d.end_hour;
+        $("sched-throttle").checked = !!d.throttle_enabled;
+        $("sched-maxcpu").value = d.max_cpu_percent;
+        const badge = $("sched-badge");
+        if (badge) badge.textContent = d.enabled ? (d.active_now ? "Aktiv" : "Wartet") : "Aus";
+        const st = $("sched-status");
+        if (st) st.textContent = d.enabled
+          ? (d.active_now ? "Encodes sind aktuell freigegeben." : `Pausiert: ${d.reason || "—"}`)
+          : "Zeitplan deaktiviert – Encodes laufen jederzeit.";
+      } catch (e) { /* ignorieren */ }
+    };
+    await load();
+    $("btn-sched-save").addEventListener("click", async () => {
+      const b = $("btn-sched-save"); const t = b.textContent; b.textContent = "Gespeichert";
+      await fetch("/api/scheduler", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: $("sched-enabled").checked,
+          window_enabled: $("sched-window").checked,
+          start_hour: parseInt($("sched-start").value, 10) || 0,
+          end_hour: parseInt($("sched-end").value, 10) || 0,
+          throttle_enabled: $("sched-throttle").checked,
+          max_cpu_percent: parseInt($("sched-maxcpu").value, 10) || 85,
+        }),
+      });
+      await load();
+      setTimeout(() => { b.textContent = t; }, 1500);
+    });
+  }
+
   async function initWatch() {
     if (!$("btn-watch-save")) return;
     // Profile-Dropdown befüllen (teilt sich die Liste mit den Encode-Profilen).
@@ -2469,6 +2904,11 @@
     initLibrary();
     initNotify();
     initWatch();
+    initScheduler();
+    initApiKeys();
+    initAbCompare();
+    initAudioOpt();
+    initDiagnostics();
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

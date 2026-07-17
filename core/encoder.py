@@ -39,6 +39,7 @@ def build_video_filters(
     nvidia_cuda_frames: bool = False,
     preserve_hdr: bool = False,
     denoise: str = "off",
+    force_10bit: bool = False,
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
@@ -46,15 +47,20 @@ def build_video_filters(
     Surfaces, Skalierung via scale_cuda). Sonst Software-Filterpfad.
     `preserve_hdr=True` => 10-bit-Surface (p010le) beim HW-Upload, damit HDR
     auf Intel/AMD erhalten bleibt (statt nv12/8-bit).
+    `force_10bit=True` (Anime-Modus) => auch SDR-Quellen als 10-bit codieren,
+    um Banding in Farbverläufen zu reduzieren.
     """
     downscale = bool(target_height and info.height and target_height < info.height)
     keep_hdr = preserve_hdr and info.is_hdr
+    want_10bit = keep_hdr or force_10bit
 
     # --- Reine NVIDIA-GPU-Pipeline (kein Tonemap) --------------------------
     if platform == "nvidia" and nvidia_cuda_frames:
-        if downscale:
-            return f"scale_cuda=-2:{target_height}"
-        return None
+        sc = f"scale_cuda=-2:{target_height}" if downscale else "scale_cuda"
+        if force_10bit:
+            # 8-bit-Quelle auf der GPU auf 10-bit anheben (p010le).
+            return f"{sc}=format=p010le" if sc == "scale_cuda" else f"{sc}:format=p010le"
+        return f"{sc}" if downscale else None
 
     filters: list[str] = []
 
@@ -70,12 +76,15 @@ def build_video_filters(
 
     # Plattformspezifischer Upload/Pixelformat-Schritt.
     # AMD/Intel benötigen Frames auf einer HW-Surface.
-    # Für HDR-Erhalt 10-bit (p010le), sonst nv12 (8-bit).
-    hw_fmt = "p010le" if keep_hdr else "nv12"
+    # Für 10-bit (HDR-Erhalt ODER Anime-Modus) p010le, sonst nv12 (8-bit).
+    hw_fmt = "p010le" if want_10bit else "nv12"
     if platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
         filters.append(f"format={hw_fmt},hwupload")
     elif platform == "intel":
         filters.append(f"format={hw_fmt},hwupload=extra_hw_frames=64")
+    elif force_10bit and not keep_hdr:
+        # CPU- bzw. NVENC-Software-Pfad: Pixelformat direkt auf 10-bit setzen.
+        filters.append("format=yuv420p10le")
 
     if not filters:
         return None
@@ -105,6 +114,30 @@ def _hdr_output_args(info: VideoInfo, codec: str, enc: str) -> list[str]:
         args += ["-profile:v", "main10"]
     # AV1-NVENC/QSV/VAAPI führen 10-bit über das Surface-Format (p010) mit.
     return args
+
+
+def _codec_supports_10bit(platform: str, codec: str) -> bool:
+    """10-bit-Ausgabe je Encoder. H.264 nur in Software (libx264 High10);
+    HW-H.264 (NVENC/QSV/VAAPI) beherrscht kein 10-bit."""
+    if codec in ("hevc", "av1"):
+        return True
+    if codec == "h264":
+        return platform == "cpu"
+    return False
+
+
+def _ten_bit_output_args(codec: str, enc: str) -> list[str]:
+    """Output-Argumente für 10-bit SDR (Anime-Modus), analog zu HDR – aber ohne
+    Farb-/HDR-Metadaten. Das Surface-Format (p010) setzt build_video_filters."""
+    if enc in ("libx265", "libsvtav1", "libx264"):
+        # x265/x264 wählen Main10/High10 automatisch anhand des Pixelformats.
+        return ["-pix_fmt", "yuv420p10le"]
+    if "nvenc" in enc and codec == "hevc":
+        return ["-profile:v", "main10"]
+    if ("qsv" in enc or "vaapi" in enc) and codec == "hevc":
+        return ["-profile:v", "main10"]
+    # AV1 (NVENC/QSV/VAAPI) führt 10-bit über das p010-Surface – kein Profil-Flag.
+    return []
 
 
 def build_encode_cmd(
@@ -137,6 +170,7 @@ def build_encode_cmd(
     keep_metadata: bool = False,
     film_grain: int = 0,
     denoise: str = "off",
+    force_10bit: bool = False,
     two_pass: bool = False,
     pass_num: Optional[int] = None,
     passlog: Optional[str] = None,
@@ -146,6 +180,8 @@ def build_encode_cmd(
     cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
 
     keep_hdr = bool(preserve_hdr and info.is_hdr)
+    # 10-bit erzwingen (Anime-Modus) nur, wenn der Encoder das kann; sonst 8-bit.
+    ten_bit = bool(force_10bit) and _codec_supports_10bit(platform, codec)
     denoise_on = denoise in _DENOISE
     nvidia_cuda_frames = False
 
@@ -181,7 +217,8 @@ def build_encode_cmd(
 
     vf = build_video_filters(info, platform, target_height, tonemap,
                              nvidia_cuda_frames=nvidia_cuda_frames,
-                             preserve_hdr=keep_hdr, denoise=denoise)
+                             preserve_hdr=keep_hdr, denoise=denoise,
+                             force_10bit=ten_bit)
     if vf:
         cmd += ["-vf", vf]
 
@@ -195,6 +232,8 @@ def build_encode_cmd(
 
     if keep_hdr:
         cmd += _hdr_output_args(info, codec, enc)
+    elif ten_bit:
+        cmd += _ten_bit_output_args(codec, enc)
 
     if enc == "libsvtav1":
         svt = "tune=0"

@@ -72,11 +72,24 @@ RETAIN_VMAF_SESSIONS = _env_bool("RETAIN_VMAF_SESSIONS", True)
 VMAF_MODEL_DIR = Path(os.getenv("VMAF_MODEL_DIR", "/usr/local/share/model"))
 VMAF_MODEL_1080P = os.getenv("VMAF_MODEL_1080P", "vmaf_v0.6.1.json")
 VMAF_MODEL_4K = os.getenv("VMAF_MODEL_4K", "vmaf_4k_v0.6.1.json")
+# NEG-Varianten ("no enhancement gain") – strafen Schärfungs-/Kontrast-Tricks
+# ab und urteilen bei Animation/Anime oft realistischer.
+VMAF_MODEL_1080P_NEG = os.getenv("VMAF_MODEL_1080P_NEG", "vmaf_v0.6.1neg.json")
+VMAF_MODEL_4K_NEG = os.getenv("VMAF_MODEL_4K_NEG", "vmaf_4k_v0.6.1neg.json")
 
 # --- VMAF-Parameter (Defaults; UI kann clip_seconds pro Job überschreiben) ----
 VMAF_CLIP_SECONDS = int(os.getenv("VMAF_CLIP_SECONDS", "30"))
 VMAF_TEST_QUALITIES = [20, 24, 28, 32]
 VMAF_SWEETSPOT = (93.0, 95.0)
+
+# --- Qualitäts-Guardrail (Post-Encode-Verifikation) --------------------------
+# Nach dem finalen Encode wird der echte VMAF der Ausgabedatei stichprobenartig
+# gemessen. Liegt er unter dem Ziel, kann automatisch mit höherer Qualität neu
+# encodiert werden. Werte pro Job im UI überschreibbar.
+VERIFY_MAX_RETRIES = max(0, int(os.getenv("VERIFY_MAX_RETRIES", "2")))
+VERIFY_CQ_STEP = max(1, int(os.getenv("VERIFY_CQ_STEP", "3")))       # CQ pro Retry senken
+VERIFY_BITRATE_FACTOR = float(os.getenv("VERIFY_BITRATE_FACTOR", "1.25"))  # Bitrate pro Retry ×
+VERIFY_CLIP_SECONDS = max(5, int(os.getenv("VERIFY_CLIP_SECONDS", "15")))
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".mov", ".avi", ".m4v", ".ts", ".m2ts",

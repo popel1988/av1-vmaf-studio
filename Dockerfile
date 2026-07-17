@@ -112,7 +112,12 @@ RUN mkdir -p ${VMAF_MODEL_DIR} \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v0.6.1.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_v0.6.1.json \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_4k_v0.6.1.json" \
-        -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1.json
+        -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1.json \
+    # NEG-Modelle (für Anime-Modus – realistischeres Urteil bei Animation)
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v0.6.1neg.json" \
+        -O ${VMAF_MODEL_DIR}/vmaf_v0.6.1neg.json \
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_4k_v0.6.1neg.json" \
+        -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1neg.json
 
 # --------------------------------------------------------------- Python-App
 WORKDIR /app

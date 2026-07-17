@@ -45,10 +45,28 @@ def _is_authed(request: Request) -> bool:
     return request.cookies.get(config.AUTH_COOKIE) == config.auth_token()
 
 
+def _api_key_from(request: Request) -> str:
+    return (request.headers.get("X-API-Key")
+            or request.query_params.get("apikey") or "")
+
+
+def _api_key_ok(request: Request) -> bool:
+    from core import apikeys
+    return apikeys.validate(_api_key_from(request))
+
+
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Externe REST-API (/api/v1): per API-Schlüssel absichern – unabhängig vom
+    # UI-Passwort. Eine gültige UI-Session zählt ebenfalls als berechtigt.
+    if path.startswith("/api/v1"):
+        from core import apikeys
+        if apikeys.any_configured() and not _api_key_ok(request) and not _is_authed(request):
+            return JSONResponse({"error": "Ungültiger oder fehlender API-Schlüssel"},
+                                status_code=401)
+        return await call_next(request)
     if config.APP_PASSWORD:
-        path = request.url.path
         allow = path.startswith("/static") or path in ("/login", "/favicon.ico")
         if not allow and not _is_authed(request):
             if path.startswith("/api"):
@@ -109,6 +127,8 @@ async def _startup() -> None:
     config.ensure_dirs()
     from core import history
     history.init_db()
+    from core import scheduler
+    queue.set_gate(scheduler.gate)
     from core.watcher import watcher
     watcher.attach(queue)
     watcher.start()
@@ -204,7 +224,7 @@ def _asset_version() -> str:
     import os
 
     latest = 0.0
-    for rel in ("static/js/app.js", "static/css/styles.css"):
+    for rel in ("static/js/app.js", "static/js/i18n.js", "static/css/styles.css"):
         try:
             latest = max(latest, os.path.getmtime(BASE_DIR / rel))
         except OSError:
@@ -295,6 +315,16 @@ class EnqueueRequest(BaseModel):
     film_grain: int = 0
     denoise: str = "off"             # off | light | medium | strong
     two_pass: bool = False
+    anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
+    verify_vmaf: bool = False        # Guardrail: echten VMAF nach Encode messen
+    verify_min: float = 93.0         # Ziel-VMAF für die Guardrail
+    verify_retry: bool = False       # bei Unterschreiten automatisch neu encoden
+    video_mode: str = "encode"       # encode | copy (nur Audio optimieren)
+    audio_opt_scope: str = "bloated" # bloated | all
+    audio_min_bitrate_kbps: int = 700
+    chunked: bool = False            # Per-Szene/Chunked Adaptive Encoding
+    chunk_seconds: int = 60
+    chunk_cq_range: int = 6
     vmaf_check: bool = True
     workflow: str = "auto"           # auto | manual | compare_only
     target_vmaf: float = 0.0         # >0: Ziel-VMAF (Super-Tool)
@@ -399,6 +429,9 @@ class LibraryScanRequest(BaseModel):
     min_height: int = 0
     codecs_include: list[str] = []
     codecs_exclude: list[str] = []
+    target_codec: str = "av1"        # Ziel für die Einspar-Projektion
+    skip_optimized: bool = False     # bereits effiziente Dateien ausblenden
+    skip_processed: bool = False     # bereits verarbeitete Dateien ausblenden
 
 
 @app.post("/api/library/scan")
@@ -440,6 +473,13 @@ async def supertool_scan_state():
     return supertool.get_state()
 
 
+@app.post("/api/supertool/list")
+async def supertool_list(req: SuperScanRequest):
+    """Schnelle Datei-Vorschau (ohne Probe) für die Live-Liste neben der Ordnerwahl."""
+    from core import supertool
+    return supertool.quick_list(req.model_dump())
+
+
 class SuperStartRequest(BaseModel):
     paths: list[str] = []
     mode: str = "representative"      # target_vmaf | representative | fixed
@@ -458,6 +498,41 @@ async def supertool_start(req: SuperStartRequest):
     return {"added": added, "group_id": group_id}
 
 
+class AudioScanRequest(BaseModel):
+    folder: str = ""
+    extensions: list[str] = []
+    settings: dict = {}              # audio_codec/channels/bitrate/scope/min_bitrate_kbps
+
+
+@app.post("/api/audio/scan")
+async def audio_scan(req: AudioScanRequest):
+    from core import audio_opt
+    started = audio_opt.start_scan(req.model_dump())
+    return {"started": started, "state": audio_opt.get_state()}
+
+
+@app.get("/api/audio/scan")
+async def audio_scan_state():
+    from core import audio_opt
+    return audio_opt.get_state()
+
+
+class AudioStartRequest(BaseModel):
+    paths: list[str] = []
+    settings: dict = {}
+
+
+@app.post("/api/audio/start")
+async def audio_start(req: AudioStartRequest):
+    from core import audio_opt
+    if not req.paths:
+        return JSONResponse({"error": "Keine Dateien ausgewählt"}, status_code=400)
+    added, batch_id, err = audio_opt.start_batch(queue, req.paths, req.settings or {})
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    return {"added": added, "batch_id": batch_id}
+
+
 @app.get("/api/supertool/status")
 async def supertool_status(batch_id: str = ""):
     """Fortschritt eines Super-Tool-Stapels (aus der Queue nach batch_id)."""
@@ -465,6 +540,170 @@ async def supertool_status(batch_id: str = ""):
     items = [it for it in st["items"]
              if not batch_id or it["settings"].get("batch_id") == batch_id]
     return {"items": items, "counts": st["counts"]}
+
+
+# ====================================================================== REST v1
+def _resolve_under_input(raw: str):
+    """Pfad (relativ zum Eingabeordner oder absolut) sicher innerhalb INPUT_DIR."""
+    from pathlib import Path
+    if not raw:
+        return None
+    base = config.INPUT_DIR.resolve()
+    p = Path(raw)
+    try:
+        target = p.resolve() if p.is_absolute() else (base / raw.lstrip("/")).resolve()
+        target.relative_to(base)
+    except (ValueError, OSError):
+        return None
+    return target if target.exists() else None
+
+
+def _remap_arr_path(raw: str) -> str:
+    """Optionales Pfad-Remapping für *arr (Env ARR_PATH_MAP='from:to,from2:to2')."""
+    mapping = os.getenv("ARR_PATH_MAP", "")
+    for pair in mapping.split(","):
+        if ":" in pair:
+            frm, _, to = pair.partition(":")
+            frm, to = frm.strip(), to.strip()
+            if frm and raw.startswith(frm):
+                return to + raw[len(frm):]
+    return raw
+
+
+def _enqueue_external(target, profile=None, settings=None, is_batch=False) -> int:
+    from core import profiles as prof
+    from core.queue_manager import build_job_settings
+    d: dict = {}
+    if profile:
+        p = prof.get(profile)
+        if p:
+            d.update(p.get("settings", {}))
+    if settings:
+        d.update(settings)
+    js = build_job_settings(d)
+    if is_batch:
+        return len(queue.add_batch(str(target), js))
+    return 1 if queue.add_file(str(target), js) else 0
+
+
+class ApiEnqueueRequest(BaseModel):
+    path: str
+    is_batch: bool = False
+    profile: str = ""
+    settings: dict = {}
+
+
+@app.get("/api/v1/health")
+async def v1_health():
+    return {"status": "ok", "version": 1, "ffmpeg": ff.ffmpeg_version()}
+
+
+@app.get("/api/v1/queue")
+async def v1_queue():
+    return queue.state()
+
+
+@app.get("/api/v1/stats")
+async def v1_stats():
+    from core import history
+    return history.stats()
+
+
+@app.post("/api/v1/enqueue")
+async def v1_enqueue(req: ApiEnqueueRequest):
+    target = _resolve_under_input(req.path)
+    if target is None:
+        return JSONResponse(
+            {"error": "Pfad nicht gefunden oder außerhalb des Eingabeordners"},
+            status_code=404)
+    added = _enqueue_external(target, req.profile or None, req.settings or None, req.is_batch)
+    if not added:
+        return JSONResponse({"error": "Nichts hinzugefügt"}, status_code=400)
+    return {"added": added}
+
+
+def _extract_arr_paths(payload: dict) -> list[str]:
+    """Dateipfade aus einem Sonarr/Radarr-Webhook-Payload ziehen."""
+    paths: list[str] = []
+    mf = payload.get("movieFile") or {}
+    if isinstance(mf, dict) and mf.get("path"):
+        paths.append(mf["path"])
+    ef = payload.get("episodeFile") or {}
+    if isinstance(ef, dict) and ef.get("path"):
+        paths.append(ef["path"])
+    for e in payload.get("episodeFiles") or []:
+        if isinstance(e, dict) and e.get("path"):
+            paths.append(e["path"])
+    return [p for p in paths if p]
+
+
+@app.post("/api/v1/webhook/arr")
+async def v1_webhook_arr(request: Request):
+    """Empfänger für Sonarr/Radarr-Webhooks ('On Import'/'On Upgrade').
+
+    Erwartet den JSON-Payload; der Dateipfad wird (optional per ARR_PATH_MAP
+    remappt) unter dem Eingabeordner aufgelöst und in die Warteschlange gelegt.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Kein gültiges JSON"}, status_code=400)
+    event = str(payload.get("eventType", "")).lower()
+    if event in ("test", "healthcheck", "grab", "rename"):
+        return {"ok": True, "ignored": event}
+    profile = request.query_params.get("profile", "")
+    raw_paths = _extract_arr_paths(payload)
+    added = 0
+    for rp in raw_paths:
+        target = _resolve_under_input(_remap_arr_path(rp))
+        if target is not None:
+            added += _enqueue_external(target, profile or None)
+    return {"ok": True, "event": event, "found": len(raw_paths), "added": added}
+
+
+# --------------------------------------------------------- API-Schlüssel (UI)
+@app.get("/api/apikeys")
+async def get_apikeys():
+    from core import apikeys
+    return apikeys.list_masked()
+
+
+@app.post("/api/apikeys/generate")
+async def generate_apikey():
+    from core import apikeys
+    return {"key": apikeys.generate()}
+
+
+class ApiKeyRevokeRequest(BaseModel):
+    index: int
+
+
+@app.post("/api/apikeys/revoke")
+async def revoke_apikey(req: ApiKeyRevokeRequest):
+    from core import apikeys
+    return {"ok": apikeys.revoke_index(req.index)}
+
+
+@app.get("/api/scheduler")
+async def get_scheduler():
+    from core import scheduler
+    return scheduler.status()
+
+
+class SchedulerRequest(BaseModel):
+    enabled: bool = False
+    window_enabled: bool = False
+    start_hour: int = 22
+    end_hour: int = 6
+    throttle_enabled: bool = False
+    max_cpu_percent: int = 85
+
+
+@app.post("/api/scheduler")
+async def set_scheduler(req: SchedulerRequest):
+    from core import scheduler
+    saved = scheduler.save(req.model_dump())
+    return {"ok": True, "config": saved}
 
 
 @app.get("/api/notify")
@@ -618,6 +857,29 @@ async def get_parallel():
 async def set_parallel(req: ParallelRequest):
     n = max(1, min(config.PARALLEL_ENCODES_LIMIT, req.value))
     return {"value": queue.set_parallel(n)}
+
+
+@app.get("/api/media")
+async def media(path: str, root: str = "input"):
+    """Streamt eine Video-Datei (mit Range-Support) für den A/B-Vergleichsplayer."""
+    from pathlib import Path
+    roots = {"input": config.INPUT_DIR, "output": config.OUTPUT_DIR}
+    base = roots.get(root, config.INPUT_DIR).resolve()
+    target = (base / path.lstrip("/")).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    return FileResponse(target)
+
+
+@app.get("/api/diagnostics")
+async def diagnostics():
+    """Selbsttest: FFmpeg/Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI, Ordner."""
+    from core import diagnostics as diag
+    return diag.run_diagnostics(monitor)
 
 
 @app.get("/api/config/paths")

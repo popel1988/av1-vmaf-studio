@@ -57,7 +57,14 @@ def init_db() -> None:
 
 
 def _pick_vmaf(item) -> Optional[float]:
-    """Bestes/gewähltes VMAF-Ergebnis aus dem Analyse-Dict ziehen (oder None)."""
+    """Bestes/gewähltes VMAF-Ergebnis aus dem Analyse-Dict ziehen (oder None).
+
+    Der per Guardrail gemessene VMAF der Ausgabe hat Vorrang, da er den echten
+    Wert der fertigen Datei widerspiegelt (nicht nur die Test-Encode-Prognose).
+    """
+    measured = getattr(item, "vmaf_verify", None)
+    if measured is not None:
+        return float(measured)
     v = getattr(item, "vmaf", None)
     if not v:
         return None
@@ -165,6 +172,21 @@ def recent(limit: int = 100) -> list[dict]:
     except sqlite3.Error:
         return []
     return [dict(r) for r in rows]
+
+
+def is_processed(path: str) -> bool:
+    """True, wenn zu diesem Quellpfad bereits ein erfolgreicher Job existiert."""
+    if _conn is None or not path:
+        return False
+    try:
+        with _lock:
+            row = _conn.execute(
+                "SELECT 1 FROM jobs WHERE path=? AND status='fertig' LIMIT 1",
+                (str(path),),
+            ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
 
 
 def clear() -> int:
