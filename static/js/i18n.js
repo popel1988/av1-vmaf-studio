@@ -46,6 +46,7 @@
     "Eingespart": "Saved",
     "Keine Analyse verfügbar.": "No analysis available.",
     "Keine abspielbare Datei gefunden.": "No playable file found.",
+    "🎞 Im A/B-Vergleich öffnen (alt vs. neu)": "🎞 Open in A/B compare (old vs. new)",
     "Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.":
       "If playback fails, your browser may not support the codec (e.g. HEVC/AV1) directly.",
 

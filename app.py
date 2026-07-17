@@ -917,7 +917,8 @@ async def queue_details(item_id: str):
             return None
         p = Path(abs_path)
         rel = _rel_to(config.INPUT_DIR if root == "input" else config.OUTPUT_DIR, p)
-        entry = {"name": p.name, "exists": p.is_file(), "media": None, "info": None}
+        entry = {"name": p.name, "exists": p.is_file(), "media": None,
+                 "info": None, "root": root, "rel": rel}
         if rel is not None and p.is_file():
             entry["media"] = f"/api/media?root={root}&path={quote(rel)}"
             info, _ = ff.probe_with_error(p)

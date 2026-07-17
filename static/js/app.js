@@ -799,6 +799,12 @@
     if (!state.selected) return;
     const btn = $("btn-vmaf-start");
     btn.disabled = true;
+    // Exakte Quelle des Vergleichs merken (rel. Pfad ist hier garantiert korrekt),
+    // damit „→ Encoding" später genau diese Datei übernimmt.
+    state.vmafSource = {
+      path: state.selected.path, name: state.selected.name,
+      isBatch: state.selected.isBatch, info: state.currentInfo || null,
+    };
     const payload = {
       path: state.selected.path,
       is_batch: state.selected.isBatch,
@@ -821,8 +827,26 @@
   }
 
   // Gewinner (oder gewählte Zeile) ins Encoding übernehmen und dorthin wechseln.
-  function transferToEncode(r) {
+  async function transferToEncode(r) {
     if (!r) return;
+    navTo("encode");
+    // Die im Vergleich genutzte Quelle wieder korrekt auswählen (inkl. Re-Probe),
+    // damit der folgende „Zur Warteschlange hinzufügen" GENAU diese Datei
+    // encodiert – auch wenn zwischenzeitlich eine andere Datei angeklickt wurde.
+    // Wir nutzen bewusst selectFile (wie ein echter Klick), das ist robuster als
+    // den DOM manuell zu rekonstruieren.
+    const src = state.vmafSource;
+    if (src && src.path && !src.isBatch) {
+      try {
+        await selectFile({ rel: src.path, name: src.name, size_human: "" });
+      } catch (e) {
+        // Fallback: wenigstens die Auswahl setzen, damit Enqueue funktioniert.
+        state.selected = { path: src.path, name: src.name, isBatch: false };
+        enableActionButtons();
+      }
+    }
+    // Encoder-Einstellungen des Gewinners NACH der Auswahl setzen (die Auswahl
+    // kann HDR-/DV-Defaults verändern; die Gewinner-Werte haben Vorrang).
     const setSel = (id, val) => {
       const el = $(id);
       if (el && val != null) { el.value = String(val); el.dispatchEvent(new Event("change")); }
@@ -832,30 +856,11 @@
     setSel("opt-rate-mode", r.rate_mode || "cq");
     if ((r.rate_mode || "cq") === "cq") {
       setSel("opt-quality", r.value);
-      $("quality-val").textContent = r.value;
+      if ($("quality-val")) $("quality-val").textContent = r.value;
     } else {
       setSel("opt-bitrate", r.value);
     }
     updateCodecAvailability();
-    // Die im Vergleich genutzte Quelle wieder als Auswahl setzen, damit der
-    // folgende „Zur Warteschlange hinzufügen" die richtige Datei encodiert –
-    // auch wenn zwischenzeitlich eine andere Datei angeklickt wurde.
-    const src = state.vmafSource;
-    if (src && src.path && !src.isBatch) {
-      state.selected = { path: src.path, name: src.name, isBatch: false };
-      $("selection-badge").textContent = "Datei ausgewählt";
-      enableActionButtons();
-      if (src.info) {
-        renderFileDetails(src.name, src.info);
-        const hdrField = $("hdr-field");
-        if (hdrField) hdrField.style.display = src.info.is_hdr ? "" : "none";
-        applyDolbyVision(src.info);
-      } else {
-        $("selected-info").innerHTML = `<strong>${escapeHtml(src.name)}</strong>`;
-      }
-      document.querySelectorAll(".row-item.selected").forEach((r) => r.classList.remove("selected"));
-    }
-    navTo("encode");
   }
 
   /* ------------------------------------------------------------ WEBSOCKET */
@@ -1206,10 +1211,16 @@
     const vmaf = target.vmaf;
     // Quelle des Vergleichs merken, damit „→ Encoding" genau diese Datei
     // übernimmt – unabhängig davon, was zwischendurch im Browser angeklickt wurde.
-    state.vmafSource = {
-      path: inputRelPath(target.path), name: target.title,
-      isBatch: false, info: target.info || null,
-    };
+    // Wurde die Quelle beim Start (vtEnqueue) schon exakt erfasst, NICHT mit dem
+    // aus dem Absolutpfad abgeleiteten Pfad überschreiben.
+    if (!(state.vmafSource && state.vmafSource.name === target.title && state.vmafSource.path)) {
+      state.vmafSource = {
+        path: inputRelPath(target.path), name: target.title,
+        isBatch: false, info: target.info || null,
+      };
+    } else if (!state.vmafSource.info) {
+      state.vmafSource.info = target.info || null;
+    }
     const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status;
     showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
@@ -1880,6 +1891,17 @@
     return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}"></video>`;
   }
 
+  // Direkt in den A/B-Vergleich springen und beide Videos laden.
+  function openAbCompare(rootA, pathA, rootB, pathB) {
+    closeModal();
+    navTo("abcompare");
+    const set = (id, val) => { const el = $(id); if (el && val != null) el.value = val; };
+    set("ab-root-a", rootA); set("ab-path-a", pathA);
+    set("ab-root-b", rootB); set("ab-path-b", pathB);
+    const load = $("btn-ab-load");
+    if (load) load.click();
+  }
+
   function openPlayer(root, rel, name) {
     const url = `/api/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`;
     openModal(name || "Wiedergabe", videoHtml(url) +
@@ -1942,8 +1964,16 @@
            <button class="btn btn-ghost btn-sm" data-src="${escapeHtml(d.source.media)}">Quelle</button>
          </div>` : "";
 
+    // A/B-Direktvergleich (alt vs. neu), sobald beide Dateien vorhanden sind.
+    const canAb = d.source && d.source.rel && d.source.exists && d.output && d.output.rel && d.output.exists;
+    const abBtn = canAb
+      ? `<button class="btn btn-primary btn-sm" id="modal-ab"
+           data-a="${escapeHtml(d.source.rel)}" data-b="${escapeHtml(d.output.rel)}">
+           🎞 Im A/B-Vergleich öffnen (alt vs. neu)</button>` : "";
+
     const html = `
       <div class="stat-grid modal-stats">${statChips}</div>
+      ${abBtn ? `<div class="modal-tabs" style="margin-bottom:8px">${abBtn}</div>` : ""}
       ${playToggle}
       <div id="modal-player">${player}</div>
       <div class="modal-cols">
@@ -1960,6 +1990,9 @@
         $("modal-player").innerHTML = videoHtml(b.dataset.src);
       });
     });
+    const ab = $("modal-ab");
+    if (ab) ab.addEventListener("click", () =>
+      openAbCompare("input", ab.dataset.a, "output", ab.dataset.b));
   }
 
   /* ----------------------------------------------------------------- UTIL */
