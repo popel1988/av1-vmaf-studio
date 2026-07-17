@@ -1994,15 +1994,28 @@
   let superScanPoll = null;
   let superStatusPoll = null;
 
+  const ST_MODE_HINTS = {
+    target_vmaf: "Pro Datei werden Test-Encodes mit den CQ-Werten unten erstellt, per VMAF " +
+      "gemessen und automatisch der effizienteste Wert mit VMAF ≥ Ziel gewählt. Genau, aber rechenintensiv.",
+    representative: "Nur die erste Datei wird per VMAF getestet (Sweet-Spot ~93–95). Der ermittelte " +
+      "Wert wird auf alle übrigen Dateien übertragen – schnell, aber weniger genau bei gemischtem Material.",
+    fixed: "Alle Dateien werden mit exakt dem eingestellten CQ bzw. der Bitrate encodiert – ohne VMAF-Analyse.",
+  };
+
   function initSuperTool() {
     if (!$("btn-st-scan")) return;
     stBuildFormats();
+    stLoadDir("");
 
     const mode = $("st-mode");
     const syncMode = () => {
       const m = mode.value;
       $("st-target-field").style.display = m === "target_vmaf" ? "" : "none";
       $("st-quality-field").style.display = m === "fixed" ? "" : "none";
+      const cfg = $("st-vmaf-config");
+      if (cfg) cfg.style.display = m === "fixed" ? "none" : "";
+      const h = $("st-mode-hint");
+      if (h) h.textContent = ST_MODE_HINTS[m] || "";
     };
     mode.addEventListener("change", syncMode);
     syncMode();
@@ -2020,6 +2033,13 @@
     };
     rate.addEventListener("change", syncRate);
     syncRate();
+
+    // Ziel-VMAF/Repräsentativ: Test-Encodes wahlweise über CQ- oder Bitratenwerte.
+    const vmafRate = $("st-vmaf-rate");
+    if (vmafRate) {
+      vmafRate.addEventListener("change", () => syncVmafRate(true));
+      syncVmafRate(false);
+    }
 
     $("st-platform").addEventListener("change", stUpdateCodec);
     $("st-codec").addEventListener("change", stUpdateCodec);
@@ -2060,6 +2080,74 @@
     cont.innerHTML = exts.map((e) =>
       `<label><input type="checkbox" class="st-fmt" value="${escapeHtml(e)}" /><span>${escapeHtml(e)}</span></label>`
     ).join("") || '<span class="empty">Keine Formate.</span>';
+  }
+
+  // Eigener Ordner-Browser des Super-Tools: der aktuell geöffnete Ordner ist
+  // zugleich der zu scannende Ordner (rekursiv, inkl. Unterordner).
+  async function stLoadDir(path) {
+    state.stPath = path;
+    const el = $("st-browser");
+    if (!el) return;
+    const hid = $("st-folder");
+    if (hid) hid.value = path;
+    const info = $("st-folder-info");
+    if (info) info.textContent = path
+      ? `Aktuell: /${path} (inkl. Unterordner)`
+      : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
+    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+    try {
+      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
+      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      stRenderCrumb(data);
+      el.innerHTML = "";
+      if (!data.is_root) {
+        el.appendChild(stDirRow("..", () => stLoadDir(data.parent || "")));
+      }
+      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => stLoadDir(d.rel))));
+      if (!(data.dirs || []).length) {
+        const note = document.createElement("div");
+        note.className = "browser-loading";
+        note.textContent = (data.files || []).length
+          ? `${data.files.length} Video-Datei(en) hier · keine Unterordner`
+          : "Leerer Ordner.";
+        el.appendChild(note);
+      }
+    } catch (e) {
+      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function stDirRow(name, onOpen) {
+    const row = document.createElement("div");
+    row.className = "row-item";
+    row.innerHTML =
+      `<span class="row-icon dir">📁</span><span class="row-name">${escapeHtml(name)}</span>`;
+    row.addEventListener("click", onOpen);
+    return row;
+  }
+
+  function stRenderCrumb(data) {
+    const bc = $("st-breadcrumb");
+    if (!bc) return;
+    bc.innerHTML = "";
+    const root = document.createElement("a");
+    root.textContent = "/media/input";
+    root.onclick = () => stLoadDir("");
+    bc.appendChild(root);
+    if (data.path) {
+      let acc = "";
+      data.path.split("/").forEach((p) => {
+        acc = acc ? `${acc}/${p}` : p;
+        const sep = document.createElement("span");
+        sep.textContent = " / ";
+        bc.appendChild(sep);
+        const a = document.createElement("a");
+        a.textContent = p;
+        const target = acc;
+        a.onclick = () => stLoadDir(target);
+        bc.appendChild(a);
+      });
+    }
   }
 
   function stFilters() {
@@ -2122,6 +2210,39 @@
       '<tr class="empty-row"><td colspan="6">Keine Treffer.</td></tr>';
   }
 
+  // Passt Beschriftung, Grenzen und (optional) die Vorgabewerte des Test-Grids
+  // an den gewählten Steuerungsmodus an (CQ vs. Bitrate).
+  function syncVmafRate(resetValues) {
+    const mode = $("st-vmaf-rate") ? $("st-vmaf-rate").value : "cq";
+    const bitrate = mode === "abr" || mode === "bitrate";
+    const lbl = $("st-test-label");
+    if (lbl) lbl.textContent = bitrate ? "Test-Bitraten (kbit/s)" : "Test-CQ-Werte";
+    const hint = $("st-test-hint");
+    if (hint) hint.textContent = bitrate
+      ? "Leere Felder werden ignoriert. Höhere Bitrate = höhere Qualität/größer."
+      : "Leere Felder werden ignoriert. Niedriger CQ = höhere Qualität/größer.";
+    const inputs = [...document.querySelectorAll("#st-test-grid .st-test-val")];
+    if (resetValues) {
+      const defs = bitrate ? [8000, 6000, 4000, 2000] : [20, 24, 28, 32];
+      inputs.forEach((inp, i) => { inp.value = defs[i] != null ? defs[i] : ""; });
+    }
+    inputs.forEach((inp) => {
+      inp.min = bitrate ? 500 : 1;
+      inp.max = bitrate ? 50000 : 51;
+      inp.step = bitrate ? 500 : 1;
+    });
+  }
+
+  function stTestValues() {
+    const vals = [...document.querySelectorAll("#st-test-grid .st-test-val")]
+      .map((i) => parseInt(i.value, 10))
+      .filter((v) => !isNaN(v) && v > 0);
+    if (vals.length) return vals;
+    const bitrate = $("st-vmaf-rate") &&
+      ($("st-vmaf-rate").value === "abr" || $("st-vmaf-rate").value === "bitrate");
+    return bitrate ? [8000, 6000, 4000, 2000] : [20, 24, 28, 32];
+  }
+
   function stGatherSettings() {
     const mode = $("st-mode").value;
     const rateMode = $("st-rate-mode").value;
@@ -2133,8 +2254,14 @@
       audio_mode: $("st-audio-mode").value,
       rate_mode: "cq",
     };
-    if (mode === "target_vmaf") {
-      s.target_vmaf = parseInt($("st-target").value, 10);
+    if (mode === "target_vmaf" || mode === "representative") {
+      // Test-Encode-Konfiguration für die VMAF-Analyse (CQ oder Bitrate).
+      s.rate_mode = $("st-vmaf-rate") ? $("st-vmaf-rate").value : "cq";
+      s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
+      s.samples = parseInt($("st-samples").value, 10) || 1;
+      s.test_values = stTestValues();
+      s.generate_screenshots = false; // Batch: keine Screenshot-Flut
+      if (mode === "target_vmaf") s.target_vmaf = parseInt($("st-target").value, 10);
     } else if (mode === "fixed") {
       s.rate_mode = rateMode;
       s.quality = rateMode === "cq"

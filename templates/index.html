@@ -590,9 +590,17 @@
               wählen, Qualitätsmodus festlegen, scannen und starten. Der Fortschritt je Datei
               erscheint unten.</p>
 
+            <div class="field">
+              <label>Ordner auswählen</label>
+              <div class="breadcrumb" id="st-breadcrumb"></div>
+              <div class="browser browser-sm" id="st-browser">
+                <div class="browser-loading">Lade Verzeichnis …</div>
+              </div>
+              <p class="hint" id="st-folder-info">Aktuell: gesamter Eingabeordner (alle Unterordner)</p>
+              <input type="hidden" id="st-folder" value="" />
+            </div>
+
             <div class="lib-filters">
-              <div class="field"><label>Ordner (relativ zum Eingabeordner)</label>
-                <input type="text" id="st-folder" placeholder="leer = gesamter Eingabeordner" /></div>
               <div class="field"><label>Name enthält</label><input type="text" id="st-name" placeholder="optional" /></div>
               <div class="field"><label>Name ausschließen</label>
                 <input type="text" id="st-exclude" placeholder="z. B. sample, trailer, .archiv"
@@ -612,7 +620,7 @@
 
             <div class="field">
               <label>Container / Formate</label>
-              <div id="st-formats" class="compare-encoders"></div>
+              <div id="st-formats" class="fmt-checks"></div>
               <p class="hint">Nichts auswählen = alle unterstützten Formate.</p>
             </div>
 
@@ -645,13 +653,51 @@
                 <option value="representative">Repräsentativ – 1 VMAF-Check für alle</option>
                 <option value="fixed">Feste Qualität – ohne VMAF</option>
               </select>
+              <p class="hint" id="st-mode-hint"></p>
             </div>
 
             <div class="field" id="st-target-field">
               <label>Ziel-VMAF: <strong id="st-target-val">94</strong></label>
               <input type="range" id="st-target" min="80" max="99" value="94" />
-              <p class="hint">Es wird der effizienteste Wert mit VMAF ≥ Ziel gewählt.
-                Rechenintensiv – Test-Encodes je Datei.</p>
+              <p class="hint">Aus den Test-Encodes wird der effizienteste Wert (kleinste Datei)
+                mit VMAF ≥ Ziel automatisch gewählt.</p>
+            </div>
+
+            <!-- VMAF-Testkonfiguration (Ziel-VMAF + Repräsentativ) -->
+            <div id="st-vmaf-config">
+              <div class="field-row">
+                <div class="field">
+                  <label>Test-Steuerung</label>
+                  <select id="st-vmaf-rate">
+                    <option value="cq">CQ / QP / CRF</option>
+                    <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                    <option value="bitrate">Festbitrate (CBR)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Szenen-Stichproben</label>
+                  <select id="st-samples">
+                    <option value="1">1 (Mitte)</option>
+                    <option value="2">2 Szenen</option>
+                    <option value="3">3 Szenen</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label>Clip-Länge (Sekunden)</label>
+                <input type="number" id="st-clip" min="5" max="120" value="20" />
+              </div>
+              <div class="field">
+                <label><span id="st-test-label">Test-CQ-Werte</span>
+                  <span class="hint">(Anzahl der Felder = Test-Encodes je Datei)</span></label>
+                <div class="test-values-grid" id="st-test-grid">
+                  <input type="number" class="st-test-val" value="20" min="1" max="51" />
+                  <input type="number" class="st-test-val" value="24" min="1" max="51" />
+                  <input type="number" class="st-test-val" value="28" min="1" max="51" />
+                  <input type="number" class="st-test-val" value="32" min="1" max="51" />
+                </div>
+                <p class="hint" id="st-test-hint">Leere Felder werden ignoriert. Niedriger CQ = höhere Qualität/größer.</p>
+              </div>
             </div>
 
             <div class="field-row" id="st-quality-field" style="display:none">

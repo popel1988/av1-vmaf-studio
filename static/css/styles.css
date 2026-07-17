@@ -239,6 +239,7 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   max-height: 300px; overflow-y: auto; background: var(--surface-2);
 }
+.browser-sm { max-height: 220px; }
 .browser-loading { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .row-item {
   display: flex; align-items: center; gap: 10px; padding: 9px 14px;
@@ -358,6 +359,19 @@ input[type="range"]::-moz-range-thumb {
 }
 .compare-encoders input { accent-color: var(--accent); }
 .compare-encoders .empty { color: var(--text-muted); font-size: 12px; }
+
+/* Kompakte Format-/Container-Auswahl (Super-Tool) als Pills nebeneinander */
+.fmt-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.fmt-checks label {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 5px 11px; font-size: 12px; user-select: none;
+}
+.fmt-checks label:has(input:checked) {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.fmt-checks input { accent-color: var(--accent); }
+.fmt-checks .empty { color: var(--text-muted); font-size: 12px; }
 
 .vmaf-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .pick-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
