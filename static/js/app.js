@@ -533,7 +533,34 @@
   }
   function isEncoderAvailable(platform, codec) {
     const e = encoderInfo(platform, codec);
-    return e ? !!e.available : true; // unbekannt -> nicht blockieren
+    const present = e ? !!e.available : true; // im FFmpeg-Build vorhanden?
+    if (!present) return false;
+    // working: true = HW-Test bestanden, false = HW kann das nicht, null/undef = ungetestet
+    return (e && e.working === false) ? false : true;
+  }
+
+  // Beschriftungs-Suffix für nicht wählbare Codecs (unterscheidet Build vs. HW).
+  function encUnavailReason(platform, codec) {
+    const e = encoderInfo(platform, codec);
+    if (e && e.available && e.working === false) return " — von der Hardware nicht unterstützt";
+    return " — nicht verfügbar";
+  }
+
+  // Ergebnisse des echten Encoder-Tests laden und in die Matrix übernehmen,
+  // dann alle Codec-Dropdowns/Vergleichslisten neu bewerten.
+  async function loadCapabilities() {
+    try {
+      const d = await (await fetch("/api/capabilities")).json();
+      const res = (d && d.results) || {};
+      if (!Object.keys(res).length) return; // noch nicht getestet -> Build-Fallback
+      encoderMatrix().forEach((e) => {
+        if (Object.prototype.hasOwnProperty.call(res, e.value)) e.working = res[e.value];
+      });
+      if ($("opt-codec")) updateCodecAvailability();
+      if ($("vt-codec")) vtUpdateCodecAvailability();
+      if ($("st-codec")) stUpdateCodec();
+      buildCompareOptions();
+    } catch (e) { /* still: UI fällt auf Build-Verfügbarkeit zurück */ }
   }
 
   // Codec-Dropdown je nach gewählter Plattform kennzeichnen (nicht verfügbare
@@ -547,7 +574,7 @@
       const ok = isEncoderAvailable(plat, opt.value);
       opt.disabled = !ok;
       opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
-        + (ok ? "" : " — nicht verfügbar");
+        + (ok ? "" : encUnavailReason(plat, opt.value));
       if (ok && firstAvail === null) firstAvail = opt.value;
     });
     // Falls der aktuell gewählte Codec auf dieser Plattform fehlt -> umschalten.
@@ -574,7 +601,8 @@
     if (!cont) return;
     const base = `${$("vt-platform").value}:${$("vt-codec").value}`;
     const prev = new Set(getCompareEncoders());
-    const all = encoderMatrix().filter((e) => e.available && e.value !== base);
+    const all = encoderMatrix().filter((e) =>
+      isEncoderAvailable(e.platform, e.codec) && e.value !== base);
     if (!all.length) {
       cont.innerHTML = '<span class="empty">Keine weiteren Encoder verfügbar.</span>';
       return;
@@ -741,7 +769,7 @@
       const ok = isEncoderAvailable(plat, opt.value);
       opt.disabled = !ok;
       opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
-        + (ok ? "" : " — nicht verfügbar");
+        + (ok ? "" : encUnavailReason(plat, opt.value));
       if (ok && firstAvail === null) firstAvail = opt.value;
     });
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) {
@@ -2363,7 +2391,7 @@
       const ok = isEncoderAvailable(plat, opt.value);
       opt.disabled = !ok;
       opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
-        + (ok ? "" : " — nicht verfügbar");
+        + (ok ? "" : encUnavailReason(plat, opt.value));
       if (ok && firstAvail === null) firstAvail = opt.value;
     });
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) sel.value = firstAvail;
@@ -2912,6 +2940,9 @@
         badge.className = "badge diag-" + (d.overall || "ok");
       }
       renderDiagnostics(d);
+      // Der Funktionstest aktualisiert die echten Encoder-Fähigkeiten -> Dropdowns
+      // in VMAF/Encoding sofort nachziehen.
+      if (deep) loadCapabilities();
     } catch (e) {
       if (report) report.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
     } finally {
@@ -3156,6 +3187,7 @@
     initAbCompare();
     initAudioOpt();
     initDiagnostics();
+    loadCapabilities();
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

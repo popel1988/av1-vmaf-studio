@@ -110,7 +110,8 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
         str(path),
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=60, check=False)
     except FileNotFoundError:
         return None, "ffprobe nicht gefunden (PATH prüfen – /usr/local/bin)."
     except subprocess.TimeoutExpired:
@@ -317,7 +318,8 @@ def ffmpeg_version() -> str:
     try:
         out = subprocess.run(
             [config.FFMPEG, "-hide_banner", "-version"],
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15, check=False,
         )
         first = (out.stdout or "").splitlines()
         return first[0].strip() if first else "unbekannt"
@@ -332,7 +334,8 @@ def available_encoders() -> frozenset:
     try:
         out = subprocess.run(
             [config.FFMPEG, "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=20, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
@@ -553,7 +556,8 @@ def add_mkv_statistics_tags(path) -> bool:
     try:
         res = subprocess.run(
             [tool, str(p), "--add-track-statistics-tags"],
-            capture_output=True, text=True, timeout=600, check=False)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=600, check=False)
         if res.returncode != 0:
             logger.warning("mkvpropedit (Statistik-Tags) fehlgeschlagen (Exit %s): %s",
                            res.returncode, (res.stderr or "")[-300:])

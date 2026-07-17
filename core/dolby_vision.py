@@ -35,7 +35,8 @@ def available() -> bool:
 
 
 def _run(cmd: list[str], label: str) -> bool:
-    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    res = subprocess.run(cmd, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", check=False)
     if res.returncode != 0:
         logger.warning("%s fehlgeschlagen (Exit %s)\nCMD: %s\nSTDERR:\n%s",
                        label, res.returncode, " ".join(cmd), (res.stderr or "")[-1500:])
@@ -54,7 +55,8 @@ def _extract_rpu(source: Path, rpu: Path) -> bool:
     try:
         p1 = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         p2 = subprocess.Popen(dv_cmd, stdin=p1.stdout,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              encoding="utf-8", errors="replace")
         if p1.stdout:
             p1.stdout.close()  # dovi_tool erhält EOF, wenn ffmpeg endet
         _, err = p2.communicate()

@@ -50,6 +50,8 @@
     "Encoder wirklich testen": "Really test encoders",
     "Encoder-Funktionstest läuft (kann etwas dauern) …": "Encoder function test running (may take a while) …",
     "Encoder werden real getestet …": "Encoders are being tested for real …",
+    " — von der Hardware nicht unterstützt": " — not supported by hardware",
+    " — nicht verfügbar": " — not available",
     "Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.":
       "If playback fails, your browser may not support the codec (e.g. HEVC/AV1) directly.",
 

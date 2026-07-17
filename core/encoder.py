@@ -348,6 +348,8 @@ class EncodeRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",  # Latin-1-Metadaten dürfen das Lesen nicht killen
             bufsize=1,
         )
         prog = EncodeProgress()

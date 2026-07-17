@@ -220,7 +220,8 @@ def _remap_sub_args(args: list[str]) -> list[str]:
 
 def _run(cmd: list[str], label: str) -> int:
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", check=False)
         if res.returncode != 0:
             logger.warning("%s fehlgeschlagen (Exit %s): %s", label, res.returncode,
                            (res.stderr or "")[-500:])

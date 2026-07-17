@@ -128,6 +128,11 @@ async def _startup() -> None:
     config.ensure_dirs()
     from core import history
     history.init_db()
+    # Offene Aufträge aus der letzten Sitzung wiederherstellen (überleben Neustart).
+    queue.restore()
+    # Echte Encoder-Fähigkeiten im Hintergrund testen (nur falls noch kein Cache).
+    from core import capabilities as caps
+    caps.ensure_async(monitor)
     from core import scheduler
     queue.set_gate(scheduler.gate)
     from core.watcher import watcher
@@ -179,6 +184,8 @@ def _encoder_options() -> list[dict]:
     plats = monitor.available_platforms()
     if "cpu" not in plats:
         plats = plats + ["cpu"]
+    from core import capabilities as caps
+    working = caps.results_map()  # {} solange noch nicht getestet
     out: list[dict] = []
     for p in plats:
         for c in _ALL_CODECS:
@@ -191,6 +198,8 @@ def _encoder_options() -> list[dict]:
                 "encoder": ff.encoder_name(p, c),
                 "kind": "cpu" if p == "cpu" else "gpu",
                 "available": ff.encoder_available(p, c),
+                # True/False aus echtem Mini-Encode-Test; None = noch nicht getestet.
+                "working": working.get(f"{p}:{c}"),
             })
     return out
 
@@ -961,10 +970,31 @@ async def diagnostics(deep: bool = False):
     """Selbsttest: FFmpeg/Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI, Ordner.
 
     deep=1 führt echte Mini-Encodes je Encoder aus (prüft die tatsächliche
-    Hardware-Fähigkeit, dauert etwas länger)."""
+    Hardware-Fähigkeit, dauert etwas länger) und aktualisiert dabei den
+    Encoder-Fähigkeits-Cache, den VMAF-Tool/Encoding zum Ausblenden nutzen."""
     from core import diagnostics as diag
     # Blockierende ffmpeg-Aufrufe im Threadpool, damit der Event-Loop frei bleibt.
     return await asyncio.to_thread(diag.run_diagnostics, monitor, deep)
+
+
+@app.get("/api/capabilities")
+async def capabilities():
+    """Echte Encoder-Fähigkeiten (per Mini-Encode getestet). Leeres results =
+    noch nicht getestet -> UI fällt auf die Build-Verfügbarkeit zurück."""
+    from core import capabilities as caps
+    data = caps.get_cached()
+    if data is None:
+        # Test evtl. noch nicht durch -> im Hintergrund anstoßen.
+        caps.compute_async(monitor)
+        return {"results": {}, "generated_at": 0, "pending": True}
+    return data
+
+
+@app.post("/api/capabilities/refresh")
+async def capabilities_refresh():
+    """Encoder-Fähigkeiten neu ermitteln (echte Mini-Encodes)."""
+    from core import capabilities as caps
+    return await asyncio.to_thread(caps.compute, monitor, None)
 
 
 @app.get("/api/config/paths")

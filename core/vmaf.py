@@ -19,7 +19,10 @@ logger = logging.getLogger("vcompress.vmaf")
 
 
 def _run_logged(cmd: list[str], label: str) -> subprocess.CompletedProcess:
-    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    # errors="replace": FFmpeg gibt Quell-Metadaten teils in Latin-1 aus –
+    # ohne das würde das UTF-8-Decoding der stderr-Ausgabe abstürzen.
+    res = subprocess.run(cmd, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", check=False)
     if res.returncode != 0:
         logger.error("%s fehlgeschlagen (Exit %s)\nCMD: %s\nSTDERR:\n%s",
                      label, res.returncode, " ".join(cmd), (res.stderr or "")[-3000:])

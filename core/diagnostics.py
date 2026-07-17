@@ -35,7 +35,8 @@ def _section(title: str, checks: list) -> dict:
 def _ffmpeg_has_filter(name: str) -> bool:
     try:
         out = subprocess.run([config.FFMPEG, "-hide_banner", "-filters"],
-                             capture_output=True, text=True, timeout=20, check=False)
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=20, check=False)
         return name in (out.stdout or "")
     except (OSError, subprocess.SubprocessError):
         return False
@@ -62,7 +63,8 @@ def _tools_section() -> dict:
         if dv.available():
             try:
                 r = subprocess.run([config.DOVI_TOOL, "--version"],
-                                   capture_output=True, text=True, timeout=10, check=False)
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=10, check=False)
                 dver = (r.stdout or "").strip().splitlines()
                 detail = dver[0] if dver else config.DOVI_TOOL
             except (OSError, subprocess.SubprocessError):
@@ -138,6 +140,7 @@ def _test_encode(platform: str, codec: str, timeout: int = 40) -> tuple[bool, st
     cmd += ["-f", "null", "-"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
                            timeout=timeout, check=False)
         if r.returncode == 0:
             return True, ""
@@ -163,6 +166,16 @@ def _encoder_section(monitor, deep: bool = False) -> dict:
                              "FFmpeg -encoders nicht lesbar – Prüfung übersprungen"))
         return _section("Encoder", checks)
 
+    # Im Funktionstest die echten Ergebnisse ermitteln UND den Cache aktualisieren,
+    # damit VMAF-Tool/Encoding danach nur noch lauffähige Encoder anbieten.
+    deep_results: dict = {}
+    if deep:
+        try:
+            from . import capabilities as caps
+            deep_results = caps.compute(monitor).get("results", {})
+        except Exception:  # pragma: no cover
+            deep_results = {}
+
     for p in platforms:
         codec_states = []
         codec_status = []  # pro Codec: "ok" | "warn" | "skip"
@@ -178,7 +191,11 @@ def _encoder_section(monitor, deep: bool = False) -> dict:
                 codec_status.append("ok")
                 continue
             # Echter Mini-Encode: prüft die tatsächliche HW-Fähigkeit.
-            ok, err = _test_encode(p, c)
+            key = f"{p}:{c}"
+            if key in deep_results:
+                ok, err = bool(deep_results[key]), "HW unterstützt diesen Encoder nicht"
+            else:
+                ok, err = _test_encode(p, c)
             if ok:
                 codec_states.append(f"{c.upper()}=✓ ({enc})")
                 codec_status.append("ok")

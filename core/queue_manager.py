@@ -7,6 +7,7 @@ weiteren Dateien angewendet.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -175,8 +176,83 @@ class QueueManager:
         # laufende Encodes werden nie unterbrochen.
         self._gate = None
         self._gate_msg = ""
+        # Persistenz der Warteschlange: offene Aufträge überleben Neustarts.
+        self._persist_path = config.DATA_DIR / "queue.json"
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+    # ------------------------------------------------------------- Persistenz
+    # Nur nicht-terminale Zustände werden gesichert; beim Laden auf "wartend"
+    # normalisiert, damit unterbrochene Jobs sauber neu starten.
+    _PERSIST_STATES = (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
+
+    def _persistable_locked(self) -> list[dict]:
+        out: list[dict] = []
+        for it in self._items:
+            if it.status not in self._PERSIST_STATES:
+                continue
+            out.append({
+                "id": it.id,
+                "title": it.title,
+                "path": it.path,
+                "group_id": it.group_id,
+                "settings": asdict(it.settings),
+                "info": it.info,
+                "original_size": it.original_size,
+                "created_at": it.created_at,
+            })
+        return out
+
+    def _persist(self) -> None:
+        try:
+            with self._lock:
+                data = self._persistable_locked()
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._persist_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self._persist_path)
+        except Exception as e:  # pragma: no cover - Persistenz darf nie crashen
+            logger.debug("Queue-Persistenz fehlgeschlagen: %s", e)
+
+    def restore(self) -> int:
+        """Gesicherte, offene Aufträge nach einem Neustart wieder einreihen."""
+        try:
+            if not self._persist_path.exists():
+                return 0
+            data = json.loads(self._persist_path.read_text(encoding="utf-8"))
+        except Exception as e:  # pragma: no cover
+            logger.warning("Warteschlange konnte nicht geladen werden: %s", e)
+            return 0
+        fields = set(JobSettings.__dataclass_fields__)
+        restored = 0
+        with self._lock:
+            existing = {it.id for it in self._items}
+            for d in data if isinstance(data, list) else []:
+                path = d.get("path", "")
+                # Nur Dateien wieder aufnehmen, die es noch gibt.
+                if not path or not Path(path).is_file():
+                    continue
+                if d.get("id") in existing:
+                    continue
+                raw = d.get("settings", {}) or {}
+                s = JobSettings(**{k: v for k, v in raw.items() if k in fields})
+                item = QueueItem(
+                    id=d.get("id") or uuid.uuid4().hex[:10],
+                    title=d.get("title") or Path(path).name,
+                    path=path,
+                    settings=s,
+                    group_id=d.get("group_id") or uuid.uuid4().hex[:8],
+                    status=STATUS_WAITING,  # unterbrochene Jobs neu starten
+                    info=d.get("info"),
+                    original_size=int(d.get("original_size", 0) or 0),
+                    created_at=float(d.get("created_at", time.time())),
+                )
+                self._items.append(item)
+                restored += 1
+        if restored:
+            logger.info("Warteschlange wiederhergestellt: %d offene Auftrag/Aufträge", restored)
+            self._wake.set()
+        return restored
 
     def set_gate(self, fn) -> None:
         """Callable setzen, das (bool, str) liefert und neue Jobs freigibt/sperrt."""
@@ -207,7 +283,8 @@ class QueueManager:
             if not (0 <= j < len(self._items)):
                 return False
             self._items[idx], self._items[j] = self._items[j], self._items[idx]
-            return True
+        self._persist()
+        return True
 
     # ------------------------------------------------------------- Parallelität
     def set_parallel(self, n: int) -> int:
@@ -237,6 +314,7 @@ class QueueManager:
             item.original_size = info.size_bytes
         with self._lock:
             self._items.append(item)
+        self._persist()
         self._wake.set()
         return item
 
@@ -273,6 +351,7 @@ class QueueManager:
             for it in self._items:
                 if it.id == item_id and it.status in (STATUS_WAITING, STATUS_AWAITING):
                     it.status = STATUS_CANCELLED
+                    self._persist()
                     return True
         return False
 
@@ -294,6 +373,7 @@ class QueueManager:
                 "platform": item.settings.platform,
             }
             item.status = STATUS_WAITING
+        self._persist()
         self._wake.set()
         return True
 
@@ -304,6 +384,7 @@ class QueueManager:
                 if it.id == item_id and it.status == STATUS_AWAITING:
                     it.status = STATUS_DONE
                     self._group_skip.add(it.group_id)
+                    self._persist()
                     self._wake.set()
                     return True
         return False
@@ -325,6 +406,7 @@ class QueueManager:
                 it for it in self._items
                 if it.status in (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
             ]
+        self._persist()
 
     # ------------------------------------------------------------------- State
     def get_item(self, item_id: str) -> Optional[QueueItem]:
@@ -429,6 +511,8 @@ class QueueManager:
             self._active.pop(item_id, None)
             self._cancel_ids.discard(item_id)
             self._refresh_global_msg()
+        # Terminal-Status wird nicht mehr gesichert -> Datei aktuell halten.
+        self._persist()
         self._wake.set()
 
     def _run_job(self, item: QueueItem) -> None:
