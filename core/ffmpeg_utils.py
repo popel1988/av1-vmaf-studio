@@ -5,6 +5,7 @@ import functools
 import json
 import logging
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -528,6 +529,38 @@ def subtitle_track_args(tracks: list, info=None) -> list[str]:
         # "0" setzt alle Dispositions-Flags zurück (kein Default/Forced).
         args += [f"-disposition:s:{out_idx}", "+".join(flags) if flags else "0"]
     return args
+
+
+@functools.lru_cache(maxsize=1)
+def _mkvpropedit() -> str:
+    return shutil.which("mkvpropedit") or ""
+
+
+def add_mkv_statistics_tags(path) -> bool:
+    """Schreibt Bitraten-/Größen-Statistik-Tags pro Spur (BPS, NUMBER_OF_BYTES,
+    DURATION) – wie mkvmerge. FFmpeg schreibt diese nicht, daher zeigen
+    ffprobe/MediaInfo bei kopierten Tonspuren sonst keine Bitrate an.
+
+    Nur für .mkv und nur wenn mkvpropedit vorhanden ist; ansonsten still
+    übersprungen (kein Fehler). Läuft in-place ohne Remux (schnell).
+    """
+    p = Path(path)
+    if p.suffix.lower() != ".mkv" or not p.exists():
+        return False
+    tool = _mkvpropedit()
+    if not tool:
+        return False
+    try:
+        res = subprocess.run(
+            [tool, str(p), "--add-track-statistics-tags"],
+            capture_output=True, text=True, timeout=600, check=False)
+        if res.returncode != 0:
+            logger.warning("mkvpropedit (Statistik-Tags) fehlgeschlagen (Exit %s): %s",
+                           res.returncode, (res.stderr or "")[-300:])
+        return res.returncode == 0
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("mkvpropedit nicht ausführbar: %s", e)
+        return False
 
 
 def hwaccel_input_args(platform: str) -> list[str]:

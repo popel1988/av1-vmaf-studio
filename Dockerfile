@@ -42,6 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # --- GPU-Monitoring-Werkzeuge ---
         intel-gpu-tools radeontop \
         libdrm2 \
+        # --- MKV-Werkzeuge (mkvpropedit für Bitraten-/Statistik-Tags) ---
+        mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------ Neueres libva bauen

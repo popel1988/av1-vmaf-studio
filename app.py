@@ -10,6 +10,7 @@ import contextlib
 import logging
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 logging.basicConfig(
     level=logging.INFO,
@@ -873,6 +874,85 @@ async def media(path: str, root: str = "input"):
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     return FileResponse(target)
+
+
+@app.get("/api/ffprobe")
+async def ffprobe_any(path: str, root: str = "input"):
+    """ffprobe für eine Datei aus dem Input- oder Output-Ordner (Detail-Ansicht)."""
+    from pathlib import Path
+    roots = {"input": config.INPUT_DIR, "output": config.OUTPUT_DIR}
+    base = roots.get(root, config.INPUT_DIR).resolve()
+    target = (base / path.lstrip("/")).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    info, err = ff.probe_with_error(target)
+    if info is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+    return info.to_dict()
+
+
+def _rel_to(base, abs_path) -> Optional[str]:
+    from pathlib import Path
+    try:
+        return str(Path(abs_path).resolve().relative_to(Path(base).resolve())).replace("\\", "/")
+    except (ValueError, OSError):
+        return None
+
+
+@app.get("/api/queue/{item_id}/details")
+async def queue_details(item_id: str):
+    """Detail-Ansicht eines (auch abgeschlossenen) Auftrags: ffprobe von Quelle
+    und Ausgabe, Medien-URLs für den Player sowie Encode-Kennzahlen."""
+    item = queue.get_item(item_id)
+    if item is None:
+        return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
+
+    def _pack(abs_path, root):
+        from pathlib import Path
+        if not abs_path:
+            return None
+        p = Path(abs_path)
+        rel = _rel_to(config.INPUT_DIR if root == "input" else config.OUTPUT_DIR, p)
+        entry = {"name": p.name, "exists": p.is_file(), "media": None, "info": None}
+        if rel is not None and p.is_file():
+            entry["media"] = f"/api/media?root={root}&path={quote(rel)}"
+            info, _ = ff.probe_with_error(p)
+            if info:
+                entry["info"] = info.to_dict()
+        return entry
+
+    src = _pack(item.path, "input")
+    out = _pack(item.output_path, "output")
+
+    # Encode-Kennzahlen: Geschwindigkeit (x-fach), Ø FPS, Ersparnis.
+    stats = {
+        "duration": item.duration,
+        "duration_human": ff.human_duration(item.duration) if item.duration else "—",
+        "status": item.status,
+        "vmaf_verify": item.vmaf_verify,
+        "original_human": ff.human_size(item.original_size) if item.original_size else "—",
+        "output_human": ff.human_size(item.output_size) if item.output_size else "—",
+        "saved_human": ff.human_size(item.saved_bytes) if item.saved_bytes else "—",
+        "savings_percent": (round(item.saved_bytes / item.original_size * 100, 1)
+                            if item.original_size and item.saved_bytes else None),
+        "speed_x": None,
+        "avg_fps": None,
+    }
+    vid_dur = (item.info or {}).get("duration") if item.info else None
+    if vid_dur and item.duration and item.duration > 0:
+        stats["speed_x"] = round(vid_dur / item.duration, 2)
+        fps = (item.info or {}).get("fps")
+        if fps:
+            stats["avg_fps"] = round(fps * stats["speed_x"], 1)
+
+    return {
+        "id": item.id, "title": item.title, "status": item.status,
+        "source": src, "output": out, "stats": stats,
+    }
 
 
 @app.get("/api/diagnostics")

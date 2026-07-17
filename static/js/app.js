@@ -19,7 +19,20 @@
     hasArchive: false, // es existieren archivierte VMAF-Vergleiche
     shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
     superBatch: null,  // aktive Super-Tool-Stapelkennung
+    vmafSource: null,  // Quelle des aktuell gezeigten VMAF-Vergleichs (für „→ Encoding")
   };
+
+  // Absoluten Quellpfad (aus der Queue) in einen relativen Pfad zum
+  // Eingabeordner umwandeln (für erneute Auswahl/Enqueue).
+  function inputRelPath(abs) {
+    if (!abs) return "";
+    const el = document.getElementById("input-dir");
+    let base = (el ? el.textContent : "") || "";
+    base = base.replace(/\\/g, "/").replace(/\/+$/, "");
+    let p = String(abs).replace(/\\/g, "/");
+    if (base && p.startsWith(base)) p = p.slice(base.length);
+    return p.replace(/^\/+/, "");
+  }
 
   /* --------------------------------------------------------- NAVIGATION */
   // data-page kann mehrere (leerzeichengetrennte) Seiten listen (z. B.
@@ -144,7 +157,7 @@
     });
     data.files.forEach((f) => {
       browser.appendChild(
-        makeRow("file", f.name, f.size_human, null, () => selectFile(f))
+        makeRow("file", f.name, f.size_human, null, () => selectFile(f), f.rel)
       );
     });
     if (!data.dirs.length && !data.files.length) {
@@ -152,7 +165,7 @@
     }
   }
 
-  function makeRow(type, name, size, onOpen, onPick) {
+  function makeRow(type, name, size, onOpen, onPick, playRel) {
     const row = document.createElement("div");
     row.className = "row-item";
     const icon = type === "dir" ? "📁" : "🎬";
@@ -161,6 +174,17 @@
       <span class="row-name">${escapeHtml(name)}</span>
       <span class="row-size">${size}</span>`;
     if (onOpen) row.addEventListener("click", onOpen);
+    if (playRel) {
+      const play = document.createElement("button");
+      play.className = "row-play";
+      play.title = "Im Browser abspielen";
+      play.textContent = "▶";
+      play.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openPlayer("input", playRel, name);
+      });
+      row.appendChild(play);
+    }
     if (onPick) {
       const btn = document.createElement("button");
       btn.className = "row-pick";
@@ -813,6 +837,24 @@
       setSel("opt-bitrate", r.value);
     }
     updateCodecAvailability();
+    // Die im Vergleich genutzte Quelle wieder als Auswahl setzen, damit der
+    // folgende „Zur Warteschlange hinzufügen" die richtige Datei encodiert –
+    // auch wenn zwischenzeitlich eine andere Datei angeklickt wurde.
+    const src = state.vmafSource;
+    if (src && src.path && !src.isBatch) {
+      state.selected = { path: src.path, name: src.name, isBatch: false };
+      $("selection-badge").textContent = "Datei ausgewählt";
+      enableActionButtons();
+      if (src.info) {
+        renderFileDetails(src.name, src.info);
+        const hdrField = $("hdr-field");
+        if (hdrField) hdrField.style.display = src.info.is_hdr ? "" : "none";
+        applyDolbyVision(src.info);
+      } else {
+        $("selected-info").innerHTML = `<strong>${escapeHtml(src.name)}</strong>`;
+      }
+      document.querySelectorAll(".row-item.selected").forEach((r) => r.classList.remove("selected"));
+    }
     navTo("encode");
   }
 
@@ -1041,8 +1083,8 @@
       const dur = (active.has(it.id) || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
       const finished = DONE.includes(it.status) && it.finished_at
         ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
-      return `<tr>
-        <td>${escapeHtml(it.title)}${err}</td>
+      return `<tr class="queue-row" data-details="${it.id}" title="Details / ffprobe anzeigen">
+        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
@@ -1052,12 +1094,19 @@
       </tr>`;
     }).join("");
     body.querySelectorAll("[data-cancel]").forEach((b) => {
-      b.addEventListener("click", () =>
-        fetch(`/api/queue/${b.dataset.cancel}/cancel`, { method: "POST" }));
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fetch(`/api/queue/${b.dataset.cancel}/cancel`, { method: "POST" });
+      });
     });
     body.querySelectorAll("[data-move]").forEach((b) => {
-      b.addEventListener("click", () =>
-        fetch(`/api/queue/${b.dataset.move}/move?direction=${b.dataset.dir}`, { method: "POST" }));
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        fetch(`/api/queue/${b.dataset.move}/move?direction=${b.dataset.dir}`, { method: "POST" });
+      });
+    });
+    body.querySelectorAll("tr.queue-row").forEach((tr) => {
+      tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
     });
   }
 
@@ -1155,6 +1204,12 @@
     }
 
     const vmaf = target.vmaf;
+    // Quelle des Vergleichs merken, damit „→ Encoding" genau diese Datei
+    // übernimmt – unabhängig davon, was zwischendurch im Browser angeklickt wurde.
+    state.vmafSource = {
+      path: inputRelPath(target.path), name: target.title,
+      isBatch: false, info: target.info || null,
+    };
     const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status;
     showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
@@ -1776,6 +1831,135 @@
     $("data-preview").style.display = "none";
     loadDataDir();
     refreshStorageBadge();
+  }
+
+  /* -------------------------------------------------- MODAL / PLAYER / INFO */
+  function ensureModal() {
+    let m = $("app-modal");
+    if (m) return m;
+    m = document.createElement("div");
+    m.id = "app-modal";
+    m.className = "app-modal";
+    m.style.display = "none";
+    m.innerHTML = `
+      <div class="app-modal-backdrop"></div>
+      <div class="app-modal-box">
+        <div class="app-modal-head">
+          <span id="app-modal-title" class="app-modal-title"></span>
+          <button id="app-modal-close" class="btn btn-ghost btn-sm">Schließen</button>
+        </div>
+        <div id="app-modal-body" class="app-modal-body"></div>
+      </div>`;
+    document.body.appendChild(m);
+    const close = () => closeModal();
+    m.querySelector(".app-modal-backdrop").addEventListener("click", close);
+    $("app-modal-close").addEventListener("click", close);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && m.style.display !== "none") close();
+    });
+    return m;
+  }
+
+  function openModal(title, html) {
+    const m = ensureModal();
+    $("app-modal-title").textContent = title || "";
+    $("app-modal-body").innerHTML = html || "";
+    m.style.display = "";
+  }
+
+  function closeModal() {
+    const m = $("app-modal");
+    if (!m) return;
+    // Laufende Videos stoppen, damit im Hintergrund kein Ton weiterläuft.
+    m.querySelectorAll("video").forEach((v) => { try { v.pause(); } catch (e) {} });
+    m.style.display = "none";
+    $("app-modal-body").innerHTML = "";
+  }
+
+  function videoHtml(mediaUrl) {
+    return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}"></video>`;
+  }
+
+  function openPlayer(root, rel, name) {
+    const url = `/api/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`;
+    openModal(name || "Wiedergabe", videoHtml(url) +
+      `<p class="muted" style="margin-top:8px;font-size:12px">Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.</p>`);
+  }
+
+  // Kompakte ffprobe-Übersicht (Video-/Audio-/Untertitelspuren) als HTML.
+  function infoTableHtml(info) {
+    if (!info) return `<p class="muted">Keine Analyse verfügbar.</p>`;
+    const rows = [];
+    rows.push(`<tr><th>Container</th><td>${escapeHtml(info.container || "—")} · ${escapeHtml(info.resolution || "—")} · ${info.duration ? Math.round(info.duration) + "s" : "—"}</td></tr>`);
+    const v = `${info.codec || "—"}${info.is_hdr ? " · HDR" : ""}${info.dolby_vision ? " · DV" + (info.dv_profile ? " " + info.dv_profile : "") : ""}`;
+    const vbr = (info.video_bitrate_human && info.video_bitrate_human !== "—")
+      ? ` · ${info.video_bitrate_human}`
+      : (info.overall_bitrate_human && info.overall_bitrate_human !== "—" ? ` · ${info.overall_bitrate_human} gesamt` : "");
+    rows.push(`<tr><th>Video</th><td>${escapeHtml(v + vbr)}</td></tr>`);
+    (info.audio || []).forEach((a, i) => {
+      const parts = [a.codec, a.language, a.channels ? a.channels + " ch" : null,
+        (a.bitrate_human && a.bitrate_human !== "—") ? a.bitrate_human : null].filter(Boolean);
+      rows.push(`<tr><th>Audio ${i + 1}</th><td>${escapeHtml(parts.join(" · ") || "—")}</td></tr>`);
+    });
+    (info.subtitles || []).forEach((s, i) => {
+      const parts = [s.codec, s.language].filter(Boolean);
+      rows.push(`<tr><th>Sub ${i + 1}</th><td>${escapeHtml(parts.join(" · ") || "—")}</td></tr>`);
+    });
+    return `<table class="info-table">${rows.join("")}</table>`;
+  }
+
+  async function openQueueDetails(id) {
+    if (!id) return;
+    openModal("Details", `<p class="muted">Lade …</p>`);
+    let d;
+    try {
+      const r = await fetch(`/api/queue/${id}/details`);
+      d = await r.json();
+    } catch (e) {
+      openModal("Details", `<p class="bad">Fehler: ${escapeHtml(String(e))}</p>`);
+      return;
+    }
+    if (d.error) { openModal("Details", `<p class="bad">${escapeHtml(d.error)}</p>`); return; }
+
+    const s = d.stats || {};
+    const statChips = [
+      ["Status", d.status || "—"],
+      ["Dauer", s.duration_human || "—"],
+      ["Ø Speed", s.speed_x != null ? s.speed_x + "×" : "—"],
+      ["Ø FPS", s.avg_fps != null ? s.avg_fps : "—"],
+      ["Original", s.original_human || "—"],
+      ["Ausgabe", s.output_human || "—"],
+      ["Eingespart", (s.saved_human || "—") + (s.savings_percent != null ? ` (${s.savings_percent}%)` : "")],
+      ["VMAF", s.vmaf_verify != null ? Number(s.vmaf_verify).toFixed(1) : "—"],
+    ].map(([k, v]) => `<div class="stat"><span class="stat-label">${k}</span><span class="stat-val">${escapeHtml(String(v))}</span></div>`).join("");
+
+    const player = (d.output && d.output.media)
+      ? videoHtml(d.output.media)
+      : (d.source && d.source.media ? videoHtml(d.source.media) : `<p class="muted">Keine abspielbare Datei gefunden.</p>`);
+    const playToggle = (d.source && d.source.media && d.output && d.output.media)
+      ? `<div class="modal-tabs">
+           <button class="btn btn-ghost btn-sm active" data-src="${escapeHtml(d.output.media)}">Ausgabe</button>
+           <button class="btn btn-ghost btn-sm" data-src="${escapeHtml(d.source.media)}">Quelle</button>
+         </div>` : "";
+
+    const html = `
+      <div class="stat-grid modal-stats">${statChips}</div>
+      ${playToggle}
+      <div id="modal-player">${player}</div>
+      <div class="modal-cols">
+        <div><h4>Quelle</h4>${infoTableHtml(d.source && d.source.info)}</div>
+        <div><h4>Ausgabe</h4>${infoTableHtml(d.output && d.output.info)}</div>
+      </div>`;
+    openModal(escapeHtml(d.title || "Details"), html);
+
+    const body = $("app-modal-body");
+    body.querySelectorAll(".modal-tabs [data-src]").forEach((b) => {
+      b.addEventListener("click", () => {
+        body.querySelectorAll(".modal-tabs [data-src]").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        $("modal-player").innerHTML = videoHtml(b.dataset.src);
+      });
+    });
   }
 
   /* ----------------------------------------------------------------- UTIL */

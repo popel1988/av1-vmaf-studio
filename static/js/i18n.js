@@ -30,6 +30,25 @@
     "Verbinde …": "Connecting …",
     "Gesamt eingespart": "Total saved",
 
+    // --- Detail-Modal / Player ---
+    "Schließen": "Close",
+    "Details": "Details",
+    "Details / ffprobe anzeigen": "Show details / ffprobe",
+    "Im Browser abspielen": "Play in browser",
+    "Wiedergabe": "Playback",
+    "Lade …": "Loading …",
+    "Quelle": "Source",
+    "Ausgabe": "Output",
+    "Ø Speed": "Avg speed",
+    "Ø FPS": "Avg FPS",
+    "Original": "Original",
+    "Dauer": "Duration",
+    "Eingespart": "Saved",
+    "Keine Analyse verfügbar.": "No analysis available.",
+    "Keine abspielbare Datei gefunden.": "No playable file found.",
+    "Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.":
+      "If playback fails, your browser may not support the codec (e.g. HEVC/AV1) directly.",
+
     // --- Topbar ---
     "Quelle:": "Source:",
     "· Daten:": "· Data:",

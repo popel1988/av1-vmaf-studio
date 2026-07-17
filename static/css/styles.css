@@ -333,6 +333,43 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 }
 .row-item:hover .row-pick { opacity: 1; }
 .row-pick:hover { border-color: var(--accent); color: var(--accent); }
+.row-play {
+  font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); cursor: pointer; opacity: 0; transition: opacity .15s; line-height: 1;
+}
+.row-item:hover .row-play { opacity: 1; }
+.row-play:hover { border-color: var(--accent); color: var(--accent); }
+
+/* --- Queue: klickbare Zeilen für Detail-Ansicht --- */
+tr.queue-row { cursor: pointer; }
+tr.queue-row:hover { background: rgba(127,127,127,.08); }
+.queue-title-link { text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* --- Modal (Detail-Ansicht / Player) --- */
+.app-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.app-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.6); }
+.app-modal-box {
+  position: relative; z-index: 1; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; width: min(920px, 96vw);
+  max-height: 92vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.app-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  background: var(--surface); z-index: 2;
+}
+.app-modal-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-modal-body { padding: 16px; }
+.modal-video { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; }
+.modal-stats { margin-bottom: 12px; }
+.modal-tabs { display: flex; gap: 6px; margin: 6px 0; }
+.modal-tabs .active { border-color: var(--accent); color: var(--accent); }
+.modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+@media (max-width: 700px) { .modal-cols { grid-template-columns: 1fr; } }
+.modal-cols h4 { margin: 0 0 6px; font-size: 13px; color: var(--text-muted); }
+.info-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.info-table th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 3px 8px 3px 0; white-space: nowrap; vertical-align: top; width: 74px; }
+.info-table td { padding: 3px 0; word-break: break-word; }
 
 .selection-actions { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
 .selected-info { font-size: 12.5px; color: var(--text-muted); min-height: 18px; }

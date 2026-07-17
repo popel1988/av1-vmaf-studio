@@ -327,6 +327,10 @@ class QueueManager:
             ]
 
     # ------------------------------------------------------------------- State
+    def get_item(self, item_id: str) -> Optional[QueueItem]:
+        with self._lock:
+            return next((it for it in self._items if it.id == item_id), None)
+
     def state(self) -> dict:
         with self._lock:
             items = [it.to_dict() for it in self._items]
@@ -651,6 +655,7 @@ class QueueManager:
                     and item.vmaf_verify < s.verify_min):
                 item.error = (f"Qualitätswarnung: gemessener VMAF "
                               f"{item.vmaf_verify:.1f} < Ziel {s.verify_min:.0f}.")
+            ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
@@ -703,6 +708,7 @@ class QueueManager:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
+            ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
@@ -762,6 +768,7 @@ class QueueManager:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
+            ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
