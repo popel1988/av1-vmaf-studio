@@ -57,10 +57,12 @@ def build_video_filters(
     # --- Reine NVIDIA-GPU-Pipeline (kein Tonemap) --------------------------
     if platform == "nvidia" and nvidia_cuda_frames:
         sc = f"scale_cuda=-2:{target_height}" if downscale else "scale_cuda"
-        if force_10bit:
-            # 8-bit-Quelle auf der GPU auf 10-bit anheben (p010le).
-            return f"{sc}=format=p010le" if sc == "scale_cuda" else f"{sc}:format=p010le"
-        return f"{sc}" if downscale else None
+        # Immer mit definiertem Zielformat durch scale_cuda leiten. Geht die
+        # rohe CUDA-Surface ohne Formatnormalisierung direkt an NVENC, entstehen
+        # bei manchen Quellen/Treibern komplett grüne Ausgaben. p010le = 10-bit
+        # (Anime), sonst nv12 (8-bit).
+        fmt = "p010le" if force_10bit else "nv12"
+        return f"{sc}=format={fmt}" if sc == "scale_cuda" else f"{sc}:format={fmt}"
 
     filters: list[str] = []
 
@@ -187,9 +189,11 @@ def build_encode_cmd(
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
     if platform == "nvidia":
-        if (tonemap and info.is_hdr) or denoise_on:
-            # GPU-Decode, aber Download nach RAM für Software-Filter
-            # (Tonemapping/Denoise laufen nicht als reine CUDA-Pipeline).
+        if (tonemap and info.is_hdr) or denoise_on or start_at is not None:
+            # GPU-Decode, aber Download nach RAM. Nötig für Software-Filter
+            # (Tonemapping/Denoise) und beim Anspringen einer Position: mit
+            # `-hwaccel_output_format cuda` liefert der HW-Decoder nach einem
+            # Seek (VMAF-/Verify-Clips) oft grüne/kaputte Frames.
             cmd += ["-hwaccel", "cuda"]
         else:
             # Komplett auf der GPU: Decode -> (scale_cuda) -> NVENC.
@@ -283,9 +287,10 @@ def build_encode_cmd(
     if subtitle_per_track:
         # Gezielte Spurauswahl inkl. Default/Forced-Flags (Einzeldatei).
         # Leere Liste => keine Untertitel.
-        cmd += ff.subtitle_track_args(subtitle_track_settings or [])
+        cmd += ff.subtitle_track_args(subtitle_track_settings or [], info)
     elif keep_subtitles:
-        cmd += ["-map", "0:s?", "-c:s", "copy"]
+        # mov_text (MP4-Text) -> srt, sonst copy (MKV kennt mov_text nicht).
+        cmd += ff.subtitle_copy_args(info, 0)
     if not keep_chapters:
         cmd += ["-map_chapters", "-1"]
     if not keep_metadata:

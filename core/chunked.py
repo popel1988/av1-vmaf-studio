@@ -197,12 +197,12 @@ def _mux_cmd(info: VideoInfo, video: Path, output: Path, s) -> list[str]:
             cmd += ["-map", "1:a?"]
         cmd += ff.audio_args(s.audio_mode, s.audio_codec, s.audio_bitrate,
                              s.audio_channels, s.audio_normalize)
-    # Untertitel/Kapitel/Metadaten aus der Quelle.
+    # Untertitel/Kapitel/Metadaten aus der Quelle (mov_text -> srt für MKV).
     if getattr(s, "subtitle_per_track", False):
         cmd += _remap_sub_args(ff.subtitle_track_args(
-            list(getattr(s, "subtitle_track_settings", []) or [])))
+            list(getattr(s, "subtitle_track_settings", []) or []), info))
     elif s.keep_subtitles:
-        cmd += ["-map", "1:s?", "-c:s", "copy"]
+        cmd += ff.subtitle_copy_args(info, 1)
     cmd += ["-map_chapters", "1" if s.keep_chapters else "-1"]
     cmd += ["-map_metadata", "1" if s.keep_metadata else "-1"]
     cmd += [str(output)]

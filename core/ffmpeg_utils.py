@@ -457,20 +457,63 @@ def audio_track_args(tracks: list) -> list[str]:
     return args
 
 
-def subtitle_track_args(tracks: list) -> list[str]:
-    """Mapping + Disposition (Default/Forced) pro gewählter Untertitelspur.
+# MP4-Text-Untertitel (mov_text/tx3g) können nicht per copy in eine MKV, da
+# Matroska mov_text nicht kennt. Sie werden nach SRT (subrip) umgewandelt.
+_SUB_TEXT_MP4 = {"mov_text", "tx3g", "text"}
+
+
+def _sub_out_codec(src_codec: str) -> str:
+    """Ziel-Codec einer Untertitelspur für MKV: mov_text -> srt, sonst copy."""
+    return "srt" if (src_codec or "").lower() in _SUB_TEXT_MP4 else "copy"
+
+
+def _sub_codec_map(info) -> dict:
+    """{Untertitel-Index: Quell-Codec} aus der Analyse (für Codec-Wahl)."""
+    out: dict = {}
+    for s in (getattr(info, "subtitles", []) or []):
+        try:
+            out[int(s.get("index", 0))] = s.get("codec", "") or ""
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def subtitle_copy_args(info, input_idx: int = 0) -> list[str]:
+    """Alle Untertitel der Quelle übernehmen (MKV-tauglich).
+
+    mov_text/tx3g werden nach SRT umgewandelt, Bild-Untertitel (PGS/VobSub) und
+    Text-Formate wie ASS/SRT verlustfrei kopiert. `input_idx` = Eingang, aus dem
+    die Untertitel stammen (0 = Hauptinput, 1 = Quelle beim Chunked-Mux).
+    """
+    subs = list(getattr(info, "subtitles", []) or [])
+    if not subs:
+        # Ohne Analyse defensiv kopieren (z. B. Sonderfälle) – „?" ignoriert Fehlen.
+        return ["-map", f"{input_idx}:s?", "-c:s", "copy"]
+    args: list[str] = []
+    for sub in subs:
+        args += ["-map", f"{input_idx}:s:{int(sub.get('index', 0))}?"]
+    for out_idx, sub in enumerate(subs):
+        args += [f"-c:s:{out_idx}", _sub_out_codec(sub.get("codec", ""))]
+    return args
+
+
+def subtitle_track_args(tracks: list, info=None) -> list[str]:
+    """Mapping + Codec + Disposition (Default/Forced) pro gewählter Spur.
 
     `tracks`: geordnete Liste ausgewählter Untertitel, je Eintrag ein Dict mit
-    index (Quell-Untertitel-Index) und optional default/forced (bool). Alle
-    Spuren werden verlustfrei kopiert (`-c:s copy`). Leere Liste => keine
+    index (Quell-Untertitel-Index) und optional default/forced (bool). Der
+    Ziel-Codec richtet sich nach der Quelle (mov_text -> srt, sonst copy); dafür
+    wird `info` mit der Untertitel-Analyse benötigt. Leere Liste => keine
     Untertitel im Output.
     """
     if not tracks:
         return []
+    codecs = _sub_codec_map(info) if info is not None else {}
     args: list[str] = []
     for t in tracks:
         args += ["-map", f"0:s:{int(t.get('index', 0))}?"]
-    args += ["-c:s", "copy"]
+    for out_idx, t in enumerate(tracks):
+        args += [f"-c:s:{out_idx}", _sub_out_codec(codecs.get(int(t.get('index', 0)), ""))]
     for out_idx, t in enumerate(tracks):
         flags = []
         if t.get("default"):
