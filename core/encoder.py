@@ -189,16 +189,19 @@ def build_encode_cmd(
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
     if platform == "nvidia":
-        if (tonemap and info.is_hdr) or denoise_on or start_at is not None:
-            # GPU-Decode, aber Download nach RAM. Nötig für Software-Filter
-            # (Tonemapping/Denoise) und beim Anspringen einer Position: mit
-            # `-hwaccel_output_format cuda` liefert der HW-Decoder nach einem
-            # Seek (VMAF-/Verify-Clips) oft grüne/kaputte Frames.
-            cmd += ["-hwaccel", "cuda"]
-        else:
-            # Komplett auf der GPU: Decode -> (scale_cuda) -> NVENC.
+        # Reine GPU-Pipeline nur, wenn ausdrücklich gewünscht (NVENC_FULL_GPU)
+        # UND kein Software-Filter/Seek nötig ist. Standard: CUDA-Decode mit
+        # Download in den RAM – robust gegen grüne Ausgaben, die die reine
+        # CUDA-Surface-Pipeline (`-hwaccel_output_format cuda`) je nach
+        # Treiber/Quelle erzeugt. Software-Filter (Tonemapping/Denoise) und
+        # Positions-Sprünge (VMAF-/Verify-Clips) brauchen ohnehin den RAM-Pfad.
+        full_gpu = (config.NVENC_FULL_GPU and not (tonemap and info.is_hdr)
+                    and not denoise_on and start_at is None)
+        if full_gpu:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
             nvidia_cuda_frames = True
+        else:
+            cmd += ["-hwaccel", "cuda"]
     elif platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
         # VAAPI-Device als Upload-Ziel für den Software-Filterpfad (AMD sowie
         # Intel im VAAPI-Modus).

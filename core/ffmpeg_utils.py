@@ -372,6 +372,11 @@ def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> lis
     """Festbitrate (CBR) oder Average-Bitrate (VBR-Ziel) in kbit/s."""
     br = f"{kbps}k"
     enc = encoder_name(platform, codec)
+    # SVT-AV1 unterstützt maxrate/bufsize nur im CRF-Modus (sonst „Max Bitrate
+    # only supported with CRF mode"). -b:v allein ergibt ein VBR-Ziel – für ABR
+    # und CBR gleichermaßen genutzt.
+    if enc == "libsvtav1":
+        return ["-b:v", br]
     if abr:
         args = ["-b:v", br, "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k"]
         if "nvenc" in enc:

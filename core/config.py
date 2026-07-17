@@ -114,6 +114,13 @@ VAAPI_DEVICE = os.getenv("VAAPI_DEVICE", "/dev/dri/renderD128")
 # etc.) – bei Bedarf einfach auf "qsv" umstellen.
 INTEL_ENCODER = os.getenv("INTEL_ENCODER", "vaapi").strip().lower()
 
+# NVENC-Dekodierpfad: Standardmäßig wird per CUDA dekodiert, die Frames aber in
+# den System-RAM heruntergeladen (robust). Die reine GPU-Pipeline
+# (`-hwaccel_output_format cuda` + scale_cuda) ist schneller, führt aber je nach
+# Treiber/Quelle zu komplett grünen Ausgaben. Wer die volle GPU-Pipeline
+# erzwingen will, setzt NVENC_FULL_GPU=1.
+NVENC_FULL_GPU = _env_bool("NVENC_FULL_GPU", False)
+
 # --- CQ-Sweetspot-Overrides ---------------------------------------------------
 # Optional per Env feinjustierbar. Format (kommagetrennt):
 #   CQ_SWEETSPOT="cpu:hevc=22,nvidia:av1=33"
