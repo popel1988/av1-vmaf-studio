@@ -99,9 +99,11 @@ RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FF
 ARG DOVI_TOOL_VERSION=2.3.3
 RUN wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
         -O /tmp/dovi_tool.tar.gz \
-    && tar -xf /tmp/dovi_tool.tar.gz -C /usr/local/bin dovi_tool \
-    && chmod +x /usr/local/bin/dovi_tool \
-    && rm -f /tmp/dovi_tool.tar.gz \
+    && mkdir -p /tmp/dovi \
+    && tar -xf /tmp/dovi_tool.tar.gz -C /tmp/dovi \
+    # Layout des Archivs kann variieren (dovi_tool bzw. ./dovi_tool) -> per find holen
+    && install -m 0755 "$(find /tmp/dovi -type f -name dovi_tool | head -n1)" /usr/local/bin/dovi_tool \
+    && rm -rf /tmp/dovi /tmp/dovi_tool.tar.gz \
     && /usr/local/bin/dovi_tool --version
 
 # ------------------------------------------------------------- VMAF-Modelle
