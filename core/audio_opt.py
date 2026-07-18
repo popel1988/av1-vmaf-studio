@@ -123,11 +123,16 @@ def build_remux_cmd(info: VideoInfo, output: Path, settings: dict) -> list[str]:
         if normalize:
             cmd += [f"-filter:a:{out_idx}", "loudnorm=I=-16:TP=-1.5:LRA=11"]
 
-    # Untertitel, Kapitel, Attachments und Metadaten unverändert übernehmen.
-    cmd += ["-map", "0:s?", "-c:s", "copy",
-            "-map", "0:t?", "-c:t", "copy",
-            "-map_chapters", "0", "-map_metadata", "0",
-            "-progress", "pipe:1", "-nostats", str(output)]
+    # Untertitel/Kapitel/Metadaten. In MP4 sind Bild-Untertitel und Attachments
+    # nicht möglich – Text-Untertitel werden nach mov_text gewandelt.
+    if str(output).lower().endswith(".mp4"):
+        cmd += ff.subtitle_copy_args(info, 0, "mp4")
+        cmd += ["-map_chapters", "0", "-map_metadata", "0"]
+    else:
+        cmd += ["-map", "0:s?", "-c:s", "copy",
+                "-map", "0:t?", "-c:t", "copy",
+                "-map_chapters", "0", "-map_metadata", "0"]
+    cmd += ["-progress", "pipe:1", "-nostats", str(output)]
     return cmd
 
 

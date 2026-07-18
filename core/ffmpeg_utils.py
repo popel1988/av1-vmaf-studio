@@ -146,7 +146,7 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     hdr_type, dovi, dv_profile = _detect_hdr(transfer, video)
 
     # Audio-/Untertitel-Spuren strukturiert sammeln
-    audio = [_audio_entry(s, i) for i, s in
+    audio = [_audio_entry(s, i, duration) for i, s in
              enumerate(s for s in streams if s.get("codec_type") == "audio")]
     subs = [_subtitle_entry(s, i) for i, s in
             enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
@@ -216,9 +216,52 @@ def _bit_depth(pix_fmt: str, video: dict) -> int:
     return 8
 
 
-def _audio_entry(s: dict, index: int = 0) -> dict:
-    tags = s.get("tags", {}) or {}
+def _tag_lookup(tags: dict, name: str):
+    """Tag case-insensitiv holen – auch mit Sprach-Suffix (z. B. BPS-eng)."""
+    up = name.upper()
+    for k, v in (tags or {}).items():
+        ku = str(k).upper()
+        if ku == up or ku.startswith(up + "-"):
+            return v
+    return None
+
+
+def _duration_tag_seconds(val) -> float:
+    """MKV-DURATION-Tag ("HH:MM:SS.nnnnnnnnn") in Sekunden umrechnen."""
+    if not val:
+        return 0.0
+    parts = str(val).split(":")
+    if len(parts) == 3:
+        try:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        except ValueError:
+            return 0.0
+    return _f(val) or 0.0
+
+
+def _stream_bitrate(s: dict, tags: dict, container_duration: float = 0.0) -> int:
+    """Bitrate einer Spur robust bestimmen – wie MediaInfo.
+
+    Reihenfolge: bit_rate (ffprobe) -> BPS-Tag (MKV/mkvmerge) ->
+    NUMBER_OF_BYTES / DURATION (Statistik-Tags). So erscheint auch bei MKVs, die
+    ffprobe keine bit_rate liefern, wieder eine Bitrate.
+    """
     br = int(_f(s.get("bit_rate")) or 0)
+    if br:
+        return br
+    bps = _f(_tag_lookup(tags, "BPS"))
+    if bps:
+        return int(bps)
+    nbytes = _f(_tag_lookup(tags, "NUMBER_OF_BYTES"))
+    dur = _duration_tag_seconds(_tag_lookup(tags, "DURATION")) or container_duration
+    if nbytes and dur:
+        return int(nbytes * 8 / dur)
+    return 0
+
+
+def _audio_entry(s: dict, index: int = 0, container_duration: float = 0.0) -> dict:
+    tags = s.get("tags", {}) or {}
+    br = _stream_bitrate(s, tags, container_duration)
     return {
         "index": index,  # relativer Audio-Index (0:a:index)
         "codec": s.get("codec_name", "?"),
@@ -469,11 +512,24 @@ def audio_track_args(tracks: list) -> list[str]:
 # MP4-Text-Untertitel (mov_text/tx3g) können nicht per copy in eine MKV, da
 # Matroska mov_text nicht kennt. Sie werden nach SRT (subrip) umgewandelt.
 _SUB_TEXT_MP4 = {"mov_text", "tx3g", "text"}
+# Bild-Untertitel: in MP4 nicht möglich (nur in MKV per copy).
+_SUB_IMAGE = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvdsub",
+              "dvb_subtitle", "dvbsub", "xsub"}
 
 
-def _sub_out_codec(src_codec: str) -> str:
-    """Ziel-Codec einer Untertitelspur für MKV: mov_text -> srt, sonst copy."""
-    return "srt" if (src_codec or "").lower() in _SUB_TEXT_MP4 else "copy"
+def _sub_out_codec(src_codec: str, container: str = "mkv") -> Optional[str]:
+    """Ziel-Codec einer Untertitelspur je Container.
+
+    MKV: mov_text -> srt, sonst copy (behält ASS/SRT/PGS/…).
+    MP4: alles Textbasierte -> mov_text; Bild-Untertitel (PGS/VobSub) sind in
+    MP4 nicht möglich -> None (Spur wird ausgelassen).
+    """
+    c = (src_codec or "").lower()
+    if container == "mp4":
+        if c in _SUB_IMAGE:
+            return None
+        return "mov_text"
+    return "srt" if c in _SUB_TEXT_MP4 else "copy"
 
 
 def _sub_codec_map(info) -> dict:
@@ -487,43 +543,59 @@ def _sub_codec_map(info) -> dict:
     return out
 
 
-def subtitle_copy_args(info, input_idx: int = 0) -> list[str]:
-    """Alle Untertitel der Quelle übernehmen (MKV-tauglich).
+def subtitle_copy_args(info, input_idx: int = 0, container: str = "mkv") -> list[str]:
+    """Alle Untertitel der Quelle übernehmen (container-abhängig).
 
-    mov_text/tx3g werden nach SRT umgewandelt, Bild-Untertitel (PGS/VobSub) und
-    Text-Formate wie ASS/SRT verlustfrei kopiert. `input_idx` = Eingang, aus dem
-    die Untertitel stammen (0 = Hauptinput, 1 = Quelle beim Chunked-Mux).
+    MKV: mov_text/tx3g -> SRT, Rest (ASS/SRT/PGS/VobSub) verlustfrei kopieren.
+    MP4: Text -> mov_text; Bild-Untertitel (PGS/VobSub) werden ausgelassen.
+    `input_idx` = Eingang, aus dem die Untertitel stammen (0 = Hauptinput,
+    1 = Quelle beim Chunked-Mux).
     """
     subs = list(getattr(info, "subtitles", []) or [])
     if not subs:
-        # Ohne Analyse defensiv kopieren (z. B. Sonderfälle) – „?" ignoriert Fehlen.
+        if container == "mp4":
+            # Ohne Analyse in MP4 nicht blind mappen (Bild-Subs würden crashen).
+            return []
         return ["-map", f"{input_idx}:s?", "-c:s", "copy"]
-    args: list[str] = []
+    maps: list[str] = []
+    codecs: list[str] = []
     for sub in subs:
-        args += ["-map", f"{input_idx}:s:{int(sub.get('index', 0))}?"]
-    for out_idx, sub in enumerate(subs):
-        args += [f"-c:s:{out_idx}", _sub_out_codec(sub.get("codec", ""))]
+        oc = _sub_out_codec(sub.get("codec", ""), container)
+        if oc is None:
+            continue  # z. B. PGS in MP4 -> auslassen
+        maps += ["-map", f"{input_idx}:s:{int(sub.get('index', 0))}?"]
+        codecs.append(oc)
+    args: list[str] = list(maps)
+    for out_idx, oc in enumerate(codecs):
+        args += [f"-c:s:{out_idx}", oc]
     return args
 
 
-def subtitle_track_args(tracks: list, info=None) -> list[str]:
+def subtitle_track_args(tracks: list, info=None, container: str = "mkv") -> list[str]:
     """Mapping + Codec + Disposition (Default/Forced) pro gewählter Spur.
 
     `tracks`: geordnete Liste ausgewählter Untertitel, je Eintrag ein Dict mit
     index (Quell-Untertitel-Index) und optional default/forced (bool). Der
-    Ziel-Codec richtet sich nach der Quelle (mov_text -> srt, sonst copy); dafür
-    wird `info` mit der Untertitel-Analyse benötigt. Leere Liste => keine
-    Untertitel im Output.
+    Ziel-Codec richtet sich nach Quelle UND Container (MKV: copy/srt, MP4:
+    mov_text; Bild-Untertitel entfallen in MP4). Leere Liste => keine Untertitel.
     """
     if not tracks:
         return []
-    codecs = _sub_codec_map(info) if info is not None else {}
-    args: list[str] = []
+    codec_map = _sub_codec_map(info) if info is not None else {}
+    kept: list[tuple[dict, str]] = []
     for t in tracks:
+        oc = _sub_out_codec(codec_map.get(int(t.get("index", 0)), ""), container)
+        if oc is None:
+            continue  # Bild-Untertitel in MP4 -> auslassen
+        kept.append((t, oc))
+    if not kept:
+        return []
+    args: list[str] = []
+    for t, _ in kept:
         args += ["-map", f"0:s:{int(t.get('index', 0))}?"]
-    for out_idx, t in enumerate(tracks):
-        args += [f"-c:s:{out_idx}", _sub_out_codec(codecs.get(int(t.get('index', 0)), ""))]
-    for out_idx, t in enumerate(tracks):
+    for out_idx, (_, oc) in enumerate(kept):
+        args += [f"-c:s:{out_idx}", oc]
+    for out_idx, (t, _) in enumerate(kept):
         flags = []
         if t.get("default"):
             flags.append("default")

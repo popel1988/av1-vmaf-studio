@@ -20,6 +20,10 @@
     shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
     superBatch: null,  // aktive Super-Tool-Stapelkennung
     vmafSource: null,  // Quelle des aktuell gezeigten VMAF-Vergleichs (für „→ Encoding")
+    browseData: null,  // zuletzt geladener Ordnerinhalt (für Live-Filter)
+    libRows: [],       // Bibliotheks-Treffer (für Sortierung/Filter/Gruppierung)
+    libStats: null,    // Dashboard-Statistik des letzten Scans
+    libSort: { key: "est_saved_bytes", dir: "desc" },
   };
 
   // Absoluten Quellpfad (aus der Queue) in einen relativen Pfad zum
@@ -102,6 +106,9 @@
   /* ------------------------------------------------------------- BROWSER */
   async function loadDir(path) {
     state.currentPath = path;
+    // Suche beim Ordnerwechsel zurücksetzen (frische Ansicht).
+    const search = $("browser-search");
+    if (search) search.value = "";
     const browser = $("browser");
     browser.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
     try {
@@ -111,6 +118,7 @@
         browser.innerHTML = `<div class="browser-loading">${data.error}</div>`;
         return;
       }
+      state.browseData = data;
       renderBreadcrumb(data);
       renderBrowser(data);
       // "Diesen Ordner als Batch" bezieht sich auf das aktuelle Verzeichnis
@@ -120,6 +128,49 @@
     } catch (e) {
       browser.innerHTML = `<div class="browser-loading">Fehler: ${e}</div>`;
     }
+  }
+
+  // Reagiert auf Eingaben im Suchfeld: lokal filtern (aktueller Ordner) oder –
+  // bei „Unterordner" – rekursiv über das Backend suchen.
+  let _searchTimer = null;
+  function onBrowserSearch() {
+    const recursive = $("browser-recursive") && $("browser-recursive").checked;
+    const q = ($("browser-search") ? $("browser-search").value : "").trim();
+    if (recursive && q) {
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(() => runRecursiveSearch(q), 250);
+    } else {
+      renderBrowser(state.browseData);
+    }
+  }
+
+  async function runRecursiveSearch(q) {
+    const browser = $("browser");
+    browser.innerHTML = '<div class="browser-loading">Suche in Unterordnern …</div>';
+    try {
+      const res = await fetch(
+        `/api/search?path=${encodeURIComponent(state.currentPath || "")}&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.error) { browser.innerHTML = `<div class="browser-loading">${data.error}</div>`; return; }
+      renderSearchResults(data);
+    } catch (e) {
+      browser.innerHTML = `<div class="browser-loading">Fehler: ${e}</div>`;
+    }
+  }
+
+  function renderSearchResults(data) {
+    const browser = $("browser");
+    browser.innerHTML = "";
+    (data.files || []).forEach((f) => {
+      const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
+      const row = makeRow("file", label, f.size_human, null, () => selectFile(f), f.rel);
+      browser.appendChild(row);
+    });
+    if (!data.files || !data.files.length) {
+      browser.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
+    }
+    updateBrowserCount((data.files || []).length, null,
+      data.truncated ? " (begrenzt)" : "", true);
   }
 
   function renderBreadcrumb(data) {
@@ -147,25 +198,46 @@
   }
 
   function renderBrowser(data) {
+    if (!data) return;
     const browser = $("browser");
     browser.innerHTML = "";
+    const q = ($("browser-search") ? $("browser-search").value : "").trim().toLowerCase();
+    const match = (name) => !q || name.toLowerCase().includes(q);
+    const dirs = data.dirs.filter((d) => match(d.name));
+    const files = data.files.filter((f) => match(f.name));
 
-    if (!data.is_root) {
+    if (!data.is_root && !q) {
       browser.appendChild(makeRow("dir", "..", "", () => loadDir(data.parent || ""), null));
     }
-    data.dirs.forEach((d) => {
-      browser.appendChild(
-        makeRow("dir", d.name, "", () => loadDir(d.rel), null)
-      );
+    dirs.forEach((d) => {
+      browser.appendChild(makeRow("dir", d.name, "", () => loadDir(d.rel), null));
     });
-    data.files.forEach((f) => {
-      browser.appendChild(
-        makeRow("file", f.name, f.size_human, null, () => selectFile(f), f.rel)
-      );
+    files.forEach((f) => {
+      browser.appendChild(makeRow("file", f.name, f.size_human, null, () => selectFile(f), f.rel));
     });
-    if (!data.dirs.length && !data.files.length) {
-      browser.innerHTML = '<div class="browser-loading">Leerer Ordner.</div>';
+    if (!dirs.length && !files.length) {
+      browser.innerHTML = q
+        ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
+        : '<div class="browser-loading">Leerer Ordner.</div>';
     }
+    updateBrowserCount(files.length, dirs.length, "", false,
+      q ? data.files.length : null, q ? data.dirs.length : null);
+  }
+
+  // Zeigt Ordner-/Dateizahl (und bei Filter „x von y") an.
+  function updateBrowserCount(files, dirs, suffix, searchMode, totalFiles, totalDirs) {
+    const el = $("browser-count");
+    if (!el) return;
+    if (searchMode) {
+      el.textContent = `${files} Treffer${suffix || ""}`;
+      return;
+    }
+    const parts = [];
+    if (dirs != null) {
+      parts.push(totalDirs != null ? `${dirs}/${totalDirs} Ordner` : `${dirs} Ordner`);
+    }
+    parts.push(totalFiles != null ? `${files}/${totalFiles} Dateien` : `${files} Dateien`);
+    el.textContent = parts.join(" · ");
   }
 
   function makeRow(type, name, size, onOpen, onPick, playRel) {
@@ -233,47 +305,48 @@
     return `<div class="chip ${cls || ""}"><span class="chip-k">${label}</span><span class="chip-v">${value}</span></div>`;
   }
 
-  // Dolby Vision: Hinweis anzeigen und bei Profilen ohne HDR10-Basis (z. B. 5)
-  // automatisch Tone-Mapping voreinstellen, damit die Farben stimmen.
+  // Dolby Vision: Bei einer neuen Datei die DV-Auswahl neu bewerten (Defaults
+  // wieder zulassen, bis der Nutzer bewusst umschaltet).
   function applyDolbyVision(info) {
     state.currentInfo = info || null;
-    const dvNote = $("dv-note");
-    const modeSel = $("opt-hdr-mode");
-    if (!info.dolby_vision) {
-      if (dvNote) dvNote.style.display = "none";
-      syncDvOption();
-      return;
-    }
-    const prof = info.dv_profile || 0;
-    // Profil 8.1 hat eine HDR10-kompatible Basis -> „beibehalten" ist ok.
-    const hasHdr10Base = prof === 8 || prof === 0;
-    if (modeSel && !hasHdr10Base) modeSel.value = "tonemap";
-    if (dvNote) {
-      dvNote.style.display = "";
-      const p = prof ? `Profil ${prof}` : "Dolby Vision";
-      dvNote.textContent = hasHdr10Base
-        ? `${p} erkannt: Die dynamische DV-Schicht (RPU) kann optional per dovi_tool übernommen werden (nur HEVC, experimentell). Die HDR10-Basis bleibt bei „HDR beibehalten" erhalten.`
-        : `${p} erkannt: keine HDR10-kompatible Basis – daher ist Tone-Mapping voreingestellt. „HDR beibehalten" würde hier zu Farbfehlern führen. Die DV-Schicht (RPU) kann nicht übernommen werden.`;
-    }
+    const dvSel = $("opt-dv-mode");
+    if (dvSel) dvSel.dataset.userset = "";
     syncDvOption();
   }
 
-  // Blendet die experimentelle DV-Erhaltung nur ein, wenn die Quelle Dolby
-  // Vision mit HDR10-Basis (Profil 8.1) hat UND als HEVC codiert wird.
+  // Steuert HDR- vs. DV-Behandlung: Bei Dolby-Vision-Quellen erscheint die
+  // DV-Auswahl (übernehmen / nur HDR10 / Tonemap), sonst die normale HDR-Wahl.
+  // Ziel-Profil richtet sich nach dem Encode-Codec: HEVC -> 8.1, AV1 -> 10.1.
   function syncDvOption() {
-    const wrap = $("dv-preserve-wrap");
-    const hint = $("dv-preserve-hint");
-    const cb = $("opt-preserve-dv");
-    const modeSel = $("opt-hdr-mode");
+    const hdrWrap = $("hdr-mode-wrap");
+    const dvWrap = $("dv-mode-wrap");
+    const dvSel = $("opt-dv-mode");
+    const dvHint = $("dv-mode-hint");
     const info = state.currentInfo;
     const codec = $("opt-codec") ? $("opt-codec").value : "";
-    const prof = info && info.dv_profile ? info.dv_profile : 0;
-    const eligible = !!(info && info.dolby_vision && (prof === 8 || prof === 0) && codec === "hevc");
-    if (wrap) wrap.style.display = eligible ? "" : "none";
-    if (hint) hint.style.display = eligible ? "" : "none";
-    if (!eligible && cb) cb.checked = false;
-    // DV-Erhaltung erzwingt „HDR beibehalten".
-    if (eligible && cb && cb.checked && modeSel) modeSel.value = "preserve";
+    const isDv = !!(info && info.dolby_vision);
+    if (hdrWrap) hdrWrap.style.display = isDv ? "none" : "";
+    if (dvWrap) dvWrap.style.display = isDv ? "" : "none";
+    if (!isDv || !dvSel) return;
+
+    const prof = info.dv_profile || 0;
+    const codecLabel = codec === "av1" ? "AV1" : "HEVC";
+    // Profil 5 bleibt bei „Übernehmen" unverändert Profil 5, sonst 8.1/10.1.
+    const targetProfile = prof === 5 ? "Profil 5" : (codec === "av1" ? "10.1" : "8.1");
+    // Profil 5 hat keine HDR10-kompatible Basis -> Tonemap als Default.
+    if (!dvSel.dataset.userset) dvSel.value = prof === 5 ? "tonemap" : "preserve";
+    if (dvHint) {
+      const p = prof ? `Profil ${prof}` : "Dolby Vision";
+      let conv = "";
+      if (prof === 7) conv = " Profil 7 wird zu 8.1 konvertiert (Enhancement-Layer entfällt, HDR10-Basis bleibt).";
+      else if (prof === 5) conv = " Bei „Übernehmen" bleibt es Profil 5 (unverändert) – das braucht einen DV-fähigen Player und hat keinen HDR10-Fallback. Ohne solchen Player ist Tone-Mapping die sichere Wahl (Default).";
+      const fallback = prof === 5
+        ? " Schlägt ein Schritt fehl, bleibt die (nur mit DV korrekt darstellbare) Basis erhalten."
+        : " Schlägt ein Schritt fehl, bleibt die HDR10-Basis erhalten.";
+      dvHint.textContent = `${p} erkannt. „Übernehmen" extrahiert die DV-RPU und `
+        + `re-injiziert sie nach dem Encode (dovi_tool) → Ziel ${targetProfile} (${codecLabel}).`
+        + `${conv}${fallback}`;
+    }
   }
 
   function renderFileDetails(name, info) {
@@ -284,6 +357,9 @@
     chips.push(chip("Bit-Tiefe", info.bit_depth + " bit"));
     if (info.fps) chips.push(chip("FPS", info.fps));
     chips.push(chip("Dynamik", info.hdr_type, info.is_hdr ? "warn" : ""));
+    if (info.dolby_vision) {
+      chips.push(chip("Dolby Vision", info.dv_profile ? "Profil " + info.dv_profile : "ja", "accent"));
+    }
     chips.push(chip("Größe", info.size_human));
     chips.push(chip("Dauer", info.duration_human));
     if (info.overall_bitrate) chips.push(chip("Gesamt-Bitrate", info.overall_bitrate_human));
@@ -459,9 +535,9 @@
     $("opt-codec").addEventListener("change", updateCodecAvailability);
     updateCodecAvailability();
 
-    const dvCb = $("opt-preserve-dv");
-    if (dvCb) dvCb.addEventListener("change", () => {
-      if (dvCb.checked && $("opt-hdr-mode")) $("opt-hdr-mode").value = "preserve";
+    const dvSel = $("opt-dv-mode");
+    if (dvSel) dvSel.addEventListener("change", () => {
+      dvSel.dataset.userset = "1";  // bewusste Wahl nicht mehr automatisch überschreiben
     });
 
     const verifyCb = $("opt-verify-vmaf");
@@ -645,7 +721,9 @@
     return {
       target_height: res ? parseInt(res, 10) : null,
       hdr_mode: $("opt-hdr-mode") ? $("opt-hdr-mode").value : "tonemap",
-      preserve_dv: $("opt-preserve-dv") ? $("opt-preserve-dv").checked : false,
+      // DV-Behandlung nur mitsenden, wenn die DV-Auswahl aktiv (= DV-Quelle) ist.
+      dv_mode: ($("dv-mode-wrap") && $("dv-mode-wrap").style.display !== "none"
+                && $("opt-dv-mode")) ? $("opt-dv-mode").value : "",
       keep_subtitles: subTracks === null
         ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
       subtitle_per_track: subTracks !== null,
@@ -664,6 +742,7 @@
       audio_tracks: gatherAudioTracks(),
       audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
       audio_track_settings: perTrack || [],
+      container: $("opt-container") ? $("opt-container").value : "auto",
     };
   }
 
@@ -2115,7 +2194,10 @@
     else set("opt-bitrate", s.quality);
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
-    set("opt-preserve-dv", s.preserve_dv, "change");
+    if (s.dv_mode) {
+      const dvSel = $("opt-dv-mode");
+      if (dvSel) { dvSel.value = s.dv_mode; dvSel.dataset.userset = "1"; }
+    }
     set("opt-keep-subs", s.keep_subtitles);
     set("opt-keep-chapters", s.keep_chapters);
     set("opt-keep-metadata", s.keep_metadata);
@@ -2126,6 +2208,7 @@
     set("opt-verify-vmaf", s.verify_vmaf, "change");
     set("opt-verify-min", s.verify_min);
     set("opt-verify-retry", s.verify_retry);
+    set("opt-container", s.container, "change");
     set("opt-post", s.post_processing, "change");
     set("opt-audio-mode", s.audio_mode, "change");
     set("opt-audio-codec", s.audio_codec, "change");
@@ -2199,11 +2282,34 @@
     const scanBtn = $("btn-lib-scan");
     if (!scanBtn) return;
     scanBtn.addEventListener("click", startLibraryScan);
-    $("btn-lib-add").addEventListener("click", addLibrarySelection);
+    $("btn-lib-add").addEventListener("click", () => addLibrarySelection(false));
+    const auto = $("btn-lib-add-auto");
+    if (auto) auto.addEventListener("click", () => addLibrarySelection(true));
+    const csv = $("btn-lib-csv");
+    if (csv) csv.addEventListener("click", () => window.open("/api/library/export.csv", "_blank"));
     const all = $("lib-check-all");
     if (all) all.addEventListener("change", () => {
       document.querySelectorAll(".lib-check").forEach((c) => { c.checked = all.checked; });
     });
+    const rs = $("lib-result-search");
+    if (rs) rs.addEventListener("input", renderLibrary);
+    const grp = $("lib-group");
+    if (grp) grp.addEventListener("change", renderLibrary);
+    // Sortierbare Spalten
+    document.querySelectorAll(".lib-table th.sortable").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        const cur = state.libSort || { key: "est_saved_bytes", dir: "desc" };
+        state.libSort = (cur.key === key)
+          ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
+          : { key, dir: (key === "name" || key === "codec") ? "asc" : "desc" };
+        renderLibrary();
+      });
+    });
+    // Aktionen (Play / →Encode / →VMAF) delegiert.
+    const body = $("lib-body");
+    if (body) body.addEventListener("click", onLibAction);
+    loadLastLibrary();
   }
 
   function libFilters() {
@@ -2219,6 +2325,7 @@
       codecs_include: [],
       codecs_exclude: [],
       target_codec: $("lib-target-codec") ? $("lib-target-codec").value : "av1",
+      dynamic_filter: $("lib-dynamic") ? $("lib-dynamic").value : "",
       skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
       skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
     };
@@ -2231,7 +2338,7 @@
   function renderLibProjection(st) {
     const box = $("lib-projection");
     if (!box) return;
-    const rows = st.matched || [];
+    const rows = st.matched || state.libRows || [];
     if (!rows.length) { box.style.display = "none"; return; }
     box.style.display = "";
     $("lib-proj-count").textContent = String(rows.length);
@@ -2240,6 +2347,31 @@
     const pct = st.total_size_bytes
       ? Math.round((st.total_saved_bytes / st.total_size_bytes) * 100) : 0;
     $("lib-proj-pct").textContent = `${pct}%`;
+  }
+
+  function renderLibDashboard(stats, totalMatched) {
+    const box = $("lib-dashboard");
+    if (!box) return;
+    if (!stats || !totalMatched) { box.style.display = "none"; return; }
+    box.style.display = "";
+    const bar = (label, count, total, cls) => {
+      const pct = total ? Math.round((count / total) * 100) : 0;
+      return `<div class="lib-bar"><span class="lib-bar-lbl">${escapeHtml(label)}</span>`
+        + `<span class="lib-bar-track"><span class="lib-bar-fill ${cls || ""}" style="width:${pct}%"></span></span>`
+        + `<span class="lib-bar-val">${count}</span></div>`;
+    };
+    const codecs = (stats.codec_distribution || []);
+    $("lib-dash-codecs").innerHTML = codecs.map((c) =>
+      bar((c.codec || "?").toUpperCase(), c.count, totalMatched)).join("") || "<span class='muted'>—</span>";
+    $("lib-dash-dynamic").innerHTML =
+      bar("SDR", stats.sdr_count || 0, totalMatched) +
+      bar("HDR", stats.hdr_count || 0, totalMatched, "warn") +
+      bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent");
+    const hogs = stats.top_hogs || [];
+    $("lib-dash-hogs").innerHTML = hogs.map((h) =>
+      `<li title="${escapeHtml(h.path || "")}"><span class="hog-name">${escapeHtml(h.name || "")}</span>`
+      + `<span class="hog-save good">${escapeHtml(h.est_saved_human || "—")}</span></li>`).join("")
+      || "<li class='muted'>—</li>";
   }
 
   async function startLibraryScan() {
@@ -2253,61 +2385,185 @@
     pollLibrary();
   }
 
+  function applyLibState(st) {
+    state.libRows = st.matched || [];
+    state.libStats = st.stats || null;
+    renderLibrary();
+    renderLibProjection(st);
+    renderLibDashboard(st.stats, state.libRows.length);
+    const has = state.libRows.length > 0;
+    ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
+      const b = $(id); if (b) b.disabled = !has;
+    });
+  }
+
   async function pollLibrary() {
     try {
       const r = await fetch("/api/library/scan");
       const st = await r.json();
       $("lib-progress").textContent =
         `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer · ca. ${st.total_saved_human || "0 B"} einsparbar`;
-      renderLibrary(st.matched);
-      renderLibProjection(st);
+      applyLibState(st);
       if (!st.running) {
         clearInterval(libPoll); libPoll = null;
         $("lib-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
-        $("btn-lib-add").disabled = st.matched.length === 0;
       }
     } catch (e) { /* ignorieren */ }
   }
 
-  function renderLibrary(rows) {
-    const body = $("lib-body");
-    if (!body) return;
-    body.innerHTML = rows.length ? rows.map((m) => {
-      const opt = m.already_optimized
-        ? '<span class="lib-opt-badge">schon optimiert</span>'
-        : `<span class="good">${escapeHtml(m.est_saved_human || "—")}</span>`;
-      return `
+  async function loadLastLibrary() {
+    try {
+      const r = await fetch("/api/library/last");
+      const st = await r.json();
+      if (st && (st.matched || []).length) {
+        applyLibState(st);
+        const when = st.generated_at ? new Date(st.generated_at * 1000).toLocaleString() : "";
+        $("lib-scan-badge").textContent = `${st.matched.length} Treffer`;
+        if (when) $("lib-progress").textContent = `Letzter Scan: ${when}`;
+      }
+    } catch (e) { /* kein Cache */ }
+  }
+
+  function libDynamicLabel(m) {
+    if (m.dolby_vision) return "DV" + (m.dv_profile ? " P" + m.dv_profile : "");
+    if (m.is_hdr) return (m.hdr_type || "HDR").replace(/ \(.*\)/, "");
+    return "SDR";
+  }
+
+  function libViewRows() {
+    const q = ($("lib-result-search") ? $("lib-result-search").value : "").trim().toLowerCase();
+    let rows = (state.libRows || []).slice();
+    if (q) rows = rows.filter((m) =>
+      (m.name || "").toLowerCase().includes(q) || (m.folder || "").toLowerCase().includes(q));
+    const s = state.libSort || { key: "est_saved_bytes", dir: "desc" };
+    const numeric = ["height", "video_bitrate", "duration", "size_bytes", "est_saved_bytes"];
+    rows.sort((a, b) => {
+      let av = a[s.key], bv = b[s.key];
+      if (numeric.includes(s.key)) { av = av || 0; bv = bv || 0; return s.dir === "asc" ? av - bv : bv - av; }
+      av = String(av || "").toLowerCase(); bv = String(bv || "").toLowerCase();
+      return s.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    return rows;
+  }
+
+  function libRowHtml(m) {
+    const dyn = libDynamicLabel(m);
+    const dynCls = m.dolby_vision ? "accent" : (m.is_hdr ? "warn" : "");
+    const opt = m.already_optimized
+      ? '<span class="lib-opt-badge">schon optimiert</span>'
+      : `<span class="good">${escapeHtml(m.est_saved_human || "—")}</span>`;
+    const sug = (m.suggest && m.suggest.label) ? escapeHtml(m.suggest.label) : "—";
+    return `
       <tr>
         <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
         <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
+        <td><span class="dyn-badge ${dynCls}">${escapeHtml(dyn)}</span></td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
+        <td>${escapeHtml(m.duration_human || "—")}</td>
         <td>${escapeHtml(m.size_human)}</td>
         <td>${opt}</td>
+        <td class="lib-suggest">${sug}</td>
+        <td class="lib-row-actions">
+          <button class="lib-act" data-act="play" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Abspielen">▶</button>
+          <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
+          <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
+        </td>
       </tr>`;
-    }).join("") :
-      '<tr class="empty-row"><td colspan="7">Keine Treffer.</td></tr>';
   }
 
-  async function addLibrarySelection() {
-    const paths = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
-    if (!paths.length) return;
-    const btn = $("btn-lib-add");
-    btn.disabled = true;
+  function renderLibrary() {
+    const body = $("lib-body");
+    if (!body) return;
+    const rows = libViewRows();
+    const cnt = $("lib-result-count");
+    if (cnt) cnt.textContent = rows.length
+      ? `${rows.length} von ${(state.libRows || []).length} angezeigt` : "";
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="11">Keine Treffer.</td></tr>';
+      return;
+    }
+    const grouped = $("lib-group") && $("lib-group").checked;
+    if (!grouped) {
+      body.innerHTML = rows.map(libRowHtml).join("");
+      return;
+    }
+    // Nach Ordner gruppieren.
+    const byFolder = {};
+    rows.forEach((m) => {
+      const k = m.folder || "(Wurzel)";
+      (byFolder[k] = byFolder[k] || []).push(m);
+    });
+    body.innerHTML = Object.keys(byFolder).sort().map((folder) => {
+      const items = byFolder[folder];
+      const saved = items.reduce((a, m) => a + (m.est_saved_bytes || 0), 0);
+      return `<tr class="lib-group-row"><td colspan="11">📁 ${escapeHtml(folder)} `
+        + `<span class="muted">· ${items.length} Dateien · ca. ${escapeHtml(formatBytes(saved))} einsparbar</span></td></tr>`
+        + items.map(libRowHtml).join("");
+    }).join("");
+  }
+
+  function onLibAction(e) {
+    const btn = e.target.closest(".lib-act");
+    if (!btn) return;
+    e.stopPropagation();
+    const path = btn.dataset.path;
+    const name = btn.dataset.name;
+    const act = btn.dataset.act;
+    if (act === "play") { openPlayer("input", path, name); return; }
+    const row = (state.libRows || []).find((m) => m.path === path);
+    libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
+  }
+
+  // Datei aus der Bibliothek in Encoding/VMAF-Tool übernehmen (inkl. Vorschlag).
+  async function libTransfer(path, name, page, suggest) {
+    navTo(page);
+    await selectFile({ rel: path, name: name });
+    if (page === "encode" && suggest) {
+      const cSel = $("opt-codec");
+      if (cSel && suggest.codec) { cSel.value = suggest.codec; cSel.dispatchEvent(new Event("change")); }
+      if (suggest.dv_mode) {
+        const dv = $("opt-dv-mode");
+        if (dv) { dv.value = suggest.dv_mode; dv.dataset.userset = "1"; }
+      } else if (suggest.hdr_mode) {
+        const h = $("opt-hdr-mode");
+        if (h) h.value = suggest.hdr_mode;
+      }
+    }
+  }
+
+  async function addLibrarySelection(auto) {
+    const checked = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
+    if (!checked.length) return;
+    const btnA = $("btn-lib-add"); const btnB = $("btn-lib-add-auto");
+    if (btnA) btnA.disabled = true; if (btnB) btnB.disabled = true;
     const base = gatherSettings();
     let ok = 0;
-    for (const p of paths) {
+    for (const p of checked) {
+      let payload = { path: p, is_batch: false, ...base };
+      if (auto) {
+        const row = (state.libRows || []).find((m) => m.path === p);
+        const sug = row && row.suggest;
+        if (sug) {
+          payload.codec = sug.codec;
+          payload.suffix = "_" + sug.codec;
+          if (sug.dv_mode) payload.dv_mode = sug.dv_mode;
+          else if (sug.hdr_mode) payload.hdr_mode = sug.hdr_mode;
+        }
+      }
       try {
         const r = await fetch("/api/enqueue", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: p, is_batch: false, ...base }),
+          body: JSON.stringify(payload),
         });
         if (r.ok) ok++;
       } catch (e) { /* weiter */ }
     }
-    btn.disabled = false;
-    $("lib-progress").textContent = `${ok} zur Warteschlange hinzugefügt.`;
+    if (btnA) btnA.disabled = false; if (btnB) btnB.disabled = false;
+    $("lib-progress").textContent = auto
+      ? `${ok} mit Auto-Einstellungen hinzugefügt.`
+      : `${ok} zur Warteschlange hinzugefügt.`;
   }
 
   /* ------------------------------------------------------------- SUPER-TOOL */
@@ -3188,6 +3444,10 @@
     initAudioOpt();
     initDiagnostics();
     loadCapabilities();
+    const bSearch = $("browser-search");
+    if (bSearch) bSearch.addEventListener("input", onBrowserSearch);
+    const bRec = $("browser-recursive");
+    if (bRec) bRec.addEventListener("change", onBrowserSearch);
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

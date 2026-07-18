@@ -45,7 +45,7 @@ class JobSettings:
     target_height: Optional[int] = None
     tonemap: bool = False
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
-    preserve_dv: bool = False        # Dolby-Vision-RPU nach Encode re-injizieren (nur HEVC)
+    preserve_dv: bool = False        # Dolby-Vision-RPU nach Encode re-injizieren (HEVC 8.1 / AV1 10.1)
     keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
     subtitle_per_track: bool = False # Untertitel pro Spur konfiguriert
     subtitle_track_settings: list = field(default_factory=list)  # je Spur: index/default/forced
@@ -81,6 +81,7 @@ class JobSettings:
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     generate_screenshots: bool = True
     post_processing: str = "keep"
+    container: str = "auto"        # auto | mkv | mp4 (Ausgabe-Container)
     suffix: str = "_av1"
     # Audio
     audio_mode: str = "copy"       # copy | encode | none
@@ -705,8 +706,8 @@ class QueueManager:
             rc, stderr, cmd, cancelled = self._encode_to(item, s, info, out_path, on_prog)
             if cancelled or rc != 0:
                 break
-            # Dolby Vision (experimentell): RPU aus der Quelle re-injizieren.
-            if s.preserve_dv and s.codec == "hevc":
+            # Dolby Vision: RPU aus der Quelle re-injizieren (HEVC->8.1 / AV1->10.1).
+            if s.preserve_dv and s.codec in ("hevc", "av1"):
                 self._reinject_dv(item, out_path)
             if not do_verify:
                 break
@@ -789,6 +790,9 @@ class QueueManager:
             logger.error("Chunked fehlgeschlagen: %s | %s", item.title, err)
             out_path.unlink(missing_ok=True)
         else:
+            # Dolby Vision auch nach Chunked-Encode übernehmen (HEVC/AV1).
+            if s.preserve_dv and s.codec in ("hevc", "av1"):
+                self._reinject_dv(item, out_path)
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
@@ -881,6 +885,7 @@ class QueueManager:
             "film_grain": s.film_grain,
             "denoise": s.denoise,
             "force_10bit": s.anime,
+            "container": _container_ext(s).lstrip("."),
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -947,7 +952,7 @@ class QueueManager:
             return None
 
     def _reinject_dv(self, item: QueueItem, out_path: Path) -> None:
-        """DV-RPU nach dem HEVC-Encode übernehmen (best-effort, mit Fallback)."""
+        """DV-RPU nach dem Encode übernehmen (HEVC->8.1 / AV1->10.1, best-effort)."""
         import shutil
         from . import dolby_vision as dv
 
@@ -960,10 +965,16 @@ class QueueManager:
             return
         item.message = "Dolby Vision: RPU wird übernommen …"
         work = config.WORK_DIR / f"dv_{item.id}"
-        fps = float((item.info or {}).get("fps") or 0.0)
+        info = item.info or {}
+        fps = float(info.get("fps") or 0.0)
+        source_codec = "av1" if str(info.get("codec", "")).lower() in ("av1", "libaom-av1") else "hevc"
+        target_codec = item.settings.codec
+        profile = int(info.get("dv_profile") or 0)
         try:
             final, err = dv.reinject(
                 Path(item.path), out_path, work, fps=fps,
+                source_codec=source_codec, target_codec=target_codec,
+                profile=profile,
                 status=lambda m: setattr(item, "message", m))
             if final and final.exists():
                 out_path.unlink(missing_ok=True)
@@ -1034,11 +1045,22 @@ def build_job_settings(d: dict) -> JobSettings:
     """UI-/Profil-Dict → JobSettings (zentrale Zuordnung inkl. HDR-Modus)."""
     hdr_mode = d.get("hdr_mode", "tonemap")
     codec = d.get("codec", "av1")
-    # Dolby-Vision-Erhaltung geht nur mit HEVC-Basis (Profil 8.1) und impliziert
-    # HDR-Beibehaltung (kein Tonemapping).
-    preserve_dv = bool(d.get("preserve_dv", False)) and codec == "hevc"
-    preserve_hdr = (hdr_mode == "preserve") or preserve_dv
-    tonemap = ((hdr_mode == "tonemap") or bool(d.get("tonemap"))) and not preserve_dv
+    # DV-Behandlung: `dv_mode` (aus der UI bei DV-Quellen) hat Vorrang und legt
+    # sowohl HDR- als auch DV-Verhalten fest. Ohne dv_mode gilt hdr_mode + Legacy.
+    #   preserve -> DV-RPU übernehmen (HEVC->8.1, AV1->10.1), HDR bleibt
+    #   hdr10    -> nur HDR10-Basis behalten (DV verwerfen)
+    #   tonemap  -> HDR->SDR
+    dv_mode = d.get("dv_mode", "") or ""
+    if dv_mode == "preserve":
+        preserve_dv, preserve_hdr, tonemap = True, True, False
+    elif dv_mode == "hdr10":
+        preserve_dv, preserve_hdr, tonemap = False, True, False
+    elif dv_mode == "tonemap":
+        preserve_dv, preserve_hdr, tonemap = False, False, True
+    else:
+        preserve_dv = bool(d.get("preserve_dv", False))
+        preserve_hdr = (hdr_mode == "preserve") or preserve_dv
+        tonemap = ((hdr_mode == "tonemap") or bool(d.get("tonemap"))) and not preserve_dv
     return JobSettings(
         platform=d.get("platform", "cpu"),
         codec=codec,
@@ -1075,6 +1097,7 @@ def build_job_settings(d: dict) -> JobSettings:
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         generate_screenshots=bool(d.get("generate_screenshots", True)),
         post_processing=d.get("post_processing", "keep"),
+        container=d.get("container", "auto") if d.get("container") in ("mkv", "mp4") else "auto",
         suffix=d.get("suffix", "_" + codec),
         audio_mode=d.get("audio_mode", "copy"),
         audio_codec=d.get("audio_codec", "aac"),
@@ -1107,9 +1130,19 @@ def _parse_encoders(entries: list) -> list:
     return out
 
 
+def _container_ext(s: JobSettings) -> str:
+    """Ziel-Container: explizite Wahl (mkv/mp4) oder Standard je Codec."""
+    choice = getattr(s, "container", "auto")
+    if choice == "mkv":
+        return ".mkv"
+    if choice == "mp4":
+        return ".mp4"
+    return CONTAINER.get(s.codec, ".mkv")
+
+
 def _output_path(item: QueueItem) -> Path:
     src = Path(item.path)
-    ext = CONTAINER.get(item.settings.codec, ".mkv")
+    ext = _container_ext(item.settings)
     if item.settings.post_processing == "inplace":
         # Temporäre Datei neben dem Original
         return src.with_name(f"{src.stem}.__tmp__{ext}")

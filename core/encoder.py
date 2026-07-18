@@ -176,6 +176,7 @@ def build_encode_cmd(
     two_pass: bool = False,
     pass_num: Optional[int] = None,
     passlog: Optional[str] = None,
+    container: str = "mkv",
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -231,6 +232,9 @@ def build_encode_cmd(
 
     enc = ff.encoder_name(platform, codec)
     cmd += ["-c:v", enc]
+    # HEVC in MP4 braucht das hvc1-Tag für breite Player-Kompatibilität (Apple).
+    if container == "mp4" and codec == "hevc":
+        cmd += ["-tag:v", "hvc1"]
     is_bitrate = rate_mode in ("bitrate", "abr") and bitrate_kbps
     if is_bitrate:
         cmd += ff.bitrate_args(platform, codec, bitrate_kbps, abr=(rate_mode == "abr"))
@@ -290,10 +294,10 @@ def build_encode_cmd(
     if subtitle_per_track:
         # Gezielte Spurauswahl inkl. Default/Forced-Flags (Einzeldatei).
         # Leere Liste => keine Untertitel.
-        cmd += ff.subtitle_track_args(subtitle_track_settings or [], info)
+        cmd += ff.subtitle_track_args(subtitle_track_settings or [], info, container)
     elif keep_subtitles:
-        # mov_text (MP4-Text) -> srt, sonst copy (MKV kennt mov_text nicht).
-        cmd += ff.subtitle_copy_args(info, 0)
+        # Container-abhängig: MKV -> srt/copy, MP4 -> mov_text (Bild-Subs entfallen).
+        cmd += ff.subtitle_copy_args(info, 0, container)
     if not keep_chapters:
         cmd += ["-map_chapters", "-1"]
     if not keep_metadata:

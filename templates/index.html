@@ -126,6 +126,13 @@
           </div>
           <div class="card-body">
             <div class="breadcrumb" id="breadcrumb"></div>
+            <div class="browser-search-row">
+              <input type="search" id="browser-search" placeholder="Im Ordner suchen … (Name)" autocomplete="off" />
+              <label class="check browser-recursive" title="Auch alle Unterordner durchsuchen">
+                <input type="checkbox" id="browser-recursive" /><span>Unterordner</span>
+              </label>
+              <span class="browser-count muted" id="browser-count"></span>
+            </div>
             <div class="browser" id="browser">
               <div class="browser-loading">Lade Verzeichnis …</div>
             </div>
@@ -186,18 +193,23 @@
             </div>
 
             <div class="field" id="hdr-field" style="display:none">
-              <label>HDR-Behandlung</label>
-              <select id="opt-hdr-mode">
-                <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
-                <option value="preserve">HDR beibehalten (10-bit)</option>
-              </select>
-              <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
-              <p class="hint bad" id="dv-note" style="display:none">Dolby Vision erkannt: Beim Re-Encode kann die dynamische DV-Schicht (RPU) nicht übernommen werden. Bei Profil 8.1 bleibt die HDR10-Basis erhalten; bei Profil 5 wird Tone-Mapping empfohlen.</p>
-              <label class="check" id="dv-preserve-wrap" style="display:none">
-                <input type="checkbox" id="opt-preserve-dv" />
-                <span>Dolby Vision (RPU) beibehalten &ndash; experimentell, nur HEVC/Profil 8.1</span>
-              </label>
-              <p class="hint" id="dv-preserve-hint" style="display:none">Extrahiert die DV-RPU aus der Quelle und re-injiziert sie nach dem HEVC-Encode (dovi_tool). Erzwingt „HDR beibehalten". Bei Fehlschlag bleibt die reine HDR10-Ausgabe erhalten.</p>
+              <div id="hdr-mode-wrap">
+                <label>HDR-Behandlung</label>
+                <select id="opt-hdr-mode">
+                  <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+                  <option value="preserve">HDR beibehalten (10-bit)</option>
+                </select>
+                <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
+              </div>
+              <div id="dv-mode-wrap" style="display:none">
+                <label>Dolby-Vision-Behandlung</label>
+                <select id="opt-dv-mode">
+                  <option value="preserve">Dolby Vision übernehmen (RPU)</option>
+                  <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
+                  <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+                </select>
+                <p class="hint" id="dv-mode-hint"></p>
+              </div>
             </div>
 
             <div class="field">
@@ -358,6 +370,18 @@
             </div>
 
             <div class="divider"></div>
+
+            <div class="field">
+              <label>Ausgabe-Container</label>
+              <select id="opt-container">
+                <option value="auto">Automatisch (Codec-abhängig)</option>
+                <option value="mkv">MKV (Matroska)</option>
+                <option value="mp4">MP4</option>
+              </select>
+              <p class="hint">MKV wird empfohlen (unterstützt AV1/HEVC/H.264 sowie alle
+                Untertitel). MP4 wandelt Text-Untertitel in mov_text um; Bild-Untertitel
+                (PGS/VobSub) können nicht in MP4 und entfallen dann.</p>
+            </div>
 
             <div class="field">
               <label>Nach erfolgreichem Encode</label>
@@ -628,6 +652,17 @@
                   <option value="hevc">HEVC/H.265</option>
                 </select>
               </div>
+              <div class="field"><label>Dynamik-Filter</label>
+                <select id="lib-dynamic">
+                  <option value="">Alle</option>
+                  <option value="sdr">Nur SDR</option>
+                  <option value="hdr">Nur HDR (ohne DV)</option>
+                  <option value="dv">Nur Dolby Vision</option>
+                  <option value="dv5">Nur DV Profil 5</option>
+                  <option value="dv7">Nur DV Profil 7</option>
+                  <option value="dv8">Nur DV Profil 8</option>
+                </select>
+              </div>
             </div>
             <div class="lib-checks">
               <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span>Bereits effiziente Dateien ausblenden</span></label>
@@ -639,18 +674,56 @@
               <div class="stat-box"><span class="stat-val good" id="lib-proj-saved">0 B</span><span class="stat-lbl">Einsparung (ca.)</span></div>
               <div class="stat-box"><span class="stat-val" id="lib-proj-pct">0%</span><span class="stat-lbl">Anteil</span></div>
             </div>
+
+            <!-- Dashboard: Codec-Verteilung, Dynamik-Anteil, größte Platzfresser -->
+            <div class="lib-dashboard" id="lib-dashboard" style="display:none">
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Codec-Verteilung</div>
+                <div id="lib-dash-codecs" class="lib-dash-bars"></div>
+              </div>
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Dynamik</div>
+                <div id="lib-dash-dynamic" class="lib-dash-bars"></div>
+              </div>
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Größte Einsparpotenziale</div>
+                <ol id="lib-dash-hogs" class="lib-dash-hogs"></ol>
+              </div>
+            </div>
+
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-lib-scan">Scan starten</button>
               <span id="lib-progress" class="muted"></span>
+              <button class="btn btn-ghost btn-sm" id="btn-lib-csv" disabled title="Treffer als CSV exportieren">CSV-Export</button>
               <button class="btn btn-ghost btn-sm" id="btn-lib-add" disabled>Auswahl zur Warteschlange</button>
+              <button class="btn btn-primary btn-sm" id="btn-lib-add-auto" disabled title="Mit automatisch je Datei vorgeschlagenen Einstellungen (Codec/HDR/DV)">Auswahl mit Auto-Einstellungen</button>
             </div>
+
+            <div class="lib-result-toolbar">
+              <input type="search" id="lib-result-search" placeholder="In Treffern suchen … (Name/Ordner)" autocomplete="off" />
+              <label class="check"><input type="checkbox" id="lib-group" /><span>Nach Ordner gruppieren</span></label>
+              <span class="muted" id="lib-result-count"></span>
+            </div>
+
             <div class="data-table-wrap">
-              <table class="data-table">
+              <table class="data-table lib-table">
                 <thead>
-                  <tr><th><input type="checkbox" id="lib-check-all" /></th><th>Datei</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th><th>Einsparung (ca.)</th></tr>
+                  <tr>
+                    <th><input type="checkbox" id="lib-check-all" /></th>
+                    <th class="sortable" data-sort="name">Datei</th>
+                    <th class="sortable" data-sort="codec">Codec</th>
+                    <th class="sortable" data-sort="height">Auflösung</th>
+                    <th>Dynamik</th>
+                    <th class="sortable" data-sort="video_bitrate">Bitrate</th>
+                    <th class="sortable" data-sort="duration">Dauer</th>
+                    <th class="sortable" data-sort="size_bytes">Größe</th>
+                    <th class="sortable" data-sort="est_saved_bytes">Einsparung (ca.)</th>
+                    <th>Vorschlag</th>
+                    <th>Aktionen</th>
+                  </tr>
                 </thead>
                 <tbody id="lib-body">
-                  <tr class="empty-row"><td colspan="7">Noch kein Scan.</td></tr>
+                  <tr class="empty-row"><td colspan="11">Noch kein Scan.</td></tr>
                 </tbody>
               </table>
             </div>

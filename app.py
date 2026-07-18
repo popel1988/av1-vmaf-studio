@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -295,6 +296,51 @@ async def browse_input(path: str = ""):
     }
 
 
+@app.get("/api/search")
+async def search_input(path: str = "", q: str = "", limit: int = 500):
+    """Rekursive Namenssuche ab `path` (Videos). Für große Bibliotheken.
+
+    Liefert Treffer inkl. relativem Unterordner, damit die Herkunft klar ist.
+    Begrenzt auf `limit` Ergebnisse, um die Payload beherrschbar zu halten.
+    """
+    query = (q or "").strip().lower()
+    if not query:
+        return {"files": [], "truncated": False}
+    target = _safe_resolve(path)
+    if target is None or not target.is_dir():
+        return JSONResponse({"error": "Kein Verzeichnis"}, status_code=400)
+
+    base = config.INPUT_DIR.resolve()
+    files: list[dict] = []
+    truncated = False
+    for root, dirnames, filenames in os.walk(target):
+        # Versteckte Ordner (.archiv, .previews …) überspringen.
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in sorted(filenames, key=str.lower):
+            if fn.startswith(".") or Path(fn).suffix.lower() not in config.VIDEO_EXTENSIONS:
+                continue
+            if query not in fn.lower():
+                continue
+            entry = Path(root) / fn
+            try:
+                rel = str(entry.resolve().relative_to(base)).replace("\\", "/")
+                size = entry.stat().st_size
+            except (OSError, ValueError):
+                continue
+            folder = str(Path(rel).parent).replace("\\", "/")
+            files.append({
+                "name": fn, "rel": rel, "size": size,
+                "size_human": ff.human_size(size),
+                "folder": "" if folder == "." else folder,
+            })
+            if len(files) >= max(1, min(2000, limit)):
+                truncated = True
+                break
+        if truncated:
+            break
+    return {"files": files, "truncated": truncated}
+
+
 @app.get("/api/probe")
 async def probe(path: str):
     target = _safe_resolve(path)
@@ -316,7 +362,8 @@ class EnqueueRequest(BaseModel):
     target_height: Optional[int] = None
     tonemap: bool = False
     hdr_mode: str = "tonemap"        # tonemap (HDR->SDR) | preserve (HDR behalten)
-    preserve_dv: bool = False        # Dolby-Vision-RPU beibehalten (nur HEVC/Profil 8.1)
+    dv_mode: str = ""                # DV-Quellen: preserve | hdr10 | tonemap (Vorrang vor hdr_mode)
+    preserve_dv: bool = False        # Legacy: Dolby-Vision-RPU beibehalten
     keep_subtitles: bool = True
     subtitle_per_track: bool = False
     subtitle_track_settings: list[dict] = []  # je Spur: index/default/forced
@@ -345,6 +392,7 @@ class EnqueueRequest(BaseModel):
     samples: int = 1
     generate_screenshots: bool = True
     post_processing: str = "keep"
+    container: str = "auto"          # auto | mkv | mp4 (Ausgabe-Container)
     suffix: str = "_av1"
     audio_mode: str = "copy"         # copy | encode | none
     audio_codec: str = "aac"         # aac | opus | ac3 | eac3 | flac
@@ -440,6 +488,7 @@ class LibraryScanRequest(BaseModel):
     codecs_include: list[str] = []
     codecs_exclude: list[str] = []
     target_codec: str = "av1"        # Ziel für die Einspar-Projektion
+    dynamic_filter: str = ""         # ""|sdr|hdr|dv|dv5|dv7|dv8 (Dynamik-Filter)
     skip_optimized: bool = False     # bereits effiziente Dateien ausblenden
     skip_processed: bool = False     # bereits verarbeitete Dateien ausblenden
 
@@ -455,6 +504,24 @@ async def library_scan(req: LibraryScanRequest):
 async def library_scan_state():
     from core import library
     return library.get_state()
+
+
+@app.get("/api/library/last")
+async def library_last():
+    """Zuletzt gecachten Scan laden (Anzeige beim Öffnen der Bibliothek)."""
+    from core import library
+    return library.load_last()
+
+
+@app.get("/api/library/export.csv")
+async def library_export_csv():
+    """Aktuelle Treffer als CSV herunterladen."""
+    from fastapi.responses import Response
+    from core import library
+    csv_text = library.export_csv()
+    return Response(
+        content=csv_text, media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=library_scan.csv"})
 
 
 # ---------------------------------------------------------------- Super-Tool

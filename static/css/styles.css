@@ -235,6 +235,15 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
 .breadcrumb a:hover { text-decoration: underline; }
 
+.browser-search-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.browser-search-row input[type="search"] {
+  flex: 1; min-width: 0;
+}
+.browser-search-row .browser-recursive { white-space: nowrap; margin: 0; }
+.browser-count { font-size: 12px; white-space: nowrap; }
+
 .browser {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   max-height: 300px; overflow-y: auto; background: var(--surface-2);
@@ -269,6 +278,42 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
   display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 11px;
   font-weight: 700; background: var(--surface-2); color: var(--text-muted);
 }
+
+/* Bibliotheks-Dashboard */
+.lib-dashboard {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+  margin: 10px 0 14px; padding: 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.lib-dash-title { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+.lib-dash-bars { display: flex; flex-direction: column; gap: 5px; }
+.lib-bar { display: grid; grid-template-columns: 74px 1fr 34px; align-items: center; gap: 8px; font-size: 12px; }
+.lib-bar-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-bar-track { background: var(--surface-3); border-radius: 5px; height: 9px; overflow: hidden; }
+.lib-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.lib-bar-fill.warn { background: var(--warn, #e0a83a); }
+.lib-bar-fill.accent { background: var(--accent); }
+.lib-bar-val { text-align: right; color: var(--text-muted); }
+.lib-dash-hogs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.lib-dash-hogs li { display: flex; justify-content: space-between; gap: 8px; }
+.lib-dash-hogs .hog-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Ergebnis-Toolbar + Tabelle */
+.lib-result-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; }
+.lib-result-toolbar input[type="search"] { flex: 1; min-width: 180px; }
+.lib-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.lib-table th.sortable:hover { color: var(--accent); }
+.lib-group-row td { background: var(--surface-3); font-weight: 700; font-size: 12px; }
+.dyn-badge { display: inline-block; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 700; background: var(--surface-3); color: var(--text-muted); }
+.dyn-badge.warn { background: color-mix(in srgb, var(--warn, #e0a83a) 25%, transparent); color: var(--text); }
+.dyn-badge.accent { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
+.lib-suggest { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.lib-row-actions { white-space: nowrap; }
+.lib-act {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 6px; padding: 2px 7px; margin-left: 3px; cursor: pointer; font-size: 12px;
+}
+.lib-act:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent); }
 
 /* Qualitäts-Guardrail: gemessener VMAF in Tabellen */
 .vmaf-verify {

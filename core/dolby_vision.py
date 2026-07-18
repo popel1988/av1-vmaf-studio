@@ -1,12 +1,22 @@
-"""Experimentelle Dolby-Vision-(RPU)-Erhaltung für Profil 8.1 via dovi_tool.
+"""Dolby-Vision-(RPU)-Erhaltung via dovi_tool – HEVC (Profil 8.x) und AV1 (10.x).
 
-Der Re-Encode selbst kann keinen DV-RPU-Layer erzeugen (die HW-/SW-Encoder
-schreiben nur HDR10). Dieser Post-Schritt extrahiert daher die dynamische
-RPU-Schicht aus der Quelle, re-injiziert sie in den frisch codierten
-HEVC-Stream (dovi_tool) und muxt das Ergebnis zurück in den Container.
+Die Encoder selbst schreiben nur den HDR10-Basislayer (keinen DV-RPU-Layer).
+Dieser Post-Schritt extrahiert daher die dynamische RPU-Schicht aus der Quelle,
+re-injiziert sie in den frisch codierten Stream (dovi_tool) und muxt das Ergebnis
+zurück in den Container.
+
+Unterstützt:
+  * HEVC-Ziel  -> Dolby Vision Profil 8.1 (HDR10-Basis + RPU)
+  * AV1-Ziel   -> Dolby Vision Profil 10.1 (HDR10-Basis + RPU)
+  * Quelle Profil 7 (Dual-Layer) -> Konvertierung nach 8.1 (--mode 2, EL entfällt)
+  * Quelle Profil 5              -> Konvertierung nach 8.1 (--mode 3, best-effort)
+
+Die RPU-Metadaten sind codec-übergreifend: eine HEVC-DV-Quelle kann so auch in
+eine AV1-Ausgabe (Profil 10.1) übernommen werden und umgekehrt.
 
 Best-effort: schlägt irgendein Schritt fehl oder fehlt dovi_tool, bleibt der
-normale HDR10-Encode unverändert erhalten.
+normale HDR10-Encode unverändert erhalten (der Basislayer ist HDR10-kompatibel,
+Player ohne DV zeigen also HDR10).
 """
 from __future__ import annotations
 
@@ -28,10 +38,36 @@ def available() -> bool:
     """True, wenn dovi_tool im Image aufrufbar ist."""
     try:
         r = subprocess.run([config.DOVI_TOOL, "--version"],
-                           capture_output=True, text=True, timeout=15, check=False)
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=15, check=False)
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def _mode_for_profile(profile: int) -> int:
+    """dovi_tool-Konvertierungsmodus je Quell-Profil.
+
+    7 -> Dual-Layer (FEL/MEL) auf Single-Layer 8.1 (--mode 2, EL entfällt).
+    5/8/10 -> RPU unverändert übernehmen (Mode 0). Bei Profil 5 bleibt es damit
+        faithful Profil 5: dovi_tool ändert nur die RPU, nicht die Basis-Pixel –
+        eine „Konvertierung" nach 8.1 (--mode 3) würde die im DV5-Farbformat
+        codierte Basis fehlfarbig lassen. Profil 5 hat keinen HDR10-Fallback und
+        braucht daher einen DV-fähigen Player.
+    """
+    if profile == 7:
+        return 2
+    return 0
+
+
+def _es_args(codec: str) -> tuple[str, list[str]]:
+    """(-f-Format, zusätzliche Bitstream-Filter) für den Elementarstream je Codec.
+
+    AV1 wird als roher OBU-Stream verarbeitet, HEVC als Annex-B.
+    """
+    if codec == "av1":
+        return "obu", []
+    return "hevc", ["-bsf:v", "hevc_mp4toannexb"]
 
 
 def _run(cmd: list[str], label: str) -> bool:
@@ -43,15 +79,20 @@ def _run(cmd: list[str], label: str) -> bool:
     return res.returncode == 0
 
 
-def _extract_rpu(source: Path, rpu: Path) -> bool:
+def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0) -> bool:
     """RPU-Schicht aus der (Dolby-Vision-)Quelle in eine .bin extrahieren.
 
-    ffmpeg liefert den HEVC-Elementarstream (Annex-B) an dovi_tool via Pipe.
+    ffmpeg liefert den Elementarstream (HEVC-Annex-B bzw. AV1-OBU) via Pipe an
+    dovi_tool. `mode` konvertiert die RPU dabei (z. B. Profil 7 -> 8.1).
     """
+    fmt, bsf = _es_args(source_codec)
     ff_cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error",
               "-i", str(source), "-map", "0:v:0", "-c:v", "copy",
-              "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-"]
-    dv_cmd = [config.DOVI_TOOL, "extract-rpu", "-", "-o", str(rpu)]
+              *bsf, "-f", fmt, "-"]
+    dv_cmd = [config.DOVI_TOOL]
+    if mode:
+        dv_cmd += ["-m", str(mode)]
+    dv_cmd += ["extract-rpu", "-", "-o", str(rpu)]
     try:
         p1 = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         p2 = subprocess.Popen(dv_cmd, stdin=p1.stdout,
@@ -70,37 +111,47 @@ def _extract_rpu(source: Path, rpu: Path) -> bool:
         return False
 
 
-def reinject(source: Path, encoded: Path, work_dir: Path,
-             fps: float = 0.0, status: StatusCb = None) -> tuple[Optional[Path], str]:
-    """DV-RPU aus `source` in den `encoded`-HEVC re-injizieren und remuxen.
+def reinject(source: Path, encoded: Path, work_dir: Path, *,
+             source_codec: str = "hevc", target_codec: str = "hevc",
+             profile: int = 0, fps: float = 0.0,
+             status: StatusCb = None) -> tuple[Optional[Path], str]:
+    """DV-RPU aus `source` in den `encoded`-Stream re-injizieren und remuxen.
+
+    `source_codec`/`target_codec`: hevc|av1 (Quelle bzw. Encode-Ausgabe).
+    `profile`: DV-Profil der Quelle (steuert eine evtl. Konvertierung 7/5 -> 8.1).
 
     Gibt (Pfad zur neuen DV-Datei, "") bei Erfolg zurück, sonst (None, Grund).
     Der Aufrufer ersetzt bei Erfolg die Encode-Ausgabe durch die DV-Datei.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
+    mode = _mode_for_profile(profile)
+    tgt_fmt, tgt_bsf = _es_args(target_codec)
+    ext = "obu" if target_codec == "av1" else "hevc"
     rpu = work_dir / "rpu.bin"
-    enc_hevc = work_dir / "encoded.hevc"
-    inj_hevc = work_dir / "injected.hevc"
+    enc_es = work_dir / f"encoded.{ext}"
+    inj_es = work_dir / f"injected.{ext}"
     final = encoded.with_name(f"{encoded.stem}.__dv__{encoded.suffix}")
+    dv_target = "Profil 10.1 (AV1)" if target_codec == "av1" else "Profil 8.1 (HEVC)"
 
     try:
         if status:
-            status("Dolby Vision: RPU wird aus der Quelle extrahiert …")
-        if not _extract_rpu(source, rpu):
+            conv = f" (Profil {profile} → 8.1)" if mode else ""
+            status(f"Dolby Vision: RPU wird aus der Quelle extrahiert{conv} …")
+        if not _extract_rpu(source, source_codec, rpu, mode):
             return None, "RPU-Extraktion fehlgeschlagen"
 
         if status:
-            status("Dolby Vision: Encode-Stream wird vorbereitet …")
+            status(f"Dolby Vision: Encode-Stream wird vorbereitet ({dv_target}) …")
         if not _run([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
                      "-i", str(encoded), "-map", "0:v:0", "-c:v", "copy",
-                     "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", str(enc_hevc)],
-                    "HEVC-Extraktion (Encode)"):
-            return None, "HEVC-Extraktion des Encodes fehlgeschlagen"
+                     *tgt_bsf, "-f", tgt_fmt, str(enc_es)],
+                    "Elementarstream-Extraktion (Encode)"):
+            return None, "Elementarstream-Extraktion des Encodes fehlgeschlagen"
 
         if status:
             status("Dolby Vision: RPU wird re-injiziert …")
-        if not _run([config.DOVI_TOOL, "inject-rpu", "-i", str(enc_hevc),
-                     "--rpu-in", str(rpu), "-o", str(inj_hevc)],
+        if not _run([config.DOVI_TOOL, "inject-rpu", "-i", str(enc_es),
+                     "--rpu-in", str(rpu), "-o", str(inj_es)],
                     "RPU-Injektion"):
             return None, "RPU-Injektion fehlgeschlagen"
 
@@ -108,9 +159,9 @@ def reinject(source: Path, encoded: Path, work_dir: Path,
             status("Dolby Vision: Container wird gemuxt …")
         mux = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
         if fps and fps > 0:
-            # Roh-HEVC hat keine Framerate – sonst nimmt ffmpeg 25 fps an.
+            # Roh-Elementarstream hat keine Framerate – sonst rät ffmpeg (25 fps).
             mux += ["-r", f"{fps:.6f}"]
-        mux += ["-i", str(inj_hevc), "-i", str(encoded),
+        mux += ["-i", str(inj_es), "-i", str(encoded),
                 "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
                 "-map_chapters", "1", "-c", "copy", str(final)]
         if not _run(mux, "DV-Mux"):
@@ -120,7 +171,7 @@ def reinject(source: Path, encoded: Path, work_dir: Path,
             return None, "DV-Ausgabedatei leer"
         return final, ""
     finally:
-        for f in (rpu, enc_hevc, inj_hevc):
+        for f in (rpu, enc_es, inj_es):
             try:
                 f.unlink(missing_ok=True)
             except OSError:
