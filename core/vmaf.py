@@ -97,6 +97,11 @@ class VmafResult:
     codec: str = "av1"
     platform: str = "cpu"
     recommended: bool = False
+    # Zusatzmetriken (Mittel über alle Stichproben; 0 = nicht gemessen).
+    vmaf_hmean: float = 0.0   # harmonisches Mittel (straft Ausreißer stärker)
+    vmaf_1pct: float = 0.0    # Mittel der schlechtesten 1 % Frames ("1%-Low")
+    psnr: float = 0.0
+    ssim: float = 0.0
     screenshot_ref: str = ""            # Szene 0 (Rückwärtskompatibilität)
     screenshot_enc: str = ""
     screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
@@ -118,6 +123,14 @@ class VmafResult:
             "savings_percent": round(self.savings_percent, 1),
             "recommended": self.recommended,
         }
+        if self.vmaf_hmean:
+            d["vmaf_hmean"] = round(self.vmaf_hmean, 2)
+        if self.vmaf_1pct:
+            d["vmaf_1pct"] = round(self.vmaf_1pct, 2)
+        if self.psnr:
+            d["psnr"] = round(self.psnr, 2)
+        if self.ssim:
+            d["ssim"] = round(self.ssim, 4)
         if self.screenshot_ref:
             d["screenshot_ref"] = f"/api/preview/{self.screenshot_ref}"
         if self.screenshot_enc:
@@ -220,13 +233,20 @@ def _sample_starts(duration: float, clip_seconds: int, count: int) -> list[tuple
 
 def _extract_reference(
     info: VideoInfo, work: Path, tonemap: bool, start: float, clip_len: float,
-    idx: int, status: StatusCb,
+    idx: int, status: StatusCb, crop: str = "",
 ) -> Path:
     ref = work / f"reference_{idx}.mkv"
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-ss", str(start), "-t", str(clip_len),
            "-i", str(info.path)]
+    # Crop und Tonemap identisch zur Encode-Kette anwenden, damit der Vergleich
+    # dieselbe (beschnittene/getonemappte) Bildfläche wie die Ausgabe nutzt.
+    vf = []
+    if crop:
+        vf.append(f"crop={crop}")
     if tonemap and info.is_hdr:
-        cmd += ["-vf", _TONEMAP_CHAIN]
+        vf.append(_TONEMAP_CHAIN)
+    if vf:
+        cmd += ["-vf", ",".join(vf)]
     cmd += ["-an", "-sn", "-c:v", "ffv1", "-level", "3", str(ref)]
     if status:
         status(f"Referenz-Clip {idx + 1} wird extrahiert …")
@@ -239,18 +259,20 @@ def _vmaf_threads() -> int:
     return max(2, min(16, os.cpu_count() or 4))
 
 
-def _vmaf_compare(
+def _run_libvmaf(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
-    neg: bool = False,
-) -> Optional[float]:
+    neg: bool, dims: Optional[tuple[int, int]], features: str,
+) -> Optional[dict]:
+    """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None."""
     _, model_path = _model_for(info, neg)
     log = work / f"vmaf_{key}.json"
-    scale = f"scale={info.width}:{info.height}:flags=bicubic"
+    w, h = dims if dims else (info.width, info.height)
+    scale = f"scale={w}:{h}:flags=bicubic"
     fc = (
         f"[0:v]{scale},setpts=PTS-STARTPTS[dist];"
         f"[1:v]setpts=PTS-STARTPTS[ref];"
         f"[dist][ref]libvmaf=model=path={model_path}:"
-        f"log_fmt=json:log_path={log}:n_threads={_vmaf_threads()}"
+        f"{features}log_fmt=json:log_path={log}:n_threads={_vmaf_threads()}"
     )
     cmd = [config.FFMPEG, "-y", "-hide_banner",
            "-i", str(distorted), "-i", str(reference),
@@ -259,17 +281,69 @@ def _vmaf_compare(
     if not log.exists():
         return None
     try:
-        data = json.loads(log.read_text())
+        return json.loads(log.read_text())
     except (OSError, json.JSONDecodeError):
         return None
-    pooled = data.get("pooled_metrics", {}).get("vmaf", {})
-    score = pooled.get("mean")
-    if score is None:
-        frames = data.get("frames", [])
-        vals = [f.get("metrics", {}).get("vmaf") for f in frames if f.get("metrics")]
-        vals = [v for v in vals if v is not None]
-        score = sum(vals) / len(vals) if vals else None
-    return float(score) if score is not None else None
+
+
+def _metrics_from_json(data: dict) -> Optional[dict]:
+    """VMAF-Kennzahlen aus einem libvmaf-JSON extrahieren (inkl. 1%-Low)."""
+    pooled = data.get("pooled_metrics", {}) or {}
+    vm = pooled.get("vmaf", {}) or {}
+    frames = data.get("frames", []) or []
+    vals = sorted(
+        f["metrics"]["vmaf"] for f in frames
+        if f.get("metrics") and f["metrics"].get("vmaf") is not None
+    )
+    mean = vm.get("mean")
+    if mean is None:
+        mean = sum(vals) / len(vals) if vals else None
+    if mean is None:
+        return None
+    # 1%-Low = Mittel der schlechtesten 1 % Frames (mind. 1 Frame).
+    p1 = 0.0
+    if vals:
+        k = max(1, int(len(vals) * 0.01))
+        p1 = sum(vals[:k]) / k
+    psnr = (pooled.get("psnr_y", {}) or pooled.get("psnr", {}) or {}).get("mean") or 0.0
+    ssim = (pooled.get("float_ssim", {}) or pooled.get("ssim", {}) or {}).get("mean") or 0.0
+    return {
+        "vmaf": float(mean),
+        "hmean": float(vm.get("harmonic_mean") or 0.0),
+        "min": float(vm.get("min") or 0.0),
+        "p1": float(p1),
+        "psnr": float(psnr),
+        "ssim": float(ssim),
+    }
+
+
+def _vmaf_metrics(
+    distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
+    neg: bool = False, dims: Optional[tuple[int, int]] = None,
+) -> Optional[dict]:
+    """Vollständige Metriken (VMAF + PSNR + SSIM + 1%-Low) für einen Vergleich.
+
+    PSNR/SSIM werden über die libvmaf-`feature`-Option mitberechnet. Schlägt der
+    Lauf mit Features fehl (ältere FFmpeg-Builds), wird auf einen reinen
+    VMAF-Lauf zurückgefallen – die Kern-Metrik bleibt so immer verfügbar.
+    """
+    data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                        features="feature=name=psnr|name=float_ssim:")
+    metrics = _metrics_from_json(data) if data else None
+    if metrics is None:
+        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                            features="")
+        metrics = _metrics_from_json(data) if data else None
+    return metrics
+
+
+def _vmaf_compare(
+    distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
+    neg: bool = False, dims: Optional[tuple[int, int]] = None,
+) -> Optional[float]:
+    """Rückwärtskompatibel: nur der VMAF-Mittelwert."""
+    m = _vmaf_metrics(distorted, reference, info, work, key, neg, dims)
+    return m["vmaf"] if m else None
 
 
 def _extract_frame(
@@ -303,6 +377,7 @@ def measure_output_vmaf(
     samples: int = 1,
     clip_seconds: int = 15,
     anime: bool = False,
+    crop: str = "",
     cancelled: Callable[[], bool] = lambda: False,
 ) -> Optional[float]:
     """Misst den echten VMAF der fertigen Ausgabedatei gegen die Quelle.
@@ -319,11 +394,13 @@ def measure_output_vmaf(
     work.mkdir(parents=True, exist_ok=True)
     try:
         specs = _sample_starts(info.duration, clip_seconds, samples)
+        dims = ff.crop_dims(crop)  # bei Auto-Crop auf beschnittene Fläche vergleichen
         scores: list[float] = []
         for idx, (start, clip_len) in enumerate(specs):
             if cancelled():
                 break
-            ref = _extract_reference(info, work, tonemap, start, clip_len, idx, None)
+            ref = _extract_reference(info, work, tonemap, start, clip_len, idx,
+                                     None, crop=crop)
             dist = work / f"out_{idx}.mkv"
             # Denselben Ausschnitt verlustfrei aus der Ausgabe ziehen.
             _run_logged(
@@ -333,7 +410,8 @@ def measure_output_vmaf(
                 f"Verify-Clip {idx}")
             if not dist.exists():
                 continue
-            score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}", neg=anime)
+            score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}",
+                                  neg=anime, dims=dims)
             if score is not None:
                 scores.append(score)
         return round(sum(scores) / len(scores), 2) if scores else None
@@ -353,6 +431,7 @@ def analyze(
     preserve_hdr: bool = False,
     film_grain: int = 0,
     denoise: str = "off",
+    crop: str = "",
     progress: Optional[Callable[[dict], None]] = None,
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
@@ -414,9 +493,11 @@ def analyze(
         sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
         references: list[tuple[Path, float, float]] = []
         ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
+        dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
         for si, (start, clip_len) in enumerate(sample_specs):
             emit("reference")
-            ref = _extract_reference(info, work, tonemap, start, clip_len, si, status)
+            ref = _extract_reference(info, work, tonemap, start, clip_len, si,
+                                     status, crop=crop)
             references.append((ref, start, clip_len))
             if opts.generate_screenshots:
                 ref_shots.append(_extract_frame(
@@ -441,6 +522,10 @@ def analyze(
                 total_size = 0
                 total_dur = 0.0
                 scores: list[float] = []
+                hmeans: list[float] = []
+                p1s: list[float] = []
+                psnrs: list[float] = []
+                ssims: list[float] = []
                 shots: list[dict] = []  # je Szene ein {scene, ref, enc}
                 scene_scores: list[dict] = []  # je Szene ein {scene, vmaf}
 
@@ -461,7 +546,7 @@ def analyze(
                             rate_mode=opts.rate_mode, bitrate_kbps=val,
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise, force_10bit=opts.anime,
+                            denoise=denoise, force_10bit=opts.anime, crop=crop,
                         )
                     else:
                         cmd = build_encode_cmd(
@@ -470,7 +555,7 @@ def analyze(
                             duration_limit=clip_len, start_at=start,
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise, force_10bit=opts.anime,
+                            denoise=denoise, force_10bit=opts.anime, crop=crop,
                         )
                     # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
                     runner = EncodeRunner(on_progress=lambda pr: emit(
@@ -492,13 +577,23 @@ def analyze(
                         status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
                     emit("vmaf")
 
-                    score = _vmaf_compare(test_file, reference, info, work, skey, opts.anime)
+                    metrics = _vmaf_metrics(test_file, reference, info, work, skey,
+                                            neg=opts.anime, dims=dims)
                     prog["done"] += 1
                     emit("vmaf")
 
-                    if score is None:
+                    if metrics is None:
                         continue
+                    score = metrics["vmaf"]
                     scores.append(score)
+                    if metrics.get("hmean"):
+                        hmeans.append(metrics["hmean"])
+                    if metrics.get("p1"):
+                        p1s.append(metrics["p1"])
+                    if metrics.get("psnr"):
+                        psnrs.append(metrics["psnr"])
+                    if metrics.get("ssim"):
+                        ssims.append(metrics["ssim"])
                     scene_scores.append({"scene": si, "vmaf": score})
                     total_size += test_file.stat().st_size
                     total_dur += clip_len
@@ -522,6 +617,9 @@ def analyze(
                 if info.size_bytes > 0:
                     savings = (info.size_bytes - predicted) / info.size_bytes * 100.0
 
+                def _avg(xs: list[float]) -> float:
+                    return sum(xs) / len(xs) if xs else 0.0
+
                 analysis.results.append(VmafResult(
                     value=val,
                     rate_mode=opts.rate_mode,
@@ -529,6 +627,10 @@ def analyze(
                     codec=c,
                     platform=p,
                     vmaf=avg_score,
+                    vmaf_hmean=_avg(hmeans),
+                    vmaf_1pct=_avg(p1s),
+                    psnr=_avg(psnrs),
+                    ssim=_avg(ssims),
                     clip_size_bytes=total_size,
                     predicted_size_bytes=predicted,
                     savings_percent=savings,

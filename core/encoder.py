@@ -40,6 +40,7 @@ def build_video_filters(
     preserve_hdr: bool = False,
     denoise: str = "off",
     force_10bit: bool = False,
+    crop: str = "",
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
@@ -65,6 +66,11 @@ def build_video_filters(
         return f"{sc}=format={fmt}" if sc == "scale_cuda" else f"{sc}:format={fmt}"
 
     filters: list[str] = []
+
+    # Auto-Crop schwarzer Balken zuerst (vor Tonemap/Scale), damit die Balken
+    # gar nicht erst mitcodiert werden.
+    if crop:
+        filters.append(f"crop={crop}")
 
     if tonemap and info.is_hdr:
         filters.append(_TONEMAP_CHAIN)
@@ -178,6 +184,7 @@ def build_encode_cmd(
     passlog: Optional[str] = None,
     container: str = "mkv",
     preserve_dv: bool = False,
+    crop: str = "",
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -199,7 +206,7 @@ def build_encode_cmd(
         # Treiber/Quelle erzeugt. Software-Filter (Tonemapping/Denoise) und
         # Positions-Sprünge (VMAF-/Verify-Clips) brauchen ohnehin den RAM-Pfad.
         full_gpu = (config.NVENC_FULL_GPU and not (tonemap and info.is_hdr)
-                    and not denoise_on and start_at is None)
+                    and not denoise_on and not crop and start_at is None)
         if full_gpu:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
             nvidia_cuda_frames = True
@@ -228,7 +235,7 @@ def build_encode_cmd(
     vf = build_video_filters(info, platform, target_height, tonemap,
                              nvidia_cuda_frames=nvidia_cuda_frames,
                              preserve_hdr=keep_hdr, denoise=denoise,
-                             force_10bit=ten_bit)
+                             force_10bit=ten_bit, crop=crop)
     if vf:
         cmd += ["-vf", vf]
 

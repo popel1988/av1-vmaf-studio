@@ -129,6 +129,10 @@
       "Two-pass (bitrate mode only – more consistent quality)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)":
       "Anime mode (VMAF-NEG scoring + 10-bit against banding)",
+    "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)":
+      "Auto-crop: automatically remove black bars (cropdetect)",
+    "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.":
+      "Detects letterbox/pillarbox borders at several points and crops them before encoding – saves bitrate. VMAF analysis and guardrail automatically use the same cropped area.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)":
       "Chunked adaptive encoding (segments with complexity-based CQ – CQ mode only, slower)",
     "Segmentlänge (Sekunden)": "Segment length (seconds)",
@@ -173,6 +177,12 @@
     "Original behalten + Suffix": "Keep original + suffix",
     "Inplace ersetzen (Original löschen)": "Replace in place (delete original)",
     "Original nach .archiv/ verschieben": "Move original to .archiv/",
+    "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)":
+      "Output integrity check (full decode + duration match)",
+    "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind":
+      "Safe post-processing: only replace/move the original if the integrity check and (if active) the quality guardrail passed",
+    "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.":
+      "Protects against data loss: if the check fails, the original is kept and the output is also stored in the output folder.",
     "Zur Warteschlange hinzufügen": "Add to queue",
 
     // --- VMAF-Tool ---

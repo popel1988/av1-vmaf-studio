@@ -256,6 +256,14 @@
             </label>
 
             <label class="check">
+              <input type="checkbox" id="opt-autocrop" />
+              <span>Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)</span>
+            </label>
+            <p class="hint">Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und
+              beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail
+              nutzen automatisch dieselbe beschnittene Fläche.</p>
+
+            <label class="check">
               <input type="checkbox" id="opt-chunked" />
               <span>Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)</span>
             </label>
@@ -392,6 +400,19 @@
               </select>
             </div>
 
+            <label class="check">
+              <input type="checkbox" id="opt-integrity" checked />
+              <span>Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)</span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="opt-safe-replace" checked />
+              <span>Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn
+                Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind</span>
+            </label>
+            <p class="hint">Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das
+              Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.</p>
+
             <button class="btn btn-primary btn-block" id="btn-enqueue" disabled>
               Zur Warteschlange hinzufügen
             </button>
@@ -498,6 +519,7 @@
           </div>
           <div id="vmaf-archive-note" class="archive-note" style="display:none">
             Archiv-Ansicht – gespeicherter Vergleich.
+            <span id="vmaf-archive-src" class="archive-src"></span>
             <button class="btn btn-ghost btn-sm" id="btn-vmaf-live">Zur aktuellen Analyse</button>
           </div>
           <div class="card-body vmaf-body">

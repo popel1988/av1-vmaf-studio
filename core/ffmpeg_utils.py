@@ -674,3 +674,117 @@ def _f(value) -> Optional[float]:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+# --------------------------------------------------------------- Integritäts-Check
+def verify_playable(path: Path, expected_duration: float = 0.0) -> tuple[bool, str]:
+    """Prüft, ob die Ausgabedatei sauber decodierbar ist und die Dauer passt.
+
+    1) Voll-Decode (nur Fehler-Log, `-xerror` bricht beim ersten Fehler ab) –
+       erkennt abgeschnittene/korrupte Streams.
+    2) Dauer-Abgleich gegen die erwartete Länge (Toleranz max. 2 s bzw. 1 %).
+
+    Gibt (ok, meldung) zurück. Bei ok=True ist die Meldung ein kurzer Status.
+    """
+    from . import config
+
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return False, "Ausgabedatei fehlt oder ist leer"
+
+    # 1) Decodier-Test (Video + Audio), bricht beim ersten Fehler ab.
+    try:
+        res = subprocess.run(
+            [config.FFMPEG, "-v", "error", "-xerror",
+             "-i", str(path), "-map", "0:v:0?", "-map", "0:a?",
+             "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"Decoder-Test nicht ausführbar: {e}"
+    if res.returncode != 0:
+        tail = (res.stderr or "").strip().splitlines()
+        return False, f"Decodier-Fehler: {tail[-1] if tail else 'unbekannt'}"
+
+    # 2) Dauer prüfen (nur wenn eine Erwartung vorliegt).
+    if expected_duration and expected_duration > 0:
+        try:
+            pr = subprocess.run(
+                [config.FFPROBE, "-v", "error", "-show_entries",
+                 "format=duration", "-of", "default=nk=1:nw=1", str(path)],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", check=False,
+            )
+            out_dur = _f((pr.stdout or "").strip()) or 0.0
+        except (OSError, subprocess.SubprocessError):
+            out_dur = 0.0
+        if out_dur > 0:
+            tol = max(2.0, expected_duration * 0.01)
+            if abs(out_dur - expected_duration) > tol:
+                return (False,
+                        f"Dauer weicht ab: {human_duration(out_dur)} statt "
+                        f"{human_duration(expected_duration)}")
+    return True, "ok"
+
+
+# ------------------------------------------------------------------- Auto-Crop
+_CROP_RE = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+
+
+def detect_crop(info: "VideoInfo", samples: int = 3, probe_seconds: int = 2) -> str:
+    """Ermittelt via ffmpeg `cropdetect` schwarze Ränder und liefert "w:h:x:y".
+
+    Es werden mehrere Positionen (20/50/80 %) kurz analysiert und der häufigste
+    Crop-Vorschlag gewählt. Rückgabe "" wenn kein nennenswerter Crop (< 2 %) oder
+    ungültig. So bleibt die volle Fläche erhalten, wenn keine Balken existieren.
+    """
+    from . import config
+
+    dur = info.duration or 0.0
+    if dur <= 0 or not info.width or not info.height:
+        return ""
+    fracs = [0.2, 0.5, 0.8][:max(1, min(3, samples))]
+    counts: dict[str, int] = {}
+    for frac in fracs:
+        start = max(0.0, dur * frac)
+        try:
+            res = subprocess.run(
+                [config.FFMPEG, "-hide_banner", "-ss", str(start),
+                 "-i", str(info.path), "-t", str(probe_seconds),
+                 "-vf", "cropdetect=round=2:reset=0", "-f", "null", "-"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for m in _CROP_RE.finditer(res.stderr or ""):
+            counts[m.group(0)] = counts.get(m.group(0), 0) + 1
+    if not counts:
+        return ""
+    best = max(counts, key=lambda k: counts[k])
+    m = _CROP_RE.search(best)
+    if not m:
+        return ""
+    w, h, x, y = (int(m.group(i)) for i in range(1, 5))
+    if w <= 0 or h <= 0 or w > info.width or h > info.height:
+        return ""
+    if w + x > info.width or h + y > info.height:
+        return ""
+    # Zu kleiner Crop (< 2 % je Achse) → ignorieren (Rauschen/Rundung).
+    if (info.height - h) < info.height * 0.02 and (info.width - w) < info.width * 0.02:
+        return ""
+    return f"{w}:{h}:{x}:{y}"
+
+
+def crop_dims(crop: str) -> Optional[tuple[int, int]]:
+    """(Breite, Höhe) aus einem "w:h:x:y"-Crop-String oder None."""
+    if not crop:
+        return None
+    parts = crop.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None

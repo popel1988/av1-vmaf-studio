@@ -753,7 +753,10 @@
       denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
+      autocrop: $("opt-autocrop") ? $("opt-autocrop").checked : false,
       post_processing: $("opt-post").value,
+      integrity_check: $("opt-integrity") ? $("opt-integrity").checked : true,
+      safe_replace: $("opt-safe-replace") ? $("opt-safe-replace").checked : true,
       audio_mode: $("opt-audio-mode").value,
       audio_codec: $("opt-audio-codec").value,
       audio_bitrate: parseInt($("opt-audio-bitrate").value, 10),
@@ -959,6 +962,13 @@
   // Gewinner (oder gewählte Zeile) ins Encoding übernehmen und dorthin wechseln.
   async function transferToEncode(r) {
     if (!r) return;
+    // Archivierte Quelle nicht mehr vorhanden? Dann früh und deutlich abbrechen.
+    if (state.vmafSource && state.vmafSource.available === false) {
+      alert("Die Quelldatei dieses gespeicherten Vergleichs ist nicht mehr "
+        + "verfügbar (verschoben/gelöscht). Bitte die Datei erneut im Encoding "
+        + "auswählen.");
+      return;
+    }
     navTo("encode");
     // Die im Vergleich genutzte Quelle wieder korrekt auswählen (inkl. Re-Probe),
     // damit der folgende „Zur Warteschlange hinzufügen" GENAU diese Datei
@@ -1198,7 +1208,16 @@
       verify = ` <span class="vmaf-verify ${ok ? "vv-ok" : "vv-bad"}" `
         + `title="Gemessener VMAF der Ausgabe (Ziel ≥ ${min})">VMAF ${it.vmaf_verify.toFixed(1)}${retry}</span>`;
     }
-    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}${verify}`;
+    let extra = "";
+    if (it.crop) {
+      extra += ` <span class="codec-badge" title="Auto-Crop angewendet">✂ ${escapeHtml(it.crop)}</span>`;
+    }
+    if (it.integrity_ok === false) {
+      extra += ` <span class="vmaf-verify vv-bad" title="${escapeHtml(it.integrity_msg || "Integritäts-Check fehlgeschlagen")}">⚠ Integrität</span>`;
+    } else if (it.integrity_ok === true) {
+      extra += ` <span class="vmaf-verify vv-ok" title="Integritäts-Check bestanden">✓ intakt</span>`;
+    }
+    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}${verify}${extra}`;
   }
 
   function renderQueueTable(items, activeIds) {
@@ -1450,8 +1469,29 @@
       const vmaf = data.analysis;
       if (!vmaf || !vmaf.results) return;
       state.viewSession = name;
+      // Quelle des archivierten Vergleichs übernehmen, damit „→ Encoding" auch
+      // nach einem Neustart/Rebuild direkt diese Datei encodiert.
+      const srcPath = data.source_path || "";
+      const srcName = srcPath ? srcPath.replace(/^.*[\\/]/, "") : "";
+      state.vmafSource = srcPath
+        ? { path: srcPath, name: srcName, isBatch: false, info: null,
+            available: data.source_available !== false }
+        : null;
       const note = $("vmaf-archive-note");
       if (note) note.style.display = "";
+      const srcInfo = $("vmaf-archive-src");
+      if (srcInfo) {
+        if (!srcPath) {
+          srcInfo.textContent = "";
+        } else if (data.source_available === false) {
+          srcInfo.innerHTML = ` · Quelle nicht mehr verfügbar `
+            + `(<span class="bad">${escapeHtml(srcName)}</span>) – „→ Encoding" `
+            + `nicht möglich.`;
+        } else {
+          srcInfo.innerHTML = ` · Quelle: <span class="good">`
+            + `${escapeHtml(srcName)}</span> – „→ Encoding" verfügbar.`;
+        }
+      }
       const actions = $("vmaf-actions");
       if (actions) actions.style.display = "none";
       showCard($("vmaf-card"), true);
@@ -1624,6 +1664,20 @@
         .map((sc) => `Szene ${sc.scene + 1}: ${sc.vmaf.toFixed(1)}`).join("\n");
       s += `<br><span class="muted" title="${escapeHtml(perScene)}">`
         + `Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}</span>`;
+    }
+    // Zusatzmetriken (falls gemessen): 1%-Low + harmon. Mittel, PSNR/SSIM.
+    const extra = [];
+    if (r.vmaf_1pct != null) extra.push(`1%-Low ${r.vmaf_1pct.toFixed(1)}`);
+    if (r.vmaf_hmean != null) extra.push(`H-Ø ${r.vmaf_hmean.toFixed(1)}`);
+    if (extra.length) {
+      s += `<br><span class="muted" title="1%-Low = Mittel der schlechtesten 1 % Frames; `
+        + `H-Ø = harmonisches Mittel">${extra.join(" · ")}</span>`;
+    }
+    const qual = [];
+    if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
+    if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
+    if (qual.length) {
+      s += `<br><span class="muted">${qual.join(" · ")}</span>`;
     }
     return s;
   }
@@ -2225,11 +2279,14 @@
     set("opt-film-grain", s.film_grain);
     set("opt-two-pass", s.two_pass);
     set("opt-anime", s.anime);
+    set("opt-autocrop", s.autocrop);
     set("opt-verify-vmaf", s.verify_vmaf, "change");
     set("opt-verify-min", s.verify_min);
     set("opt-verify-retry", s.verify_retry);
     set("opt-container", s.container, "change");
     set("opt-post", s.post_processing, "change");
+    if (s.integrity_check !== undefined) set("opt-integrity", s.integrity_check);
+    if (s.safe_replace !== undefined) set("opt-safe-replace", s.safe_replace);
     set("opt-audio-mode", s.audio_mode, "change");
     set("opt-audio-codec", s.audio_codec, "change");
     set("opt-audio-bitrate", s.audio_bitrate);

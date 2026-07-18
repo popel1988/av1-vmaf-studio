@@ -70,6 +70,14 @@ class JobSettings:
     verify_vmaf: bool = False
     verify_min: float = 93.0
     verify_retry: bool = False
+    # Playability-/Integritäts-Check der Ausgabe nach dem Encode (Voll-Decode +
+    # Dauer-Abgleich). Voraussetzung für die sichere Original-Nachbehandlung.
+    integrity_check: bool = True
+    # Sichere Original-Nachbehandlung: Original nur löschen/verschieben (inplace/
+    # archive), wenn Integritäts-Check UND (falls aktiv) Guardrail bestanden sind.
+    safe_replace: bool = True
+    # Auto-Crop: schwarze Balken automatisch erkennen (cropdetect) und beschneiden.
+    autocrop: bool = False
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
     target_vmaf: float = 0.0       # >0: Ziel-VMAF (Super-Tool), sonst Sweetspot
@@ -114,6 +122,9 @@ class QueueItem:
     saved_bytes: int = 0
     vmaf_verify: Optional[float] = None  # gemessener VMAF der Ausgabe (Guardrail)
     verify_attempts: int = 0             # Anzahl Encode-Versuche (>1 = Retry lief)
+    integrity_ok: Optional[bool] = None  # Playability-/Integritäts-Check bestanden?
+    integrity_msg: str = ""              # Kurzbegründung des Integritäts-Checks
+    crop: str = ""                       # erkannter Auto-Crop "w:h:x:y" (leer = kein)
     message: str = ""
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
@@ -148,6 +159,9 @@ class QueueItem:
             "saved_human": ff.human_size(self.saved_bytes) if self.saved_bytes else "—",
             "vmaf_verify": self.vmaf_verify,
             "verify_attempts": self.verify_attempts,
+            "integrity_ok": self.integrity_ok,
+            "integrity_msg": self.integrity_msg,
+            "crop": self.crop,
             "output_path": self.output_path,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
@@ -192,7 +206,7 @@ class QueueManager:
         for it in self._items:
             if it.status not in self._PERSIST_STATES:
                 continue
-            out.append({
+            entry = {
                 "id": it.id,
                 "title": it.title,
                 "path": it.path,
@@ -201,7 +215,15 @@ class QueueManager:
                 "info": it.info,
                 "original_size": it.original_size,
                 "created_at": it.created_at,
-            })
+            }
+            # „Auswahl"-Jobs (manuelles Approval) zusätzlich mit ihrer bereits
+            # berechneten VMAF-Analyse sichern, damit sie nach einem Neustart/
+            # Rebuild nicht neu analysiert werden müssen, sondern direkt wieder
+            # zur Auswahl bereitstehen.
+            if it.status == STATUS_AWAITING and it.vmaf:
+                entry["status"] = STATUS_AWAITING
+                entry["vmaf"] = it.vmaf
+            out.append(entry)
         return out
 
     def _persist(self) -> None:
@@ -237,14 +259,22 @@ class QueueManager:
                     continue
                 raw = d.get("settings", {}) or {}
                 s = JobSettings(**{k: v for k, v in raw.items() if k in fields})
+                # „Auswahl"-Jobs mit gesicherter Analyse wieder als AWAITING
+                # herstellen (kein erneutes Analysieren nötig). Alle übrigen
+                # unterbrochenen Jobs starten sauber neu als „wartend".
+                saved_vmaf = d.get("vmaf")
+                is_awaiting = (d.get("status") == STATUS_AWAITING
+                               and isinstance(saved_vmaf, dict)
+                               and saved_vmaf.get("results"))
                 item = QueueItem(
                     id=d.get("id") or uuid.uuid4().hex[:10],
                     title=d.get("title") or Path(path).name,
                     path=path,
                     settings=s,
                     group_id=d.get("group_id") or uuid.uuid4().hex[:8],
-                    status=STATUS_WAITING,  # unterbrochene Jobs neu starten
+                    status=STATUS_AWAITING if is_awaiting else STATUS_WAITING,
                     info=d.get("info"),
+                    vmaf=saved_vmaf if is_awaiting else None,
                     original_size=int(d.get("original_size", 0) or 0),
                     created_at=float(d.get("created_at", time.time())),
                 )
@@ -584,6 +614,19 @@ class QueueManager:
             logger.error("Encoder fehlt: %s | verfügbar: %s", enc, avail)
             return
 
+        # --- Auto-Crop: schwarze Balken einmalig erkennen ---------------------
+        # Das Ergebnis fließt in VMAF-Analyse, Haupt-Encode und Guardrail ein,
+        # damit alle drei dieselbe (beschnittene) Bildfläche nutzen.
+        if s.autocrop and not item.crop:
+            item.message = "Auto-Crop: schwarze Balken werden erkannt …"
+            crop = ff.detect_crop(info)
+            item.crop = crop
+            if crop:
+                logger.info("Auto-Crop erkannt (%s): crop=%s (Quelle %dx%d)",
+                            item.title, crop, info.width, info.height)
+            else:
+                logger.info("Auto-Crop: keine nennenswerten Balken (%s)", item.title)
+
         # --- VMAF-Test (optional, repräsentativ pro Gruppe) -------------------
         with self._lock:
             do_vmaf = s.vmaf_check and item.group_id not in self._group_quality
@@ -609,7 +652,7 @@ class QueueManager:
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
                 preserve_hdr=s.preserve_hdr,
-                film_grain=s.film_grain, denoise=s.denoise,
+                film_grain=s.film_grain, denoise=s.denoise, crop=item.crop,
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
@@ -744,6 +787,7 @@ class QueueManager:
                     and item.vmaf_verify < s.verify_min):
                 item.error = (f"Qualitätswarnung: gemessener VMAF "
                               f"{item.vmaf_verify:.1f} < Ziel {s.verify_min:.0f}.")
+            self._run_integrity(item, s, info, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -755,6 +799,12 @@ class QueueManager:
         from . import chunked
         s = item.settings
         item.status = STATUS_RUNNING
+        # Auto-Crop einmalig erkennen (Chunked umgeht den Standard-Encode-Pfad).
+        if s.autocrop and not item.crop:
+            item.message = "Auto-Crop: schwarze Balken werden erkannt …"
+            item.crop = ff.detect_crop(info)
+            if item.crop:
+                logger.info("Auto-Crop erkannt (%s): crop=%s", item.title, item.crop)
         item.message = "Chunked Adaptive Encoding …"
         self._refresh_global_msg()
         out_path = _output_path(item)
@@ -766,6 +816,7 @@ class QueueManager:
             "film_grain": s.film_grain,
             "denoise": s.denoise,
             "force_10bit": s.anime,
+            "crop": item.crop,
             "audio_mode": s.audio_mode,
             "audio_codec": s.audio_codec,
             "audio_bitrate_kbps": s.audio_bitrate,
@@ -803,6 +854,7 @@ class QueueManager:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
+            self._run_integrity(item, s, info, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -865,6 +917,7 @@ class QueueManager:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
+            self._run_integrity(item, s, info, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -896,6 +949,7 @@ class QueueManager:
             "force_10bit": s.anime,
             "container": _container_ext(s).lstrip("."),
             "preserve_dv": s.preserve_dv,
+            "crop": item.crop,
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -956,7 +1010,7 @@ class QueueManager:
                 tonemap=s.tonemap, preserve_hdr=s.preserve_hdr,
                 samples=min(3, max(1, s.samples)),
                 clip_seconds=config.VERIFY_CLIP_SECONDS,
-                anime=s.anime,
+                anime=s.anime, crop=item.crop,
             )
             if score is not None:
                 logger.info("Guardrail-VMAF %.2f (%s)", score, item.title)
@@ -1014,11 +1068,58 @@ class QueueManager:
             except OSError:
                 pass
 
+    # ------------------------------------------------------ Integritäts-Check
+    @staticmethod
+    def _run_integrity(item: QueueItem, s: "JobSettings", info,
+                       out_path: Path) -> None:
+        """Playability-/Integritäts-Check der Ausgabe (Voll-Decode + Dauer).
+
+        Läuft, wenn explizit aktiviert oder eine destruktive Nachbehandlung
+        (inplace/archive) ansteht – dann ist der Check die Voraussetzung, um das
+        Original gefahrlos ersetzen/verschieben zu können.
+        """
+        need = s.integrity_check or s.post_processing in ("inplace", "archive")
+        if not need:
+            return
+        item.message = "Integritäts-Check der Ausgabe …"
+        expected = float(getattr(info, "duration", 0.0) or 0.0)
+        ok, msg = ff.verify_playable(out_path, expected)
+        item.integrity_ok = ok
+        item.integrity_msg = msg
+        if ok:
+            logger.info("Integritäts-Check bestanden: %s", item.title)
+        else:
+            item.error = ((item.error + " ") if item.error else "") + \
+                f"Integritäts-Check fehlgeschlagen: {msg}."
+            logger.warning("Integritäts-Check fehlgeschlagen (%s): %s",
+                           item.title, msg)
+
     # ------------------------------------------------------------ Postprocessing
     @staticmethod
     def _post_process(item: QueueItem, out_path: Path) -> None:
-        mode = item.settings.post_processing
+        s = item.settings
+        mode = s.post_processing
         src = Path(item.path)
+
+        # Sichere Original-Nachbehandlung: Original nur dann löschen/verschieben,
+        # wenn die Ausgabe intakt ist UND (falls Guardrail aktiv) die Qualität
+        # erreicht wurde. Sonst das Original vorsichtshalber behalten.
+        if mode in ("inplace", "archive") and s.safe_replace:
+            quality_ok = True
+            if s.verify_vmaf and item.vmaf_verify is not None:
+                quality_ok = item.vmaf_verify >= s.verify_min
+            if item.integrity_ok is False or not quality_ok:
+                if item.integrity_ok is False:
+                    reason = "Integritäts-Check fehlgeschlagen"
+                else:
+                    reason = (f"VMAF {item.vmaf_verify:.1f} < Ziel "
+                              f"{s.verify_min:.0f}")
+                item.error = ((item.error + " ") if item.error else "") + \
+                    f"Original behalten (Sicherheit): {reason}."
+                logger.warning("Sichere Nachbehandlung – Original behalten (%s): %s",
+                               item.title, reason)
+                return  # Original bleibt unangetastet, Output liegt in OUTPUT_DIR
+
         try:
             if mode == "inplace":
                 # Original durch neues File ersetzen (am Originalort)
@@ -1114,6 +1215,9 @@ def build_job_settings(d: dict) -> JobSettings:
         verify_vmaf=bool(d.get("verify_vmaf", False)),
         verify_min=float(d.get("verify_min", 93) or 93),
         verify_retry=bool(d.get("verify_retry", False)),
+        integrity_check=bool(d.get("integrity_check", True)),
+        safe_replace=bool(d.get("safe_replace", True)),
+        autocrop=bool(d.get("autocrop", False)),
         vmaf_check=bool(d.get("vmaf_check", True)),
         workflow=d.get("workflow", "auto"),
         target_vmaf=float(d.get("target_vmaf", 0) or 0),
@@ -1258,6 +1362,11 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
             f"    Encoder        : {s.platform}/{s.codec} → {enc_name}  "
             f"|  Container: {_container_ext(s)}")
         lines.append(f"    Rate/Qualität  : {_quality_label(s)}{extra}")
+        if s.autocrop:
+            crop_txt = (f"erkannt crop={item.crop}" if item.crop
+                        else ("noch nicht erkannt" if item.crop == ""
+                              else "keine Balken"))
+            lines.append(f"    Auto-Crop      : aktiv ({crop_txt})")
         lines.append(f"    Skalierung     : {scale}")
         lines.append(f"    HDR/DV         : {_describe_dynamic(s)}")
         lines.append(
@@ -1274,7 +1383,11 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
                 f"    Guardrail      : VMAF ≥ {s.verify_min:.0f}"
                 + (f", bis zu {config.VERIFY_MAX_RETRIES} Wiederholung(en)"
                    if s.verify_retry else ", ohne Wiederholung"))
-        lines.append(f"    Nachbearbeitung: {s.post_processing}  |  Suffix: {s.suffix}")
+        integ = "an" if (s.integrity_check or s.post_processing in ("inplace", "archive")) else "aus"
+        safe = "sicher (nur bei bestandener Prüfung)" if s.safe_replace else "immer"
+        lines.append(
+            f"    Nachbearbeitung: {s.post_processing} ({safe})  "
+            f"|  Integritäts-Check: {integ}  |  Suffix: {s.suffix}")
 
     logger.info("\n".join(lines))
 
