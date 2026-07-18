@@ -99,6 +99,14 @@ VIDEO_EXTENSIONS = {
 ARCHIVE_DIRNAME = ".archiv"
 METRICS_INTERVAL = float(os.getenv("METRICS_INTERVAL", "1.5"))
 
+# --- Logging ------------------------------------------------------------------
+# LOG_LEVEL steuert die Ausführlichkeit der Container-Logs (DEBUG, INFO,
+# WARNING, ERROR). Standard INFO. LOG_FFMPEG_CMD=1 loggt zusätzlich die
+# vollständige FFmpeg-Kommandozeile jedes Encodes (sehr geschwätzig, aber
+# hilfreich beim Debuggen). Standard: an, da explizit gewünscht.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+LOG_FFMPEG_CMD = _env_bool("LOG_FFMPEG_CMD", True)
+
 # --- GPU-Render-Node (Intel QSV / AMD VAAPI) ---------------------------------
 # Der DRM-Render-Knoten der zu nutzenden GPU. Auf Systemen mit MEHREREN GPUs
 # (z. B. Nvidia-Karte + Intel-iGPU) ist /dev/dri/renderD128 evtl. NICHT die

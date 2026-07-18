@@ -677,6 +677,7 @@ class QueueManager:
         self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        _log_job_start(item, info, out_path, "Encode")
 
         def on_prog(p: EncodeProgress) -> None:
             saved = max(0, item.original_size - p.current_size)
@@ -755,6 +756,7 @@ class QueueManager:
         self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        _log_job_start(item, info, out_path, "Chunked-Encode")
 
         enc_kw = {
             "preserve_hdr": s.preserve_hdr,
@@ -825,6 +827,7 @@ class QueueManager:
         self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        _log_job_start(item, info, out_path, "Audio-Remux")
 
         def on_prog(p: EncodeProgress) -> None:
             saved = max(0, item.original_size - p.current_size)
@@ -838,6 +841,7 @@ class QueueManager:
             }
 
         cmd = audio_opt.build_remux_cmd(info, out_path, settings)
+        _log_cmd(item, cmd)
         runner = EncodeRunner(on_progress=on_prog)
         with self._lock:
             self._active[item.id] = runner
@@ -908,6 +912,7 @@ class QueueManager:
                 passlog=passlog, **enc_kw,
             )
             item.message = "Zwei-Pass: Analyse-Durchlauf (1/2) …"
+            _log_cmd(item, cmd, "Zwei-Pass 1/2")
             rc, stderr = runner.run(cmd, info.duration)
             if rc == 0 and not runner._cancel:
                 item.message = "Zwei-Pass: Encode-Durchlauf (2/2) …"
@@ -916,6 +921,7 @@ class QueueManager:
                     s.target_height, s.tonemap, two_pass=True, pass_num=2,
                     passlog=passlog, **enc_kw,
                 )
+                _log_cmd(item, cmd, "Zwei-Pass 2/2")
                 rc, stderr = runner.run(cmd, info.duration)
             self._cleanup_passlog(passlog)
         elif s.two_pass and s.platform == "nvidia":
@@ -923,12 +929,14 @@ class QueueManager:
                 info, out_path, s.platform, s.codec, s.quality,
                 s.target_height, s.tonemap, two_pass=True, **enc_kw,
             )
+            _log_cmd(item, cmd)
             rc, stderr = runner.run(cmd, info.duration)
         else:
             cmd = build_encode_cmd(
                 info, out_path, s.platform, s.codec, s.quality,
                 s.target_height, s.tonemap, **enc_kw,
             )
+            _log_cmd(item, cmd)
             rc, stderr = runner.run(cmd, info.duration)
         return rc, stderr, cmd, runner._cancel
 
@@ -1161,6 +1169,102 @@ def _quality_label(s: JobSettings) -> str:
     if s.rate_mode == "bitrate":
         return f"{s.quality} kbit/s"
     return f"CQ/QP {s.quality}"
+
+
+def _describe_dynamic(s: JobSettings) -> str:
+    """HDR-/Dolby-Vision-Behandlung als lesbarer Text fürs Log."""
+    if getattr(s, "preserve_dv", False):
+        return "Dolby Vision übernehmen (RPU-Reinjektion nach Encode)"
+    if getattr(s, "preserve_hdr", False):
+        return "HDR10/HLG erhalten"
+    if getattr(s, "tonemap", False):
+        return "HDR→SDR (Tonemapping)"
+    return "unverändert (SDR / keine HDR-Behandlung)"
+
+
+def _describe_audio(s: JobSettings) -> str:
+    """Audio-Einstellungen als lesbarer Text fürs Log."""
+    mode = s.audio_mode
+    if mode == "none":
+        return "keine Tonspur"
+    if mode == "encode":
+        ch = {0: "Original-Kanäle", 1: "Mono", 2: "Stereo"}.get(
+            s.audio_channels, f"{s.audio_channels} Kanäle")
+        base = f"transkodieren → {s.audio_codec.upper()} {s.audio_bitrate} kbit/s, {ch}"
+        if s.audio_normalize:
+            base += ", normalisiert"
+    else:
+        base = "Original kopieren (Copy)"
+    tracks = "alle Spuren" if not s.audio_tracks else f"Spuren {list(s.audio_tracks)}"
+    if s.audio_per_track:
+        tracks += " (pro Spur konfiguriert)"
+    return f"{base}; {tracks}"
+
+
+def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode") -> None:
+    """Ausführliches Start-Log eines Jobs (alle wesentlichen Parameter).
+
+    Landet über den Standard-Logger in den Docker-Container-Logs.
+    """
+    s = item.settings
+    lines = [
+        f"▶ {kind} gestartet: {item.title}",
+        f"    Job-ID         : {item.id}  (Gruppe {item.group_id})",
+        f"    Quelle         : {item.path}",
+        f"    Ausgabe        : {out_path}",
+    ]
+    if info is not None:
+        dv = f", Dolby Vision Profil {info.dv_profile}" if info.dolby_vision else ""
+        lines.append(
+            f"    Quelle-Info    : {(info.codec or '?').upper()} {info.width}x{info.height}, "
+            f"{ff.human_duration(info.duration)}, {info.bit_depth}-bit, {info.hdr_type}{dv}, "
+            f"{ff.human_size(info.size_bytes)}")
+
+    if kind == "Audio-Remux":
+        lines.append("    Video          : 1:1 kopieren (kein Re-Encode)")
+        lines.append(f"    Container      : {_container_ext(s)}  |  Nachbearbeitung: {s.post_processing}")
+        lines.append(
+            f"    Audio          : {_describe_audio(s)} "
+            f"(Scope: {s.audio_opt_scope}, ab {s.audio_min_bitrate_kbps} kbit/s)")
+    else:
+        enc_name = ff.encoder_name(s.platform, s.codec)
+        scale = (f"{info.height}p → {s.target_height}p"
+                 if (info is not None and s.target_height) else "Original beibehalten")
+        extra = " · Zwei-Pass" if s.two_pass else ""
+        if s.chunked:
+            extra += f" · Chunked ({s.chunk_seconds}s, ±CQ {s.chunk_cq_range})"
+        lines.append(
+            f"    Encoder        : {s.platform}/{s.codec} → {enc_name}  "
+            f"|  Container: {_container_ext(s)}")
+        lines.append(f"    Rate/Qualität  : {_quality_label(s)}{extra}")
+        lines.append(f"    Skalierung     : {scale}")
+        lines.append(f"    HDR/DV         : {_describe_dynamic(s)}")
+        lines.append(
+            f"    Video-Extras   : Film-Grain={s.film_grain}, Denoise={s.denoise}, "
+            f"10-bit/Anime={'ja' if s.anime else 'nein'}")
+        lines.append(f"    Audio          : {_describe_audio(s)}")
+        lines.append(
+            f"    Untertitel     : {'übernehmen' if s.keep_subtitles else 'verwerfen'}"
+            + (" (pro Spur)" if s.subtitle_per_track else "")
+            + f"  |  Kapitel: {'ja' if s.keep_chapters else 'nein'}"
+            + f"  |  Metadaten: {'ja' if s.keep_metadata else 'nein'}")
+        if s.verify_vmaf:
+            lines.append(
+                f"    Guardrail      : VMAF ≥ {s.verify_min:.0f}"
+                + (f", bis zu {config.VERIFY_MAX_RETRIES} Wiederholung(en)"
+                   if s.verify_retry else ", ohne Wiederholung"))
+        lines.append(f"    Nachbearbeitung: {s.post_processing}  |  Suffix: {s.suffix}")
+
+    logger.info("\n".join(lines))
+
+
+def _log_cmd(item: "QueueItem", cmd: list, label: str = "") -> None:
+    """Vollständige FFmpeg-Kommandozeile ins Log schreiben (falls aktiviert)."""
+    if not config.LOG_FFMPEG_CMD or not cmd:
+        return
+    tag = f" [{label}]" if label else ""
+    logger.info("FFmpeg-Kommando%s (%s):\n    %s",
+                tag, item.title, " ".join(str(c) for c in cmd))
 
 
 def _counts(items: list[dict]) -> dict:

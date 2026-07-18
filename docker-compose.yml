@@ -49,6 +49,12 @@ services:
       - METRICS_INTERVAL=1.5
       - DATA_DIR=/data
       - RETAIN_VMAF_SESSIONS=true
+      # --- Logging -----------------------------------------------------------
+      # Log-Ausführlichkeit: DEBUG | INFO | WARNING | ERROR (Standard INFO).
+      # Beim Start jedes Encodes werden alle Parameter geloggt.
+      - LOG_LEVEL=INFO
+      # Vollständige FFmpeg-Kommandozeile jedes Encodes mitloggen (1/0).
+      - LOG_FFMPEG_CMD=1
       # --- Intel iGPU (VAAPI) / AMD VAAPI ------------------------------------
       # Intel-Media-Treiber erzwingen (nötig für Intel-iGPU wie UHD 730).
       - LIBVA_DRIVER_NAME=iHD

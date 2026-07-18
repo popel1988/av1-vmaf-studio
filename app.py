@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+from core import config
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -25,7 +27,6 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 
-from core import config
 from core import ffmpeg_utils as ff
 from core.data_browser import (
     DATA_ROOTS,

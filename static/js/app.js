@@ -339,7 +339,7 @@
       const p = prof ? `Profil ${prof}` : "Dolby Vision";
       let conv = "";
       if (prof === 7) conv = " Profil 7 wird zu 8.1 konvertiert (Enhancement-Layer entfällt, HDR10-Basis bleibt).";
-      else if (prof === 5) conv = " Bei „Übernehmen" bleibt es Profil 5 (unverändert) – das braucht einen DV-fähigen Player und hat keinen HDR10-Fallback. Ohne solchen Player ist Tone-Mapping die sichere Wahl (Default).";
+      else if (prof === 5) conv = ' Bei „Übernehmen" bleibt es Profil 5 (unverändert) – das braucht einen DV-fähigen Player und hat keinen HDR10-Fallback. Ohne solchen Player ist Tone-Mapping die sichere Wahl (Default).';
       const fallback = prof === 5
         ? " Schlägt ein Schritt fehl, bleibt die (nur mit DV korrekt darstellbare) Basis erhalten."
         : " Schlägt ein Schritt fehl, bleibt die HDR10-Basis erhalten.";
