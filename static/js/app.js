@@ -329,23 +329,43 @@
     if (dvWrap) dvWrap.style.display = isDv ? "" : "none";
     if (!isDv || !dvSel) return;
 
+    const platform = $("opt-platform") ? $("opt-platform").value : "";
     const prof = info.dv_profile || 0;
     const codecLabel = codec === "av1" ? "AV1" : "HEVC";
     // Profil 5 bleibt bei „Übernehmen" unverändert Profil 5, sonst 8.1/10.1.
     const targetProfile = prof === 5 ? "Profil 5" : (codec === "av1" ? "10.1" : "8.1");
-    // Profil 5 hat keine HDR10-kompatible Basis -> Tonemap als Default.
-    if (!dvSel.dataset.userset) dvSel.value = prof === 5 ? "tonemap" : "preserve";
+    // AV1-Dolby-Vision kann nur der CPU-Encoder (libsvtav1) einbetten – Hardware-
+    // Encoder (NVENC/QSV/VAAPI) können weder einbetten noch nachträglich
+    // injizieren (dovi_tool kann kein AV1). Dann ist nur HDR10 möglich.
+    const av1NeedsCpu = codec === "av1" && platform && platform !== "cpu";
+
+    if (!dvSel.dataset.userset) {
+      // Standardwahl: DV übernehmen, außer AV1 ohne CPU (dann HDR10) bzw.
+      // Profil 5 ohne HDR10-Fallback (dann Tonemap als sichere Wahl).
+      if (av1NeedsCpu) dvSel.value = "hdr10";
+      else dvSel.value = prof === 5 ? "tonemap" : "preserve";
+    }
+
     if (dvHint) {
       const p = prof ? `Profil ${prof}` : "Dolby Vision";
+      if (av1NeedsCpu) {
+        dvHint.textContent = `${p} erkannt. AV1-Dolby-Vision kann nur der `
+          + `CPU-Encoder (SVT-AV1) beim Encoden einbetten – mit `
+          + `${platform.toUpperCase()} ist keine DV-Übernahme möglich, `
+          + `„Übernehmen" fällt auf HDR10 zurück. Für echtes DV: Plattform „CPU" `
+          + `wählen (Profil 10.1) oder Codec HEVC nutzen (Profil 8.1).`;
+        return;
+      }
       let conv = "";
-      if (prof === 7) conv = " Profil 7 wird zu 8.1 konvertiert (Enhancement-Layer entfällt, HDR10-Basis bleibt).";
+      if (prof === 7) conv = ` Profil 7 wird zu ${targetProfile} konvertiert (Enhancement-Layer entfällt, HDR10-Basis bleibt).`;
       else if (prof === 5) conv = ' Bei „Übernehmen" bleibt es Profil 5 (unverändert) – das braucht einen DV-fähigen Player und hat keinen HDR10-Fallback. Ohne solchen Player ist Tone-Mapping die sichere Wahl (Default).';
       const fallback = prof === 5
         ? " Schlägt ein Schritt fehl, bleibt die (nur mit DV korrekt darstellbare) Basis erhalten."
         : " Schlägt ein Schritt fehl, bleibt die HDR10-Basis erhalten.";
-      dvHint.textContent = `${p} erkannt. „Übernehmen" extrahiert die DV-RPU und `
-        + `re-injiziert sie nach dem Encode (dovi_tool) → Ziel ${targetProfile} (${codecLabel}).`
-        + `${conv}${fallback}`;
+      const how = codec === "av1"
+        ? `libsvtav1 bettet die DV-RPU direkt beim Encoden ein → Ziel ${targetProfile} (${codecLabel}).`
+        : `„Übernehmen" re-injiziert die RPU nach dem Encode (dovi_tool) → Ziel ${targetProfile} (${codecLabel}).`;
+      dvHint.textContent = `${p} erkannt. ${how}${conv}${fallback}`;
     }
   }
 

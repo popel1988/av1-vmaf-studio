@@ -1,22 +1,21 @@
-"""Dolby-Vision-(RPU)-Erhaltung via dovi_tool – HEVC (Profil 8.x) und AV1 (10.x).
+"""Dolby-Vision-(RPU)-Erhaltung via dovi_tool – nur HEVC-Ziel (Profil 8.1).
 
-Die Encoder selbst schreiben nur den HDR10-Basislayer (keinen DV-RPU-Layer).
-Dieser Post-Schritt extrahiert daher die dynamische RPU-Schicht aus der Quelle,
-re-injiziert sie in den frisch codierten Stream (dovi_tool) und muxt das Ergebnis
-zurück in den Container.
+Die HW-Encoder schreiben nur den HDR10-Basislayer (keinen DV-RPU-Layer). Dieser
+Post-Schritt extrahiert daher die dynamische RPU aus der Quelle, re-injiziert sie
+in den frisch codierten HEVC-Stream (dovi_tool) und muxt das Ergebnis zurück.
 
 Unterstützt:
   * HEVC-Ziel  -> Dolby Vision Profil 8.1 (HDR10-Basis + RPU)
-  * AV1-Ziel   -> Dolby Vision Profil 10.1 (HDR10-Basis + RPU)
   * Quelle Profil 7 (Dual-Layer) -> Konvertierung nach 8.1 (--mode 2, EL entfällt)
-  * Quelle Profil 5              -> Konvertierung nach 8.1 (--mode 3, best-effort)
+  * Quelle Profil 5              -> RPU unverändert (Mode 0, DV-fähiger Player nötig)
 
-Die RPU-Metadaten sind codec-übergreifend: eine HEVC-DV-Quelle kann so auch in
-eine AV1-Ausgabe (Profil 10.1) übernommen werden und umgekehrt.
+WICHTIG – AV1: dovi_tool kann AV1 auf der CLI NICHT verarbeiten (weder extract
+noch inject; es meldet "Invalid input file type"). AV1-Dolby-Vision (Profil 10.1)
+entsteht daher ausschließlich beim Encoden selbst über libsvtav1 (`-dolbyvision`),
+siehe core/encoder.py – dieses Modul wird für AV1-Ziele nicht mehr aufgerufen.
 
-Best-effort: schlägt irgendein Schritt fehl oder fehlt dovi_tool, bleibt der
-normale HDR10-Encode unverändert erhalten (der Basislayer ist HDR10-kompatibel,
-Player ohne DV zeigen also HDR10).
+Best-effort: schlägt ein Schritt fehl oder fehlt dovi_tool, bleibt der normale
+HDR10-Encode erhalten (der Basislayer ist HDR10-kompatibel).
 """
 from __future__ import annotations
 

@@ -707,8 +707,11 @@ class QueueManager:
             rc, stderr, cmd, cancelled = self._encode_to(item, s, info, out_path, on_prog)
             if cancelled or rc != 0:
                 break
-            # Dolby Vision: RPU aus der Quelle re-injizieren (HEVC->8.1 / AV1->10.1).
-            if s.preserve_dv and s.codec in ("hevc", "av1"):
+            # Dolby Vision: Bei HEVC wird die RPU nach dem Encode via dovi_tool
+            # re-injiziert (Profil 8.1). AV1-DV wird bereits beim Encoden durch
+            # libsvtav1 nativ eingebettet (dovi_tool kann kein AV1) – daher hier
+            # nur HEVC.
+            if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
             if not do_verify:
                 break
@@ -792,8 +795,10 @@ class QueueManager:
             logger.error("Chunked fehlgeschlagen: %s | %s", item.title, err)
             out_path.unlink(missing_ok=True)
         else:
-            # Dolby Vision auch nach Chunked-Encode übernehmen (HEVC/AV1).
-            if s.preserve_dv and s.codec in ("hevc", "av1"):
+            # Dolby Vision nach Chunked-Encode nur für HEVC (dovi_tool). AV1-DV
+            # ist über zusammengefügte Segmente nicht zuverlässig einbettbar –
+            # dort bleibt der HDR10-Basislayer erhalten.
+            if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
@@ -890,6 +895,7 @@ class QueueManager:
             "denoise": s.denoise,
             "force_10bit": s.anime,
             "container": _container_ext(s).lstrip("."),
+            "preserve_dv": s.preserve_dv,
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -1069,8 +1075,21 @@ def build_job_settings(d: dict) -> JobSettings:
         preserve_dv = bool(d.get("preserve_dv", False))
         preserve_hdr = (hdr_mode == "preserve") or preserve_dv
         tonemap = ((hdr_mode == "tonemap") or bool(d.get("tonemap"))) and not preserve_dv
+
+    platform = d.get("platform", "cpu")
+    # AV1-Dolby-Vision entsteht nur beim Encoden selbst und kann in FFmpeg
+    # ausschließlich libsvtav1 (CPU) als Metadaten-OBUs einbetten. Hardware-
+    # Encoder (NVENC/QSV/VAAPI) können DV weder einbetten noch nachträglich
+    # injizieren – dovi_tool unterstützt AV1 auf der CLI nicht. Daher hier
+    # ehrlich auf den HDR10-Basislayer zurückfallen statt später zu scheitern.
+    if preserve_dv and codec == "av1" and platform != "cpu":
+        preserve_dv, preserve_hdr, tonemap = False, True, False
+        logger.info("AV1+DV nur mit CPU/libsvtav1 möglich – %s: HDR10-Fallback "
+                    "(Encoder %s kann keine DV-RPU einbetten).",
+                    d.get("title") or d.get("path") or "?", platform)
+
     return JobSettings(
-        platform=d.get("platform", "cpu"),
+        platform=platform,
         codec=codec,
         quality=int(d.get("quality", 28) or 28),
         target_height=d.get("target_height"),
@@ -1174,7 +1193,9 @@ def _quality_label(s: JobSettings) -> str:
 def _describe_dynamic(s: JobSettings) -> str:
     """HDR-/Dolby-Vision-Behandlung als lesbarer Text fürs Log."""
     if getattr(s, "preserve_dv", False):
-        return "Dolby Vision übernehmen (RPU-Reinjektion nach Encode)"
+        if s.codec == "av1":
+            return "Dolby Vision übernehmen (nativ via libsvtav1 → Profil 10.1)"
+        return "Dolby Vision übernehmen (dovi_tool-Reinjektion → Profil 8.1)"
     if getattr(s, "preserve_hdr", False):
         return "HDR10/HLG erhalten"
     if getattr(s, "tonemap", False):

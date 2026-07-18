@@ -177,12 +177,14 @@ def build_encode_cmd(
     pass_num: Optional[int] = None,
     passlog: Optional[str] = None,
     container: str = "mkv",
+    preserve_dv: bool = False,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
     cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
 
     keep_hdr = bool(preserve_hdr and info.is_hdr)
+    downscale = bool(target_height and info.height and target_height < info.height)
     # 10-bit erzwingen (Anime-Modus) nur, wenn der Encoder das kann; sonst 8-bit.
     ten_bit = bool(force_10bit) and _codec_supports_10bit(platform, codec)
     denoise_on = denoise in _DENOISE
@@ -251,6 +253,14 @@ def build_encode_cmd(
         if film_grain > 0:
             svt += f":film-grain={int(film_grain)}:film-grain-denoise=0"
         cmd += ["-preset", "6", "-svtav1-params", svt]
+        # Dolby Vision (Profil 10.1) nativ einbetten: FFmpeg liest die DV-RPU der
+        # Quelle als Frame-Side-Data, libsvtav1 schreibt sie als T.35-Metadaten-
+        # OBUs mit. Das ist der EINZIGE Weg zu AV1-DV (dovi_tool kann kein AV1).
+        # Voraussetzung: DV-Quelle, kein Tonemapping und KEIN Downscale – der
+        # Scale-Filter verwirft die DV-Side-Data, wodurch der Encode sonst
+        # abbräche. Bei Downscale bleibt der HDR10-Basislayer erhalten.
+        if preserve_dv and info.dolby_vision and not tonemap and not downscale:
+            cmd += ["-dolbyvision", "auto"]
     elif enc.startswith("libx"):
         cmd += ["-preset", "medium"]
     elif "nvenc" in enc and not is_bitrate:
