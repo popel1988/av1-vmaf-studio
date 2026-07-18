@@ -19,6 +19,8 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264**).
 - [Containers](#containers)
 - [HDR & Dolby Vision](#hdr--dolby-vision)
 - [Rate control & quality](#rate-control--quality)
+- [Remux & editing (no re-encode)](#remux--editing-no-re-encode)
+- [Multiple input & output locations](#multiple-input--output-locations)
 - [Quality assurance](#quality-assurance)
 - [Automation & integration](#automation--integration)
 - [Persistence & data layout](#persistence--data-layout)
@@ -41,6 +43,7 @@ DE/EN language toggle:
 | **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. |
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders. |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
+| **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes. |
@@ -54,6 +57,9 @@ Other highlights:
 - **Sidebar with live hardware rings**: CPU, RAM, and GPU(s) via `psutil`,
   `nvidia-smi`, sysfs (AMD `gpu_busy_percent`), and `intel_gpu_top`.
 - **Structured file/folder browser** for `/media/input` (recursive, with filter/sort).
+- **Multiple named input roots** and **multiple output volumes** (see below).
+- **Per-job target folder**: pick the output volume and/or a subfolder for every
+  encode, remux, merge, split, and extract job (with an output folder browser).
 - **Functional encoder detection**: mini test encodes verify what the hardware
   can actually do; unavailable options are hidden in the UI.
 - **Dynamic GPU capacity**: configurable number of concurrent encodes per GPU.
@@ -150,6 +156,49 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   channel downmix, and loudness normalization (EBU R128).
 - **Per-track subtitles & chapters**, metadata preservation, automatic
   `mov_text`/`tx3g`→SRT conversion.
+
+---
+
+## Remux & editing (no re-encode)
+
+The **Remux & edit** page manipulates the container without touching the video
+stream (`-c:v copy`), so it is near-instant and lossless. It shares the same
+safety features as encoding (integrity check, safe post-processing) and runs
+through the normal queue.
+
+| Capability | Details |
+|------------|---------|
+| **Track selection** | Keep/remove individual audio & subtitle tracks. |
+| **Reorder** | Move tracks up/down; the order defines the output order. |
+| **Track metadata** | Edit `default`/`forced` disposition, language, and title per track. |
+| **External tracks** | Add audio/subtitle files (also several streams from one file), with optional delay, language, and title. |
+| **Attachments** | Keep existing and add new fonts/covers (MKV only). |
+| **Chapters** | Keep, remove, rename, or import chapters (FFmetadata). |
+| **Trim** | Lossless cut by start/end time. |
+| **Extract** | Export selected tracks to standalone files. |
+| **Container compatibility** | MP4 limitations are checked up front (e.g. image subtitles), with warnings and optional per-track transcode of incompatible audio. |
+| **Merge (concat)** | Join multiple files losslessly (same codecs/parameters). |
+| **Split** | Split one file at chapter boundaries or into fixed-length segments. |
+
+---
+
+## Multiple input & output locations
+
+You are not limited to a single mounted folder:
+
+- **Multiple input roots** — mount several folders and list them via `INPUT_DIRS`
+  (`Name=/path`, separated by `;` or newlines). The browser then shows each root
+  as a named virtual folder, and output paths keep the root name as a prefix so
+  identically named files from different roots never collide.
+- **Multiple output volumes** — define named targets via `OUTPUT_DIRS` (same
+  format). Each job can pick its output volume.
+- **Per-job target folder** — every encode, remux, merge, split, and extract job
+  has an optional **target subfolder** field plus an **output folder browser**.
+  Leave it empty to mirror the source structure into the output volume, or pick a
+  folder to place the result there directly.
+
+Both are optional — without `INPUT_DIRS`/`OUTPUT_DIRS` the single `INPUT_DIR` /
+`OUTPUT_DIR` behavior is unchanged.
 
 ---
 
@@ -290,6 +339,7 @@ core/
   dolby_vision.py       Dolby Vision RPU preservation via dovi_tool (HEVC 8.1)
   chunked.py            Chunked adaptive encoding
   audio_opt.py          Audio-only remux/optimization
+  remux.py              Lossless remux/edit: tracks, attachments, chapters, trim, concat/split
   queue_manager.py      Async queue, guardrail, post-processing, persistence
   supertool.py          Guided batch processing (target/representative VMAF)
   library.py            Library scan + savings estimate
@@ -328,6 +378,8 @@ docker-compose.yml      Portainer stack
 |----------|---------|-------------|
 | `INPUT_DIR` | `/media/input` | Source directory (read) |
 | `OUTPUT_DIR` | `/media/output` | Output directory |
+| `INPUT_DIRS` | – | Multiple named input roots, e.g. `Movies=/media/movies;Series=/media/series` (`;`/newline separated). Overrides the single `INPUT_DIR`. |
+| `OUTPUT_DIRS` | – | Multiple named output volumes, e.g. `Local=/media/output;NAS=/mnt/nas/encodes`. Selectable per job. |
 | `DATA_DIR` | `/data` | Root for queue, history, sessions, cache |
 | `VMAF_MODEL_DIR` | `/usr/local/share/model` | Path to VMAF models |
 | `RETAIN_VMAF_SESSIONS` | `true` | Keep VMAF artifacts after analysis |

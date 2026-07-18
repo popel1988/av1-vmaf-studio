@@ -261,6 +261,7 @@ def _stream_bitrate(s: dict, tags: dict, container_duration: float = 0.0) -> int
 
 def _audio_entry(s: dict, index: int = 0, container_duration: float = 0.0) -> dict:
     tags = s.get("tags", {}) or {}
+    disp = s.get("disposition", {}) or {}
     br = _stream_bitrate(s, tags, container_duration)
     return {
         "index": index,  # relativer Audio-Index (0:a:index)
@@ -272,6 +273,8 @@ def _audio_entry(s: dict, index: int = 0, container_duration: float = 0.0) -> di
         "bitrate_human": _bitrate_human(br) if br else "—",
         "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
         "title": tags.get("title", "") or tags.get("TITLE", "") or "",
+        "forced": bool(disp.get("forced")),
+        "default": bool(disp.get("default")),
     }
 
 
@@ -312,6 +315,42 @@ def ffprobe(path: Path) -> Optional[VideoInfo]:
     if err:
         logger.warning("ffprobe fehlgeschlagen für %s: %s", path, err)
     return info
+
+
+def probe_streams(path: Path) -> tuple[Optional[dict], Optional[str]]:
+    """Alle Ton-/Untertitel-Streams einer Datei listen – auch ohne Video-Stream.
+
+    Für den Remux-Modus (externe Ton-/Untertiteldateien wie .eac3/.srt haben
+    keinen Video-Stream und würden bei ``probe_with_error`` scheitern).
+    Rückgabe: ({audio, subtitles, has_video, container}, fehler).
+    """
+    from . import config
+    cmd = [config.FFPROBE, "-v", "error", "-show_streams", "-show_format",
+           "-of", "json", str(path)]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=60, check=False)
+    except (FileNotFoundError, OSError) as e:
+        return None, f"ffprobe-Aufruf fehlgeschlagen: {e}"
+    except subprocess.TimeoutExpired:
+        return None, "ffprobe-Timeout."
+    if out.returncode != 0:
+        return None, (out.stderr or "").strip() or f"Exit-Code {out.returncode}"
+    try:
+        data = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None, "ffprobe-Ausgabe nicht lesbar."
+
+    streams = data.get("streams", [])
+    fmt = data.get("format", {})
+    duration = _f(fmt.get("duration")) or 0.0
+    audio = [_audio_entry(s, i, duration) for i, s in
+             enumerate(s for s in streams if s.get("codec_type") == "audio")]
+    subs = [_subtitle_entry(s, i) for i, s in
+            enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
+    has_video = any(s.get("codec_type") == "video" for s in streams)
+    return {"audio": audio, "subtitles": subs, "has_video": has_video,
+            "container": fmt.get("format_name", "") or ""}, None
 
 
 # ----------------------------------------------------------------- Encoder-Map

@@ -102,6 +102,13 @@ class JobSettings:
     audio_track_settings: list = field(default_factory=list)  # je Spur ein Dict
     selected_result_index: Optional[int] = None
     batch_id: str = ""             # Super-Tool-Stapelkennung (Dashboard-Filter)
+    # Remux-/Bearbeiten-Modus (video_mode="edit"): Spuren entfernen/umsortieren,
+    # Flags/Sprache/Titel ändern, externe Spuren hinzufügen – ohne Re-Encode.
+    edit_spec: dict = field(default_factory=dict)
+    # Freier Ablageort: Output-Root (Volume) + optionaler Unterordner. Leer =
+    # Standard (erster Output-Root, gespiegelte Eingabestruktur).
+    out_root: str = ""
+    out_subdir: str = ""
 
 
 @dataclass
@@ -586,6 +593,17 @@ class QueueManager:
 
         s = item.settings
 
+        # --- Remux/Bearbeiten: Spuren editieren, Video 1:1 (kein Re-Encode) ---
+        if s.video_mode == "edit":
+            self._process_remux_edit(item, info)
+            return
+        if s.video_mode == "concat":
+            self._process_concat(item, info)
+            return
+        if s.video_mode == "split":
+            self._process_split(item, info)
+            return
+
         # --- Audio-Optimierung: nur Remux (Video 1:1 kopieren) ----------------
         if s.video_mode == "copy":
             self._process_audio_remux(item, info)
@@ -924,6 +942,137 @@ class QueueManager:
             item.progress["percent"] = 100.0
         item.message = ""
 
+    def _process_remux_edit(self, item: "QueueItem", info) -> None:
+        """Remux/Bearbeiten: Spuren entfernen/umsortieren, Flags/Sprache/Titel
+        ändern, externe Spuren hinzufügen – ohne Video-Re-Encode."""
+        from . import remux
+        s = item.settings
+        spec = dict(s.edit_spec or {})
+        # Container aus dem Spec zieht (mkv/mp4) – für Ausgabe-Pfad & Kompatibilität.
+        spec.setdefault("container", "mkv")
+
+        conflicts = remux.check_conflicts(info, spec)
+        if conflicts:
+            item.status = STATUS_FAILED
+            item.error = "Container-Konflikt: " + " ".join(conflicts)
+            logger.error("Remux abgebrochen (Konflikt): %s\n%s",
+                         item.title, "\n".join(conflicts))
+            item.message = ""
+            return
+
+        out_path = _output_path(item)
+        cmd, err = remux.build_edit_cmd(info, out_path, spec)
+        if err:
+            item.status = STATUS_FAILED
+            item.error = err
+            item.message = ""
+            return
+        self._run_copy_job(item, info, cmd, out_path, "Remux/Bearbeiten (kein Re-Encode)")
+
+    def _run_copy_job(self, item: "QueueItem", info, cmd: list, out_path: Path,
+                      label: str) -> None:
+        """Gemeinsamer Ablauf für Copy-Jobs (Remux/Concat/Split): laufen lassen,
+        Integrität prüfen, Nachbehandlung. Kein VMAF/Re-Encode."""
+        s = item.settings
+        item.status = STATUS_RUNNING
+        item.message = label
+        self._refresh_global_msg()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        _log_job_start(item, info, out_path, label)
+
+        def on_prog(p: EncodeProgress) -> None:
+            item.progress = {
+                "percent": p.percent, "fps": round(p.fps, 1),
+                "bitrate": p.bitrate, "speed": p.speed,
+                "eta": round(p.eta, 0), "eta_human": ff.human_duration(p.eta),
+                "current_size": p.current_size,
+                "current_human": ff.human_size(p.current_size),
+            }
+
+        _log_cmd(item, cmd)
+        runner = EncodeRunner(on_progress=on_prog)
+        with self._lock:
+            self._active[item.id] = runner
+        rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
+
+        if runner._cancel:
+            item.status = STATUS_CANCELLED
+            out_path.unlink(missing_ok=True)
+        elif rc != 0:
+            item.status = STATUS_FAILED
+            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+            logger.error("%s fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
+                         label, item.title, rc, " ".join(cmd), stderr)
+            out_path.unlink(missing_ok=True)
+        else:
+            item.output_path = str(out_path)
+            item.output_size = out_path.stat().st_size if out_path.exists() else 0
+            item.saved_bytes = item.original_size - item.output_size
+            self._run_integrity(item, s, info, out_path)
+            ff.add_mkv_statistics_tags(out_path)
+            self._post_process(item, out_path)
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+        item.message = ""
+
+    def _process_concat(self, item: "QueueItem", info) -> None:
+        """Mehrere Dateien verlustfrei zusammenführen (concat-Demuxer)."""
+        from . import remux
+        s = item.settings
+        rels = list((s.edit_spec or {}).get("concat_files", []))
+        files = []
+        for r in rels:
+            t = config.resolve_input(r)
+            if t is None or not t.is_file():
+                item.status = STATUS_FAILED
+                item.error = f"Datei nicht gefunden: {r}"
+                return
+            files.append(t)
+        out_path = _output_path(item)
+        cmd, err = remux.build_concat_cmd(files, out_path, config.WORK_DIR)
+        if err:
+            item.status = STATUS_FAILED
+            item.error = err
+            return
+        self._run_copy_job(item, info, cmd, out_path, "Zusammenführen (concat)")
+
+    def _process_split(self, item: "QueueItem", info) -> None:
+        """Quelle verlustfrei in Segmente splitten (Segment-Muxer)."""
+        from . import remux
+        s = item.settings
+        spec = s.edit_spec or {}
+        base = _output_path(item)
+        pattern = base.with_name(f"{Path(item.path).stem}_%03d{base.suffix}")
+        cmd, err = remux.build_split_cmd(
+            info, pattern, spec.get("split_mode", "chapters"),
+            spec.get("split_value"))
+        if err:
+            item.status = STATUS_FAILED
+            item.error = err
+            return
+        # Split erzeugt mehrere Dateien; Integritäts-/Nachbehandlung entfällt.
+        item.status = STATUS_RUNNING
+        item.message = "Splitten …"
+        self._refresh_global_msg()
+        pattern.parent.mkdir(parents=True, exist_ok=True)
+        _log_job_start(item, info, pattern, "Splitten")
+        _log_cmd(item, cmd)
+        runner = EncodeRunner()
+        with self._lock:
+            self._active[item.id] = runner
+        rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
+        if runner._cancel:
+            item.status = STATUS_CANCELLED
+        elif rc != 0:
+            item.status = STATUS_FAILED
+            item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+            logger.error("Splitten fehlgeschlagen: %s (Exit %s)\nSTDERR:\n%s",
+                         item.title, rc, stderr)
+        else:
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+            item.message = ""
+
     def _encode_to(self, item: "QueueItem", s: "JobSettings", info,
                    out_path: Path, on_prog) -> tuple:
         """Ein Encode-Durchlauf (Ein-/Zwei-Pass). Liefert
@@ -1239,6 +1388,9 @@ def build_job_settings(d: dict) -> JobSettings:
         audio_per_track=bool(d.get("audio_per_track", False)),
         audio_track_settings=list(d.get("audio_track_settings", [])),
         batch_id=str(d.get("batch_id", "") or ""),
+        edit_spec=dict(d.get("edit_spec", {}) or {}),
+        out_root=str(d.get("out_root", "") or ""),
+        out_subdir=str(d.get("out_subdir", "") or ""),
     )
 
 
@@ -1277,12 +1429,17 @@ def _output_path(item: QueueItem) -> Path:
     if item.settings.post_processing == "inplace":
         # Temporäre Datei neben dem Original
         return src.with_name(f"{src.stem}.__tmp__{ext}")
-    # In das Output-Volume spiegeln (relativer Pfad ab INPUT_DIR)
-    try:
-        rel = src.relative_to(config.INPUT_DIR)
-        target = config.OUTPUT_DIR / rel
-    except ValueError:
-        target = config.OUTPUT_DIR / src.name
+    base = config.resolve_output_base(getattr(item.settings, "out_root", ""))
+    sub = config.safe_subdir(getattr(item.settings, "out_subdir", ""))
+    if sub:
+        # Fester Ziel-Unterordner → Datei flach dort ablegen.
+        target = base / sub / src.name
+    else:
+        # In das Output-Volume spiegeln. Bei mehreren Input-Roots enthält der
+        # relative Pfad den Root-Namen als erstes Segment, damit sich
+        # gleichnamige Dateien aus verschiedenen Roots nicht überschreiben.
+        rel = config.rel_input(src)
+        target = (base / rel) if rel else (base / src.name)
     return target.with_name(f"{src.stem}{item.settings.suffix}{ext}")
 
 

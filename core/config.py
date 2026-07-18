@@ -53,6 +53,158 @@ def auth_token() -> str:
 INPUT_DIR = Path(os.getenv("INPUT_DIR", "/media/input"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/media/output"))
 
+# --- Mehrere Eingabe-Ordner ("virtuelle Roots") ------------------------------
+# Wer verschiedene Ordnerstrukturen einbinden will (Filme, Serien, Anime …),
+# ohne das ganze Laufwerk zu mounten, gibt sie über INPUT_DIRS an:
+#   INPUT_DIRS="Filme=/media/filme;Serien=/media/serien;Anime=/media/anime"
+# Einträge sind durch ; oder Zeilenumbruch getrennt, jeweils "Name=/pfad"
+# (Name optional – sonst der Ordnername). Ohne INPUT_DIRS gilt der einzelne
+# INPUT_DIR wie bisher. Relative Pfade sind bei mehreren Roots mit dem Root-Namen
+# als erstem Segment prefixed ("Filme/Unterordner/film.mkv").
+from typing import Iterator, Optional  # noqa: E402
+
+
+def _slug(name: str) -> str:
+    s = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (name or "").strip())
+    return s.strip("_") or "root"
+
+
+def _parse_roots(env_name: str, default_dir: Path,
+                 default_name: str) -> "list[tuple[str, Path]]":
+    raw = os.getenv(env_name, "").strip()
+    roots: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    if raw:
+        parts = [p.strip() for line in raw.splitlines() for p in line.split(";")]
+        for part in parts:
+            if not part:
+                continue
+            if "=" in part:
+                name, _, path = part.partition("=")
+            else:
+                name, path = "", part
+            p = Path(path.strip())
+            nm = _slug(name.strip() or p.name or "root")
+            base_nm, k = nm, 2
+            while nm in seen:
+                nm = f"{base_nm}{k}"
+                k += 1
+            seen.add(nm)
+            roots.append((nm, p))
+    if not roots:
+        roots = [(_slug(default_dir.name or default_name), default_dir)]
+    return roots
+
+
+INPUT_ROOTS: "list[tuple[str, Path]]" = _parse_roots("INPUT_DIRS", INPUT_DIR, "input")
+MULTI_INPUT = len(INPUT_ROOTS) > 1
+
+# --- Mehrere Ausgabe-Ordner (optional, analog zu INPUT_DIRS) -----------------
+# OUTPUT_DIRS="Standard=/media/output;NAS=/mnt/nas/encodes" – erlaubt pro Job die
+# Wahl eines Ziel-Volumes. Ohne die Variable gilt der einzelne OUTPUT_DIR.
+OUTPUT_ROOTS: "list[tuple[str, Path]]" = _parse_roots("OUTPUT_DIRS", OUTPUT_DIR, "output")
+MULTI_OUTPUT = len(OUTPUT_ROOTS) > 1
+
+
+def input_roots_public() -> "list[dict]":
+    """Roots für UI/API (Name + Pfad + Existenz)."""
+    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in INPUT_ROOTS]
+
+
+def output_roots_public() -> "list[dict]":
+    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in OUTPUT_ROOTS]
+
+
+def resolve_output_base(root_name: str) -> Path:
+    """Basis-Verzeichnis eines Output-Roots (Fallback: erster Root)."""
+    for name, base in OUTPUT_ROOTS:
+        if name == (root_name or ""):
+            return base
+    return OUTPUT_ROOTS[0][1]
+
+
+def safe_subdir(sub: str) -> str:
+    """Freien Ziel-Unterordner säubern (kein Pfad-Traversal, keine Wurzel)."""
+    parts = []
+    for seg in str(sub or "").replace("\\", "/").split("/"):
+        seg = seg.strip()
+        if not seg or seg in (".", ".."):
+            continue
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def _within(target: Path, base: Path) -> bool:
+    try:
+        target.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_input(rel: str) -> Optional[Path]:
+    """Relativen (root-aware) Pfad sicher in einen absoluten Pfad auflösen.
+
+    Einzel-Root: `rel` ist relativ zum Root (optionaler Root-Prefix erlaubt).
+    Multi-Root: erstes Segment = Root-Name, Rest = Unterpfad.
+    """
+    rel = (rel or "").strip().strip("/")
+    if len(INPUT_ROOTS) == 1:
+        name, base = INPUT_ROOTS[0]
+        base = base.resolve()
+        first, _, rest = rel.partition("/")
+        if first == name:
+            rel = rest
+        target = (base / rel).resolve() if rel else base
+        return target if _within(target, base) else None
+    if not rel:
+        return None
+    first, _, rest = rel.partition("/")
+    for name, base in INPUT_ROOTS:
+        if name == first:
+            b = base.resolve()
+            target = (b / rest).resolve() if rest else b
+            return target if _within(target, b) else None
+    return None
+
+
+def rel_input(abs_path) -> Optional[str]:
+    """Absoluten Pfad in einen root-aware relativen Pfad umwandeln (für UI/Output).
+
+    Einzel-Root: Unterpfad ohne Prefix (rückwärtskompatibel).
+    Multi-Root: "Root-Name/Unterpfad".
+    """
+    ap = Path(abs_path).resolve()
+    for name, base in INPUT_ROOTS:
+        b = base.resolve()
+        if _within(ap, b):
+            sub = ap.relative_to(b).as_posix()
+            if len(INPUT_ROOTS) == 1:
+                return "" if sub == "." else sub
+            return name if sub == "." else f"{name}/{sub}"
+    return None
+
+
+def scan_targets(root_rel: str) -> "list[Path]":
+    """Zu durchsuchende Verzeichnisse für einen (root-aware) Pfad bestimmen.
+
+    Leerer Pfad → alle vorhandenen Roots. Konkreter Pfad → genau dieser Ordner.
+    """
+    rel = (root_rel or "").strip().strip("/")
+    if rel:
+        target = resolve_input(rel)
+        if target and target.is_dir():
+            return [target]
+    return [b.resolve() for _, b in INPUT_ROOTS if b.exists()]
+
+
+def iter_input_files(root_rel: str, exts: set) -> "Iterator[Path]":
+    """Alle passenden Dateien unter dem/den Ziel-Root(s) (rekursiv)."""
+    for scan_dir in scan_targets(root_rel):
+        for f in scan_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in exts:
+                yield f
+
 # --- Persistenter Datenordner (App-intern, per Docker-Volume mounten) ---------
 # DATA_DIR ist die Wurzel für alles, was die App zwischen speichert:
 #   work/      – kurzlebige Encode-Zwischendateien
@@ -94,6 +246,21 @@ VERIFY_CLIP_SECONDS = max(5, int(os.getenv("VERIFY_CLIP_SECONDS", "15")))
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".mov", ".avi", ".m4v", ".ts", ".m2ts",
     ".mpg", ".mpeg", ".wmv", ".flv", ".webm", ".vob", ".mts",
+}
+
+# Externe Ton-/Untertitel-Dateien für den Remux-/Bearbeiten-Modus (Spuren
+# hinzufügen ohne Re-Encode). Videos zählen ebenfalls als Quelle (Spur daraus).
+AUDIO_EXTENSIONS = {
+    ".eac3", ".ac3", ".dts", ".thd", ".truehd", ".mlp", ".flac", ".aac",
+    ".m4a", ".mka", ".opus", ".ogg", ".mp3", ".wav", ".ac4",
+}
+SUBTITLE_EXTENSIONS = {
+    ".srt", ".ass", ".ssa", ".sup", ".sub", ".vtt", ".idx", ".pgs",
+}
+# Attachments (Fonts/Cover) für den Remux-Modus.
+ATTACHMENT_EXTENSIONS = {
+    ".ttf", ".otf", ".ttc", ".pfb", ".jpg", ".jpeg", ".png", ".webp",
+    ".txt",  # Kapitel-/ffmetadata-Dateien
 }
 
 ARCHIVE_DIRNAME = ".archiv"

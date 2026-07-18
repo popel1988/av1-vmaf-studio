@@ -24,17 +24,32 @@
     libRows: [],       // Bibliotheks-Treffer (für Sortierung/Filter/Gruppierung)
     libStats: null,    // Dashboard-Statistik des letzten Scans
     libSort: { key: "est_saved_bytes", dir: "desc" },
+    remuxLoaded: false, // Remux-Seite initialisiert
+    remuxSel: null,     // { path, name } der Remux-Quelle
+    remuxInfo: null,    // ffprobe-Info der Remux-Quelle
+    remuxExt: [],       // hinzugefügte externe Spuren
+    remuxExtPath: "",   // aktueller Ordner im externen Datei-Picker
+    remuxAtt: [],       // hinzugefügte Attachments (Fonts/Cover)
+    remuxChapters: null, // geladene/bearbeitete Kapitel (null = unverändert)
+    remuxMerge: [],     // Dateien für "Zusammenführen"
+    remuxPick: null,    // aktueller Modus des Datei-Pickers (ext|att|merge|chapters)
+    outPick: null,      // Zielordner-Picker (prefix/root/path)
   };
 
   // Absoluten Quellpfad (aus der Queue) in einen relativen Pfad zum
   // Eingabeordner umwandeln (für erneute Auswahl/Enqueue).
   function inputRelPath(abs) {
     if (!abs) return "";
-    const el = document.getElementById("input-dir");
-    let base = (el ? el.textContent : "") || "";
-    base = base.replace(/\\/g, "/").replace(/\/+$/, "");
-    let p = String(abs).replace(/\\/g, "/");
-    if (base && p.startsWith(base)) p = p.slice(base.length);
+    const p = String(abs).replace(/\\/g, "/");
+    const roots = (window.APP_CONFIG && window.APP_CONFIG.inputRoots) || [];
+    const multi = !!(window.APP_CONFIG && window.APP_CONFIG.multiInput);
+    for (const r of roots) {
+      const base = String(r.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      if (base && (p === base || p.startsWith(base + "/"))) {
+        const sub = p.slice(base.length).replace(/^\/+/, "");
+        return multi ? (sub ? `${r.name}/${sub}` : r.name) : sub;
+      }
+    }
     return p.replace(/^\/+/, "");
   }
 
@@ -75,6 +90,7 @@
     if (page === "stats") loadStats();
     if (page === "supertool") pollSuperStatus();
     if (page === "audio" && !state.audioLoaded) { state.audioLoaded = true; auLoadDir(""); }
+    if (page === "remux" && !state.remuxLoaded) { state.remuxLoaded = true; remuxInit(); }
     if (page === "diag" && !state.diagLoaded) loadDiagnostics();
   }
 
@@ -121,10 +137,11 @@
       state.browseData = data;
       renderBreadcrumb(data);
       renderBrowser(data);
-      // "Diesen Ordner als Batch" bezieht sich auf das aktuelle Verzeichnis
+      // "Diesen Ordner als Batch" bezieht sich auf das aktuelle Verzeichnis.
+      // Auf der virtuellen Wurzel (Root-Liste) nicht sinnvoll → deaktivieren.
       const folderBtn = $("btn-select-folder");
-      folderBtn.disabled = false;
-      folderBtn.onclick = () => selectFolder(data.path, data.is_root);
+      folderBtn.disabled = !!data.roots;
+      folderBtn.onclick = data.roots ? null : () => selectFolder(data.path, data.is_root);
     } catch (e) {
       browser.innerHTML = `<div class="browser-loading">Fehler: ${e}</div>`;
     }
@@ -177,7 +194,7 @@
     const bc = $("breadcrumb");
     bc.innerHTML = "";
     const root = document.createElement("a");
-    root.textContent = "/media/input";
+    root.textContent = (window.APP_CONFIG && window.APP_CONFIG.multiInput) ? "Ordner" : "/media/input";
     root.onclick = () => loadDir("");
     bc.appendChild(root);
     if (data.path) {
@@ -766,7 +783,100 @@
       audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
       audio_track_settings: perTrack || [],
       container: $("opt-container") ? $("opt-container").value : "auto",
+      ...outTargetVals("opt"),
     };
+  }
+
+  // Zielort (Output-Root + Unterordner) für ein Feld-Präfix (z. B. "opt", "remux").
+  function outTargetVals(prefix) {
+    const rootEl = $(prefix + "-out-root");
+    const subEl = $(prefix + "-out-subdir");
+    return {
+      out_root: rootEl ? rootEl.value : "",
+      out_subdir: subEl ? (subEl.value || "").trim() : "",
+    };
+  }
+
+  // Output-Root-Dropdowns befüllen; nur einblenden, wenn mehrere Roots existieren.
+  function initOutputRoots() {
+    const roots = (window.APP_CONFIG && APP_CONFIG.outputRoots) || [];
+    const multi = !!(window.APP_CONFIG && APP_CONFIG.multiOutput);
+    ["opt", "remux", "merge", "split"].forEach((prefix) => {
+      const sel = $(prefix + "-out-root");
+      if (sel) {
+        sel.innerHTML = roots
+          .map((r) => `<option value="${r.name}">${r.name}</option>`)
+          .join("");
+        const field = sel.closest("[data-out-root-field]");
+        if (field) field.style.display = multi ? "" : "none";
+      }
+      const browse = $(prefix + "-out-browse");
+      if (browse) browse.addEventListener("click", () => openOutPicker(prefix));
+    });
+  }
+
+  // Ordner-Browser fürs Ausgabe-Volume: Unterordner auswählen (oder Wurzel).
+  function openOutPicker(prefix) {
+    const rootEl = $(prefix + "-out-root");
+    state.outPick = { prefix, root: rootEl ? rootEl.value : "", path: "" };
+    openModal("Zielordner wählen",
+      '<div class="breadcrumb" id="out-pick-crumb"></div>' +
+      '<div class="browser browser-sm" id="out-pick-browser"><div class="browser-loading">Lade …</div></div>' +
+      '<div class="lib-actions" style="margin-top:10px">' +
+      '<button class="btn btn-primary btn-sm" id="out-pick-choose">Diesen Ordner wählen</button>' +
+      '<span id="out-pick-sel" class="muted"></span></div>');
+    const choose = $("out-pick-choose");
+    if (choose) choose.addEventListener("click", () => {
+      const sub = (state.outPick || {}).path || "";
+      const el = $(prefix + "-out-subdir");
+      if (el) el.value = sub;
+      closeModal();
+    });
+    outPickLoadDir("");
+  }
+
+  async function outPickLoadDir(path) {
+    const el = $("out-pick-browser");
+    if (!el) return;
+    const root = (state.outPick || {}).root || "";
+    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+    try {
+      const data = await (await fetch(
+        `/api/browse-output?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`)).json();
+      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      state.outPick.path = data.path || "";
+      const sel = $("out-pick-sel");
+      if (sel) sel.textContent = data.path ? `Ziel: ${data.path}` : "Ziel: (Wurzel)";
+      const bc = $("out-pick-crumb");
+      if (bc) {
+        bc.innerHTML = "";
+        const r = document.createElement("a");
+        r.textContent = root || "Ausgabe";
+        r.onclick = () => outPickLoadDir("");
+        bc.appendChild(r);
+        if (data.path) {
+          let acc = "";
+          data.path.split("/").forEach((p) => {
+            acc = acc ? `${acc}/${p}` : p;
+            const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
+            const a = document.createElement("a"); a.textContent = p;
+            const t = acc; a.onclick = () => outPickLoadDir(t); bc.appendChild(a);
+          });
+        }
+      }
+      el.innerHTML = "";
+      if (data.parent !== null && data.parent !== undefined)
+        el.appendChild(stDirRow("..", () => outPickLoadDir(data.parent || "")));
+      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => outPickLoadDir(d.rel))));
+      if (!(data.dirs || []).length) {
+        const hint = document.createElement("div");
+        hint.className = "browser-loading";
+        hint.textContent = data.exists ? "Keine Unterordner." : "Ordner wird beim Job angelegt.";
+        el.appendChild(hint);
+      }
+    } catch (e) {
+      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
   }
 
   // Encoding-Seite: reines Encoden mit manuellem Wert (keine Test-Encodes).
@@ -3101,6 +3211,591 @@
     }
   }
 
+  /* ---------------------------------------------- REMUX & BEARBEITEN */
+  const RX_MP4_AUDIO_COPY = new Set(["aac", "ac3", "eac3", "mp3", "opus", "alac", "ac4"]);
+  const RX_IMAGE_SUBS = new Set(["hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "pgssub", "pgs"]);
+  const RX_EXT_IMAGE = new Set(["sup", "pgs", "idx", "sub"]);
+
+  function remuxInit() {
+    const cont = $("remux-container");
+    if (cont) cont.addEventListener("change", () => { if (state.remuxInfo) remuxRenderEditor(); });
+    const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
+    on("btn-remux-add-ext", () => remuxOpenPicker("ext", "aux"));
+    on("btn-remux-add-att", () => remuxOpenPicker("att", "att"));
+    on("btn-remux-extract", remuxExtract);
+    on("btn-remux-load-chapters", remuxLoadChapters);
+    on("btn-remux-start", remuxStart);
+    on("btn-merge-add", () => remuxOpenPicker("merge", "aux"));
+    on("btn-merge-start", remuxMergeStart);
+    on("btn-split-start", remuxSplitStart);
+    const sm = $("split-mode");
+    if (sm) sm.addEventListener("change", () => {
+      $("split-dur-field").style.display = sm.value === "duration" ? "" : "none";
+    });
+    remuxLoadDir("");
+  }
+
+  async function remuxLoadDir(path) {
+    const el = $("remux-browser");
+    if (!el) return;
+    state.currentRemuxPath = path;
+    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+    try {
+      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
+      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      remuxRenderCrumb(data);
+      el.innerHTML = "";
+      if (!data.is_root) el.appendChild(stDirRow("..", () => remuxLoadDir(data.parent || "")));
+      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => remuxLoadDir(d.rel))));
+      (data.files || []).forEach((f) =>
+        el.appendChild(makeRow("file", f.name, f.size_human, null, () => remuxSelectFile(f), f.rel)));
+    } catch (e) {
+      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  function remuxRenderCrumb(data) {
+    const bc = $("remux-breadcrumb");
+    if (!bc) return;
+    bc.innerHTML = "";
+    const root = document.createElement("a");
+    root.textContent = "/media/input";
+    root.onclick = () => remuxLoadDir("");
+    bc.appendChild(root);
+    if (data.path) {
+      let acc = "";
+      data.path.split("/").forEach((p) => {
+        acc = acc ? `${acc}/${p}` : p;
+        const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
+        const a = document.createElement("a"); a.textContent = p;
+        const target = acc; a.onclick = () => remuxLoadDir(target); bc.appendChild(a);
+      });
+    }
+  }
+
+  async function remuxSelectFile(f) {
+    state.remuxSel = { path: f.rel, name: f.name };
+    state.remuxExt = [];
+    state.remuxAtt = [];
+    state.remuxChapters = null;
+    $("remux-chapters-wrap").style.display = "none";
+    $("remux-chapters-info").textContent = "";
+    const splitBtn = $("btn-split-start");
+    if (splitBtn) splitBtn.disabled = false;
+    $("remux-badge").textContent = `${f.name} · analysiere …`;
+    document.querySelectorAll("#remux-browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
+    try {
+      const info = await (await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
+      if (info.error) { $("remux-badge").textContent = info.error; return; }
+      state.remuxInfo = info;
+      $("remux-badge").textContent = f.name;
+      $("remux-editor").style.display = "";
+      remuxRenderEditor();
+    } catch (e) {
+      $("remux-badge").textContent = `Analyse-Fehler: ${e}`;
+    }
+  }
+
+  function remuxOrderBtns() {
+    return '<button class="btn btn-ghost btn-sm iconbtn rx-up" title="Nach oben">↑</button>' +
+           '<button class="btn btn-ghost btn-sm iconbtn rx-down" title="Nach unten">↓</button>';
+  }
+
+  function remuxMoveRow(tr, dir) {
+    if (!tr) return;
+    if (dir < 0 && tr.previousElementSibling) {
+      tr.parentNode.insertBefore(tr, tr.previousElementSibling);
+    } else if (dir > 0 && tr.nextElementSibling) {
+      tr.parentNode.insertBefore(tr.nextElementSibling, tr);
+    }
+  }
+
+  function remuxAudioCodecSelect(cls, sel) {
+    const opts = [["eac3", "E-AC3"], ["ac3", "AC3"], ["aac", "AAC"], ["opus", "Opus"], ["flac", "FLAC"]];
+    return `<select class="${cls}">` +
+      opts.map(([v, l]) => `<option value="${v}"${v === sel ? " selected" : ""}>${l}</option>`).join("") +
+      `</select>`;
+  }
+
+  function remuxRenderEditor() {
+    const info = state.remuxInfo || {};
+    // Audio-Tabelle
+    const ab = $("remux-audio-body");
+    ab.innerHTML = "";
+    (info.audio || []).forEach((a) => {
+      const tr = document.createElement("tr");
+      tr.dataset.aindex = a.index;
+      tr.innerHTML = `
+        <td><input type="checkbox" class="rx-a-keep" checked></td>
+        <td>#${a.index} · ${escapeHtml(a.codec)} ${a.channels || "?"}ch · ${escapeHtml(a.language || "und")} · ${escapeHtml(a.bitrate_human || "—")}${a.title ? " · " + escapeHtml(a.title) : ""}</td>
+        <td><input type="checkbox" class="rx-a-default"${a.default ? " checked" : ""}></td>
+        <td><input type="checkbox" class="rx-a-forced"${a.forced ? " checked" : ""}></td>
+        <td><input type="text" class="rx-a-lang" value="${escapeHtml(a.language || "")}" size="4"></td>
+        <td><input type="text" class="rx-a-title" value="${escapeHtml(a.title || "")}"></td>
+        <td class="rx-tc-cell">
+          <label class="check"><input type="checkbox" class="rx-a-tc"><span>→</span></label>
+          ${remuxAudioCodecSelect("rx-a-codec", "eac3")}
+          <input type="number" class="rx-a-br" value="640" min="64" max="1536" step="64" style="width:70px">
+        </td>
+        <td class="row-actions">${remuxOrderBtns()}</td>`;
+      ab.appendChild(tr);
+    });
+    if (!(info.audio || []).length) ab.innerHTML = '<tr class="empty-row"><td colspan="8">Keine Tonspuren.</td></tr>';
+
+    // Untertitel-Tabelle
+    const sb = $("remux-sub-body");
+    sb.innerHTML = "";
+    (info.subtitles || []).forEach((s) => {
+      const tr = document.createElement("tr");
+      tr.dataset.sindex = s.index;
+      tr.innerHTML = `
+        <td><input type="checkbox" class="rx-s-keep" checked></td>
+        <td>#${s.index} · ${escapeHtml(s.codec)} · ${escapeHtml(s.language || "und")}${s.title ? " · " + escapeHtml(s.title) : ""}</td>
+        <td><input type="checkbox" class="rx-s-default"${s.default ? " checked" : ""}></td>
+        <td><input type="checkbox" class="rx-s-forced"${s.forced ? " checked" : ""}></td>
+        <td><input type="text" class="rx-s-lang" value="${escapeHtml(s.language || "")}" size="4"></td>
+        <td><input type="text" class="rx-s-title" value="${escapeHtml(s.title || "")}"></td>
+        <td class="row-actions">${remuxOrderBtns()}</td>`;
+      sb.appendChild(tr);
+    });
+    if (!(info.subtitles || []).length) sb.innerHTML = '<tr class="empty-row"><td colspan="7">Keine Untertitel.</td></tr>';
+
+    ["rx-a-keep", "rx-s-keep", "rx-a-tc"].forEach((c) =>
+      document.querySelectorAll(`#remux-editor .${c}`).forEach((el) =>
+        el.addEventListener("change", remuxUpdateConflicts)));
+    document.querySelectorAll("#remux-audio-body .rx-up, #remux-audio-body .rx-down, #remux-sub-body .rx-up, #remux-sub-body .rx-down")
+      .forEach((b) => b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        remuxMoveRow(b.closest("tr"), b.classList.contains("rx-up") ? -1 : 1);
+      }));
+
+    remuxRenderExternals();
+    remuxUpdateConflicts();
+    $("btn-remux-start").disabled = false;
+  }
+
+  function remuxRenderExternals() {
+    const eb = $("remux-ext-body");
+    eb.innerHTML = "";
+    if (!state.remuxExt.length) {
+      eb.innerHTML = '<tr class="empty-row"><td colspan="8">Keine externen Spuren.</td></tr>';
+      return;
+    }
+    state.remuxExt.forEach((e, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(e.name)}${e.desc ? `<div class="muted" style="font-size:11px">${escapeHtml(e.desc)}</div>` : ""}</td>
+        <td>${e.type === "subtitle" ? "Untertitel" : "Ton"}</td>
+        <td><input type="text" class="rx-e-lang" data-i="${i}" value="${escapeHtml(e.language || "")}" size="4"></td>
+        <td><input type="text" class="rx-e-title" data-i="${i}" value="${escapeHtml(e.title || "")}"></td>
+        <td><input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:70px"></td>
+        <td><input type="checkbox" class="rx-e-default" data-i="${i}"></td>
+        <td><input type="checkbox" class="rx-e-forced" data-i="${i}"></td>
+        <td class="row-actions"><button class="btn btn-ghost btn-sm iconbtn rx-e-up" data-i="${i}" title="Nach oben">↑</button><button class="btn btn-ghost btn-sm iconbtn rx-e-down" data-i="${i}" title="Nach unten">↓</button></td>
+        <td><button class="btn btn-ghost btn-sm bad-btn rx-e-del" data-i="${i}">✕</button></td>`;
+      eb.appendChild(tr);
+    });
+    const flush = () => { remuxSyncExternalInputs(); remuxRenderExternals(); remuxUpdateConflicts(); };
+    document.querySelectorAll(".rx-e-del").forEach((b) =>
+      b.addEventListener("click", () => { state.remuxExt.splice(parseInt(b.dataset.i, 10), 1); flush(); }));
+    document.querySelectorAll(".rx-e-up").forEach((b) =>
+      b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), -1); flush(); }));
+    document.querySelectorAll(".rx-e-down").forEach((b) =>
+      b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), 1); flush(); }));
+  }
+
+  // Vor dem Neu-Rendern die editierten Werte aus dem DOM in den State übernehmen,
+  // damit Reihenfolge-Änderungen nichts überschreiben.
+  function remuxSyncExternalInputs() {
+    state.remuxExt.forEach((e, i) => {
+      const g = (c) => document.querySelector(`.${c}[data-i="${i}"]`);
+      if (g("rx-e-lang")) e.language = g("rx-e-lang").value.trim();
+      if (g("rx-e-title")) e.title = g("rx-e-title").value.trim();
+      if (g("rx-e-delay")) e.delay = parseFloat(g("rx-e-delay").value) || 0;
+      if (g("rx-e-default")) e.default = g("rx-e-default").checked;
+      if (g("rx-e-forced")) e.forced = g("rx-e-forced").checked;
+    });
+  }
+
+  function remuxArrMove(arr, i, dir) {
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+
+  const RX_PICK_TITLE = {
+    ext: "Externe Ton-/Untertiteldatei auswählen",
+    att: "Attachment (Font/Cover) auswählen",
+    merge: "Datei zum Zusammenführen auswählen",
+  };
+
+  function remuxOpenPicker(mode, kind) {
+    state.remuxPick = { mode, kind: kind || "aux" };
+    openModal(RX_PICK_TITLE[mode] || "Datei auswählen",
+      '<div class="breadcrumb" id="remux-ext-breadcrumb"></div>' +
+      '<div class="browser browser-sm" id="remux-ext-browser"><div class="browser-loading">Lade …</div></div>');
+    remuxPickLoadDir("");
+  }
+
+  function remuxPickChoose(f) {
+    const mode = (state.remuxPick || {}).mode;
+    if (mode === "att") {
+      state.remuxAtt.push({ path: f.rel, name: f.name });
+      closeModal();
+      remuxRenderAttachments();
+    } else if (mode === "merge") {
+      state.remuxMerge.push({ path: f.rel, name: f.name });
+      closeModal();
+      remuxRenderMerge();
+    } else {
+      remuxAddExternal(f);
+    }
+  }
+
+  async function remuxPickLoadDir(path) {
+    const el = $("remux-ext-browser");
+    if (!el) return;
+    const kind = (state.remuxPick || {}).kind || "aux";
+    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+    try {
+      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`)).json();
+      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      const bc = $("remux-ext-breadcrumb");
+      if (bc) {
+        bc.innerHTML = "";
+        const root = document.createElement("a");
+        root.textContent = (window.APP_CONFIG && window.APP_CONFIG.multiInput) ? "Ordner" : "/media/input";
+        root.onclick = () => remuxPickLoadDir("");
+        bc.appendChild(root);
+        if (data.path) {
+          let acc = "";
+          data.path.split("/").forEach((p) => {
+            acc = acc ? `${acc}/${p}` : p;
+            const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
+            const a = document.createElement("a"); a.textContent = p;
+            const t = acc; a.onclick = () => remuxPickLoadDir(t); bc.appendChild(a);
+          });
+        }
+      }
+      el.innerHTML = "";
+      if (!data.is_root) el.appendChild(stDirRow("..", () => remuxPickLoadDir(data.parent || "")));
+      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => remuxPickLoadDir(d.rel))));
+      (data.files || []).forEach((f) =>
+        el.appendChild(makeRow("file", f.name, f.size_human, null, () => remuxPickChoose(f), null)));
+    } catch (e) {
+      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  async function remuxAddExternal(f) {
+    closeModal();
+    $("remux-start-info").textContent = `Analysiere ${f.name} …`;
+    try {
+      const data = await (await fetch(`/api/remux/probe?path=${encodeURIComponent(f.rel)}`)).json();
+      if (data.error) { $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
+      const streams = [];
+      (data.audio || []).forEach((a) => streams.push({
+        type: "audio", stream: a.index,
+        desc: `Ton #${a.index} · ${a.codec} ${a.channels || "?"}ch · ${a.bitrate_human || "—"}`,
+        language: a.language, title: a.title,
+      }));
+      (data.subtitles || []).forEach((s) => streams.push({
+        type: "subtitle", stream: s.index,
+        desc: `UT #${s.index} · ${s.codec}`,
+        language: s.language, title: s.title,
+      }));
+      if (!streams.length) {
+        $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(f.name)}: keine Ton-/Untertitelspuren gefunden.</span>`;
+        return;
+      }
+      streams.forEach((st) => state.remuxExt.push({
+        path: f.rel, name: f.name, type: st.type, stream: st.stream, desc: st.desc,
+        language: (st.language && st.language !== "und") ? st.language : "",
+        title: st.title || "", delay: 0, default: false, forced: false,
+      }));
+      $("remux-start-info").textContent = `${streams.length} Spur(en) aus ${f.name} hinzugefügt.`;
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+      return;
+    }
+    remuxRenderExternals();
+    remuxUpdateConflicts();
+  }
+
+  function remuxGatherSpec() {
+    const audio = [];
+    document.querySelectorAll("#remux-audio-body tr[data-aindex]").forEach((tr) => {
+      const q = (c) => tr.querySelector("." + c);
+      audio.push({
+        index: parseInt(tr.dataset.aindex, 10),
+        keep: q("rx-a-keep").checked,
+        default: q("rx-a-default").checked,
+        forced: q("rx-a-forced").checked,
+        language: q("rx-a-lang").value.trim(),
+        title: q("rx-a-title").value.trim(),
+        transcode: q("rx-a-tc").checked,
+        codec: q("rx-a-codec").value,
+        bitrate: parseInt(q("rx-a-br").value, 10) || 640,
+      });
+    });
+    const subtitles = [];
+    document.querySelectorAll("#remux-sub-body tr[data-sindex]").forEach((tr) => {
+      const q = (c) => tr.querySelector("." + c);
+      subtitles.push({
+        index: parseInt(tr.dataset.sindex, 10),
+        keep: q("rx-s-keep").checked,
+        default: q("rx-s-default").checked,
+        forced: q("rx-s-forced").checked,
+        language: q("rx-s-lang").value.trim(),
+        title: q("rx-s-title").value.trim(),
+      });
+    });
+    // Externe: Werte aus DOM aktualisieren
+    state.remuxExt.forEach((e, i) => {
+      const g = (c) => document.querySelector(`.${c}[data-i="${i}"]`);
+      if (g("rx-e-lang")) e.language = g("rx-e-lang").value.trim();
+      if (g("rx-e-title")) e.title = g("rx-e-title").value.trim();
+      if (g("rx-e-delay")) e.delay = parseFloat(g("rx-e-delay").value) || 0;
+      if (g("rx-e-default")) e.default = g("rx-e-default").checked;
+      if (g("rx-e-forced")) e.forced = g("rx-e-forced").checked;
+    });
+    const spec = {
+      container: $("remux-container").value,
+      keep_chapters: $("remux-keep-chapters").checked,
+      keep_metadata: $("remux-keep-metadata").checked,
+      keep_attachments: $("remux-keep-att").checked,
+      audio, subtitles,
+      external: state.remuxExt.map((e) => ({ ...e })),
+      add_attachments: state.remuxAtt.map((a) => ({ path: a.path })),
+    };
+    const ts = parseFloat($("remux-trim-start").value) || 0;
+    const te = parseFloat($("remux-trim-end").value) || 0;
+    if (ts > 0 || te > 0) spec.trim = { start: ts, end: te };
+    // Kapitel nur mitsenden, wenn geladen/bearbeitet (sonst greift keep_chapters).
+    if (state.remuxChapters) {
+      spec.chapters = state.remuxChapters.map((c, i) => ({
+        start: c.start, end: c.end,
+        title: (document.querySelector(`.rx-ch-title[data-i="${i}"]`) || {}).value || c.title,
+      }));
+    }
+    return spec;
+  }
+
+  function remuxRenderAttachments() {
+    const box = $("remux-att-list");
+    if (!state.remuxAtt.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+    box.style.display = "";
+    box.innerHTML = "Attachments: " + state.remuxAtt.map((a, i) =>
+      `${escapeHtml(a.name)} <a href="#" data-i="${i}" class="rx-att-del">✕</a>`).join(" · ");
+    box.querySelectorAll(".rx-att-del").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        state.remuxAtt.splice(parseInt(el.dataset.i, 10), 1);
+        remuxRenderAttachments();
+      }));
+  }
+
+  async function remuxLoadChapters() {
+    if (!state.remuxSel) return;
+    $("remux-chapters-info").textContent = "Lade Kapitel …";
+    try {
+      const data = await (await fetch(`/api/remux/chapters?path=${encodeURIComponent(state.remuxSel.path)}`)).json();
+      state.remuxChapters = data.chapters || [];
+      const body = $("remux-chapters-body");
+      body.innerHTML = "";
+      if (!state.remuxChapters.length) {
+        $("remux-chapters-info").textContent = "Keine Kapitel vorhanden.";
+        $("remux-chapters-wrap").style.display = "none";
+        state.remuxChapters = null;
+        return;
+      }
+      state.remuxChapters.forEach((c, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i + 1}</td><td>${fmtClock(c.start)}</td>` +
+          `<td><input type="text" class="rx-ch-title" data-i="${i}" value="${escapeHtml(c.title || "")}" style="width:100%"></td>`;
+        body.appendChild(tr);
+      });
+      $("remux-chapters-wrap").style.display = "";
+      $("remux-chapters-info").textContent = `${state.remuxChapters.length} Kapitel – Titel bearbeitbar.`;
+    } catch (e) {
+      $("remux-chapters-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  function fmtClock(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  }
+
+  async function remuxExtract() {
+    if (!state.remuxInfo) return;
+    const tracks = [];
+    document.querySelectorAll("#remux-audio-body tr[data-aindex]").forEach((tr) => {
+      if (tr.querySelector(".rx-a-keep").checked)
+        tracks.push({ type: "audio", index: parseInt(tr.dataset.aindex, 10) });
+    });
+    document.querySelectorAll("#remux-sub-body tr[data-sindex]").forEach((tr) => {
+      if (tr.querySelector(".rx-s-keep").checked)
+        tracks.push({ type: "subtitle", index: parseInt(tr.dataset.sindex, 10) });
+    });
+    if (!tracks.length) { $("remux-start-info").innerHTML = '<span class="bad">Keine (behaltene) Spur zum Extrahieren.</span>'; return; }
+    $("remux-start-info").textContent = "Extrahiere …";
+    try {
+      const data = await (await fetch("/api/remux/extract", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: state.remuxSel.path, tracks, ...outTargetVals("remux") }),
+      })).json();
+      if (data.error) { $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
+      const n = (data.extracted || []).length;
+      const errs = (data.errors || []).length ? ` (${data.errors.length} Fehler)` : "";
+      $("remux-start-info").innerHTML = `<span class="good">${n} Spur(en) in den Ausgabeordner extrahiert${errs}.</span>`;
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  function remuxRenderMerge() {
+    const body = $("remux-merge-body");
+    body.innerHTML = "";
+    if (!state.remuxMerge.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="4">Keine Dateien.</td></tr>';
+      $("btn-merge-start").disabled = true;
+      return;
+    }
+    state.remuxMerge.forEach((m, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${i + 1}</td><td>${escapeHtml(m.name)}</td>` +
+        `<td class="row-actions"><button class="btn btn-ghost btn-sm iconbtn mg-up" data-i="${i}">↑</button><button class="btn btn-ghost btn-sm iconbtn mg-down" data-i="${i}">↓</button></td>` +
+        `<td><button class="btn btn-ghost btn-sm bad-btn mg-del" data-i="${i}">✕</button></td>`;
+      body.appendChild(tr);
+    });
+    $("btn-merge-start").disabled = state.remuxMerge.length < 2;
+    body.querySelectorAll(".mg-del").forEach((b) =>
+      b.addEventListener("click", () => { state.remuxMerge.splice(parseInt(b.dataset.i, 10), 1); remuxRenderMerge(); }));
+    body.querySelectorAll(".mg-up").forEach((b) =>
+      b.addEventListener("click", () => { remuxArrMove(state.remuxMerge, parseInt(b.dataset.i, 10), -1); remuxRenderMerge(); }));
+    body.querySelectorAll(".mg-down").forEach((b) =>
+      b.addEventListener("click", () => { remuxArrMove(state.remuxMerge, parseInt(b.dataset.i, 10), 1); remuxRenderMerge(); }));
+  }
+
+  async function remuxMergeStart() {
+    if (state.remuxMerge.length < 2) return;
+    $("merge-info").textContent = "Wird eingereiht …";
+    try {
+      const data = await (await fetch("/api/remux/concat", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paths: state.remuxMerge.map((m) => m.path),
+          container: $("merge-container").value,
+          ...outTargetVals("merge"),
+        }),
+      })).json();
+      $("merge-info").innerHTML = data.error
+        ? `<span class="bad">${escapeHtml(data.error)}</span>`
+        : `<span class="good">Zusammenführen eingereiht.</span>`;
+    } catch (e) {
+      $("merge-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  async function remuxSplitStart() {
+    if (!state.remuxSel) { $("split-info").innerHTML = '<span class="bad">Erst oben eine Quelle wählen.</span>'; return; }
+    $("split-info").textContent = "Wird eingereiht …";
+    try {
+      const data = await (await fetch("/api/remux/split", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: state.remuxSel.path,
+          mode: $("split-mode").value,
+          value: parseFloat($("split-value").value) || 0,
+          container: $("remux-container").value,
+          ...outTargetVals("split"),
+        }),
+      })).json();
+      $("split-info").innerHTML = data.error
+        ? `<span class="bad">${escapeHtml(data.error)}</span>`
+        : `<span class="good">Splitten eingereiht.</span>`;
+    } catch (e) {
+      $("split-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  function remuxCheckConflicts(spec) {
+    if (spec.container !== "mp4") return [];
+    const out = [];
+    const info = state.remuxInfo || {};
+    const aMap = {}; (info.audio || []).forEach((a) => { aMap[a.index] = a; });
+    const sMap = {}; (info.subtitles || []).forEach((s) => { sMap[s.index] = s; });
+    spec.audio.forEach((a) => {
+      if (!a.keep || a.transcode) return;
+      const codec = ((aMap[a.index] || {}).codec || "").toLowerCase();
+      if (!RX_MP4_AUDIO_COPY.has(codec))
+        out.push(`Tonspur #${a.index} (${codec}) ist in MP4 nicht kopierbar – MKV wählen oder „Transcode" aktivieren.`);
+    });
+    spec.subtitles.forEach((s) => {
+      if (!s.keep) return;
+      const codec = ((sMap[s.index] || {}).codec || "").toLowerCase();
+      if (RX_IMAGE_SUBS.has(codec))
+        out.push(`Untertitel #${s.index} (${codec}) ist ein Bild-Untertitel und in MP4 nicht möglich (MKV wählen).`);
+    });
+    spec.external.forEach((e) => {
+      const suf = (e.name.split(".").pop() || "").toLowerCase();
+      if (e.type === "subtitle" && RX_EXT_IMAGE.has(suf))
+        out.push(`Externer Bild-Untertitel „${e.name}“ ist in MP4 nicht möglich (MKV wählen).`);
+    });
+    return out;
+  }
+
+  function remuxUpdateConflicts() {
+    if (!state.remuxInfo) return;
+    const box = $("remux-conflicts");
+    const conflicts = remuxCheckConflicts(remuxGatherSpec());
+    if (conflicts.length) {
+      box.style.display = "";
+      box.innerHTML = "⚠ " + conflicts.map(escapeHtml).join("<br>");
+    } else {
+      box.style.display = "none";
+      box.innerHTML = "";
+    }
+  }
+
+  async function remuxStart() {
+    if (!state.remuxSel) return;
+    const spec = remuxGatherSpec();
+    const conflicts = remuxCheckConflicts(spec);
+    if (conflicts.length) {
+      $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(conflicts[0])}</span>`;
+      return;
+    }
+    const btn = $("btn-remux-start");
+    btn.disabled = true;
+    $("remux-start-info").textContent = "Wird eingereiht …";
+    try {
+      const res = await fetch("/api/remux/enqueue", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: state.remuxSel.path,
+          spec,
+          container: spec.container,
+          post_processing: $("remux-post").value,
+          integrity_check: $("remux-integrity").checked,
+          safe_replace: $("remux-safe").checked,
+          suffix: $("remux-suffix").value.trim() || "_remux",
+          ...outTargetVals("remux"),
+        }),
+      });
+      const data = await res.json();
+      $("remux-start-info").innerHTML = data.error
+        ? `<span class="bad">${escapeHtml(data.error)}</span>`
+        : `<span class="good">Remux-Auftrag eingereiht (Warteschlange).</span>`;
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function audioStartScan() {
     const info = $("audio-scan-info");
     if (info) info.textContent = "Scan gestartet …";
@@ -3520,6 +4215,7 @@
     initAbCompare();
     initAudioOpt();
     initDiagnostics();
+    initOutputRoots();
     loadCapabilities();
     const bSearch = $("browser-search");
     if (bSearch) bSearch.addEventListener("input", onBrowserSearch);

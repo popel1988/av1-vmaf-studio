@@ -247,15 +247,7 @@ def _dynamic_match(info, dynamic_filter: str) -> bool:
 
 def _run(root_rel: str, filters: dict) -> None:
     try:
-        base = config.INPUT_DIR
-        root = (base / root_rel.lstrip("/")).resolve() if root_rel else base.resolve()
-        try:
-            root.relative_to(base.resolve())
-        except ValueError:
-            root = base.resolve()
-
-        files = [f for f in root.rglob("*")
-                 if f.is_file() and f.suffix.lower() in config.VIDEO_EXTENSIONS]
+        files = list(config.iter_input_files(root_rel, config.VIDEO_EXTENSIONS))
         with _lock:
             _state["total"] = len(files)
 
@@ -283,10 +275,7 @@ def _run(root_rel: str, filters: dict) -> None:
                 # Ausschluss: greift auf den gesamten (relativen) Pfad, damit auch
                 # ganze Ordner wie „.archiv" übersprungen werden können.
                 if name_exclude:
-                    try:
-                        rel_low = str(f.relative_to(base)).replace("\\", "/").lower()
-                    except ValueError:
-                        rel_low = f.name.lower()
+                    rel_low = (config.rel_input(f) or f.name).lower()
                     if any(t in rel_low for t in name_exclude):
                         continue
                 if min_size and f.stat().st_size < min_size:
@@ -309,10 +298,7 @@ def _run(root_rel: str, filters: dict) -> None:
             if not _dynamic_match(info, dynamic_filter):
                 continue
 
-            try:
-                rel = str(f.relative_to(base)).replace("\\", "/")
-            except ValueError:
-                rel = f.name
+            rel = config.rel_input(f) or f.name
 
             # Bereits verarbeitete Dateien überspringen (Historie).
             if skip_processed and history.is_processed(str(f)):

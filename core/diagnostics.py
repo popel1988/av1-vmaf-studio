@@ -253,7 +253,9 @@ def _hardware_section(monitor) -> dict:
 def _storage_section() -> dict:
     checks: list[dict] = []
     dirs = [
-        ("Eingabe", config.INPUT_DIR, False),
+        (f"Eingabe [{name}]", base, False)
+        for name, base in config.INPUT_ROOTS
+    ] + [
         ("Ausgabe", config.OUTPUT_DIR, True),
         ("Daten", config.DATA_DIR, True),
         ("Arbeitsordner", config.WORK_DIR, True),

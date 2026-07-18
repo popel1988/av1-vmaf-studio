@@ -250,6 +250,12 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 }
 .browser-sm { max-height: 220px; }
 
+/* Remux & Bearbeiten */
+.sub-head { margin: 16px 0 6px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.rx-tc-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#remux-audio-table input[type="text"], #remux-sub-table input[type="text"] { width: 100%; min-width: 60px; }
+#remux-audio-table td, #remux-sub-table td, #remux-ext-table td { vertical-align: middle; }
+
 /* A/B-Vergleichsplayer */
 .ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
 .ab-videos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
@@ -388,6 +394,8 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 /* --- Queue: klickbare Zeilen für Detail-Ansicht --- */
 tr.queue-row { cursor: pointer; }
 tr.queue-row:hover { background: rgba(127,127,127,.08); }
+/* Alle Zellen mittig ausrichten, damit Badges/Buttons die Zeile nicht versetzen. */
+.queue-table td { vertical-align: middle; }
 .queue-title-link { text-decoration: underline dotted; text-underline-offset: 2px; }
 
 /* --- Modal (Detail-Ansicht / Player) --- */
@@ -464,6 +472,9 @@ tr.queue-row:hover { background: rgba(127,127,127,.08); }
 /* ----------------------------- SETTINGS --------------------------------- */
 .settings { display: flex; flex-direction: column; gap: 14px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.subdir-row { display: flex; gap: 8px; align-items: center; }
+.subdir-row input { flex: 1 1 auto; min-width: 0; }
+.subdir-row .btn { flex: 0 0 auto; white-space: nowrap; }
 .check { display: flex; align-items: center; gap: 10px; font-size: 13.5px; cursor: pointer; }
 .check input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
 .check-accent { font-weight: 600; }
@@ -564,7 +575,10 @@ input[type="range"]::-moz-range-thumb {
 /* ---------------------------------------------------------------- PROFIL */
 .profile-row { display: flex; gap: 6px; align-items: center; }
 .profile-row select { flex: 1; }
-.row-actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
+/* Aktionen im Tabellen-<td>: kein flex auf der Zelle (bricht die Zeilenhöhe),
+   sondern inline rechtsbündig mit kleinem Abstand. */
+.row-actions { white-space: nowrap; text-align: right; }
+.row-actions > * + * { margin-left: 4px; }
 .iconbtn { padding: 2px 8px; min-width: 0; }
 
 .track-audio { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 6px; background: var(--surface-2); }
@@ -762,7 +776,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .queue-stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.status-cell { display: flex; align-items: center; gap: 6px; }
+/* Status-Zelle bleibt eine echte Tabellenzelle (kein flex-<td>), damit alle
+   Spalten einer Zeile auf gleicher Höhe stehen. */
+.status-cell { white-space: nowrap; }
 .queue-err { font-size: 11px; color: var(--bad); margin-top: 3px; white-space: pre-wrap;
   word-break: break-word; max-width: 460px; cursor: help; }
 

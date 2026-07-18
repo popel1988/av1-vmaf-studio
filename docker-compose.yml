@@ -24,6 +24,13 @@ services:
       - ${OUTPUT_PATH:-/media/output}:/media/output
       # Persistenter App-Datenordner (Screenshots, VMAF-Sessions, Cache)
       - ${DATA_PATH:-./data}:/data
+      # --- Mehrere Eingabe-Ordner (optional) --------------------------------
+      # Wer verschiedene Ordnerstrukturen einbinden will, mountet zusätzliche
+      # Verzeichnisse und listet sie unten unter INPUT_DIRS auf (Name=/Pfad).
+      # Beispiel:
+      # - /mnt/nas/filme:/media/filme
+      # - /mnt/nas/serien:/media/serien
+      # - /mnt/nas/anime:/media/anime
 
     # --- Hardware-Zugriff --------------------------------------------------
     # privileged sorgt für vollen Zugriff auf sysfs/DRM (saubere GPU-Metriken).
@@ -49,6 +56,16 @@ services:
       - METRICS_INTERVAL=1.5
       - DATA_DIR=/data
       - RETAIN_VMAF_SESSIONS=true
+      # --- Mehrere Eingabe-Ordner (optional) --------------------------------
+      # Aktiviert die oben gemounteten Zusatz-Ordner als benannte Quellen.
+      # Format: "Name=/pfad" getrennt durch ; (oder Zeilenumbruch). Ohne diese
+      # Variable gilt weiterhin der einzelne /media/input als Quelle.
+      # - INPUT_DIRS=Filme=/media/filme;Serien=/media/serien;Anime=/media/anime
+      # --- Mehrere Ausgabe-Ordner (optional) --------------------------------
+      # Ermöglicht, pro Job ein Ziel-Volume zu wählen (z. B. lokal vs. NAS).
+      # Zusätzliche Ziele ebenfalls oben mounten. Ohne Variable gilt der einzelne
+      # /media/output. Format wie INPUT_DIRS.
+      # - OUTPUT_DIRS=Standard=/media/output;NAS=/mnt/nas/encodes
       # --- Logging -----------------------------------------------------------
       # Log-Ausführlichkeit: DEBUG | INFO | WARNING | ERROR (Standard INFO).
       # Beim Start jedes Encodes werden alle Parameter geloggt.

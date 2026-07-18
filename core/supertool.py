@@ -61,20 +61,13 @@ def start_scan(filters: dict) -> bool:
 
 def _run(filters: dict) -> None:
     try:
-        base = config.INPUT_DIR
         folder = str(filters.get("folder") or "")
-        root = (base / folder.lstrip("/")).resolve() if folder else base.resolve()
-        try:
-            root.relative_to(base.resolve())
-        except ValueError:
-            root = base.resolve()
 
         # Format-/Container-Filter: gewählte Endungen (ohne Punkt) oder alle.
         exts_raw = [str(e).lower().lstrip(".") for e in (filters.get("extensions") or [])]
         allowed = {"." + e for e in exts_raw if e} or set(config.VIDEO_EXTENSIONS)
 
-        files = [f for f in root.rglob("*")
-                 if f.is_file() and f.suffix.lower() in allowed]
+        files = list(config.iter_input_files(folder, allowed))
         with _lock:
             _state["total"] = len(files)
 
@@ -94,10 +87,7 @@ def _run(filters: dict) -> None:
                 if name_contains and name_contains not in f.name.lower():
                     continue
                 if name_exclude:
-                    try:
-                        rel_low = str(f.relative_to(base)).replace("\\", "/").lower()
-                    except ValueError:
-                        rel_low = f.name.lower()
+                    rel_low = (config.rel_input(f) or f.name).lower()
                     if any(t in rel_low for t in name_exclude):
                         continue
                 if min_size and f.stat().st_size < min_size:
@@ -118,10 +108,7 @@ def _run(filters: dict) -> None:
             if min_bitrate and info.video_bitrate < min_bitrate:
                 continue
 
-            try:
-                rel = str(f.relative_to(base)).replace("\\", "/")
-            except ValueError:
-                rel = f.name
+            rel = config.rel_input(f) or f.name
             with _lock:
                 _state["matched"].append({
                     "path": rel,
@@ -154,14 +141,7 @@ def quick_list(filters: dict) -> dict:
     ausschließen, Mindestgröße). Codec-/Bitraten-/Höhen-Filter benötigen einen
     Probe und greifen erst beim eigentlichen Scan.
     """
-    base = config.INPUT_DIR
     folder = str(filters.get("folder") or "")
-    root = (base / folder.lstrip("/")).resolve() if folder else base.resolve()
-    try:
-        root.relative_to(base.resolve())
-    except ValueError:
-        root = base.resolve()
-
     exts_raw = [str(e).lower().lstrip(".") for e in (filters.get("extensions") or [])]
     allowed = {"." + e for e in exts_raw if e} or set(config.VIDEO_EXTENSIONS)
     min_size = float(filters.get("min_size_mb") or 0) * 1024 * 1024
@@ -173,16 +153,11 @@ def quick_list(filters: dict) -> dict:
     truncated = False
     limit = 1000
     try:
-        for f in sorted(root.rglob("*")):
-            if not (f.is_file() and f.suffix.lower() in allowed):
-                continue
+        for f in sorted(config.iter_input_files(folder, allowed)):
             if name_contains and name_contains not in f.name.lower():
                 continue
             if name_exclude:
-                try:
-                    rel_low = str(f.relative_to(base)).replace("\\", "/").lower()
-                except ValueError:
-                    rel_low = f.name.lower()
+                rel_low = (config.rel_input(f) or f.name).lower()
                 if any(t in rel_low for t in name_exclude):
                     continue
             try:
@@ -194,10 +169,7 @@ def quick_list(filters: dict) -> dict:
             if len(items) >= limit:
                 truncated = True
                 break
-            try:
-                rel = str(f.relative_to(base)).replace("\\", "/")
-            except ValueError:
-                rel = f.name
+            rel = config.rel_input(f) or f.name
             items.append({
                 "path": rel, "name": f.name,
                 "size_bytes": sz, "size_human": ff.human_size(sz),
@@ -208,13 +180,7 @@ def quick_list(filters: dict) -> dict:
 
 
 def _safe_resolve(rel: str) -> Optional[Path]:
-    base = config.INPUT_DIR.resolve()
-    target = (base / rel.lstrip("/")).resolve() if rel else base
-    try:
-        target.relative_to(base)
-    except ValueError:
-        return None
-    return target
+    return config.resolve_input(rel)
 
 
 def start_batch(queue, paths: list, settings: dict, mode: str) -> tuple[int, str, str]:

@@ -172,18 +172,11 @@ def start_scan(payload: dict) -> bool:
 def _run_scan(payload: dict) -> None:
     try:
         settings = payload.get("settings") or {}
-        base = config.INPUT_DIR
         folder = str(payload.get("folder") or "")
-        root = (base / folder.lstrip("/")).resolve() if folder else base.resolve()
-        try:
-            root.relative_to(base.resolve())
-        except ValueError:
-            root = base.resolve()
 
         exts_raw = [str(e).lower().lstrip(".") for e in (payload.get("extensions") or [])]
         allowed = {"." + e for e in exts_raw if e} or set(config.VIDEO_EXTENSIONS)
-        files = [f for f in root.rglob("*")
-                 if f.is_file() and f.suffix.lower() in allowed]
+        files = list(config.iter_input_files(folder, allowed))
         with _lock:
             _state["total"] = len(files)
 
@@ -197,10 +190,7 @@ def _run_scan(payload: dict) -> None:
             saved = sum(p["est_saved_bytes"] for p in plan)
             if not any(p["transcode"] for p in plan) or saved <= 0:
                 continue
-            try:
-                rel = str(f.relative_to(base)).replace("\\", "/")
-            except ValueError:
-                rel = f.name
+            rel = config.rel_input(f) or f.name
             bloated = [p for p in plan if p["transcode"]]
             with _lock:
                 _state["matched"].append({
@@ -227,13 +217,7 @@ def _run_scan(payload: dict) -> None:
 
 
 def _safe_resolve(rel: str) -> Optional[Path]:
-    base = config.INPUT_DIR.resolve()
-    try:
-        target = (base / str(rel).lstrip("/")).resolve()
-        target.relative_to(base)
-        return target
-    except (ValueError, OSError):
-        return None
+    return config.resolve_input(rel)
 
 
 def start_batch(queue, paths: list, settings: dict) -> tuple[int, str, str]:

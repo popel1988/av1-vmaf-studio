@@ -24,6 +24,7 @@
         <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
         <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
+        <button class="nav-item" data-nav="remux"><span>✂</span> Remux &amp; Bearbeiten</button>
         <button class="nav-item" data-nav="abcompare"><span>🎞</span> A/B-Vergleich</button>
         <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
         <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
@@ -111,7 +112,7 @@
       <header class="topbar">
         <div>
           <h2>Dashboard</h2>
-          <p class="muted">Quelle: <code id="input-dir">{{ input_dir }}</code>
+          <p class="muted">Quelle: <code id="input-dir">{% if multi_input %}{{ input_roots|length }} Ordner: {{ input_roots|map(attribute='name')|join(', ') }}{% else %}{{ input_dir }}{% endif %}</code>
             · Daten: <code id="data-dir">/data</code></p>
         </div>
         <div class="status-pill" id="global-status">Bereit</div>
@@ -398,6 +399,20 @@
                 <option value="inplace">Inplace ersetzen (Original löschen)</option>
                 <option value="archive">Original nach .archiv/ verschieben</option>
               </select>
+            </div>
+
+            <div class="field-row" data-out-target>
+              <div class="field" data-out-root-field style="display:none">
+                <label>Ziel-Volume</label>
+                <select id="opt-out-root"></select>
+              </div>
+              <div class="field">
+                <label>Ziel-Unterordner (optional)</label>
+                <div class="subdir-row">
+                  <input type="text" id="opt-out-subdir" placeholder="leer = Struktur der Quelle spiegeln" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="opt-out-browse">Durchsuchen</button>
+                </div>
+              </div>
             </div>
 
             <label class="check">
@@ -1190,6 +1205,217 @@
           </div>
         </section>
 
+        <!-- PAGE: Remux & Bearbeiten (kein Re-Encode) -->
+        <section class="card span-3" data-page="remux">
+          <div class="card-head">
+            <h3><span class="card-idx">✂</span> Remux &amp; Bearbeiten</h3>
+            <span class="badge" id="remux-badge">Keine Datei</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Baut den Container um <strong>ohne das Video neu zu encoden</strong>
+              (<code>-c:v copy</code>): Ton-/Untertitelspuren entfernen, Reihenfolge & Flags
+              (Standard/Forced), Sprache/Titel ändern und externe Ton-/Untertitelspuren
+              hinzufügen. Läuft in Sekunden.</p>
+
+            <div class="st-folder-area">
+              <div class="field">
+                <label>Quelle auswählen</label>
+                <div class="breadcrumb" id="remux-breadcrumb"></div>
+                <div class="browser browser-sm" id="remux-browser">
+                  <div class="browser-loading">Lade Verzeichnis …</div>
+                </div>
+              </div>
+              <div class="field">
+                <label>Ausgabe</label>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Container</label>
+                    <select id="remux-container">
+                      <option value="mkv">MKV (empfohlen – alle Codecs)</option>
+                      <option value="mp4">MP4 (eingeschränkt)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Namenszusatz (Suffix)</label>
+                    <input type="text" id="remux-suffix" value="_remux" />
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Nach Erfolg</label>
+                  <select id="remux-post">
+                    <option value="keep">Original behalten (Suffix)</option>
+                    <option value="inplace">Original ersetzen</option>
+                    <option value="archive">Original ins .archiv verschieben</option>
+                  </select>
+                </div>
+                <div class="field-row" data-out-target>
+                  <div class="field" data-out-root-field style="display:none">
+                    <label>Ziel-Volume</label>
+                    <select id="remux-out-root"></select>
+                  </div>
+                  <div class="field">
+                    <label>Ziel-Unterordner (optional)</label>
+                    <div class="subdir-row">
+                      <input type="text" id="remux-out-subdir" placeholder="leer = Struktur der Quelle spiegeln" />
+                      <button type="button" class="btn btn-ghost btn-sm" id="remux-out-browse">Durchsuchen</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Trim ab (Sek., 0 = Anfang)</label>
+                    <input type="number" id="remux-trim-start" min="0" step="0.1" value="0" />
+                  </div>
+                  <div class="field">
+                    <label>Trim bis (Sek., 0 = Ende)</label>
+                    <input type="number" id="remux-trim-end" min="0" step="0.1" value="0" />
+                  </div>
+                </div>
+                <label class="check"><input type="checkbox" id="remux-integrity" checked /><span>Integritäts-Check der Ausgabe</span></label>
+                <label class="check"><input type="checkbox" id="remux-safe" checked /><span>Sichere Nachbehandlung (Original nur bei intakter Ausgabe ersetzen)</span></label>
+                <label class="check"><input type="checkbox" id="remux-keep-chapters" checked /><span>Kapitel übernehmen</span></label>
+                <label class="check"><input type="checkbox" id="remux-keep-metadata" checked /><span>Metadaten übernehmen</span></label>
+                <label class="check"><input type="checkbox" id="remux-keep-att" checked /><span>Attachments (Fonts/Cover) übernehmen – nur MKV</span></label>
+              </div>
+            </div>
+
+            <div id="remux-editor" style="display:none">
+              <div class="divider"></div>
+              <h4 class="sub-head">Tonspuren <span class="muted" style="font-size:11px;text-transform:none">(Reihenfolge = Ausgabe-Reihenfolge)</span></h4>
+              <div class="table-wrap">
+                <table class="queue-table" id="remux-audio-table">
+                  <thead>
+                    <tr><th>Behalten</th><th>Spur</th><th>Standard</th><th>Forced</th><th>Sprache</th><th>Titel</th><th>Transcode (Kompatibilität)</th><th>Reihenfolge</th></tr>
+                  </thead>
+                  <tbody id="remux-audio-body"></tbody>
+                </table>
+              </div>
+
+              <h4 class="sub-head">Untertitel</h4>
+              <div class="table-wrap">
+                <table class="queue-table" id="remux-sub-table">
+                  <thead>
+                    <tr><th>Behalten</th><th>Spur</th><th>Standard</th><th>Forced</th><th>Sprache</th><th>Titel</th><th>Reihenfolge</th></tr>
+                  </thead>
+                  <tbody id="remux-sub-body"><tr class="empty-row"><td colspan="7">Keine Untertitel.</td></tr></tbody>
+                </table>
+              </div>
+
+              <h4 class="sub-head">Externe Spuren hinzufügen</h4>
+              <div class="table-wrap">
+                <table class="queue-table" id="remux-ext-table">
+                  <thead>
+                    <tr><th>Datei</th><th>Typ</th><th>Sprache</th><th>Titel</th><th>Delay (s)</th><th>Standard</th><th>Forced</th><th>Reihenfolge</th><th></th></tr>
+                  </thead>
+                  <tbody id="remux-ext-body"><tr class="empty-row"><td colspan="9">Keine externen Spuren.</td></tr></tbody>
+                </table>
+              </div>
+              <div class="lib-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-remux-add-ext">+ Externe Datei hinzufügen</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-add-att">+ Attachment (Font/Cover) hinzufügen</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-extract">Behaltene Spuren extrahieren</button>
+              </div>
+              <div id="remux-att-list" class="hint" style="display:none"></div>
+
+              <h4 class="sub-head">Kapitel</h4>
+              <div class="lib-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-remux-load-chapters">Kapitel laden/bearbeiten</button>
+                <span id="remux-chapters-info" class="muted"></span>
+              </div>
+              <div class="table-wrap" id="remux-chapters-wrap" style="display:none">
+                <table class="queue-table">
+                  <thead><tr><th>#</th><th>Start</th><th>Titel</th></tr></thead>
+                  <tbody id="remux-chapters-body"></tbody>
+                </table>
+              </div>
+
+              <div id="remux-conflicts" class="hint bad" style="display:none"></div>
+
+              <div class="lib-actions">
+                <button class="btn btn-primary" id="btn-remux-start" disabled>In Warteschlange (Remux)</button>
+                <span id="remux-start-info" class="muted"></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE: Remux – Zusammenführen & Splitten -->
+        <section class="card span-3" data-page="remux">
+          <div class="card-head">
+            <h3><span class="card-idx">⧉</span> Zusammenführen &amp; Splitten</h3>
+          </div>
+          <div class="card-body">
+            <div class="st-folder-area">
+              <div class="field">
+                <label>Zusammenführen (concat, kein Re-Encode)</label>
+                <p class="hint">Mehrere Dateien in der gewählten Reihenfolge aneinanderhängen.
+                  Voraussetzung: gleiche Codecs/Parameter (z. B. Teile desselben Films).</p>
+                <div class="table-wrap">
+                  <table class="queue-table" id="remux-merge-table">
+                    <thead><tr><th>#</th><th>Datei</th><th>Reihenfolge</th><th></th></tr></thead>
+                    <tbody id="remux-merge-body"><tr class="empty-row"><td colspan="4">Keine Dateien.</td></tr></tbody>
+                  </table>
+                </div>
+                <div class="field-row" data-out-target>
+                  <div class="field" data-out-root-field style="display:none">
+                    <label>Ziel-Volume</label>
+                    <select id="merge-out-root"></select>
+                  </div>
+                  <div class="field">
+                    <label>Ziel-Unterordner (optional)</label>
+                    <div class="subdir-row">
+                      <input type="text" id="merge-out-subdir" placeholder="leer = Struktur der ersten Datei" />
+                      <button type="button" class="btn btn-ghost btn-sm" id="merge-out-browse">Durchsuchen</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="lib-actions">
+                  <button class="btn btn-ghost btn-sm" id="btn-merge-add">+ Datei hinzufügen</button>
+                  <select id="merge-container" style="width:auto">
+                    <option value="mkv">MKV</option>
+                    <option value="mp4">MP4</option>
+                  </select>
+                  <button class="btn btn-primary btn-sm" id="btn-merge-start" disabled>Zusammenführen</button>
+                  <span id="merge-info" class="muted"></span>
+                </div>
+              </div>
+              <div class="field">
+                <label>Splitten (kein Re-Encode)</label>
+                <p class="hint">Zerteilt die oben unter „Quelle" gewählte Datei verlustfrei.
+                  An Kapitelgrenzen oder in feste Zeitabschnitte.</p>
+                <div class="field">
+                  <label>Methode</label>
+                  <select id="split-mode">
+                    <option value="chapters">An Kapitelgrenzen</option>
+                    <option value="duration">Feste Länge (Sekunden)</option>
+                  </select>
+                </div>
+                <div class="field" id="split-dur-field" style="display:none">
+                  <label>Segmentlänge (Sekunden)</label>
+                  <input type="number" id="split-value" min="10" step="10" value="600" />
+                </div>
+                <div class="field-row" data-out-target>
+                  <div class="field" data-out-root-field style="display:none">
+                    <label>Ziel-Volume</label>
+                    <select id="split-out-root"></select>
+                  </div>
+                  <div class="field">
+                    <label>Ziel-Unterordner (optional)</label>
+                    <div class="subdir-row">
+                      <input type="text" id="split-out-subdir" placeholder="leer = Struktur der Quelle" />
+                      <button type="button" class="btn btn-ghost btn-sm" id="split-out-browse">Durchsuchen</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="lib-actions">
+                  <button class="btn btn-primary btn-sm" id="btn-split-start" disabled>Splitten</button>
+                  <span id="split-info" class="muted"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- PAGE: A/B-Vergleichsplayer -->
         <section class="card span-3" data-page="abcompare">
           <div class="card-head">
@@ -1273,6 +1499,10 @@
       testQualities: {{ test_qualities|tojson }},
       encoders: {{ encoder_options|tojson }},
       videoExtensions: {{ video_extensions|tojson }},
+      inputRoots: {{ input_roots|tojson }},
+      multiInput: {{ multi_input|tojson }},
+      outputRoots: {{ output_roots|tojson }},
+      multiOutput: {{ multi_output|tojson }},
     };
   </script>
   <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>

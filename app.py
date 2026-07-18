@@ -221,6 +221,10 @@ async def index(request: Request):
             "encoder_options": _encoder_options(),
             "video_extensions": sorted(e.lstrip(".") for e in config.VIDEO_EXTENSIONS),
             "input_dir": str(config.INPUT_DIR),
+            "input_roots": config.input_roots_public(),
+            "multi_input": config.MULTI_INPUT,
+            "output_roots": config.output_roots_public(),
+            "multi_output": config.MULTI_OUTPUT,
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
             "capacity": CAPACITY,
@@ -246,34 +250,53 @@ def _asset_version() -> str:
 
 # ------------------------------------------------------------------- Browser
 def _safe_resolve(rel: str) -> Optional[Path]:
-    """Verhindert Pfad-Traversal: alles muss innerhalb INPUT_DIR liegen."""
-    base = config.INPUT_DIR.resolve()
-    target = (base / rel.lstrip("/")).resolve() if rel else base
-    try:
-        target.relative_to(base)
-    except ValueError:
-        return None
-    return target
+    """Verhindert Pfad-Traversal: alles muss innerhalb eines Input-Roots liegen.
+
+    Bei genau einem Root und leerem Pfad wird der Root selbst geliefert
+    (Verzeichnis-Listing). Bei mehreren Roots ist "" die virtuelle Wurzel und
+    hat keinen Dateisystem-Pfad – das behandelt der Browser separat.
+    """
+    if not rel and not config.MULTI_INPUT:
+        return config.INPUT_ROOTS[0][1].resolve()
+    return config.resolve_input(rel)
 
 
 @app.get("/api/browse")
-async def browse_input(path: str = ""):
+async def browse_input(path: str = "", kind: str = "video"):
+    # Virtuelle Wurzel bei mehreren Roots: die Roots als "Ordner" auflisten.
+    if not path and config.MULTI_INPUT:
+        dirs = [{"name": r["name"], "rel": r["name"]}
+                for r in config.input_roots_public()]
+        return {"path": "", "parent": None, "is_root": True,
+                "roots": True, "dirs": dirs, "files": []}
+
     target = _safe_resolve(path)
     if target is None or not target.exists():
         return JSONResponse({"error": "Pfad nicht gefunden"}, status_code=404)
     if not target.is_dir():
         return JSONResponse({"error": "Kein Verzeichnis"}, status_code=400)
 
-    base = config.INPUT_DIR.resolve()
+    # kind=aux: zusätzlich Ton-/Untertitel-Dateien listen (Remux-Modus:
+    # externe Spuren hinzufügen). Standard = nur Videos.
+    if kind == "aux":
+        allowed = (config.VIDEO_EXTENSIONS | config.AUDIO_EXTENSIONS
+                   | config.SUBTITLE_EXTENSIONS)
+    elif kind == "att":
+        allowed = config.ATTACHMENT_EXTENSIONS
+    else:
+        allowed = config.VIDEO_EXTENSIONS
+
     dirs, files = [], []
     try:
         for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if entry.name.startswith("."):
                 continue
-            rel = str(entry.resolve().relative_to(base)).replace("\\", "/")
+            rel = config.rel_input(entry)
+            if rel is None:
+                continue
             if entry.is_dir():
                 dirs.append({"name": entry.name, "rel": rel})
-            elif entry.suffix.lower() in config.VIDEO_EXTENSIONS:
+            elif entry.suffix.lower() in allowed:
                 try:
                     size = entry.stat().st_size
                 except OSError:
@@ -285,16 +308,55 @@ async def browse_input(path: str = ""):
     except OSError as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-    rel_here = str(target.resolve().relative_to(base)).replace("\\", "/")
-    parent = "" if target.resolve() == base else str(
-        target.resolve().parent.relative_to(base)).replace("\\", "/")
+    rel_here = config.rel_input(target) or ""
+    # Elternpfad: leer, wenn wir auf einem Root-Top stehen (dann zur Root-Liste
+    # bei Multi-Input bzw. zum Root-Inhalt bei Einzel-Input).
+    is_root_top = any(target.resolve() == b.resolve() for _, b in config.INPUT_ROOTS)
+    if is_root_top:
+        # Multi-Root: von einem Root-Top zurück zur virtuellen Wurzel ("").
+        parent = "" if config.MULTI_INPUT else None
+    else:
+        parent = config.rel_input(target.parent)
     return {
         "path": rel_here,
-        "parent": parent if rel_here else None,
-        "is_root": target.resolve() == base,
+        "parent": parent,
+        "is_root": is_root_top and not config.MULTI_INPUT,
         "dirs": dirs,
         "files": files,
     }
+
+
+@app.get("/api/browse-output")
+async def browse_output(root: str = "", path: str = ""):
+    """Ordner-Browser fürs Ausgabe-Volume (nur Unterordner). `root` wählt das
+    Output-Root (bei mehreren), `path` ist der relative Unterordner darin."""
+    base = config.resolve_output_base(root)
+    sub = config.safe_subdir(path)
+    target = (base / sub) if sub else base
+    try:
+        base_r = base.resolve()
+        target_r = target.resolve()
+    except OSError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    if not (target_r == base_r or config._within(target_r, base_r)):
+        return JSONResponse({"error": "Pfad außerhalb des Ausgabeordners"},
+                            status_code=400)
+    dirs = []
+    if target_r.is_dir():
+        try:
+            for entry in sorted(target_r.iterdir(), key=lambda p: p.name.lower()):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    rel = config.safe_subdir(f"{sub}/{entry.name}" if sub else entry.name)
+                    dirs.append({"name": entry.name, "rel": rel})
+        except OSError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    if sub:
+        parent = config.safe_subdir(str(Path(sub).parent))
+        parent = "" if parent in (".", "") else parent
+    else:
+        parent = None
+    return {"root": root, "path": sub, "parent": parent,
+            "exists": target_r.is_dir(), "dirs": dirs}
 
 
 @app.get("/api/search")
@@ -307,35 +369,44 @@ async def search_input(path: str = "", q: str = "", limit: int = 500):
     query = (q or "").strip().lower()
     if not query:
         return {"files": [], "truncated": False}
-    target = _safe_resolve(path)
-    if target is None or not target.is_dir():
-        return JSONResponse({"error": "Kein Verzeichnis"}, status_code=400)
+    # Leerer Pfad = über alle Roots suchen; sonst genau dieser (root-aware) Ordner.
+    if path:
+        target = _safe_resolve(path)
+        if target is None or not target.is_dir():
+            return JSONResponse({"error": "Kein Verzeichnis"}, status_code=400)
+        search_dirs = [target]
+    else:
+        search_dirs = config.scan_targets("")
 
-    base = config.INPUT_DIR.resolve()
     files: list[dict] = []
     truncated = False
-    for root, dirnames, filenames in os.walk(target):
-        # Versteckte Ordner (.archiv, .previews …) überspringen.
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-        for fn in sorted(filenames, key=str.lower):
-            if fn.startswith(".") or Path(fn).suffix.lower() not in config.VIDEO_EXTENSIONS:
-                continue
-            if query not in fn.lower():
-                continue
-            entry = Path(root) / fn
-            try:
-                rel = str(entry.resolve().relative_to(base)).replace("\\", "/")
-                size = entry.stat().st_size
-            except (OSError, ValueError):
-                continue
-            folder = str(Path(rel).parent).replace("\\", "/")
-            files.append({
-                "name": fn, "rel": rel, "size": size,
-                "size_human": ff.human_size(size),
-                "folder": "" if folder == "." else folder,
-            })
-            if len(files) >= max(1, min(2000, limit)):
-                truncated = True
+    for start in search_dirs:
+        for root, dirnames, filenames in os.walk(start):
+            # Versteckte Ordner (.archiv, .previews …) überspringen.
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for fn in sorted(filenames, key=str.lower):
+                if fn.startswith(".") or Path(fn).suffix.lower() not in config.VIDEO_EXTENSIONS:
+                    continue
+                if query not in fn.lower():
+                    continue
+                entry = Path(root) / fn
+                rel = config.rel_input(entry)
+                if rel is None:
+                    continue
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    continue
+                folder = str(Path(rel).parent).replace("\\", "/")
+                files.append({
+                    "name": fn, "rel": rel, "size": size,
+                    "size_human": ff.human_size(size),
+                    "folder": "" if folder == "." else folder,
+                })
+                if len(files) >= max(1, min(2000, limit)):
+                    truncated = True
+                    break
+            if truncated:
                 break
         if truncated:
             break
@@ -403,6 +474,8 @@ class EnqueueRequest(BaseModel):
     audio_tracks: list[int] = []     # leer = alle Tonspuren
     audio_per_track: bool = False    # Audio pro Spur konfiguriert
     audio_track_settings: list[dict] = []  # je Spur: index/mode/codec/bitrate/…
+    out_root: str = ""               # Ziel-Volume (Output-Root), leer = Standard
+    out_subdir: str = ""             # optionaler Ziel-Unterordner
 
 
 class ApproveRequest(BaseModel):
@@ -425,6 +498,182 @@ async def enqueue(req: EnqueueRequest):
     item = queue.add_file(str(target), settings)
     if item is None:
         return JSONResponse({"error": "Datei konnte nicht hinzugefügt werden"}, status_code=400)
+    return {"added": 1, "id": item.id}
+
+
+class RemuxEnqueueRequest(BaseModel):
+    path: str
+    spec: dict = {}                  # Edit-Spec (audio/subtitles/external/…)
+    container: str = "mkv"           # mkv | mp4
+    post_processing: str = "keep"    # keep | inplace | archive
+    safe_replace: bool = True
+    integrity_check: bool = True
+    suffix: str = "_remux"
+    out_root: str = ""
+    out_subdir: str = ""
+
+
+@app.get("/api/remux/probe")
+async def remux_probe(path: str):
+    """Ton-/Untertitel-Streams einer (auch reinen Audio-/Untertitel-)Datei listen."""
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    data, err = ff.probe_streams(target)
+    if data is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+    data["name"] = target.name
+    return data
+
+
+@app.get("/api/remux/chapters")
+async def remux_chapters(path: str):
+    """Kapitel einer Datei (Start/Ende/Titel) für den Kapitel-Editor."""
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    from core import remux
+    return {"chapters": remux.probe_chapters(target)}
+
+
+class RemuxExtractRequest(BaseModel):
+    path: str
+    tracks: list[dict] = []          # je Spur: type (audio|subtitle), index
+    out_root: str = ""
+    out_subdir: str = ""
+
+
+@app.post("/api/remux/extract")
+async def remux_extract(req: RemuxExtractRequest):
+    """Ausgewählte Spuren als eigene Dateien extrahieren (Stream-Copy)."""
+    import subprocess
+    from core import remux
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    if not req.tracks:
+        return JSONResponse({"error": "Keine Spuren gewählt"}, status_code=400)
+    info, err = ff.probe_with_error(target)
+    if info is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+
+    base = config.resolve_output_base(req.out_root)
+    sub = config.safe_subdir(req.out_subdir)
+    if sub:
+        out_dir = base / sub
+    else:
+        rel = config.rel_input(target) or target.name
+        out_dir = (base / rel).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results, errors = [], []
+    for cmd, out_path in remux.build_extract_cmds(info, out_dir, req.tracks):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=1800, check=False)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            errors.append(str(e))
+            continue
+        if proc.returncode == 0 and out_path.exists():
+            results.append({"name": out_path.name,
+                            "size_human": ff.human_size(out_path.stat().st_size)})
+        else:
+            errors.append((proc.stderr or "")[-300:] or f"Exit {proc.returncode}")
+    return {"extracted": results, "errors": errors}
+
+
+class RemuxConcatRequest(BaseModel):
+    paths: list[str] = []            # geordnete Liste (rel) der zu verbindenden Dateien
+    container: str = "mkv"
+    suffix: str = "_merged"
+    post_processing: str = "keep"
+    out_root: str = ""
+    out_subdir: str = ""
+
+
+@app.post("/api/remux/concat")
+async def remux_concat(req: RemuxConcatRequest):
+    """Mehrere Dateien verlustfrei zusammenführen (concat, kein Re-Encode)."""
+    from core.queue_manager import build_job_settings
+    if len(req.paths or []) < 2:
+        return JSONResponse({"error": "Mindestens zwei Dateien wählen"}, status_code=400)
+    first = _safe_resolve(req.paths[0])
+    if first is None or not first.is_file():
+        return JSONResponse({"error": "Erste Datei nicht gefunden"}, status_code=404)
+    container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    d = {
+        "video_mode": "concat", "vmaf_check": False, "workflow": "auto",
+        "container": container, "post_processing": req.post_processing,
+        "suffix": req.suffix or "_merged", "integrity_check": True,
+        "edit_spec": {"concat_files": list(req.paths), "container": container},
+        "out_root": req.out_root, "out_subdir": req.out_subdir,
+    }
+    item = queue.add_file(str(first), build_job_settings(d))
+    if item is None:
+        return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)
+    return {"added": 1, "id": item.id}
+
+
+class RemuxSplitRequest(BaseModel):
+    path: str
+    mode: str = "chapters"           # chapters | duration
+    value: float = 0                 # Sekunden bei mode=duration
+    container: str = "mkv"
+    suffix: str = "_part"
+    out_root: str = ""
+    out_subdir: str = ""
+
+
+@app.post("/api/remux/split")
+async def remux_split(req: RemuxSplitRequest):
+    """Datei verlustfrei in Segmente splitten (kein Re-Encode)."""
+    from core.queue_manager import build_job_settings
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    d = {
+        "video_mode": "split", "vmaf_check": False, "workflow": "auto",
+        "container": container, "post_processing": "keep",
+        "suffix": req.suffix or "_part",
+        "edit_spec": {"split_mode": req.mode, "split_value": req.value,
+                      "container": container},
+        "out_root": req.out_root, "out_subdir": req.out_subdir,
+    }
+    item = queue.add_file(str(target), build_job_settings(d))
+    if item is None:
+        return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)
+    return {"added": 1, "id": item.id}
+
+
+@app.post("/api/remux/enqueue")
+async def remux_enqueue(req: RemuxEnqueueRequest):
+    """Remux-/Bearbeiten-Job einreihen (kein Video-Re-Encode)."""
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+
+    from core.queue_manager import build_job_settings
+    container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    spec = dict(req.spec or {})
+    spec["container"] = container
+    d = {
+        "video_mode": "edit",
+        "vmaf_check": False,
+        "workflow": "auto",
+        "container": container,
+        "post_processing": req.post_processing,
+        "safe_replace": req.safe_replace,
+        "integrity_check": req.integrity_check,
+        "suffix": req.suffix or "_remux",
+        "edit_spec": spec,
+        "out_root": req.out_root,
+        "out_subdir": req.out_subdir,
+    }
+    settings = build_job_settings(d)
+    item = queue.add_file(str(target), settings)
+    if item is None:
+        return JSONResponse({"error": "Datei konnte nicht hinzugefügt werden"},
+                            status_code=400)
     return {"added": 1, "id": item.id}
 
 
@@ -622,18 +871,22 @@ async def supertool_status(batch_id: str = ""):
 
 # ====================================================================== REST v1
 def _resolve_under_input(raw: str):
-    """Pfad (relativ zum Eingabeordner oder absolut) sicher innerhalb INPUT_DIR."""
+    """Pfad (relativ oder absolut) sicher innerhalb eines Input-Roots auflösen."""
     from pathlib import Path
     if not raw:
         return None
-    base = config.INPUT_DIR.resolve()
     p = Path(raw)
-    try:
-        target = p.resolve() if p.is_absolute() else (base / raw.lstrip("/")).resolve()
-        target.relative_to(base)
-    except (ValueError, OSError):
+    if p.is_absolute():
+        try:
+            rp = p.resolve()
+        except OSError:
+            return None
+        for _, base in config.INPUT_ROOTS:
+            if config._within(rp, base.resolve()):
+                return rp if rp.exists() else None
         return None
-    return target if target.exists() else None
+    target = config.resolve_input(raw)
+    return target if (target and target.exists()) else None
 
 
 def _remap_arr_path(raw: str) -> str:
@@ -937,16 +1190,21 @@ async def set_parallel(req: ParallelRequest):
     return {"value": queue.set_parallel(n)}
 
 
+def _resolve_media_root(path: str, root: str):
+    """Datei aus 'input' (root-aware) oder 'output' sicher auflösen."""
+    from pathlib import Path
+    if root == "output":
+        base = config.OUTPUT_DIR.resolve()
+        target = (base / path.lstrip("/")).resolve()
+        return target if config._within(target, base) else None
+    return config.resolve_input(path)
+
+
 @app.get("/api/media")
 async def media(path: str, root: str = "input"):
     """Streamt eine Video-Datei (mit Range-Support) für den A/B-Vergleichsplayer."""
-    from pathlib import Path
-    roots = {"input": config.INPUT_DIR, "output": config.OUTPUT_DIR}
-    base = roots.get(root, config.INPUT_DIR).resolve()
-    target = (base / path.lstrip("/")).resolve()
-    try:
-        target.relative_to(base)
-    except ValueError:
+    target = _resolve_media_root(path, root)
+    if target is None:
         return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
@@ -956,13 +1214,8 @@ async def media(path: str, root: str = "input"):
 @app.get("/api/ffprobe")
 async def ffprobe_any(path: str, root: str = "input"):
     """ffprobe für eine Datei aus dem Input- oder Output-Ordner (Detail-Ansicht)."""
-    from pathlib import Path
-    roots = {"input": config.INPUT_DIR, "output": config.OUTPUT_DIR}
-    base = roots.get(root, config.INPUT_DIR).resolve()
-    target = (base / path.lstrip("/")).resolve()
-    try:
-        target.relative_to(base)
-    except ValueError:
+    target = _resolve_media_root(path, root)
+    if target is None:
         return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
@@ -993,7 +1246,7 @@ async def queue_details(item_id: str):
         if not abs_path:
             return None
         p = Path(abs_path)
-        rel = _rel_to(config.INPUT_DIR if root == "input" else config.OUTPUT_DIR, p)
+        rel = config.rel_input(p) if root == "input" else _rel_to(config.OUTPUT_DIR, p)
         entry = {"name": p.name, "exists": p.is_file(), "media": None,
                  "info": None, "root": root, "rel": rel}
         if rel is not None and p.is_file():

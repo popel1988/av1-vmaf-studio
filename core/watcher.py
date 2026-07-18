@@ -138,14 +138,8 @@ class Watcher:
             self._wake.clear()
 
     def _scan(self, cfg: dict) -> None:
-        base = config.INPUT_DIR
-        root = (base / str(cfg.get("folder", "")).lstrip("/")).resolve()
-        try:
-            root.relative_to(base.resolve())
-        except ValueError:
-            root = base.resolve()
-        if not root.is_dir():
-            return
+        # Leerer Ordner = alle Input-Roots überwachen; sonst der gewählte Pfad.
+        folder = str(cfg.get("folder", ""))
 
         processed = _load_processed()
         # Bereits in der Queue befindliche Pfade nicht erneut hinzufügen.
@@ -159,9 +153,7 @@ class Watcher:
                 settings_dict = prof.get("settings", {})
 
         added = 0
-        for f in sorted(root.rglob("*")):
-            if not (f.is_file() and f.suffix.lower() in config.VIDEO_EXTENSIONS):
-                continue
+        for f in sorted(config.iter_input_files(folder, config.VIDEO_EXTENSIONS)):
             ap = str(f)
             if ap in processed or ap in in_queue:
                 continue
