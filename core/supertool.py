@@ -23,6 +23,7 @@ from . import ffmpeg_utils as ff
 logger = logging.getLogger("vcompress.supertool")
 
 _lock = threading.RLock()
+_stop = threading.Event()
 _state: dict = {
     "running": False,
     "done": False,
@@ -54,9 +55,19 @@ def start_scan(filters: dict) -> bool:
             return False
         _state.update(running=True, done=False, total=0, scanned=0,
                       matched=[], error="")
+    _stop.clear()
     _thread = threading.Thread(target=_run, args=(filters or {},), daemon=True)
     _thread.start()
     return True
+
+
+def cancel_scan() -> bool:
+    """Laufenden Scan abbrechen (kooperativ). True, wenn einer lief."""
+    with _lock:
+        running = _state["running"]
+    if running:
+        _stop.set()
+    return running
 
 
 def _run(filters: dict) -> None:
@@ -81,6 +92,8 @@ def _run(filters: dict) -> None:
         exc = {c.lower() for c in (filters.get("codecs_exclude") or [])}
 
         for f in files:
+            if _stop.is_set():
+                break
             with _lock:
                 _state["scanned"] += 1
             try:

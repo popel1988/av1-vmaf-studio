@@ -2719,7 +2719,17 @@
     const clear = $("btn-lib-clear");
     if (clear) clear.addEventListener("click", clearLibrary);
 
+    libBuildFormats();
     loadLastLibrary();
+  }
+
+  function libBuildFormats() {
+    const cont = $("lib-formats");
+    if (!cont) return;
+    const exts = (window.APP_CONFIG && window.APP_CONFIG.videoExtensions) || [];
+    cont.innerHTML = exts.map((e) =>
+      `<label><input type="checkbox" class="lib-fmt" value="${escapeHtml(e)}" /><span>${escapeHtml(e)}</span></label>`
+    ).join("") || '<span class="empty">Keine Formate.</span>';
   }
 
   function libFilters() {
@@ -2728,6 +2738,7 @@
     const codecMatch = $("lib-codec-match") ? $("lib-codec-match").value : "include";
     const f = {
       root: state.currentPath || "",
+      extensions: [...document.querySelectorAll(".lib-fmt:checked")].map((c) => c.value),
       name_contains: $("lib-name").value.trim(),
       name_exclude: ($("lib-exclude") ? $("lib-exclude").value : "")
         .split(",").map((s) => s.trim()).filter(Boolean),
@@ -3068,6 +3079,8 @@
 
     $("btn-st-scan").addEventListener("click", startSuperScan);
     $("btn-st-start").addEventListener("click", startSuperBatch);
+    const stCancel = $("btn-st-cancel");
+    if (stCancel) stCancel.addEventListener("click", cancelSuperScan);
     stInitTrackHandlers();
     stInitCommonHandlers();
 
@@ -3232,6 +3245,7 @@
   async function startSuperScan() {
     $("st-scan-badge").textContent = "Scan läuft …";
     $("btn-st-start").disabled = true;
+    stScanRunning(true);
     state.stTracks = {};
     await fetch("/api/supertool/scan", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -3242,6 +3256,22 @@
     pollSuperScan();
   }
 
+  function stScanRunning(running) {
+    const scan = $("btn-st-scan");
+    if (scan) scan.disabled = running;
+    const cancel = $("btn-st-cancel");
+    if (cancel) cancel.disabled = !running;
+  }
+
+  async function cancelSuperScan() {
+    const cancel = $("btn-st-cancel");
+    if (cancel) cancel.disabled = true;
+    try {
+      await fetch("/api/supertool/scan/cancel", { method: "POST" });
+      $("st-progress").textContent = "Scan abgebrochen.";
+    } catch (e) { /* ignorieren */ }
+  }
+
   async function pollSuperScan() {
     try {
       const st = await (await fetch("/api/supertool/scan")).json();
@@ -3250,6 +3280,7 @@
       renderSuperMatches(st.matched);
       if (!st.running) {
         clearInterval(superScanPoll); superScanPoll = null;
+        stScanRunning(false);
         $("st-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
         $("btn-st-start").disabled = st.matched.length === 0;
       }

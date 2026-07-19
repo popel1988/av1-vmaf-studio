@@ -281,7 +281,10 @@ def _dynamic_match(info, dynamic_filters: list) -> bool:
 
 def _run(root_rel: str, filters: dict) -> None:
     try:
-        files = list(config.iter_input_files(root_rel, config.VIDEO_EXTENSIONS))
+        # Format-/Container-Filter: gewählte Endungen (ohne Punkt) oder alle.
+        exts_raw = [str(e).lower().lstrip(".") for e in (filters.get("extensions") or [])]
+        allowed = {"." + e for e in exts_raw if e} or set(config.VIDEO_EXTENSIONS)
+        files = list(config.iter_input_files(root_rel, allowed))
         with _lock:
             _state["total"] = len(files)
 

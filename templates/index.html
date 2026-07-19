@@ -692,13 +692,11 @@
               <div class="field"><label>Dynamik-Filter (Mehrfachauswahl)</label>
                 <div id="lib-dynamic-multi" title="Mehrere Dynamik-Arten möglich – nichts gewählt = alle"></div>
               </div>
-              <div class="field"><label>Ausgabe-Container</label>
-                <select id="lib-container" title="Container für die zur Warteschlange hinzugefügten Encodes">
-                  <option value="auto">Automatisch (Codec-abhängig)</option>
-                  <option value="mkv">MKV (Matroska)</option>
-                  <option value="mp4">MP4</option>
-                </select>
-              </div>
+            </div>
+            <div class="field">
+              <label>Container / Formate</label>
+              <div id="lib-formats" class="fmt-checks"></div>
+              <p class="hint">Nur diese Dateiendungen durchsuchen. Nichts auswählen = alle unterstützten Formate.</p>
             </div>
             <div class="lib-checks">
               <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span>Bereits effiziente Dateien ausblenden</span></label>
@@ -997,6 +995,7 @@
 
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-st-scan">Scan – Codec/Bitrate ermitteln</button>
+              <button class="btn btn-ghost btn-sm" id="btn-st-cancel" disabled title="Laufenden Scan abbrechen">Abbrechen</button>
               <span id="st-progress" class="muted"></span>
               <button class="btn btn-ghost btn-sm" id="btn-st-start" disabled>Stapel starten</button>
             </div>

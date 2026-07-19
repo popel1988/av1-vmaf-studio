@@ -460,6 +460,10 @@
       "Preview by folder/name/format/size (without codec/bitrate/height filters – those apply on scan).",
     "Container / Formate": "Container / Formats",
     "Nichts auswählen = alle unterstützten Formate.": "Select nothing = all supported formats.",
+    "Nur diese Dateiendungen durchsuchen. Nichts auswählen = alle unterstützten Formate.":
+      "Only scan these file extensions. Select nothing = all supported formats.",
+    "Laufenden Scan abbrechen": "Cancel running scan",
+    "Scan abgebrochen.": "Scan cancelled.",
     "Qualitätsmodus": "Quality mode",
     "Ziel-VMAF – pro Datei Test-Encodes (autonom)": "Target VMAF – per-file test encodes (autonomous)",
     "Repräsentativ – 1 VMAF-Check für alle": "Representative – 1 VMAF check for all",
@@ -1030,6 +1034,10 @@
     "Vorschau nach Ordner/Name/Format/Größe (ohne Codec-/Bitraten-/Höhen-Filter – diese greifen erst beim Scan).": "Vista previa por carpeta/nombre/formato/tamaño (sin filtros de códec/bitrate/altura – estos se aplican al escanear).",
     "Container / Formate": "Contenedor / formatos",
     "Nichts auswählen = alle unterstützten Formate.": "No seleccionar nada = todos los formatos compatibles.",
+    "Nur diese Dateiendungen durchsuchen. Nichts auswählen = alle unterstützten Formate.":
+      "Buscar solo estas extensiones de archivo. No seleccionar nada = todos los formatos compatibles.",
+    "Laufenden Scan abbrechen": "Cancelar el escaneo en curso",
+    "Scan abgebrochen.": "Escaneo cancelado.",
     "Qualitätsmodus": "Modo de calidad",
     "Ziel-VMAF – pro Datei Test-Encodes (autonom)": "VMAF objetivo – codificaciones de prueba por archivo (autónomo)",
     "Repräsentativ – 1 VMAF-Check für alle": "Representativo – 1 comprobación VMAF para todos",
@@ -1562,6 +1570,10 @@
     "Vorschau nach Ordner/Name/Format/Größe (ohne Codec-/Bitraten-/Höhen-Filter – diese greifen erst beim Scan).": "Aperçu par dossier/nom/format/taille (sans filtres de codec/débit/hauteur – ceux-ci s'appliquent à l'analyse).",
     "Container / Formate": "Conteneur / formats",
     "Nichts auswählen = alle unterstützten Formate.": "Ne rien sélectionner = tous les formats pris en charge.",
+    "Nur diese Dateiendungen durchsuchen. Nichts auswählen = alle unterstützten Formate.":
+      "Ne scanner que ces extensions de fichier. Ne rien sélectionner = tous les formats pris en charge.",
+    "Laufenden Scan abbrechen": "Annuler l'analyse en cours",
+    "Scan abgebrochen.": "Analyse annulée.",
     "Qualitätsmodus": "Mode de qualité",
     "Ziel-VMAF – pro Datei Test-Encodes (autonom)": "VMAF cible – encodages de test par fichier (autonome)",
     "Repräsentativ – 1 VMAF-Check für alle": "Représentatif – 1 contrôle VMAF pour tous",

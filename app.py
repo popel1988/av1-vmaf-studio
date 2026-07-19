@@ -871,6 +871,7 @@ async def delete_profile(name: str):
 
 class LibraryScanRequest(BaseModel):
     root: str = ""
+    extensions: list[str] = []       # z. B. ["mkv","mp4"] – leer = alle
     name_contains: str = ""
     name_exclude: list[str] = []
     min_size_mb: float = 0
@@ -955,6 +956,14 @@ async def supertool_scan(req: SuperScanRequest):
 async def supertool_scan_state():
     from core import supertool
     return supertool.get_state()
+
+
+@app.post("/api/supertool/scan/cancel")
+async def supertool_scan_cancel():
+    """Laufenden Super-Tool-Scan abbrechen."""
+    from core import supertool
+    cancelled = supertool.cancel_scan()
+    return {"cancelled": cancelled, "state": supertool.get_state()}
 
 
 @app.post("/api/supertool/list")
