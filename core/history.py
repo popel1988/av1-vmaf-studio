@@ -174,6 +174,20 @@ def recent(limit: int = 100) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get(job_id: str) -> Optional[dict]:
+    """Einen einzelnen Job (nach ID) aus der Historie holen."""
+    if _conn is None or not job_id:
+        return None
+    try:
+        with _lock:
+            row = _conn.execute(
+                "SELECT * FROM jobs WHERE id=? LIMIT 1", (str(job_id),)
+            ).fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error:
+        return None
+
+
 def is_processed(path: str) -> bool:
     """True, wenn zu diesem Quellpfad bereits ein erfolgreicher Job existiert."""
     if _conn is None or not path:

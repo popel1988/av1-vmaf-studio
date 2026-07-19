@@ -35,6 +35,7 @@ _state: dict = {
     "root": "",
 }
 _thread: Optional[threading.Thread] = None
+_stop = threading.Event()
 
 _CACHE_PATH = config.DATA_DIR / "library_scan.json"
 
@@ -221,13 +222,38 @@ def start_scan(root_rel: str, filters: dict) -> bool:
         _state.update(running=True, done=False, total=0, scanned=0,
                       matched=[], total_size_bytes=0, total_saved_bytes=0,
                       error="", generated_at=time.time(), root=root_rel or "")
+    _stop.clear()
     _thread = threading.Thread(target=_run, args=(root_rel, filters or {}), daemon=True)
     _thread.start()
     return True
 
 
-def _dynamic_match(info, dynamic_filter: str) -> bool:
-    """Prüft den Dynamik-Filter (SDR/HDR/DV/DV-Profil)."""
+def cancel_scan() -> bool:
+    """Laufenden Scan abbrechen (kooperativ). True, wenn einer lief."""
+    with _lock:
+        running = _state["running"]
+    if running:
+        _stop.set()
+    return running
+
+
+def clear() -> dict:
+    """Aktuelle Treffer/Cache leeren (nur wenn kein Scan läuft)."""
+    with _lock:
+        if _state["running"]:
+            return get_state()
+        _state.update(done=False, total=0, scanned=0, matched=[],
+                      total_size_bytes=0, total_saved_bytes=0,
+                      error="", generated_at=0.0, root="")
+    try:
+        _CACHE_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return get_state()
+
+
+def _dynamic_match_one(info, dynamic_filter: str) -> bool:
+    """Prüft einen einzelnen Dynamik-Filter (SDR/HDR/DV/DV-Profil)."""
     if not dynamic_filter:
         return True
     if dynamic_filter == "sdr":
@@ -245,6 +271,14 @@ def _dynamic_match(info, dynamic_filter: str) -> bool:
     return True
 
 
+def _dynamic_match(info, dynamic_filters: list) -> bool:
+    """Prüft mehrere Dynamik-Filter (ODER-Verknüpfung). Leer = alle."""
+    active = [d for d in (dynamic_filters or []) if d]
+    if not active:
+        return True
+    return any(_dynamic_match_one(info, d) for d in active)
+
+
 def _run(root_rel: str, filters: dict) -> None:
     try:
         files = list(config.iter_input_files(root_rel, config.VIDEO_EXTENSIONS))
@@ -260,13 +294,19 @@ def _run(root_rel: str, filters: dict) -> None:
         inc = {c.lower() for c in (filters.get("codecs_include") or [])}
         exc = {c.lower() for c in (filters.get("codecs_exclude") or [])}
         target_codec = str(filters.get("target_codec") or "av1")
-        dynamic_filter = str(filters.get("dynamic_filter") or "")
+        # Mehrfach-Auswahl (dynamic_filters) mit Rückfall auf Einzelwert.
+        dynamic_filters = [str(d) for d in (filters.get("dynamic_filters") or []) if str(d)]
+        single = str(filters.get("dynamic_filter") or "")
+        if single and not dynamic_filters:
+            dynamic_filters = [single]
         skip_optimized = bool(filters.get("skip_optimized"))
         skip_processed = bool(filters.get("skip_processed"))
         if skip_processed:
             from . import history
 
         for f in files:
+            if _stop.is_set():
+                break
             with _lock:
                 _state["scanned"] += 1
             try:
@@ -295,7 +335,7 @@ def _run(root_rel: str, filters: dict) -> None:
                 continue
             if min_bitrate and info.video_bitrate < min_bitrate:
                 continue
-            if not _dynamic_match(info, dynamic_filter):
+            if not _dynamic_match(info, dynamic_filters):
                 continue
 
             rel = config.rel_input(f) or f.name

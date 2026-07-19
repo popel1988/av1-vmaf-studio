@@ -818,3 +818,51 @@ input[type="range"]::-moz-range-thumb {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+/* ------------------------------------------------ Mehrfach-Auswahl-Dropdown */
+.multiselect { position: relative; }
+.multiselect-btn {
+  width: 100%;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: border var(--transition);
+}
+.multiselect-btn::after { content: " ▾"; float: right; opacity: 0.6; }
+.multiselect-btn.has-sel { color: var(--text); }
+.multiselect-btn:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+.multiselect-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+}
+.multiselect-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.multiselect-opt:hover { background: var(--surface-2); }
+.multiselect-opt input { width: auto; }
+
+/* Klickbare Statistik-Titel */
+.stats-title { color: var(--accent-2); text-decoration: none; cursor: pointer; }
+.stats-title:hover { text-decoration: underline; }
+.stats-play { padding: 2px 9px; }

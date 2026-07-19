@@ -20,7 +20,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -341,13 +341,23 @@ async def browse_output(root: str = "", path: str = ""):
     if not (target_r == base_r or config._within(target_r, base_r)):
         return JSONResponse({"error": "Pfad außerhalb des Ausgabeordners"},
                             status_code=400)
-    dirs = []
+    dirs, files = [], []
     if target_r.is_dir():
         try:
             for entry in sorted(target_r.iterdir(), key=lambda p: p.name.lower()):
-                if entry.is_dir() and not entry.name.startswith("."):
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir():
                     rel = config.safe_subdir(f"{sub}/{entry.name}" if sub else entry.name)
                     dirs.append({"name": entry.name, "rel": rel})
+                elif entry.suffix.lower() in config.VIDEO_EXTENSIONS:
+                    try:
+                        size = entry.stat().st_size
+                    except OSError:
+                        size = 0
+                    rel = config.safe_subdir(f"{sub}/{entry.name}" if sub else entry.name)
+                    files.append({"name": entry.name, "rel": rel,
+                                  "size": size, "size_human": ff.human_size(size)})
         except OSError as e:
             return JSONResponse({"error": str(e)}, status_code=500)
     if sub:
@@ -355,8 +365,8 @@ async def browse_output(root: str = "", path: str = ""):
         parent = "" if parent in (".", "") else parent
     else:
         parent = None
-    return {"root": root, "path": sub, "parent": parent,
-            "exists": target_r.is_dir(), "dirs": dirs}
+    return {"root": root, "path": sub, "parent": parent, "is_root": not sub,
+            "exists": target_r.is_dir(), "dirs": dirs, "files": files}
 
 
 @app.get("/api/search")
@@ -532,6 +542,48 @@ async def remux_probe(path: str):
     if data is None:
         return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
     data["name"] = target.name
+    return data
+
+
+@app.post("/api/remux/upload")
+async def remux_upload(file: UploadFile = File(...)):
+    """Externe Ton-/Untertiteldatei vom PC hochladen und ihre Spuren listen.
+
+    Die Datei wird im Upload-Ordner gespeichert; der zurückgegebene Pfad
+    (``upload:<name>``) kann wie eine externe Spur weiterverwendet werden.
+    """
+    import uuid as _uuid
+
+    orig = Path(file.filename or "upload").name
+    suffix = Path(orig).suffix.lower()
+    stem = Path(orig).stem[:60] or "track"
+    safe_stem = "".join(c if (c.isalnum() or c in "-_") else "_" for c in stem)
+    stored = f"{safe_stem}_{_uuid.uuid4().hex[:8]}{suffix}"
+    config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = config.UPLOAD_DIR / stored
+    try:
+        with dest.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+    except OSError as e:
+        return JSONResponse({"error": f"Upload fehlgeschlagen: {e}"}, status_code=500)
+    finally:
+        await file.close()
+
+    data, err = ff.probe_streams(dest)
+    if data is None:
+        dest.unlink(missing_ok=True)
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=400)
+    if not (data.get("audio") or data.get("subtitles")):
+        dest.unlink(missing_ok=True)
+        return JSONResponse(
+            {"error": f"{orig}: keine Ton-/Untertitelspuren gefunden."},
+            status_code=400)
+    data["name"] = orig
+    data["path"] = f"upload:{stored}"
     return data
 
 
@@ -827,7 +879,8 @@ class LibraryScanRequest(BaseModel):
     codecs_include: list[str] = []
     codecs_exclude: list[str] = []
     target_codec: str = "av1"        # Ziel für die Einspar-Projektion
-    dynamic_filter: str = ""         # ""|sdr|hdr|dv|dv5|dv7|dv8 (Dynamik-Filter)
+    dynamic_filter: str = ""         # (alt) einzelner Dynamik-Filter
+    dynamic_filters: list[str] = []  # Mehrfach-Auswahl: sdr|hdr|dv|dv5|dv7|dv8
     skip_optimized: bool = False     # bereits effiziente Dateien ausblenden
     skip_processed: bool = False     # bereits verarbeitete Dateien ausblenden
 
@@ -843,6 +896,21 @@ async def library_scan(req: LibraryScanRequest):
 async def library_scan_state():
     from core import library
     return library.get_state()
+
+
+@app.post("/api/library/scan/cancel")
+async def library_scan_cancel():
+    """Laufenden Bibliotheks-Scan abbrechen."""
+    from core import library
+    cancelled = library.cancel_scan()
+    return {"cancelled": cancelled, "state": library.get_state()}
+
+
+@app.post("/api/library/clear")
+async def library_clear():
+    """Treffer/Cache der Bibliothek leeren (nur wenn kein Scan läuft)."""
+    from core import library
+    return library.clear()
 
 
 @app.get("/api/library/last")
@@ -1322,13 +1390,53 @@ def _rel_to(base, abs_path) -> Optional[str]:
         return None
 
 
+def _details_from_history(rec: dict) -> dict:
+    """Detail-Antwort aus einem Historien-Datensatz (Job nicht mehr in Queue)."""
+    from pathlib import Path
+    src_abs = rec.get("path") or ""
+    src = None
+    if src_abs:
+        p = Path(src_abs)
+        rel = config.rel_input(p)
+        src = {"name": p.name, "exists": p.is_file(), "media": None,
+               "info": None, "root": "input", "rel": rel}
+        if rel is not None and p.is_file():
+            src["media"] = f"/api/media?root=input&path={quote(rel)}"
+            info, _ = ff.probe_with_error(p)
+            if info:
+                src["info"] = info.to_dict()
+    orig = int(rec.get("original_size") or 0)
+    saved = int(rec.get("saved_bytes") or 0)
+    dur = float(rec.get("duration") or 0)
+    stats = {
+        "duration": dur,
+        "duration_human": ff.human_duration(dur) if dur else "—",
+        "status": rec.get("status") or "—",
+        "vmaf_verify": rec.get("vmaf"),
+        "original_human": ff.human_size(orig) if orig else "—",
+        "output_human": ff.human_size(int(rec.get("output_size") or 0)) if rec.get("output_size") else "—",
+        "saved_human": ff.human_size(saved) if saved else "—",
+        "savings_percent": (round(saved / orig * 100, 1) if orig and saved else None),
+        "speed_x": None, "avg_fps": None,
+    }
+    return {"id": rec.get("id"), "title": rec.get("title") or "Details",
+            "status": rec.get("status") or "—",
+            "source": src, "output": None, "stats": stats}
+
+
 @app.get("/api/queue/{item_id}/details")
 async def queue_details(item_id: str):
     """Detail-Ansicht eines (auch abgeschlossenen) Auftrags: ffprobe von Quelle
     und Ausgabe, Medien-URLs für den Player sowie Encode-Kennzahlen."""
     item = queue.get_item(item_id)
     if item is None:
-        return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
+        # Fallback: nicht mehr in der Warteschlange (z. B. nach Neustart) →
+        # aus der Historie rekonstruieren (Quelle + Kennzahlen, ohne Ausgabe).
+        from core import history
+        rec = history.get(item_id)
+        if rec is None:
+            return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
+        return _details_from_history(rec)
 
     def _pack(abs_path, root):
         from pathlib import Path

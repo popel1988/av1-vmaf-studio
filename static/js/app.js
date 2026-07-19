@@ -126,14 +126,20 @@
   // Super-Tool, Audio-Optimierung, Remux und den Datei-Pickern genutzt.
   //
   // opts: { listId, crumbId, kind, showFiles, recursive, playFile,
-  //         pickFile(f), onNavigate(data, path), rootLabel, searchPlaceholder }
+  //         pickFile(f), onNavigate(data, path), rootLabel, searchPlaceholder,
+  //         browseUrl(path), searchUrl(path, q), playRoot }
   function makeFolderBrowser(opts) {
     const listEl = $(opts.listId);
     if (!listEl) return null;
     const crumbEl = opts.crumbId ? $(opts.crumbId) : null;
     const kind = opts.kind || "video";
     const showFiles = opts.showFiles !== false;
-    const allowRecursive = showFiles && opts.recursive !== false;
+    const browseUrl = opts.browseUrl ||
+      ((p) => `/api/browse?path=${encodeURIComponent(p)}&kind=${kind}`);
+    const searchUrl = opts.searchUrl ||
+      ((p, q) => `/api/search?path=${encodeURIComponent(p)}&q=${encodeURIComponent(q)}&kind=${kind}`);
+    // Rekursive Suche nur, wenn eine Such-URL existiert (Standard: /api/search).
+    const allowRecursive = showFiles && opts.recursive !== false && opts.searchUrl !== null;
     const S = { path: "", data: null, hist: [], hidx: -1, scroll: {}, timer: null };
 
     // --- Toolbar (Zurück/Vor · Suche · Unterordner · Zähler) ---
@@ -182,8 +188,7 @@
       listEl.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
       let data;
       try {
-        data = await (await fetch(
-          `/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`)).json();
+        data = await (await fetch(browseUrl(path))).json();
       } catch (e) {
         listEl.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
         return;
@@ -214,8 +219,8 @@
       if (!crumbEl) return;
       crumbEl.innerHTML = "";
       const root = document.createElement("a");
-      root.textContent = (window.APP_CONFIG && APP_CONFIG.multiInput)
-        ? "Ordner" : (opts.rootLabel || "/media/input");
+      root.textContent = opts.rootLabel ||
+        ((window.APP_CONFIG && APP_CONFIG.multiInput) ? "Ordner" : "/media/input");
       root.onclick = () => go("");
       crumbEl.appendChild(root);
       if (data.path) {
@@ -244,7 +249,7 @@
       files.forEach((f) => listEl.appendChild(makeRow(
         "file", f.name, f.size_human, null,
         opts.pickFile ? () => opts.pickFile(f) : null,
-        opts.playFile ? f.rel : null)));
+        opts.playFile ? f.rel : null, opts.playRoot || "input")));
       if (!dirs.length && !files.length) {
         listEl.innerHTML = q
           ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
@@ -265,15 +270,14 @@
     async function runRecursive(q) {
       listEl.innerHTML = '<div class="browser-loading">Suche in Unterordnern …</div>';
       try {
-        const data = await (await fetch(
-          `/api/search?path=${encodeURIComponent(S.path)}&q=${encodeURIComponent(q)}&kind=${kind}`)).json();
+        const data = await (await fetch(searchUrl(S.path, q))).json();
         if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
         listEl.innerHTML = "";
         (data.files || []).forEach((f) => {
           const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
           listEl.appendChild(makeRow("file", label, f.size_human, null,
             opts.pickFile ? () => opts.pickFile(f) : null,
-            opts.playFile ? f.rel : null));
+            opts.playFile ? f.rel : null, opts.playRoot || "input"));
         });
         if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
         count.textContent = `${(data.files || []).length} Treffer${data.truncated ? " (begrenzt)" : ""}`;
@@ -302,7 +306,7 @@
   let mainBrowser = null;
   function loadDir(path) { return mainBrowser ? mainBrowser.go(path) : undefined; }
 
-  function makeRow(type, name, size, onOpen, onPick, playRel) {
+  function makeRow(type, name, size, onOpen, onPick, playRel, playRoot) {
     const row = document.createElement("div");
     row.className = "row-item";
     const icon = type === "dir" ? "📁" : "🎬";
@@ -318,7 +322,7 @@
       play.textContent = "▶";
       play.addEventListener("click", (e) => {
         e.stopPropagation();
-        openPlayer("input", playRel, name);
+        openPlayer(playRoot || "input", playRel, name);
       });
       row.appendChild(play);
     }
@@ -331,6 +335,110 @@
       row.addEventListener("click", onPick);
     }
     return row;
+  }
+
+  // Modal-Ordnerauswahl (nur Ordner). onPick(relPath) erhält den Zielordner.
+  function openFolderPickerModal(opts) {
+    opts = opts || {};
+    openModal(opts.title || "Ordner wählen",
+      '<div class="breadcrumb" id="fp-crumb"></div>' +
+      '<div class="browser browser-sm" id="fp-browser"><div class="browser-loading">Lade …</div></div>' +
+      '<div class="lib-actions" style="margin-top:10px">' +
+      '<button class="btn btn-primary btn-sm" id="fp-choose">Diesen Ordner wählen</button>' +
+      '<span id="fp-sel" class="muted"></span></div>');
+    let current = "";
+    const picker = makeFolderBrowser({
+      listId: "fp-browser", crumbId: "fp-crumb",
+      kind: opts.kind || "video", showFiles: false,
+      searchPlaceholder: "Unterordner filtern …",
+      onNavigate: (data, p) => {
+        current = p;
+        const sel = $("fp-sel");
+        if (sel) sel.textContent = p ? `Auswahl: /${p}` : "Auswahl: (Wurzel/gesamt)";
+      },
+    });
+    const choose = $("fp-choose");
+    if (choose) choose.addEventListener("click", () => {
+      closeModal();
+      if (opts.onPick) opts.onPick(current);
+    });
+    if (picker) picker.go(opts.start || "");
+  }
+
+  // Modal-Dateiauswahl (Video). onPick({rel,name}). root: "input" | "output".
+  function openFilePickerModal(opts) {
+    opts = opts || {};
+    const isOut = opts.root && opts.root !== "input";
+    openModal(opts.title || "Datei wählen",
+      '<div class="breadcrumb" id="fp-crumb"></div>' +
+      '<div class="browser browser-sm" id="fp-browser"><div class="browser-loading">Lade …</div></div>');
+    const picker = makeFolderBrowser({
+      listId: "fp-browser", crumbId: "fp-crumb",
+      kind: "video", showFiles: true,
+      rootLabel: isOut ? "Ausgabe" : undefined,
+      playRoot: isOut ? "output" : "input",
+      searchPlaceholder: "Im Ordner suchen … (Name)",
+      browseUrl: isOut
+        ? ((p) => `/api/browse-output?root=${encodeURIComponent(opts.outRoot || "")}&path=${encodeURIComponent(p)}`)
+        : undefined,
+      searchUrl: isOut ? null : undefined,
+      pickFile: (f) => { closeModal(); if (opts.onPick) opts.onPick(f); },
+    });
+    if (picker) picker.go("");
+  }
+
+  // Platzhalter-<div> in ein Mehrfach-Auswahl-Dropdown umwandeln.
+  // options: [{value,label}] · returns { getValues, setValues }.
+  function makeMultiSelect(container, options, cfg) {
+    cfg = cfg || {};
+    if (!container) return null;
+    const chosen = new Set(cfg.initial || []);
+    let open = false;
+    container.classList.add("multiselect");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "multiselect-btn";
+    const panel = document.createElement("div");
+    panel.className = "multiselect-panel";
+    panel.style.display = "none";
+    const getValues = () => options.map((o) => o.value).filter((v) => chosen.has(v));
+    const syncLabel = () => {
+      const labels = options.filter((o) => chosen.has(o.value)).map((o) => o.label);
+      if (!labels.length) { btn.textContent = cfg.placeholder || "Alle"; btn.classList.remove("has-sel"); }
+      else { btn.textContent = labels.length <= 2 ? labels.join(", ") : `${labels.length} gewählt`; btn.classList.add("has-sel"); }
+    };
+    options.forEach((o) => {
+      const lab = document.createElement("label");
+      lab.className = "multiselect-opt check";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.value = o.value; cb.checked = chosen.has(o.value);
+      cb.addEventListener("change", () => {
+        if (cb.checked) chosen.add(o.value); else chosen.delete(o.value);
+        syncLabel();
+        if (cfg.onChange) cfg.onChange(getValues());
+      });
+      const sp = document.createElement("span"); sp.textContent = o.label;
+      lab.append(cb, sp);
+      panel.appendChild(lab);
+    });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      open = !open; panel.style.display = open ? "" : "none";
+    });
+    document.addEventListener("click", (e) => {
+      if (open && !container.contains(e.target)) { open = false; panel.style.display = "none"; }
+    });
+    container.append(btn, panel);
+    syncLabel();
+    return {
+      getValues,
+      setValues: (vals) => {
+        chosen.clear();
+        (vals || []).forEach((v) => chosen.add(v));
+        panel.querySelectorAll("input").forEach((cb) => { cb.checked = chosen.has(cb.value); });
+        syncLabel();
+      },
+    };
   }
 
   function enableActionButtons() {
@@ -2527,9 +2635,10 @@
     if (body) {
       body.innerHTML = recent.length ? recent.map((j) => {
         const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
+        const id = escapeHtml(j.id || "");
         return `
         <tr>
-          <td>${escapeHtml(j.title || "")}</td>
+          <td><a href="#" class="stats-title" data-id="${id}" title="Details & Wiedergabe öffnen">${escapeHtml(j.title || "")}</a></td>
           <td>${escapeHtml((j.codec || "").toUpperCase())}</td>
           <td>${j.quality || "—"}</td>
           <td>${j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—"}</td>
@@ -2539,8 +2648,16 @@
           <td>${formatDuration(j.duration || 0)}</td>
           <td class="muted">${escapeHtml(when)}</td>
           <td>${escapeHtml(j.status || "")}</td>
+          <td><button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button></td>
         </tr>`; }).join("") :
-        '<tr class="empty-row"><td colspan="10">Noch keine Jobs.</td></tr>';
+        '<tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>';
+      body.querySelectorAll(".stats-title, .stats-play").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          const id = el.dataset.id;
+          if (id) openQueueDetails(id);
+        });
+      });
     }
   }
 
@@ -2577,11 +2694,37 @@
     // Aktionen (Play / →Encode / →VMAF) delegiert.
     const body = $("lib-body");
     if (body) body.addEventListener("click", onLibAction);
+
+    // Mehrfach-Auswahl-Dropdowns für Codec- und Dynamik-Filter.
+    state.libCodecMulti = makeMultiSelect($("lib-codec-multi"), [
+      { value: "h264", label: "H.264" },
+      { value: "hevc", label: "HEVC/H.265" },
+      { value: "av1", label: "AV1" },
+      { value: "vp9", label: "VP9" },
+      { value: "mpeg2video", label: "MPEG-2" },
+      { value: "mpeg4", label: "MPEG-4" },
+      { value: "vc1", label: "VC-1" },
+    ], { placeholder: "Alle Codecs" });
+    state.libDynMulti = makeMultiSelect($("lib-dynamic-multi"), [
+      { value: "sdr", label: "SDR" },
+      { value: "hdr", label: "HDR (ohne DV)" },
+      { value: "dv", label: "Dolby Vision (alle)" },
+      { value: "dv5", label: "DV Profil 5" },
+      { value: "dv7", label: "DV Profil 7" },
+      { value: "dv8", label: "DV Profil 8" },
+    ], { placeholder: "Alle" });
+
+    const cancel = $("btn-lib-cancel");
+    if (cancel) cancel.addEventListener("click", cancelLibraryScan);
+    const clear = $("btn-lib-clear");
+    if (clear) clear.addEventListener("click", clearLibrary);
+
     loadLastLibrary();
   }
 
   function libFilters() {
-    const mode = $("lib-codec-mode").value;
+    const codecs = state.libCodecMulti ? state.libCodecMulti.getValues() : [];
+    const dyn = state.libDynMulti ? state.libDynMulti.getValues() : [];
     const f = {
       root: state.currentPath || "",
       name_contains: $("lib-name").value.trim(),
@@ -2590,16 +2733,13 @@
       min_size_mb: parseFloat($("lib-min-size").value) || 0,
       min_bitrate_mbps: parseFloat($("lib-min-br").value) || 0,
       min_height: parseInt($("lib-min-h").value, 10) || 0,
-      codecs_include: [],
+      codecs_include: codecs,
       codecs_exclude: [],
       target_codec: $("lib-target-codec") ? $("lib-target-codec").value : "av1",
-      dynamic_filter: $("lib-dynamic") ? $("lib-dynamic").value : "",
+      dynamic_filters: dyn,
       skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
       skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
     };
-    if (mode === "exclude-av1") f.codecs_exclude = ["av1"];
-    else if (mode === "include-h264") f.codecs_include = ["h264"];
-    else if (mode === "include-hevc") f.codecs_include = ["hevc"];
     return f;
   }
 
@@ -2642,8 +2782,15 @@
       || "<li class='muted'>—</li>";
   }
 
+  function libSetRunning(running) {
+    const scan = $("btn-lib-scan"); if (scan) scan.disabled = running;
+    const cancel = $("btn-lib-cancel"); if (cancel) cancel.disabled = !running;
+    const clear = $("btn-lib-clear"); if (clear) clear.disabled = running;
+  }
+
   async function startLibraryScan() {
     $("lib-scan-badge").textContent = "Scan läuft …";
+    libSetRunning(true);
     await fetch("/api/library/scan", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(libFilters()),
@@ -2651,6 +2798,30 @@
     if (libPoll) clearInterval(libPoll);
     libPoll = setInterval(pollLibrary, 1200);
     pollLibrary();
+  }
+
+  async function cancelLibraryScan() {
+    const b = $("btn-lib-cancel");
+    if (b) { b.disabled = true; b.textContent = "Breche ab …"; }
+    try { await fetch("/api/library/scan/cancel", { method: "POST" }); }
+    catch (e) { /* ignorieren */ }
+    setTimeout(() => { if (b) b.textContent = "Abbrechen"; }, 1500);
+  }
+
+  async function clearLibrary() {
+    if (libPoll) return;  // während des Scans nicht leeren
+    try { await fetch("/api/library/clear", { method: "POST" }); }
+    catch (e) { /* ignorieren */ }
+    state.libRows = [];
+    state.libStats = null;
+    renderLibrary();
+    renderLibProjection({ matched: [] });
+    renderLibDashboard(null, 0);
+    ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
+      const el = $(id); if (el) el.disabled = true;
+    });
+    $("lib-progress").textContent = "";
+    $("lib-scan-badge").textContent = "Bereit";
   }
 
   function applyLibState(st) {
@@ -2674,6 +2845,7 @@
       applyLibState(st);
       if (!st.running) {
         clearInterval(libPoll); libPoll = null;
+        libSetRunning(false);
         $("lib-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
       }
     } catch (e) { /* ignorieren */ }
@@ -3244,6 +3416,13 @@
     if (cont) cont.addEventListener("change", () => { if (state.remuxInfo) remuxRenderEditor(); });
     const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
     on("btn-remux-add-ext", () => remuxOpenPicker("ext", "aux"));
+    on("btn-remux-upload", () => { const inp = $("remux-upload-input"); if (inp) inp.click(); });
+    const upIn = $("remux-upload-input");
+    if (upIn) upIn.addEventListener("change", () => {
+      const f = upIn.files && upIn.files[0];
+      if (f) remuxUploadExternal(f);
+      upIn.value = "";  // gleiche Datei erneut wählbar machen
+    });
     on("btn-remux-add-att", () => remuxOpenPicker("att", "att"));
     on("btn-remux-extract", remuxExtract);
     on("btn-remux-load-chapters", remuxLoadChapters);
@@ -3667,37 +3846,71 @@
     }
   }
 
+  // Aus einem probe-Ergebnis externe Spuren in state.remuxExt übernehmen.
+  // refPath ist der Pfad, unter dem die Datei im Backend aufgelöst wird
+  // (rel-Pfad eines Input-Roots oder "upload:<name>" für PC-Uploads).
+  function remuxAddStreamsFromProbe(data, refPath, name) {
+    const streams = [];
+    (data.audio || []).forEach((a) => streams.push({
+      type: "audio", stream: a.index, src_codec: a.codec,
+      desc: `Ton #${a.index} · ${a.codec} ${a.channels || "?"}ch · ${a.bitrate_human || "—"}`,
+      language: a.language, title: a.title,
+    }));
+    (data.subtitles || []).forEach((s) => streams.push({
+      type: "subtitle", stream: s.index, src_codec: s.codec,
+      desc: `UT #${s.index} · ${s.codec}`,
+      language: s.language, title: s.title,
+    }));
+    if (!streams.length) return 0;
+    streams.forEach((st) => state.remuxExt.push({
+      path: refPath, name: name, type: st.type, stream: st.stream, desc: st.desc,
+      src_codec: st.src_codec || "",
+      language: (st.language && st.language !== "und") ? st.language : "",
+      title: st.title || "", delay: 0, default: false, forced: false,
+      transcode: false, codec: "eac3", bitrate: 640, channels: 0,
+    }));
+    return streams.length;
+  }
+
   async function remuxAddExternal(f) {
     closeModal();
     $("remux-start-info").textContent = `Analysiere ${f.name} …`;
     try {
       const data = await (await fetch(`/api/remux/probe?path=${encodeURIComponent(f.rel)}`)).json();
       if (data.error) { $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
-      const streams = [];
-      (data.audio || []).forEach((a) => streams.push({
-        type: "audio", stream: a.index, src_codec: a.codec,
-        desc: `Ton #${a.index} · ${a.codec} ${a.channels || "?"}ch · ${a.bitrate_human || "—"}`,
-        language: a.language, title: a.title,
-      }));
-      (data.subtitles || []).forEach((s) => streams.push({
-        type: "subtitle", stream: s.index, src_codec: s.codec,
-        desc: `UT #${s.index} · ${s.codec}`,
-        language: s.language, title: s.title,
-      }));
-      if (!streams.length) {
+      const n = remuxAddStreamsFromProbe(data, f.rel, f.name);
+      if (!n) {
         $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(f.name)}: keine Ton-/Untertitelspuren gefunden.</span>`;
         return;
       }
-      streams.forEach((st) => state.remuxExt.push({
-        path: f.rel, name: f.name, type: st.type, stream: st.stream, desc: st.desc,
-        src_codec: st.src_codec || "",
-        language: (st.language && st.language !== "und") ? st.language : "",
-        title: st.title || "", delay: 0, default: false, forced: false,
-        transcode: false, codec: "eac3", bitrate: 640, channels: 0,
-      }));
-      $("remux-start-info").textContent = `${streams.length} Spur(en) aus ${f.name} hinzugefügt.`;
+      $("remux-start-info").textContent = `${n} Spur(en) aus ${f.name} hinzugefügt.`;
     } catch (e) {
       $("remux-start-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+      return;
+    }
+    remuxRenderExternals();
+    remuxUpdateConflicts();
+  }
+
+  async function remuxUploadExternal(file) {
+    $("remux-start-info").textContent = `Lade ${file.name} hoch …`;
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const resp = await fetch("/api/remux/upload", { method: "POST", body: fd });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
+        return;
+      }
+      const n = remuxAddStreamsFromProbe(data, data.path, data.name || file.name);
+      if (!n) {
+        $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.name || file.name)}: keine Ton-/Untertitelspuren gefunden.</span>`;
+        return;
+      }
+      $("remux-start-info").textContent = `${n} Spur(en) aus ${data.name || file.name} (Upload) hinzugefügt.`;
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">Upload-Fehler: ${escapeHtml(String(e))}</span>`;
       return;
     }
     remuxRenderExternals();
@@ -4157,6 +4370,19 @@
     $("ab-seek").addEventListener("input", (e) => {
       if (va.duration) va.currentTime = (parseInt(e.target.value, 10) / 1000) * va.duration;
     });
+
+    const browse = (which) => {
+      const root = $("ab-root-" + which).value;
+      openFilePickerModal({
+        title: `Video ${which.toUpperCase()} wählen`,
+        root: root === "output" ? "output" : "input",
+        onPick: (f) => { $("ab-path-" + which).value = f.rel; },
+      });
+    };
+    const ba = $("btn-ab-browse-a");
+    if (ba) ba.addEventListener("click", () => browse("a"));
+    const bb = $("btn-ab-browse-b");
+    if (bb) bb.addEventListener("click", () => browse("b"));
   }
 
   // Beide A/B-Videos pausieren (z. B. beim Verlassen der Seite).
@@ -4415,6 +4641,12 @@
         }),
       });
     };
+    const browse = $("btn-wf-browse");
+    if (browse) browse.addEventListener("click", () => openFolderPickerModal({
+      title: "Watch-Ordner wählen", kind: "video",
+      start: ($("wf-folder").value || "").trim(),
+      onPick: (p) => { $("wf-folder").value = p; },
+    }));
     $("btn-watch-save").addEventListener("click", async () => { await save(); await load(); });
     $("btn-watch-scan").addEventListener("click", async () => {
       const b = $("btn-watch-scan"); const t = b.textContent; b.textContent = "Prüfe …";

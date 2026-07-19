@@ -226,6 +226,8 @@ def iter_input_files(root_rel: str, exts: set) -> "Iterator[Path]":
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 WORK_DIR = Path(os.getenv("WORK_DIR", str(DATA_DIR / "work")))
 PREVIEW_DIR = Path(os.getenv("PREVIEW_DIR", str(DATA_DIR / "previews")))
+# Vom Nutzer hochgeladene externe Spuren (persistent, bis der Job gelaufen ist).
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", str(DATA_DIR / "uploads")))
 VMAF_SESSIONS_DIR = Path(os.getenv("VMAF_SESSIONS_DIR", str(DATA_DIR / "vmaf")))
 
 # VMAF-Artefakte nach Analyse behalten (statt work-Ordner zu löschen)

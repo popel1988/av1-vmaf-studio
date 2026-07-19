@@ -119,8 +119,23 @@ def check_conflicts(info: VideoInfo, spec: dict) -> list[str]:
 
 
 def _abs_external(path: str) -> Optional[Path]:
-    """Externe Datei sicher innerhalb eines Input-Roots auflösen (root-aware)."""
-    target = config.resolve_input(path)
+    """Externe Datei sicher auflösen.
+
+    ``upload:<name>`` verweist auf eine vom Nutzer hochgeladene Datei im
+    Upload-Ordner; sonst wird root-aware innerhalb eines Input-Roots aufgelöst.
+    """
+    p = str(path or "")
+    if p.startswith("upload:"):
+        name = p[len("upload:"):].strip().replace("\\", "/")
+        # Nur Dateiname zulassen (kein Pfad-Traversal).
+        if "/" in name or name in ("", ".", ".."):
+            return None
+        base = config.UPLOAD_DIR.resolve()
+        target = (base / name).resolve()
+        if not config._within(target, base):
+            return None
+        return target if target.is_file() else None
+    target = config.resolve_input(p)
     return target if (target and target.is_file()) else None
 
 

@@ -49,6 +49,8 @@
         <select id="lang-select">
           <option value="de">Deutsch</option>
           <option value="en">English</option>
+          <option value="es">Español</option>
+          <option value="fr">Français</option>
         </select>
       </div>
 
@@ -647,10 +649,10 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th>Titel</th><th>Codec</th><th>Q</th><th>VMAF</th><th>Original</th><th>Ergebnis</th><th>Ersparnis</th><th>Dauer</th><th>Datum</th><th>Status</th></tr>
+                  <tr><th>Titel</th><th>Codec</th><th>Q</th><th>VMAF</th><th>Original</th><th>Ergebnis</th><th>Ersparnis</th><th>Dauer</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
                 </thead>
                 <tbody id="stats-body">
-                  <tr class="empty-row"><td colspan="10">Noch keine Jobs.</td></tr>
+                  <tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -671,13 +673,8 @@
               <div class="field"><label>Min. Größe (MB)</label><input type="number" id="lib-min-size" min="0" value="0" /></div>
               <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="lib-min-br" min="0" step="0.5" value="0" /></div>
               <div class="field"><label>Min. Höhe (px)</label><input type="number" id="lib-min-h" min="0" value="0" /></div>
-              <div class="field"><label>Codec-Filter</label>
-                <select id="lib-codec-mode">
-                  <option value="">Alle Codecs</option>
-                  <option value="exclude-av1">Nur nicht-AV1 (AV1 überspringen)</option>
-                  <option value="include-h264">Nur H.264</option>
-                  <option value="include-hevc">Nur HEVC/H.265</option>
-                </select>
+              <div class="field"><label>Codec-Filter (Mehrfachauswahl)</label>
+                <div id="lib-codec-multi" title="Nur diese Codecs anzeigen – nichts gewählt = alle"></div>
               </div>
               <div class="field"><label>Projektion für Ziel-Codec</label>
                 <select id="lib-target-codec">
@@ -685,16 +682,8 @@
                   <option value="hevc">HEVC/H.265</option>
                 </select>
               </div>
-              <div class="field"><label>Dynamik-Filter</label>
-                <select id="lib-dynamic">
-                  <option value="">Alle</option>
-                  <option value="sdr">Nur SDR</option>
-                  <option value="hdr">Nur HDR (ohne DV)</option>
-                  <option value="dv">Nur Dolby Vision</option>
-                  <option value="dv5">Nur DV Profil 5</option>
-                  <option value="dv7">Nur DV Profil 7</option>
-                  <option value="dv8">Nur DV Profil 8</option>
-                </select>
+              <div class="field"><label>Dynamik-Filter (Mehrfachauswahl)</label>
+                <div id="lib-dynamic-multi" title="Mehrere Dynamik-Arten möglich – nichts gewählt = alle"></div>
               </div>
             </div>
             <div class="lib-checks">
@@ -726,6 +715,8 @@
 
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-lib-scan">Scan starten</button>
+              <button class="btn btn-ghost btn-sm" id="btn-lib-cancel" disabled title="Laufenden Scan abbrechen">Abbrechen</button>
+              <button class="btn btn-ghost btn-sm" id="btn-lib-clear" title="Treffer/Ergebnisse leeren">Leeren</button>
               <span id="lib-progress" class="muted"></span>
               <button class="btn btn-ghost btn-sm" id="btn-lib-csv" disabled title="Treffer als CSV exportieren">CSV-Export</button>
               <button class="btn btn-ghost btn-sm" id="btn-lib-add" disabled>Auswahl zur Warteschlange</button>
@@ -1076,7 +1067,10 @@
             <label class="check"><input type="checkbox" id="wf-enabled" /><span>Watch-Ordner aktiv</span></label>
             <div class="field">
               <label>Ordner (relativ zum Eingabeordner)</label>
-              <input type="text" id="wf-folder" placeholder="leer = gesamter Eingabeordner" />
+              <div class="field-row">
+                <input type="text" id="wf-folder" placeholder="leer = gesamter Eingabeordner" />
+                <button class="btn btn-ghost btn-sm" id="btn-wf-browse" type="button">Durchsuchen …</button>
+              </div>
             </div>
             <div class="field-row">
               <div class="field">
@@ -1311,6 +1305,8 @@
               </div>
               <div class="lib-actions">
                 <button class="btn btn-ghost btn-sm" id="btn-remux-add-ext">+ Externe Datei hinzufügen</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-upload">+ Datei vom PC hochladen</button>
+                <input type="file" id="remux-upload-input" style="display:none" />
                 <button class="btn btn-ghost btn-sm" id="btn-remux-add-att">+ Attachment (Font/Cover) hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" id="btn-remux-extract">Behaltene Spuren extrahieren</button>
               </div>
@@ -1500,6 +1496,7 @@
                     <option value="output">Ausgang</option>
                   </select>
                   <input type="text" id="ab-path-a" placeholder="relativer Pfad, z. B. Filme/film.mkv" />
+                  <button class="btn btn-ghost btn-sm" id="btn-ab-browse-a" type="button">Durchsuchen …</button>
                 </div>
               </div>
               <div class="field">
@@ -1510,6 +1507,7 @@
                     <option value="input">Eingang</option>
                   </select>
                   <input type="text" id="ab-path-b" placeholder="relativer Pfad, z. B. Filme/film_av1.mkv" />
+                  <button class="btn btn-ghost btn-sm" id="btn-ab-browse-b" type="button">Durchsuchen …</button>
                 </div>
               </div>
             </div>
