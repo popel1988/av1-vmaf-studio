@@ -242,7 +242,11 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
   flex: 1; min-width: 0;
 }
 .browser-search-row .browser-recursive { white-space: nowrap; margin: 0; }
-.browser-count { font-size: 12px; white-space: nowrap; }
+.browser-count { font-size: 12px; white-space: nowrap; margin-left: auto; }
+.browser-navbtn {
+  flex: 0 0 auto; min-width: 30px; padding: 5px 9px; line-height: 1;
+}
+.browser-navbtn:disabled { opacity: 0.4; cursor: default; }
 
 .browser {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -253,6 +257,9 @@ select:focus { outline: none; border-color: var(--accent); box-shadow: var(--glo
 /* Remux & Bearbeiten */
 .sub-head { margin: 16px 0 6px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .rx-tc-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.rx-e-enc-cell { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.rx-e-enc-cell select, .rx-e-enc-cell input { min-width: 0; }
+.preview-marks { margin-top: 12px; }
 #remux-audio-table input[type="text"], #remux-sub-table input[type="text"] { width: 100%; min-width: 60px; }
 #remux-audio-table td, #remux-sub-table td, #remux-ext-table td { vertical-align: middle; }
 

@@ -360,15 +360,24 @@ async def browse_output(root: str = "", path: str = ""):
 
 
 @app.get("/api/search")
-async def search_input(path: str = "", q: str = "", limit: int = 500):
-    """Rekursive Namenssuche ab `path` (Videos). Für große Bibliotheken.
+async def search_input(path: str = "", q: str = "", limit: int = 500,
+                       kind: str = "video"):
+    """Rekursive Namenssuche ab `path`. Für große Bibliotheken.
 
-    Liefert Treffer inkl. relativem Unterordner, damit die Herkunft klar ist.
-    Begrenzt auf `limit` Ergebnisse, um die Payload beherrschbar zu halten.
+    `kind=aux` sucht zusätzlich Ton-/Untertiteldateien (für den Remux-Picker),
+    sonst nur Videos. Liefert Treffer inkl. relativem Unterordner. Begrenzt auf
+    `limit` Ergebnisse, um die Payload beherrschbar zu halten.
     """
     query = (q or "").strip().lower()
     if not query:
         return {"files": [], "truncated": False}
+    if kind == "aux":
+        allowed = (config.VIDEO_EXTENSIONS | config.AUDIO_EXTENSIONS
+                   | config.SUBTITLE_EXTENSIONS)
+    elif kind == "att":
+        allowed = config.ATTACHMENT_EXTENSIONS
+    else:
+        allowed = config.VIDEO_EXTENSIONS
     # Leerer Pfad = über alle Roots suchen; sonst genau dieser (root-aware) Ordner.
     if path:
         target = _safe_resolve(path)
@@ -385,7 +394,7 @@ async def search_input(path: str = "", q: str = "", limit: int = 500):
             # Versteckte Ordner (.archiv, .previews …) überspringen.
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             for fn in sorted(filenames, key=str.lower):
-                if fn.startswith(".") or Path(fn).suffix.lower() not in config.VIDEO_EXTENSIONS:
+                if fn.startswith(".") or Path(fn).suffix.lower() not in allowed:
                     continue
                 if query not in fn.lower():
                     continue
@@ -586,13 +595,37 @@ class RemuxConcatRequest(BaseModel):
     container: str = "mkv"
     suffix: str = "_merged"
     post_processing: str = "keep"
+    chapters_at_joins: bool = False  # Kapitelmarke an jeder Verbindungsstelle
+    unify: bool = False              # inkompatible Dateien per Re-Encode vereinheitlichen
+    platform: str = "cpu"            # Re-Encode: Plattform/Codec/CQ
+    codec: str = "av1"
+    cq: int = 30
     out_root: str = ""
     out_subdir: str = ""
 
 
+class RemuxConcatCheckRequest(BaseModel):
+    paths: list[str] = []
+
+
+@app.post("/api/remux/concat/check")
+async def remux_concat_check(req: RemuxConcatCheckRequest):
+    """Kompatibilität der zu verbindenden Dateien prüfen (Codec/Auflösung/…)."""
+    from core import remux
+    files = []
+    for p in req.paths or []:
+        t = _safe_resolve(p)
+        if t is None or not t.is_file():
+            return JSONResponse({"error": f"Datei nicht gefunden: {p}"}, status_code=404)
+        files.append(str(t))
+    if len(files) < 2:
+        return JSONResponse({"error": "Mindestens zwei Dateien wählen"}, status_code=400)
+    return remux.concat_compat(files)
+
+
 @app.post("/api/remux/concat")
 async def remux_concat(req: RemuxConcatRequest):
-    """Mehrere Dateien verlustfrei zusammenführen (concat, kein Re-Encode)."""
+    """Mehrere Dateien zusammenführen (concat; optional Kapitel/Re-Encode)."""
     from core.queue_manager import build_job_settings
     if len(req.paths or []) < 2:
         return JSONResponse({"error": "Mindestens zwei Dateien wählen"}, status_code=400)
@@ -600,11 +633,17 @@ async def remux_concat(req: RemuxConcatRequest):
     if first is None or not first.is_file():
         return JSONResponse({"error": "Erste Datei nicht gefunden"}, status_code=404)
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    # Auch der Re-Encode-Merge läuft über den concat-Prozess (multi-input).
     d = {
         "video_mode": "concat", "vmaf_check": False, "workflow": "auto",
         "container": container, "post_processing": req.post_processing,
         "suffix": req.suffix or "_merged", "integrity_check": True,
-        "edit_spec": {"concat_files": list(req.paths), "container": container},
+        "edit_spec": {
+            "concat_files": list(req.paths), "container": container,
+            "chapters_at_joins": bool(req.chapters_at_joins),
+            "unify": bool(req.unify), "platform": req.platform,
+            "codec": req.codec, "cq": req.cq,
+        },
         "out_root": req.out_root, "out_subdir": req.out_subdir,
     }
     item = queue.add_file(str(first), build_job_settings(d))
@@ -615,8 +654,10 @@ async def remux_concat(req: RemuxConcatRequest):
 
 class RemuxSplitRequest(BaseModel):
     path: str
-    mode: str = "chapters"           # chapters | duration
-    value: float = 0                 # Sekunden bei mode=duration
+    mode: str = "chapters"           # chapters | duration | parts | times | size | range
+    value: float = 0                 # Sekunden (duration) · Teile (parts) · MB (size)
+    times: list[str] = []            # Zeitmarken bei mode=times (Sek. oder HH:MM:SS)
+    ranges: list[dict] = []          # [{start,end,title?}] bei mode=range (Ausschnitt)
     container: str = "mkv"
     suffix: str = "_part"
     out_root: str = ""
@@ -625,7 +666,7 @@ class RemuxSplitRequest(BaseModel):
 
 @app.post("/api/remux/split")
 async def remux_split(req: RemuxSplitRequest):
-    """Datei verlustfrei in Segmente splitten (kein Re-Encode)."""
+    """Datei verlustfrei splitten oder Ausschnitte exportieren (kein Re-Encode)."""
     from core.queue_manager import build_job_settings
     target = _safe_resolve(req.path)
     if target is None or not target.is_file():
@@ -636,6 +677,8 @@ async def remux_split(req: RemuxSplitRequest):
         "container": container, "post_processing": "keep",
         "suffix": req.suffix or "_part",
         "edit_spec": {"split_mode": req.mode, "split_value": req.value,
+                      "split_times": list(req.times or []),
+                      "split_ranges": list(req.ranges or []),
                       "container": container},
         "out_root": req.out_root, "out_subdir": req.out_subdir,
     }
@@ -643,6 +686,52 @@ async def remux_split(req: RemuxSplitRequest):
     if item is None:
         return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)
     return {"added": 1, "id": item.id}
+
+
+class RemuxCutRequest(BaseModel):
+    path: str
+    start: str = "0"
+    end: str = ""
+    container: str = "mkv"
+
+
+@app.post("/api/remux/cut")
+def remux_cut(req: RemuxCutRequest):
+    """Einen Ausschnitt verlustfrei schneiden und direkt als Download liefern.
+
+    Läuft synchron (im Threadpool, da normale def-Route); das Ergebnis landet in
+    einem temporären Arbeitsverzeichnis und wird nach der Auslieferung gelöscht.
+    """
+    import subprocess
+    import uuid as _uuid
+    from starlette.background import BackgroundTask
+    from core import remux
+
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    ext = "." + container
+    dl_dir = config.WORK_DIR / "downloads"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    out = dl_dir / f"cut_{_uuid.uuid4().hex[:10]}{ext}"
+    cmd, err = remux.build_single_cut_cmd(target, out, req.start, req.end)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=1800)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out.unlink(missing_ok=True)
+        return JSONResponse({"error": f"FFmpeg-Fehler: {e}"}, status_code=500)
+    if proc.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        out.unlink(missing_ok=True)
+        tail = (proc.stderr or "")[-800:]
+        return JSONResponse({"error": f"Schnitt fehlgeschlagen: {tail}"}, status_code=500)
+    dl_name = f"{target.stem}_cut{ext}"
+    return FileResponse(
+        out, filename=dl_name, media_type="application/octet-stream",
+        background=BackgroundTask(lambda: out.unlink(missing_ok=True)))
 
 
 @app.post("/api/remux/enqueue")

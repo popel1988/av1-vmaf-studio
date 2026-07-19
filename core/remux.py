@@ -302,14 +302,22 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
     for e in externals:
         if e["_kind"] != "audio":
             continue
+        transcode = bool(e.get("transcode"))
+        # In MP4 nicht kopierbare Codecs (z. B. DTS aus .dtshd) -> Transcode.
+        if is_mp4 and not transcode and not _codec_ok_in_container(
+                (e.get("src_codec") or "").lower(), "mp4", "audio"):
+            transcode = True
         cmd += ["-map", f"{e['_input']}:a:{e['_stream']}?"]
-        if e.get("transcode"):
+        if transcode:
             tgt = (e.get("codec") or ("aac" if is_mp4 else "eac3")).lower()
             enc = ff.AUDIO_ENCODERS.get(tgt, "aac" if is_mp4 else "eac3")
             cmd += [f"-c:a:{out_a}", enc]
             if enc != "flac":
                 br = int(e.get("bitrate") or 0) or 640
                 cmd += [f"-b:a:{out_a}", f"{max(32, br)}k"]
+            ch = int(e.get("channels") or 0)
+            if ch in (1, 2, 6, 8):
+                cmd += [f"-ac:a:{out_a}", str(ch)]
         else:
             cmd += [f"-c:a:{out_a}", "copy"]
         cmd += _disp("a", out_a, e)
@@ -426,10 +434,69 @@ def build_extract_cmds(info: VideoInfo, out_dir: Path, tracks: list) -> list:
     return cmds
 
 
-def build_concat_cmd(files: list, output: Path, work_dir: Path) -> tuple[list, str]:
+def probe_duration(path: Path) -> float:
+    """Dauer einer Datei in Sekunden (ffprobe, 0 bei Fehler)."""
+    try:
+        out = subprocess.run(
+            [config.FFPROBE, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=30, check=False)
+        return float((out.stdout or "0").strip() or 0)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return 0.0
+
+
+def concat_compat(files: list) -> dict:
+    """Codec/Auflösung/Pixelformat/Audio-Layout je Datei ermitteln und auf
+    Kompatibilität für verlustfreies Concat prüfen."""
+    import json
+    entries = []
+    for f in files:
+        info = {"file": Path(f).name, "vcodec": "", "width": 0, "height": 0,
+                "pix_fmt": "", "acodec": "", "channels": 0, "error": ""}
+        try:
+            out = subprocess.run(
+                [config.FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(f)],
+                capture_output=True, text=True, timeout=30, check=False)
+            data = json.loads(out.stdout or "{}")
+            for s in data.get("streams", []):
+                if s.get("codec_type") == "video" and not info["vcodec"]:
+                    info["vcodec"] = s.get("codec_name", "")
+                    info["width"] = int(s.get("width") or 0)
+                    info["height"] = int(s.get("height") or 0)
+                    info["pix_fmt"] = s.get("pix_fmt", "")
+                elif s.get("codec_type") == "audio" and not info["acodec"]:
+                    info["acodec"] = s.get("codec_name", "")
+                    info["channels"] = int(s.get("channels") or 0)
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+            info["error"] = str(e)
+        entries.append(info)
+    warnings = []
+    if entries:
+        ref = entries[0]
+        for e in entries[1:]:
+            diffs = []
+            if e["vcodec"] != ref["vcodec"]:
+                diffs.append(f"Video-Codec ({e['vcodec']} ≠ {ref['vcodec']})")
+            if (e["width"], e["height"]) != (ref["width"], ref["height"]):
+                diffs.append(f"Auflösung ({e['width']}x{e['height']} ≠ {ref['width']}x{ref['height']})")
+            if e["pix_fmt"] != ref["pix_fmt"]:
+                diffs.append(f"Pixelformat ({e['pix_fmt']} ≠ {ref['pix_fmt']})")
+            if e["acodec"] != ref["acodec"]:
+                diffs.append(f"Audio-Codec ({e['acodec']} ≠ {ref['acodec']})")
+            if diffs:
+                warnings.append(f"{e['file']}: " + ", ".join(diffs))
+    return {"streams": entries, "warnings": warnings,
+            "compatible": not warnings}
+
+
+def build_concat_cmd(files: list, output: Path, work_dir: Path,
+                     add_chapters: bool = False) -> tuple[list, str]:
     """Mehrere Dateien verlustfrei aneinanderhängen (concat-Demuxer, -c copy).
 
     Voraussetzung: identische Codecs/Parameter (sonst schlägt der Mux fehl).
+    `add_chapters=True` setzt an jeder Verbindungsstelle eine Kapitelmarke
+    (Titel = Dateiname).
     """
     if len(files) < 2:
         return [], "Zum Zusammenführen mindestens zwei Dateien wählen."
@@ -443,28 +510,138 @@ def build_concat_cmd(files: list, output: Path, work_dir: Path) -> tuple[list, s
         listfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError as e:
         return [], f"Konnte Liste nicht schreiben: {e}"
+
+    meta_path = None
+    if add_chapters:
+        chapters, acc = [], 0.0
+        for f in files:
+            dur = probe_duration(Path(f))
+            chapters.append({"start": acc, "end": acc + max(dur, 0.001),
+                             "title": Path(f).stem})
+            acc += dur
+        meta_path = write_chapter_meta(chapters, work_dir)
+
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-f", "concat", "-safe", "0",
-           "-i", str(listfile), "-map", "0", "-c", "copy",
-           "-progress", "pipe:1", "-nostats", str(output)]
+           "-i", str(listfile)]
+    if meta_path:
+        cmd += ["-i", str(meta_path), "-map_chapters", "1"]
+    cmd += ["-map", "0", "-c", "copy",
+            "-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""
 
 
+def build_concat_reencode_cmd(files: list, output: Path, platform: str,
+                              codec: str, cq: int) -> tuple[list, str]:
+    """Inkompatible Dateien via concat-Filter vereinheitlichen (mit Re-Encode).
+
+    Nutzt je Datei die erste Video- und erste Tonspur. Bild-/Attachment-Spuren
+    und weitere Tonspuren gehen dabei verloren (bewusste Vereinfachung).
+    """
+    if len(files) < 2:
+        return [], "Zum Zusammenführen mindestens zwei Dateien wählen."
+    enc = ff.encoder_name(platform, codec)
+    backend = ff.encoder_backend(platform)
+    n = len(files)
+    cmd = [config.FFMPEG, "-y", "-hide_banner"]
+    if backend == "vaapi":
+        cmd += ["-vaapi_device", "/dev/dri/renderD128"]
+    for f in files:
+        cmd += ["-i", str(f)]
+    inputs = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
+    filt = f"{inputs}concat=n={n}:v=1:a=1[vc][a]"
+    if backend == "vaapi":
+        filt += ";[vc]format=nv12,hwupload[v]"
+    else:
+        filt += ";[vc]setsar=1[v]"
+    cmd += ["-filter_complex", filt, "-map", "[v]", "-map", "[a]", "-c:v", enc]
+    cq = int(cq or 30)
+    if backend == "nvenc":
+        cmd += ["-rc", "vbr", "-cq", str(cq), "-preset", "p5"]
+    elif backend == "qsv":
+        cmd += ["-global_quality", str(cq)]
+    elif backend == "vaapi":
+        cmd += ["-rc_mode", "CQP", "-qp", str(cq)]
+    else:
+        cmd += ["-crf", str(cq)]
+        if enc == "libsvtav1":
+            cmd += ["-preset", "6"]
+    cmd += ["-c:a", "aac", "-b:a", "384k",
+            "-progress", "pipe:1", "-nostats", str(output)]
+    return cmd, ""
+
+
+def parse_time(val) -> float:
+    """Zeitangabe (Sekunden-Zahl oder HH:MM:SS[.ms]) → Sekunden (float)."""
+    if val is None:
+        return 0.0
+    s = str(val).strip()
+    if not s:
+        return 0.0
+    try:
+        if ":" in s:
+            parts = [float(p) for p in s.split(":")]
+            secs = 0.0
+            for p in parts:
+                secs = secs * 60 + p
+            return secs
+        return float(s)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def build_split_cmd(info: VideoInfo, out_pattern: Path, mode: str,
-                    value=None) -> tuple[list, str]:
+                    value=None, times=None) -> tuple[list, str]:
     """Verlustfreies Splitten am Segment-Muxer (-c copy).
 
-    mode="chapters": an Kapitelgrenzen. mode="duration": alle `value` Sekunden.
+    modi:
+      chapters – an Kapitelgrenzen
+      duration – alle `value` Sekunden
+      parts    – in `value` gleich große Teile
+      times    – an den Zeitmarken in `times` (Sekunden oder HH:MM:SS)
+      size     – nach max. `value` MB je Teil (nur ca.: Keyframe-Grenzen)
     `out_pattern` muss ein %d-Muster enthalten (z. B. film_%03d.mkv).
     """
     seg = [config.FFMPEG, "-y", "-hide_banner", "-i", str(info.path),
            "-map", "0", "-c", "copy", "-f", "segment", "-reset_timestamps", "1"]
+    dur = float(getattr(info, "duration", 0) or 0)
     if mode == "chapters":
         chaps = probe_chapters(Path(info.path))
-        times = [f"{c['start']:.3f}" for c in chaps if c["start"] > 0]
-        if not times:
+        pts = [f"{c['start']:.3f}" for c in chaps if c["start"] > 0]
+        if not pts:
             return [], "Keine Kapitel zum Splitten gefunden."
-        seg += ["-segment_times", ",".join(times)]
-    else:
+        seg += ["-segment_times", ",".join(pts)]
+    elif mode == "parts":
+        try:
+            n = int(float(value or 0))
+        except (TypeError, ValueError):
+            n = 0
+        if n < 2:
+            return [], "Anzahl Teile muss mindestens 2 sein."
+        if dur <= 0:
+            return [], "Dauer unbekannt – Splitten in N Teile nicht möglich."
+        step = dur / n
+        pts = [f"{step * k:.3f}" for k in range(1, n)]
+        seg += ["-segment_times", ",".join(pts)]
+    elif mode == "times":
+        pts = sorted({round(parse_time(t), 3) for t in (times or []) if parse_time(t) > 0})
+        pts = [p for p in pts if dur <= 0 or p < dur]
+        if not pts:
+            return [], "Keine gültigen Zeitmarken angegeben."
+        seg += ["-segment_times", ",".join(f"{p:.3f}" for p in pts)]
+    elif mode == "size":
+        try:
+            mb = float(value or 0)
+        except (TypeError, ValueError):
+            mb = 0
+        if mb <= 0:
+            return [], "Ungültige Zielgröße."
+        br = getattr(info, "overall_bitrate", 0) or (
+            int(info.size_bytes * 8 / dur) if dur > 0 and info.size_bytes > 0 else 0)
+        if not br or br <= 0:
+            return [], "Bitrate unbekannt – Splitten nach Größe nicht möglich."
+        secs = max(1, int(mb * 1024 * 1024 * 8 / br))
+        seg += ["-segment_time", str(secs)]
+    else:  # duration
         try:
             secs = max(1, int(float(value or 0)))
         except (TypeError, ValueError):
@@ -472,3 +649,50 @@ def build_split_cmd(info: VideoInfo, out_pattern: Path, mode: str,
         seg += ["-segment_time", str(secs)]
     seg += ["-progress", "pipe:1", "-nostats", str(out_pattern)]
     return seg, ""
+
+
+def build_cut_cmds(info: VideoInfo, out_dir: Path, ranges: list,
+                   ext: str = ".mkv") -> list:
+    """Ausschnitt(e) verlustfrei herausschneiden (ein Output je Bereich).
+
+    ranges: Liste von {start, end, title?} in Sekunden. Rückgabe: Liste von
+    (cmd, out_path). Nutzt Output-seitiges Seeking (-ss/-to nach dem Input),
+    damit -to als absolute Quell-Zeit gilt.
+    """
+    stem = Path(info.path).stem
+    cmds: list = []
+    for i, r in enumerate(ranges or [], start=1):
+        start = parse_time(r.get("start"))
+        end = parse_time(r.get("end"))
+        if end <= start:
+            continue
+        title = str(r.get("title") or "").strip()
+        safe = "".join(c if (c.isalnum() or c in " -_") else "_" for c in title).strip()
+        label = safe.replace(" ", "_") if safe else f"cut{i}"
+        out_path = out_dir / f"{stem}_{label}{ext}"
+        cmd = [config.FFMPEG, "-y", "-hide_banner", "-i", str(info.path),
+               "-map", "0", "-c", "copy"]
+        if start > 0:
+            cmd += ["-ss", f"{start:.3f}"]
+        cmd += ["-to", f"{end:.3f}", "-reset_timestamps", "1",
+                "-progress", "pipe:1", "-nostats", str(out_path)]
+        cmds.append((cmd, out_path))
+    return cmds
+
+
+def build_single_cut_cmd(src: Path, out: Path, start, end) -> tuple[list, str]:
+    """Schneller Einzel-Ausschnitt (verlustfrei) für den Direkt-Download.
+
+    Nutzt Input-seitiges Seeking (`-ss` vor `-i`) für Tempo; der Schnitt beginnt
+    am nächstliegenden Keyframe. Für den Download völlig ausreichend.
+    """
+    s = parse_time(start)
+    e = parse_time(end)
+    if e <= s:
+        return [], "Ende muss nach dem Start liegen."
+    cmd = [config.FFMPEG, "-y", "-hide_banner"]
+    if s > 0:
+        cmd += ["-ss", f"{s:.3f}"]
+    cmd += ["-i", str(src), "-t", f"{e - s:.3f}", "-map", "0", "-c", "copy",
+            "-avoid_negative_ts", "make_zero", str(out)]
+    return cmd, ""

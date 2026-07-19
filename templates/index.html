@@ -127,13 +127,6 @@
           </div>
           <div class="card-body">
             <div class="breadcrumb" id="breadcrumb"></div>
-            <div class="browser-search-row">
-              <input type="search" id="browser-search" placeholder="Im Ordner suchen … (Name)" autocomplete="off" />
-              <label class="check browser-recursive" title="Auch alle Unterordner durchsuchen">
-                <input type="checkbox" id="browser-recursive" /><span>Unterordner</span>
-              </label>
-              <span class="browser-count muted" id="browser-count"></span>
-            </div>
             <div class="browser" id="browser">
               <div class="browser-loading">Lade Verzeichnis …</div>
             </div>
@@ -1305,9 +1298,9 @@
               <div class="table-wrap">
                 <table class="queue-table" id="remux-ext-table">
                   <thead>
-                    <tr><th>Datei</th><th>Typ</th><th>Sprache</th><th>Titel</th><th>Delay (s)</th><th>Standard</th><th>Forced</th><th>Reihenfolge</th><th></th></tr>
+                    <tr><th>Datei</th><th>Typ</th><th>Sprache</th><th>Titel</th><th>Delay (s)</th><th>Standard</th><th>Forced</th><th>Encoden</th><th>Reihenfolge</th><th></th></tr>
                   </thead>
-                  <tbody id="remux-ext-body"><tr class="empty-row"><td colspan="9">Keine externen Spuren.</td></tr></tbody>
+                  <tbody id="remux-ext-body"><tr class="empty-row"><td colspan="10">Keine externen Spuren.</td></tr></tbody>
                 </table>
               </div>
               <div class="lib-actions">
@@ -1369,8 +1362,34 @@
                     </div>
                   </div>
                 </div>
+                <label class="check"><input type="checkbox" id="merge-chapters" /><span>Kapitelmarke an jeder Verbindungsstelle (Titel = Dateiname)</span></label>
+                <label class="check"><input type="checkbox" id="merge-unify" /><span>Bei Inkompatibilität neu encodieren (vereinheitlichen)</span></label>
+                <div class="field-row" id="merge-encode-opts" style="display:none">
+                  <div class="field">
+                    <label>Plattform</label>
+                    <select id="merge-platform">
+                      <option value="cpu">CPU (libsvtav1)</option>
+                      <option value="nvidia">NVIDIA (NVENC)</option>
+                      <option value="intel">Intel (QSV/VAAPI)</option>
+                      <option value="amd">AMD (VAAPI)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Codec</label>
+                    <select id="merge-codec">
+                      <option value="av1">AV1</option>
+                      <option value="hevc">HEVC</option>
+                      <option value="h264">H.264</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Qualität (CQ/CRF)</label>
+                    <input type="number" id="merge-cq" min="1" max="63" value="30" />
+                  </div>
+                </div>
                 <div class="lib-actions">
                   <button class="btn btn-ghost btn-sm" id="btn-merge-add">+ Datei hinzufügen</button>
+                  <button class="btn btn-ghost btn-sm" id="btn-merge-check">Kompatibilität prüfen</button>
                   <select id="merge-container" style="width:auto">
                     <option value="mkv">MKV</option>
                     <option value="mp4">MP4</option>
@@ -1378,21 +1397,60 @@
                   <button class="btn btn-primary btn-sm" id="btn-merge-start" disabled>Zusammenführen</button>
                   <span id="merge-info" class="muted"></span>
                 </div>
+                <div id="merge-check-result" class="muted" style="font-size:12px;margin-top:6px"></div>
               </div>
               <div class="field">
-                <label>Splitten (kein Re-Encode)</label>
-                <p class="hint">Zerteilt die oben unter „Quelle" gewählte Datei verlustfrei.
-                  An Kapitelgrenzen oder in feste Zeitabschnitte.</p>
+                <label>Splitten &amp; Ausschneiden (kein Re-Encode)</label>
+                <p class="hint">Zerteilt die oben unter „Quelle" gewählte Datei verlustfrei –
+                  an Kapitelgrenzen, in feste Abschnitte, in N Teile, an Zeitmarken,
+                  nach Größe (ca.) – oder exportiert gezielte Ausschnitte.</p>
                 <div class="field">
                   <label>Methode</label>
                   <select id="split-mode">
                     <option value="chapters">An Kapitelgrenzen</option>
                     <option value="duration">Feste Länge (Sekunden)</option>
+                    <option value="parts">In N gleich große Teile</option>
+                    <option value="times">An Zeitmarken</option>
+                    <option value="size">Nach max. Größe (ca.)</option>
+                    <option value="range">Ausschnitt(e) exportieren</option>
                   </select>
                 </div>
                 <div class="field" id="split-dur-field" style="display:none">
                   <label>Segmentlänge (Sekunden)</label>
                   <input type="number" id="split-value" min="10" step="10" value="600" />
+                </div>
+                <div class="field" id="split-parts-field" style="display:none">
+                  <label>Anzahl Teile</label>
+                  <input type="number" id="split-parts" min="2" step="1" value="2" />
+                </div>
+                <div class="field" id="split-times-field" style="display:none">
+                  <label>Zeitmarken (Komma-getrennt, z. B. 00:10:00, 00:25:30)</label>
+                  <input type="text" id="split-times" placeholder="00:10:00, 00:25:30" />
+                </div>
+                <div class="field" id="split-size-field" style="display:none">
+                  <label>Maximale Größe je Teil (MB)</label>
+                  <input type="number" id="split-size" min="50" step="50" value="1000" />
+                </div>
+                <div id="split-range-field" style="display:none">
+                  <p class="hint">Bereiche als Einzeldateien exportieren. Start/Ende als
+                    Zeitmarke (HH:MM:SS) – über „Kapitel laden" oben können Kapitel als
+                    Zeitpunkte übernommen werden.</p>
+                  <div class="table-wrap">
+                    <table class="queue-table" id="split-range-table">
+                      <thead><tr><th>Start</th><th>Ende</th><th>Titel (optional)</th><th></th></tr></thead>
+                      <tbody id="split-range-body"><tr class="empty-row"><td colspan="4">Keine Bereiche.</td></tr></tbody>
+                    </table>
+                  </div>
+                  <div class="lib-actions">
+                    <button class="btn btn-ghost btn-sm" id="btn-split-range-add">+ Bereich hinzufügen</button>
+                    <select id="split-range-chapter" style="width:auto"><option value="">Kapitel als Bereich …</option></select>
+                    <button class="btn btn-ghost btn-sm" id="btn-split-preview">Vorschau &amp; Marker setzen</button>
+                    <button class="btn btn-ghost btn-sm" id="btn-split-download">Ausschnitt herunterladen</button>
+                    <span id="split-download-info" class="muted"></span>
+                  </div>
+                  <p class="hint">„Herunterladen" schneidet den ersten Bereich verlustfrei
+                    (am nächsten Keyframe) und lädt die Datei direkt im Browser herunter –
+                    ohne Warteschlange.</p>
                 </div>
                 <div class="field-row" data-out-target>
                   <div class="field" data-out-root-field style="display:none">

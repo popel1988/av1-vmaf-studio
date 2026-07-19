@@ -251,8 +251,9 @@ VIDEO_EXTENSIONS = {
 # Externe Ton-/Untertitel-Dateien für den Remux-/Bearbeiten-Modus (Spuren
 # hinzufügen ohne Re-Encode). Videos zählen ebenfalls als Quelle (Spur daraus).
 AUDIO_EXTENSIONS = {
-    ".eac3", ".ac3", ".dts", ".thd", ".truehd", ".mlp", ".flac", ".aac",
-    ".m4a", ".mka", ".opus", ".ogg", ".mp3", ".wav", ".ac4",
+    ".eac3", ".ac3", ".dts", ".dtshd", ".dtsma", ".thd", ".truehd", ".mlp",
+    ".flac", ".aac", ".m4a", ".mka", ".opus", ".ogg", ".mp3", ".mp2", ".m2a",
+    ".wav", ".w64", ".aif", ".aiff", ".caf", ".ac4",
 }
 SUBTITLE_EXTENSIONS = {
     ".srt", ".ass", ".ssa", ".sup", ".sub", ".vtt", ".idx", ".pgs",

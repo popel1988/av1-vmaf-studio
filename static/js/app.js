@@ -32,6 +32,7 @@
     remuxAtt: [],       // hinzugefügte Attachments (Fonts/Cover)
     remuxChapters: null, // geladene/bearbeitete Kapitel (null = unverändert)
     remuxMerge: [],     // Dateien für "Zusammenführen"
+    splitRanges: [],    // Bereiche für Ausschnitt-Export
     remuxPick: null,    // aktueller Modus des Datei-Pickers (ext|att|merge|chapters)
     outPick: null,      // Zielordner-Picker (prefix/root/path)
   };
@@ -120,142 +121,186 @@
   }
 
   /* ------------------------------------------------------------- BROWSER */
-  async function loadDir(path) {
-    state.currentPath = path;
-    // Suche beim Ordnerwechsel zurücksetzen (frische Ansicht).
-    const search = $("browser-search");
-    if (search) search.value = "";
-    const browser = $("browser");
-    browser.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
-    try {
-      const res = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
-      const data = await res.json();
-      if (data.error) {
-        browser.innerHTML = `<div class="browser-loading">${data.error}</div>`;
+  // Wiederverwendbarer Ordner-Browser: Breadcrumb, rekursive Suche und
+  // Zurück/Vor-Navigation mit gemerkter Scroll-Position. Wird von Encoding,
+  // Super-Tool, Audio-Optimierung, Remux und den Datei-Pickern genutzt.
+  //
+  // opts: { listId, crumbId, kind, showFiles, recursive, playFile,
+  //         pickFile(f), onNavigate(data, path), rootLabel, searchPlaceholder }
+  function makeFolderBrowser(opts) {
+    const listEl = $(opts.listId);
+    if (!listEl) return null;
+    const crumbEl = opts.crumbId ? $(opts.crumbId) : null;
+    const kind = opts.kind || "video";
+    const showFiles = opts.showFiles !== false;
+    const allowRecursive = showFiles && opts.recursive !== false;
+    const S = { path: "", data: null, hist: [], hidx: -1, scroll: {}, timer: null };
+
+    // --- Toolbar (Zurück/Vor · Suche · Unterordner · Zähler) ---
+    const bar = document.createElement("div");
+    bar.className = "browser-search-row browser-nav";
+    const back = navBtn("◀", "Zurück");
+    const fwd = navBtn("▶", "Vor");
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = opts.searchPlaceholder || "Im Ordner suchen … (Name)";
+    search.autocomplete = "off";
+    const recWrap = document.createElement("label");
+    recWrap.className = "check browser-recursive";
+    recWrap.title = "Auch alle Unterordner durchsuchen";
+    const rec = document.createElement("input");
+    rec.type = "checkbox";
+    const recTxt = document.createElement("span");
+    recTxt.textContent = "Unterordner";
+    recWrap.append(rec, recTxt);
+    const count = document.createElement("span");
+    count.className = "browser-count muted";
+    bar.append(back, fwd, search);
+    if (allowRecursive) bar.append(recWrap);
+    bar.append(count);
+    const anchor = crumbEl || listEl;
+    anchor.parentNode.insertBefore(bar, anchor);
+
+    function navBtn(txt, title) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn btn-ghost btn-sm browser-navbtn";
+      b.textContent = txt;
+      b.title = title;
+      return b;
+    }
+    function syncNav() {
+      back.disabled = S.hidx <= 0;
+      fwd.disabled = S.hidx >= S.hist.length - 1;
+    }
+
+    async function navigate(path, o) {
+      o = o || {};
+      if (S.data) S.scroll[S.path] = listEl.scrollTop;  // Position merken
+      search.value = "";
+      rec.checked = false;
+      listEl.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+      let data;
+      try {
+        data = await (await fetch(
+          `/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`)).json();
+      } catch (e) {
+        listEl.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
         return;
       }
-      state.browseData = data;
-      renderBreadcrumb(data);
-      renderBrowser(data);
-      // "Diesen Ordner als Batch" bezieht sich auf das aktuelle Verzeichnis.
-      // Auf der virtuellen Wurzel (Root-Liste) nicht sinnvoll → deaktivieren.
-      const folderBtn = $("btn-select-folder");
-      folderBtn.disabled = !!data.roots;
-      folderBtn.onclick = data.roots ? null : () => selectFolder(data.path, data.is_root);
-    } catch (e) {
-      browser.innerHTML = `<div class="browser-loading">Fehler: ${e}</div>`;
+      if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      S.path = (data.path != null && data.path !== "") ? data.path : "";
+      S.data = data;
+      if (o.push !== false) {
+        S.hist = S.hist.slice(0, S.hidx + 1);
+        if (S.hist[S.hidx] !== S.path) { S.hist.push(S.path); S.hidx = S.hist.length - 1; }
+      }
+      syncNav();
+      renderCrumb(data);
+      renderList();
+      listEl.scrollTop = o.restore ? (S.scroll[S.path] || 0) : 0;
+      if (opts.onNavigate) opts.onNavigate(data, S.path);
     }
-  }
 
-  // Reagiert auf Eingaben im Suchfeld: lokal filtern (aktueller Ordner) oder –
-  // bei „Unterordner" – rekursiv über das Backend suchen.
-  let _searchTimer = null;
-  function onBrowserSearch() {
-    const recursive = $("browser-recursive") && $("browser-recursive").checked;
-    const q = ($("browser-search") ? $("browser-search").value : "").trim();
-    if (recursive && q) {
-      clearTimeout(_searchTimer);
-      _searchTimer = setTimeout(() => runRecursiveSearch(q), 250);
-    } else {
-      renderBrowser(state.browseData);
-    }
-  }
-
-  async function runRecursiveSearch(q) {
-    const browser = $("browser");
-    browser.innerHTML = '<div class="browser-loading">Suche in Unterordnern …</div>';
-    try {
-      const res = await fetch(
-        `/api/search?path=${encodeURIComponent(state.currentPath || "")}&q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (data.error) { browser.innerHTML = `<div class="browser-loading">${data.error}</div>`; return; }
-      renderSearchResults(data);
-    } catch (e) {
-      browser.innerHTML = `<div class="browser-loading">Fehler: ${e}</div>`;
-    }
-  }
-
-  function renderSearchResults(data) {
-    const browser = $("browser");
-    browser.innerHTML = "";
-    (data.files || []).forEach((f) => {
-      const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
-      const row = makeRow("file", label, f.size_human, null, () => selectFile(f), f.rel);
-      browser.appendChild(row);
+    function go(path) { return navigate(path, { push: true }); }
+    back.addEventListener("click", () => {
+      if (S.hidx > 0) { S.hidx--; navigate(S.hist[S.hidx], { push: false, restore: true }); }
     });
-    if (!data.files || !data.files.length) {
-      browser.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
-    }
-    updateBrowserCount((data.files || []).length, null,
-      data.truncated ? " (begrenzt)" : "", true);
-  }
-
-  function renderBreadcrumb(data) {
-    const bc = $("breadcrumb");
-    bc.innerHTML = "";
-    const root = document.createElement("a");
-    root.textContent = (window.APP_CONFIG && window.APP_CONFIG.multiInput) ? "Ordner" : "/media/input";
-    root.onclick = () => loadDir("");
-    bc.appendChild(root);
-    if (data.path) {
-      const parts = data.path.split("/");
-      let acc = "";
-      parts.forEach((p) => {
-        acc = acc ? `${acc}/${p}` : p;
-        const sep = document.createElement("span");
-        sep.textContent = " / ";
-        bc.appendChild(sep);
-        const a = document.createElement("a");
-        a.textContent = p;
-        const target = acc;
-        a.onclick = () => loadDir(target);
-        bc.appendChild(a);
-      });
-    }
-  }
-
-  function renderBrowser(data) {
-    if (!data) return;
-    const browser = $("browser");
-    browser.innerHTML = "";
-    const q = ($("browser-search") ? $("browser-search").value : "").trim().toLowerCase();
-    const match = (name) => !q || name.toLowerCase().includes(q);
-    const dirs = data.dirs.filter((d) => match(d.name));
-    const files = data.files.filter((f) => match(f.name));
-
-    if (!data.is_root && !q) {
-      browser.appendChild(makeRow("dir", "..", "", () => loadDir(data.parent || ""), null));
-    }
-    dirs.forEach((d) => {
-      browser.appendChild(makeRow("dir", d.name, "", () => loadDir(d.rel), null));
+    fwd.addEventListener("click", () => {
+      if (S.hidx < S.hist.length - 1) { S.hidx++; navigate(S.hist[S.hidx], { push: false, restore: true }); }
     });
-    files.forEach((f) => {
-      browser.appendChild(makeRow("file", f.name, f.size_human, null, () => selectFile(f), f.rel));
-    });
-    if (!dirs.length && !files.length) {
-      browser.innerHTML = q
-        ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
-        : '<div class="browser-loading">Leerer Ordner.</div>';
+
+    function renderCrumb(data) {
+      if (!crumbEl) return;
+      crumbEl.innerHTML = "";
+      const root = document.createElement("a");
+      root.textContent = (window.APP_CONFIG && APP_CONFIG.multiInput)
+        ? "Ordner" : (opts.rootLabel || "/media/input");
+      root.onclick = () => go("");
+      crumbEl.appendChild(root);
+      if (data.path) {
+        let acc = "";
+        data.path.split("/").forEach((p) => {
+          acc = acc ? `${acc}/${p}` : p;
+          const sep = document.createElement("span"); sep.textContent = " / "; crumbEl.appendChild(sep);
+          const a = document.createElement("a"); a.textContent = p;
+          const t = acc; a.onclick = () => go(t); crumbEl.appendChild(a);
+        });
+      }
     }
-    updateBrowserCount(files.length, dirs.length, "", false,
-      q ? data.files.length : null, q ? data.dirs.length : null);
+
+    function renderList() {
+      const data = S.data;
+      if (!data) return;
+      listEl.innerHTML = "";
+      const q = search.value.trim().toLowerCase();
+      const match = (n) => !q || n.toLowerCase().includes(q);
+      const dirs = (data.dirs || []).filter((d) => match(d.name));
+      const files = showFiles ? (data.files || []).filter((f) => match(f.name)) : [];
+      if (!data.roots && !data.is_root && !q) {
+        listEl.appendChild(makeRow("dir", "..", "", () => go(data.parent || ""), null));
+      }
+      dirs.forEach((d) => listEl.appendChild(makeRow("dir", d.name, "", () => go(d.rel), null)));
+      files.forEach((f) => listEl.appendChild(makeRow(
+        "file", f.name, f.size_human, null,
+        opts.pickFile ? () => opts.pickFile(f) : null,
+        opts.playFile ? f.rel : null)));
+      if (!dirs.length && !files.length) {
+        listEl.innerHTML = q
+          ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
+          : ((!showFiles && (data.files || []).length)
+              ? `<div class="browser-loading">${(data.files || []).length} Datei(en) hier · keine Unterordner</div>`
+              : '<div class="browser-loading">Leerer Ordner.</div>');
+      }
+      setCount(files.length, dirs.length, q, data);
+    }
+
+    function setCount(files, dirs, q, data) {
+      const parts = [];
+      parts.push(q ? `${dirs}/${(data.dirs || []).length} Ordner` : `${dirs} Ordner`);
+      if (showFiles) parts.push(q ? `${files}/${(data.files || []).length} Dateien` : `${files} Dateien`);
+      count.textContent = parts.join(" · ");
+    }
+
+    async function runRecursive(q) {
+      listEl.innerHTML = '<div class="browser-loading">Suche in Unterordnern …</div>';
+      try {
+        const data = await (await fetch(
+          `/api/search?path=${encodeURIComponent(S.path)}&q=${encodeURIComponent(q)}&kind=${kind}`)).json();
+        if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+        listEl.innerHTML = "";
+        (data.files || []).forEach((f) => {
+          const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
+          listEl.appendChild(makeRow("file", label, f.size_human, null,
+            opts.pickFile ? () => opts.pickFile(f) : null,
+            opts.playFile ? f.rel : null));
+        });
+        if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
+        count.textContent = `${(data.files || []).length} Treffer${data.truncated ? " (begrenzt)" : ""}`;
+      } catch (e) {
+        listEl.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+      }
+    }
+
+    function onSearch() {
+      const q = search.value.trim();
+      if (allowRecursive && rec.checked && q) {
+        clearTimeout(S.timer);
+        S.timer = setTimeout(() => runRecursive(q), 250);
+      } else {
+        renderList();
+      }
+    }
+    search.addEventListener("input", onSearch);
+    rec.addEventListener("change", onSearch);
+
+    syncNav();
+    return { go, current: () => S.path, refresh: () => navigate(S.path, { push: false, restore: true }) };
   }
 
-  // Zeigt Ordner-/Dateizahl (und bei Filter „x von y") an.
-  function updateBrowserCount(files, dirs, suffix, searchMode, totalFiles, totalDirs) {
-    const el = $("browser-count");
-    if (!el) return;
-    if (searchMode) {
-      el.textContent = `${files} Treffer${suffix || ""}`;
-      return;
-    }
-    const parts = [];
-    if (dirs != null) {
-      parts.push(totalDirs != null ? `${dirs}/${totalDirs} Ordner` : `${dirs} Ordner`);
-    }
-    parts.push(totalFiles != null ? `${files}/${totalFiles} Dateien` : `${files} Dateien`);
-    el.textContent = parts.join(" · ");
-  }
+  // Instanzen der wiederverwendbaren Browser (einmalig erzeugt).
+  let mainBrowser = null;
+  function loadDir(path) { return mainBrowser ? mainBrowser.go(path) : undefined; }
 
   function makeRow(type, name, size, onOpen, onPick, playRel) {
     const row = document.createElement("div");
@@ -2891,40 +2936,27 @@
       ? '<div class="browser-loading">… weitere ausgeblendet (Limit 1000)</div>' : "");
   }
 
-  // Eigener Ordner-Browser des Super-Tools: der aktuell geöffnete Ordner ist
-  // zugleich der zu scannende Ordner (rekursiv, inkl. Unterordner).
-  async function stLoadDir(path) {
-    state.stPath = path;
-    const el = $("st-browser");
-    if (!el) return;
-    const hid = $("st-folder");
-    if (hid) hid.value = path;
-    const info = $("st-folder-info");
-    if (info) info.textContent = path
-      ? `Aktuell: /${path} (inkl. Unterordner)`
-      : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
-    stRefreshList(); // Live-Dateiliste zum neuen Ordner
-    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
-    try {
-      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
-      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
-      stRenderCrumb(data);
-      el.innerHTML = "";
-      if (!data.is_root) {
-        el.appendChild(stDirRow("..", () => stLoadDir(data.parent || "")));
-      }
-      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => stLoadDir(d.rel))));
-      if (!(data.dirs || []).length) {
-        const note = document.createElement("div");
-        note.className = "browser-loading";
-        note.textContent = (data.files || []).length
-          ? `${data.files.length} Video-Datei(en) hier · keine Unterordner`
-          : "Leerer Ordner.";
-        el.appendChild(note);
-      }
-    } catch (e) {
-      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+  // Ordner-Browser des Super-Tools (der geöffnete Ordner ist zugleich der zu
+  // scannende Ordner). Nutzt die gemeinsame Factory, zeigt nur Ordner.
+  let stBrowser = null;
+  function stLoadDir(path) {
+    if (!stBrowser) {
+      stBrowser = makeFolderBrowser({
+        listId: "st-browser", crumbId: "st-breadcrumb", kind: "video",
+        showFiles: false,
+        searchPlaceholder: "Unterordner filtern …",
+        onNavigate: (data, p) => {
+          state.stPath = p;
+          const hid = $("st-folder"); if (hid) hid.value = p;
+          const info = $("st-folder-info");
+          if (info) info.textContent = p
+            ? `Aktuell: /${p} (inkl. Unterordner)`
+            : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
+          stRefreshList();
+        },
+      });
     }
+    return stBrowser ? stBrowser.go(path) : undefined;
   }
 
   function stDirRow(name, onOpen) {
@@ -2934,30 +2966,6 @@
       `<span class="row-icon dir">📁</span><span class="row-name">${escapeHtml(name)}</span>`;
     row.addEventListener("click", onOpen);
     return row;
-  }
-
-  function stRenderCrumb(data) {
-    const bc = $("st-breadcrumb");
-    if (!bc) return;
-    bc.innerHTML = "";
-    const root = document.createElement("a");
-    root.textContent = "/media/input";
-    root.onclick = () => stLoadDir("");
-    bc.appendChild(root);
-    if (data.path) {
-      let acc = "";
-      data.path.split("/").forEach((p) => {
-        acc = acc ? `${acc}/${p}` : p;
-        const sep = document.createElement("span");
-        sep.textContent = " / ";
-        bc.appendChild(sep);
-        const a = document.createElement("a");
-        a.textContent = p;
-        const target = acc;
-        a.onclick = () => stLoadDir(target);
-        bc.appendChild(a);
-      });
-    }
   }
 
   function stFilters() {
@@ -3172,43 +3180,22 @@
     };
   }
 
-  async function auLoadDir(path) {
-    const el = $("audio-browser");
-    if (!el) return;
-    $("audio-folder").value = path;
-    const info = $("audio-folder-info");
-    if (info) info.textContent = path ? `Aktuell: /${path} (inkl. Unterordner)`
-      : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
-    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
-    try {
-      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
-      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
-      auRenderCrumb(data);
-      el.innerHTML = "";
-      if (!data.is_root) el.appendChild(stDirRow("..", () => auLoadDir(data.parent || "")));
-      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => auLoadDir(d.rel))));
-    } catch (e) {
-      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
-    }
-  }
-
-  function auRenderCrumb(data) {
-    const bc = $("audio-breadcrumb");
-    if (!bc) return;
-    bc.innerHTML = "";
-    const root = document.createElement("a");
-    root.textContent = "/media/input";
-    root.onclick = () => auLoadDir("");
-    bc.appendChild(root);
-    if (data.path) {
-      let acc = "";
-      data.path.split("/").forEach((p) => {
-        acc = acc ? `${acc}/${p}` : p;
-        const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
-        const a = document.createElement("a"); a.textContent = p;
-        const target = acc; a.onclick = () => auLoadDir(target); bc.appendChild(a);
+  let auBrowser = null;
+  function auLoadDir(path) {
+    if (!auBrowser) {
+      auBrowser = makeFolderBrowser({
+        listId: "audio-browser", crumbId: "audio-breadcrumb", kind: "video",
+        showFiles: false,
+        searchPlaceholder: "Unterordner filtern …",
+        onNavigate: (data, p) => {
+          const fld = $("audio-folder"); if (fld) fld.value = p;
+          const info = $("audio-folder-info");
+          if (info) info.textContent = p ? `Aktuell: /${p} (inkl. Unterordner)`
+            : "Aktuell: gesamter Eingabeordner (alle Unterordner)";
+        },
       });
     }
+    return auBrowser ? auBrowser.go(path) : undefined;
   }
 
   /* ---------------------------------------------- REMUX & BEARBEITEN */
@@ -3227,50 +3214,181 @@
     on("btn-remux-start", remuxStart);
     on("btn-merge-add", () => remuxOpenPicker("merge", "aux"));
     on("btn-merge-start", remuxMergeStart);
-    on("btn-split-start", remuxSplitStart);
-    const sm = $("split-mode");
-    if (sm) sm.addEventListener("change", () => {
-      $("split-dur-field").style.display = sm.value === "duration" ? "" : "none";
+    on("btn-merge-check", remuxMergeCheck);
+    const unify = $("merge-unify");
+    if (unify) unify.addEventListener("change", () => {
+      const el = $("merge-encode-opts");
+      if (el) el.style.display = unify.checked ? "" : "none";
     });
+    on("btn-split-start", remuxSplitStart);
+    on("btn-split-range-add", () => { state.splitRanges.push({ start: "", end: "", title: "" }); remuxRenderSplitRanges(); });
+    on("btn-split-download", remuxCutDownload);
+    on("btn-split-preview", remuxOpenPreview);
+    const sm = $("split-mode");
+    if (sm) sm.addEventListener("change", remuxSyncSplitMode);
+    const chSel = $("split-range-chapter");
+    if (chSel) chSel.addEventListener("change", () => {
+      const idx = parseInt(chSel.value, 10);
+      const chaps = state.remuxChapters || [];
+      if (!isNaN(idx) && chaps[idx]) {
+        const c = chaps[idx];
+        state.splitRanges.push({ start: fmtClock(c.start), end: fmtClock(c.end), title: c.title || "" });
+        remuxRenderSplitRanges();
+      }
+      chSel.value = "";
+    });
+    remuxSyncSplitMode();
     remuxLoadDir("");
   }
 
-  async function remuxLoadDir(path) {
-    const el = $("remux-browser");
-    if (!el) return;
-    state.currentRemuxPath = path;
-    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
+  // Zeigt je Split-Methode das passende Eingabefeld.
+  function remuxSyncSplitMode() {
+    const m = ($("split-mode") || {}).value || "chapters";
+    const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
+    show("split-dur-field", m === "duration");
+    show("split-parts-field", m === "parts");
+    show("split-times-field", m === "times");
+    show("split-size-field", m === "size");
+    show("split-range-field", m === "range");
+  }
+
+  function remuxRenderSplitRanges() {
+    const body = $("split-range-body");
+    if (!body) return;
+    body.innerHTML = "";
+    if (!state.splitRanges.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="4">Keine Bereiche.</td></tr>';
+      return;
+    }
+    state.splitRanges.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input type="text" class="rx-r-start" data-i="${i}" value="${escapeHtml(r.start || "")}" placeholder="00:00:00" style="width:90px"></td>
+        <td><input type="text" class="rx-r-end" data-i="${i}" value="${escapeHtml(r.end || "")}" placeholder="00:10:00" style="width:90px"></td>
+        <td><input type="text" class="rx-r-title" data-i="${i}" value="${escapeHtml(r.title || "")}"></td>
+        <td><button class="btn btn-ghost btn-sm bad-btn rx-r-del" data-i="${i}">✕</button></td>`;
+      body.appendChild(tr);
+    });
+    const sync = () => state.splitRanges.forEach((r, i) => {
+      const g = (c) => document.querySelector(`.${c}[data-i="${i}"]`);
+      if (g("rx-r-start")) r.start = g("rx-r-start").value.trim();
+      if (g("rx-r-end")) r.end = g("rx-r-end").value.trim();
+      if (g("rx-r-title")) r.title = g("rx-r-title").value.trim();
+    });
+    body.querySelectorAll("input").forEach((el) => el.addEventListener("input", sync));
+    body.querySelectorAll(".rx-r-del").forEach((b) =>
+      b.addEventListener("click", () => { sync(); state.splitRanges.splice(parseInt(b.dataset.i, 10), 1); remuxRenderSplitRanges(); }));
+  }
+
+  // Ersten gültigen Bereich verlustfrei schneiden und direkt herunterladen.
+  async function remuxCutDownload() {
+    if (!state.remuxSel) { $("split-download-info").innerHTML = '<span class="bad">Erst oben eine Quelle wählen.</span>'; return; }
+    const r = (state.splitRanges || []).find((x) => x.start && x.end);
+    if (!r) { $("split-download-info").innerHTML = '<span class="bad">Bereich mit Start und Ende angeben (oben „+ Bereich" oder Vorschau nutzen).</span>'; return; }
+    const info = $("split-download-info");
+    info.textContent = "Schneide … (kann bei großen Dateien einen Moment dauern)";
     try {
-      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}`)).json();
-      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
-      remuxRenderCrumb(data);
-      el.innerHTML = "";
-      if (!data.is_root) el.appendChild(stDirRow("..", () => remuxLoadDir(data.parent || "")));
-      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => remuxLoadDir(d.rel))));
-      (data.files || []).forEach((f) =>
-        el.appendChild(makeRow("file", f.name, f.size_human, null, () => remuxSelectFile(f), f.rel)));
+      const res = await fetch("/api/remux/cut", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: state.remuxSel.path, start: r.start, end: r.end,
+          container: $("remux-container").value,
+        }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error || msg; } catch (e) {}
+        info.innerHTML = `<span class="bad">${escapeHtml(msg)}</span>`;
+        return;
+      }
+      const blob = await res.blob();
+      let fname = "ausschnitt." + $("remux-container").value;
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^"]+)"?/);
+      if (m) fname = m[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      info.innerHTML = `<span class="good">Download gestartet (${fname}).</span>`;
     } catch (e) {
-      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
+      info.innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
     }
   }
 
-  function remuxRenderCrumb(data) {
-    const bc = $("remux-breadcrumb");
-    if (!bc) return;
-    bc.innerHTML = "";
-    const root = document.createElement("a");
-    root.textContent = "/media/input";
-    root.onclick = () => remuxLoadDir("");
-    bc.appendChild(root);
-    if (data.path) {
-      let acc = "";
-      data.path.split("/").forEach((p) => {
-        acc = acc ? `${acc}/${p}` : p;
-        const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
-        const a = document.createElement("a"); a.textContent = p;
-        const target = acc; a.onclick = () => remuxLoadDir(target); bc.appendChild(a);
+  // Leichtgewichtige Vorschau: Video-Player mit Marker-Buttons für Start/Ende.
+  // Nutzt die native Zeitleiste des Players (keine Wellenform).
+  function remuxOpenPreview() {
+    if (!state.remuxSel) { $("split-download-info").innerHTML = '<span class="bad">Erst oben eine Quelle wählen.</span>'; return; }
+    const url = `/api/media?root=input&path=${encodeURIComponent(state.remuxSel.path)}`;
+    openModal("Vorschau & Ausschnitt-Marker",
+      videoHtml(url) +
+      '<div class="preview-marks">' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Start</label><input type="text" id="pv-start" placeholder="00:00:00" style="width:110px"></div>' +
+      '<div class="field"><label>Ende</label><input type="text" id="pv-end" placeholder="00:10:00" style="width:110px"></div>' +
+      '</div>' +
+      '<div class="lib-actions">' +
+      '<button class="btn btn-ghost btn-sm" id="pv-set-start">⇥ Start = aktuelle Position</button>' +
+      '<button class="btn btn-ghost btn-sm" id="pv-set-end">Ende = aktuelle Position ⇤</button>' +
+      '<button class="btn btn-ghost btn-sm" id="pv-add-range">Als Bereich übernehmen</button>' +
+      '<button class="btn btn-primary btn-sm" id="pv-download">Diesen Ausschnitt herunterladen</button>' +
+      '</div>' +
+      '<span id="pv-info" class="muted" style="font-size:12px"></span>' +
+      '<p class="hint" style="margin-top:6px">Position im Player anspringen, dann Start/Ende setzen. ' +
+      'Spielt der Browser den Codec (HEVC/AV1) nicht ab, funktionieren die Marker per manueller Zeiteingabe trotzdem.</p>' +
+      '</div>');
+    const vid = document.querySelector("#app-modal-body video");
+    const cur = () => (vid && vid.currentTime) ? fmtClock(vid.currentTime) : "0:00:00";
+    const on = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
+    on("pv-set-start", () => { $("pv-start").value = cur(); });
+    on("pv-set-end", () => { $("pv-end").value = cur(); });
+    on("pv-add-range", () => {
+      const s = $("pv-start").value.trim(), e = $("pv-end").value.trim();
+      if (!s || !e) { $("pv-info").innerHTML = '<span class="bad">Start und Ende setzen.</span>'; return; }
+      state.splitRanges.push({ start: s, end: e, title: "" });
+      remuxRenderSplitRanges();
+      $("pv-info").innerHTML = '<span class="good">Bereich übernommen.</span>';
+    });
+    on("pv-download", async () => {
+      const s = $("pv-start").value.trim(), e = $("pv-end").value.trim();
+      if (!s || !e) { $("pv-info").innerHTML = '<span class="bad">Start und Ende setzen.</span>'; return; }
+      $("pv-info").textContent = "Schneide …";
+      try {
+        const res = await fetch("/api/remux/cut", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: state.remuxSel.path, start: s, end: e, container: $("remux-container").value }),
+        });
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`; try { msg = (await res.json()).error || msg; } catch (er) {}
+          $("pv-info").innerHTML = `<span class="bad">${escapeHtml(msg)}</span>`; return;
+        }
+        const blob = await res.blob();
+        let fname = "ausschnitt." + $("remux-container").value;
+        const cd = res.headers.get("Content-Disposition") || "";
+        const m = cd.match(/filename="?([^"]+)"?/);
+        if (m) fname = m[1];
+        const u = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = u; a.download = fname;
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+        $("pv-info").innerHTML = `<span class="good">Download gestartet (${fname}).</span>`;
+      } catch (er) {
+        $("pv-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(er))}</span>`;
+      }
+    });
+  }
+
+  let remuxBrowser = null;
+  function remuxLoadDir(path) {
+    if (!remuxBrowser) {
+      remuxBrowser = makeFolderBrowser({
+        listId: "remux-browser", crumbId: "remux-breadcrumb", kind: "video",
+        showFiles: true, playFile: true, pickFile: remuxSelectFile,
+        onNavigate: (data, p) => { state.currentRemuxPath = p; },
       });
     }
+    return remuxBrowser ? remuxBrowser.go(path) : undefined;
   }
 
   async function remuxSelectFile(f) {
@@ -3374,11 +3492,28 @@
     $("btn-remux-start").disabled = false;
   }
 
+  // "Encoden"-Zelle einer externen Tonspur (Checkbox + Codec/Bitrate/Kanäle).
+  // Untertitel können nicht in Audio umgewandelt werden -> Platzhalter.
+  function remuxExtEncCell(e, i) {
+    if (e.type === "subtitle") return '<td class="muted">—</td>';
+    const codecs = [["eac3", "E-AC3"], ["ac3", "AC3"], ["aac", "AAC"], ["opus", "Opus"], ["flac", "FLAC"]];
+    const codec = e.codec || "eac3";
+    const ch = e.channels || 0;
+    const chOpts = [[0, "orig"], [2, "2.0"], [6, "5.1"], [8, "7.1"]];
+    const dis = e.transcode ? "" : " disabled";
+    return `<td class="rx-e-enc-cell">
+      <label class="check" title="Diese Spur beim Remux encodieren"><input type="checkbox" class="rx-e-tc" data-i="${i}"${e.transcode ? " checked" : ""}></label>
+      <select class="rx-e-codec" data-i="${i}"${dis}>${codecs.map(([v, l]) => `<option value="${v}"${v === codec ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <input type="number" class="rx-e-br" data-i="${i}" value="${e.bitrate || 640}" style="width:60px" title="kbit/s"${dis}>
+      <select class="rx-e-ch" data-i="${i}"${dis}>${chOpts.map(([v, l]) => `<option value="${v}"${v === ch ? " selected" : ""}>${l}</option>`).join("")}</select>
+    </td>`;
+  }
+
   function remuxRenderExternals() {
     const eb = $("remux-ext-body");
     eb.innerHTML = "";
     if (!state.remuxExt.length) {
-      eb.innerHTML = '<tr class="empty-row"><td colspan="8">Keine externen Spuren.</td></tr>';
+      eb.innerHTML = '<tr class="empty-row"><td colspan="10">Keine externen Spuren.</td></tr>';
       return;
     }
     state.remuxExt.forEach((e, i) => {
@@ -3389,8 +3524,9 @@
         <td><input type="text" class="rx-e-lang" data-i="${i}" value="${escapeHtml(e.language || "")}" size="4"></td>
         <td><input type="text" class="rx-e-title" data-i="${i}" value="${escapeHtml(e.title || "")}"></td>
         <td><input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:70px"></td>
-        <td><input type="checkbox" class="rx-e-default" data-i="${i}"></td>
-        <td><input type="checkbox" class="rx-e-forced" data-i="${i}"></td>
+        <td><input type="checkbox" class="rx-e-default" data-i="${i}"${e.default ? " checked" : ""}></td>
+        <td><input type="checkbox" class="rx-e-forced" data-i="${i}"${e.forced ? " checked" : ""}></td>
+        ${remuxExtEncCell(e, i)}
         <td class="row-actions"><button class="btn btn-ghost btn-sm iconbtn rx-e-up" data-i="${i}" title="Nach oben">↑</button><button class="btn btn-ghost btn-sm iconbtn rx-e-down" data-i="${i}" title="Nach unten">↓</button></td>
         <td><button class="btn btn-ghost btn-sm bad-btn rx-e-del" data-i="${i}">✕</button></td>`;
       eb.appendChild(tr);
@@ -3402,6 +3538,16 @@
       b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), -1); flush(); }));
     document.querySelectorAll(".rx-e-down").forEach((b) =>
       b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), 1); flush(); }));
+    // Encoden-Checkbox schaltet Codec/Bitrate/Kanäle der Zeile frei.
+    document.querySelectorAll(".rx-e-tc").forEach((b) =>
+      b.addEventListener("change", () => {
+        const i = b.dataset.i;
+        ["rx-e-codec", "rx-e-br", "rx-e-ch"].forEach((c) => {
+          const el = document.querySelector(`.${c}[data-i="${i}"]`);
+          if (el) el.disabled = !b.checked;
+        });
+        remuxSyncExternalInputs();
+      }));
   }
 
   // Vor dem Neu-Rendern die editierten Werte aus dem DOM in den State übernehmen,
@@ -3414,6 +3560,10 @@
       if (g("rx-e-delay")) e.delay = parseFloat(g("rx-e-delay").value) || 0;
       if (g("rx-e-default")) e.default = g("rx-e-default").checked;
       if (g("rx-e-forced")) e.forced = g("rx-e-forced").checked;
+      if (g("rx-e-tc")) e.transcode = g("rx-e-tc").checked;
+      if (g("rx-e-codec")) e.codec = g("rx-e-codec").value;
+      if (g("rx-e-br")) e.bitrate = parseInt(g("rx-e-br").value, 10) || 640;
+      if (g("rx-e-ch")) e.channels = parseInt(g("rx-e-ch").value, 10) || 0;
     });
   }
 
@@ -3434,7 +3584,14 @@
     openModal(RX_PICK_TITLE[mode] || "Datei auswählen",
       '<div class="breadcrumb" id="remux-ext-breadcrumb"></div>' +
       '<div class="browser browser-sm" id="remux-ext-browser"><div class="browser-loading">Lade …</div></div>');
-    remuxPickLoadDir("");
+    // Frische Browser-Instanz fürs Modal (eigene History pro Öffnung).
+    const picker = makeFolderBrowser({
+      listId: "remux-ext-browser", crumbId: "remux-ext-breadcrumb",
+      kind: kind || "aux", showFiles: true,
+      searchPlaceholder: "Suchen … (Name)",
+      pickFile: remuxPickChoose,
+    });
+    if (picker) picker.go("");
   }
 
   function remuxPickChoose(f) {
@@ -3452,41 +3609,6 @@
     }
   }
 
-  async function remuxPickLoadDir(path) {
-    const el = $("remux-ext-browser");
-    if (!el) return;
-    const kind = (state.remuxPick || {}).kind || "aux";
-    el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
-    try {
-      const data = await (await fetch(`/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`)).json();
-      if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
-      const bc = $("remux-ext-breadcrumb");
-      if (bc) {
-        bc.innerHTML = "";
-        const root = document.createElement("a");
-        root.textContent = (window.APP_CONFIG && window.APP_CONFIG.multiInput) ? "Ordner" : "/media/input";
-        root.onclick = () => remuxPickLoadDir("");
-        bc.appendChild(root);
-        if (data.path) {
-          let acc = "";
-          data.path.split("/").forEach((p) => {
-            acc = acc ? `${acc}/${p}` : p;
-            const sep = document.createElement("span"); sep.textContent = " / "; bc.appendChild(sep);
-            const a = document.createElement("a"); a.textContent = p;
-            const t = acc; a.onclick = () => remuxPickLoadDir(t); bc.appendChild(a);
-          });
-        }
-      }
-      el.innerHTML = "";
-      if (!data.is_root) el.appendChild(stDirRow("..", () => remuxPickLoadDir(data.parent || "")));
-      (data.dirs || []).forEach((d) => el.appendChild(stDirRow(d.name, () => remuxPickLoadDir(d.rel))));
-      (data.files || []).forEach((f) =>
-        el.appendChild(makeRow("file", f.name, f.size_human, null, () => remuxPickChoose(f), null)));
-    } catch (e) {
-      el.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
-    }
-  }
-
   async function remuxAddExternal(f) {
     closeModal();
     $("remux-start-info").textContent = `Analysiere ${f.name} …`;
@@ -3495,12 +3617,12 @@
       if (data.error) { $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
       const streams = [];
       (data.audio || []).forEach((a) => streams.push({
-        type: "audio", stream: a.index,
+        type: "audio", stream: a.index, src_codec: a.codec,
         desc: `Ton #${a.index} · ${a.codec} ${a.channels || "?"}ch · ${a.bitrate_human || "—"}`,
         language: a.language, title: a.title,
       }));
       (data.subtitles || []).forEach((s) => streams.push({
-        type: "subtitle", stream: s.index,
+        type: "subtitle", stream: s.index, src_codec: s.codec,
         desc: `UT #${s.index} · ${s.codec}`,
         language: s.language, title: s.title,
       }));
@@ -3510,8 +3632,10 @@
       }
       streams.forEach((st) => state.remuxExt.push({
         path: f.rel, name: f.name, type: st.type, stream: st.stream, desc: st.desc,
+        src_codec: st.src_codec || "",
         language: (st.language && st.language !== "und") ? st.language : "",
         title: st.title || "", delay: 0, default: false, forced: false,
+        transcode: false, codec: "eac3", bitrate: 640, channels: 0,
       }));
       $("remux-start-info").textContent = `${streams.length} Spur(en) aus ${f.name} hinzugefügt.`;
     } catch (e) {
@@ -3551,14 +3675,7 @@
       });
     });
     // Externe: Werte aus DOM aktualisieren
-    state.remuxExt.forEach((e, i) => {
-      const g = (c) => document.querySelector(`.${c}[data-i="${i}"]`);
-      if (g("rx-e-lang")) e.language = g("rx-e-lang").value.trim();
-      if (g("rx-e-title")) e.title = g("rx-e-title").value.trim();
-      if (g("rx-e-delay")) e.delay = parseFloat(g("rx-e-delay").value) || 0;
-      if (g("rx-e-default")) e.default = g("rx-e-default").checked;
-      if (g("rx-e-forced")) e.forced = g("rx-e-forced").checked;
-    });
+    remuxSyncExternalInputs();
     const spec = {
       container: $("remux-container").value,
       keep_chapters: $("remux-keep-chapters").checked,
@@ -3617,6 +3734,13 @@
       });
       $("remux-chapters-wrap").style.display = "";
       $("remux-chapters-info").textContent = `${state.remuxChapters.length} Kapitel – Titel bearbeitbar.`;
+      // Kapitel auch als Bereichsvorlage für den Ausschnitt-Export anbieten.
+      const chSel = $("split-range-chapter");
+      if (chSel) {
+        chSel.innerHTML = '<option value="">Kapitel als Bereich …</option>' +
+          state.remuxChapters.map((c, i) =>
+            `<option value="${i}">${i + 1}. ${escapeHtml(c.title || fmtClock(c.start))}</option>`).join("");
+      }
     } catch (e) {
       $("remux-chapters-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
     }
@@ -3679,8 +3803,33 @@
       b.addEventListener("click", () => { remuxArrMove(state.remuxMerge, parseInt(b.dataset.i, 10), 1); remuxRenderMerge(); }));
   }
 
+  async function remuxMergeCheck() {
+    if (state.remuxMerge.length < 2) {
+      $("merge-check-result").innerHTML = '<span class="bad">Mindestens zwei Dateien wählen.</span>';
+      return;
+    }
+    $("merge-check-result").textContent = "Prüfe Kompatibilität …";
+    try {
+      const data = await (await fetch("/api/remux/concat/check", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: state.remuxMerge.map((m) => m.path) }),
+      })).json();
+      if (data.error) { $("merge-check-result").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
+      if (data.compatible) {
+        $("merge-check-result").innerHTML = '<span class="good">✓ Dateien sind kompatibel – verlustfreies Zusammenführen möglich.</span>';
+      } else {
+        $("merge-check-result").innerHTML = '<span class="bad">⚠ Unterschiede gefunden:</span><br>' +
+          (data.warnings || []).map(escapeHtml).join("<br>") +
+          '<br><span class="muted">Für ein einheitliches Ergebnis „neu encodieren" aktivieren.</span>';
+      }
+    } catch (e) {
+      $("merge-check-result").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
   async function remuxMergeStart() {
     if (state.remuxMerge.length < 2) return;
+    const unify = $("merge-unify") && $("merge-unify").checked;
     $("merge-info").textContent = "Wird eingereiht …";
     try {
       const data = await (await fetch("/api/remux/concat", {
@@ -3688,12 +3837,17 @@
         body: JSON.stringify({
           paths: state.remuxMerge.map((m) => m.path),
           container: $("merge-container").value,
+          chapters_at_joins: $("merge-chapters") ? $("merge-chapters").checked : false,
+          unify: !!unify,
+          platform: $("merge-platform") ? $("merge-platform").value : "cpu",
+          codec: $("merge-codec") ? $("merge-codec").value : "av1",
+          cq: $("merge-cq") ? (parseInt($("merge-cq").value, 10) || 30) : 30,
           ...outTargetVals("merge"),
         }),
       })).json();
       $("merge-info").innerHTML = data.error
         ? `<span class="bad">${escapeHtml(data.error)}</span>`
-        : `<span class="good">Zusammenführen eingereiht.</span>`;
+        : `<span class="good">${unify ? "Zusammenführen (Re-Encode)" : "Zusammenführen"} eingereiht.</span>`;
     } catch (e) {
       $("merge-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
     }
@@ -3701,21 +3855,32 @@
 
   async function remuxSplitStart() {
     if (!state.remuxSel) { $("split-info").innerHTML = '<span class="bad">Erst oben eine Quelle wählen.</span>'; return; }
+    const mode = $("split-mode").value;
+    let value = 0;
+    if (mode === "duration") value = parseFloat($("split-value").value) || 0;
+    else if (mode === "parts") value = parseInt($("split-parts").value, 10) || 0;
+    else if (mode === "size") value = parseFloat($("split-size").value) || 0;
+    const times = mode === "times"
+      ? ($("split-times").value || "").split(",").map((s) => s.trim()).filter(Boolean) : [];
+    let ranges = [];
+    if (mode === "range") {
+      ranges = (state.splitRanges || []).filter((r) => r.start && r.end);
+      if (!ranges.length) { $("split-info").innerHTML = '<span class="bad">Mindestens einen Bereich mit Start und Ende angeben.</span>'; return; }
+    }
     $("split-info").textContent = "Wird eingereiht …";
     try {
       const data = await (await fetch("/api/remux/split", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           path: state.remuxSel.path,
-          mode: $("split-mode").value,
-          value: parseFloat($("split-value").value) || 0,
+          mode, value, times, ranges,
           container: $("remux-container").value,
           ...outTargetVals("split"),
         }),
       })).json();
       $("split-info").innerHTML = data.error
         ? `<span class="bad">${escapeHtml(data.error)}</span>`
-        : `<span class="good">Splitten eingereiht.</span>`;
+        : `<span class="good">${mode === "range" ? "Ausschnitt-Export" : "Splitten"} eingereiht.</span>`;
     } catch (e) {
       $("split-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
     }
@@ -4217,10 +4382,20 @@
     initDiagnostics();
     initOutputRoots();
     loadCapabilities();
-    const bSearch = $("browser-search");
-    if (bSearch) bSearch.addEventListener("input", onBrowserSearch);
-    const bRec = $("browser-recursive");
-    if (bRec) bRec.addEventListener("change", onBrowserSearch);
+    // Haupt-Browser (Encoding/Quellenauswahl): Dateien wählbar, abspielbar,
+    // Batch-Button + Library-Ordner werden über onNavigate aktualisiert.
+    mainBrowser = makeFolderBrowser({
+      listId: "browser", crumbId: "breadcrumb", kind: "video",
+      showFiles: true, playFile: true, pickFile: selectFile,
+      onNavigate: (data) => {
+        state.currentPath = data.path || "";
+        const folderBtn = $("btn-select-folder");
+        if (folderBtn) {
+          folderBtn.disabled = !!data.roots;
+          folderBtn.onclick = data.roots ? null : () => selectFolder(data.path, data.is_root);
+        }
+      },
+    });
     loadDir("");
     connectWs();
     fetch("/api/config/paths").then((r) => r.json()).then((p) => {

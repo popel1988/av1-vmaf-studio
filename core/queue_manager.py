@@ -1016,10 +1016,11 @@ class QueueManager:
         item.message = ""
 
     def _process_concat(self, item: "QueueItem", info) -> None:
-        """Mehrere Dateien verlustfrei zusammenführen (concat-Demuxer)."""
+        """Mehrere Dateien zusammenführen (concat, optional mit Re-Encode)."""
         from . import remux
         s = item.settings
-        rels = list((s.edit_spec or {}).get("concat_files", []))
+        spec = s.edit_spec or {}
+        rels = list(spec.get("concat_files", []))
         files = []
         for r in rels:
             t = config.resolve_input(r)
@@ -1029,23 +1030,71 @@ class QueueManager:
                 return
             files.append(t)
         out_path = _output_path(item)
-        cmd, err = remux.build_concat_cmd(files, out_path, config.WORK_DIR)
+        if spec.get("unify"):
+            cmd, err = remux.build_concat_reencode_cmd(
+                files, out_path, spec.get("platform", "cpu"),
+                spec.get("codec", "av1"), int(spec.get("cq", 30) or 30))
+            label = "Zusammenführen (Re-Encode)"
+        else:
+            cmd, err = remux.build_concat_cmd(
+                files, out_path, config.WORK_DIR,
+                add_chapters=bool(spec.get("chapters_at_joins")))
+            label = "Zusammenführen (concat)"
         if err:
             item.status = STATUS_FAILED
             item.error = err
             return
-        self._run_copy_job(item, info, cmd, out_path, "Zusammenführen (concat)")
+        self._run_copy_job(item, info, cmd, out_path, label)
 
     def _process_split(self, item: "QueueItem", info) -> None:
-        """Quelle verlustfrei in Segmente splitten (Segment-Muxer)."""
+        """Quelle verlustfrei splitten bzw. Ausschnitte exportieren."""
         from . import remux
         s = item.settings
         spec = s.edit_spec or {}
+        mode = spec.get("split_mode", "chapters")
         base = _output_path(item)
+        base.parent.mkdir(parents=True, exist_ok=True)
+
+        if mode == "range":
+            # Ein Output je Bereich – mehrere FFmpeg-Läufe.
+            cmds = remux.build_cut_cmds(
+                info, base.parent, spec.get("split_ranges") or [], base.suffix)
+            if not cmds:
+                item.status = STATUS_FAILED
+                item.error = "Keine gültigen Bereiche zum Ausschneiden."
+                return
+            item.status = STATUS_RUNNING
+            self._refresh_global_msg()
+            _log_job_start(item, info, base.parent, "Ausschnitt exportieren")
+            outputs = []
+            for idx, (cmd, out_path) in enumerate(cmds, start=1):
+                item.message = f"Ausschnitt {idx}/{len(cmds)} …"
+                _log_cmd(item, cmd)
+                runner = EncodeRunner()
+                with self._lock:
+                    self._active[item.id] = runner
+                rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
+                if runner._cancel:
+                    item.status = STATUS_CANCELLED
+                    item.message = ""
+                    return
+                if rc != 0:
+                    item.status = STATUS_FAILED
+                    item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+                    logger.error("Ausschnitt fehlgeschlagen: %s (Exit %s)\nSTDERR:\n%s",
+                                 item.title, rc, stderr)
+                    return
+                outputs.append(str(out_path))
+            item.output_path = outputs[0] if outputs else ""
+            item.status = STATUS_DONE
+            item.progress["percent"] = 100.0
+            item.message = ""
+            return
+
         pattern = base.with_name(f"{Path(item.path).stem}_%03d{base.suffix}")
         cmd, err = remux.build_split_cmd(
-            info, pattern, spec.get("split_mode", "chapters"),
-            spec.get("split_value"))
+            info, pattern, mode, spec.get("split_value"),
+            spec.get("split_times"))
         if err:
             item.status = STATUS_FAILED
             item.error = err
