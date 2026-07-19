@@ -861,6 +861,9 @@ input[type="range"]::-moz-range-thumb {
 }
 .multiselect-opt:hover { background: var(--surface-2); }
 .multiselect-opt input { width: auto; }
+.codec-filter-row { display: flex; gap: 8px; align-items: stretch; }
+.codec-filter-row .codec-match { flex: 0 0 auto; width: auto; }
+.codec-filter-row .multiselect { flex: 1 1 auto; position: relative; }
 
 /* Klickbare Statistik-Titel */
 .stats-title { color: var(--accent-2); text-decoration: none; cursor: pointer; }

@@ -2725,6 +2725,7 @@
   function libFilters() {
     const codecs = state.libCodecMulti ? state.libCodecMulti.getValues() : [];
     const dyn = state.libDynMulti ? state.libDynMulti.getValues() : [];
+    const codecMatch = $("lib-codec-match") ? $("lib-codec-match").value : "include";
     const f = {
       root: state.currentPath || "",
       name_contains: $("lib-name").value.trim(),
@@ -2733,8 +2734,8 @@
       min_size_mb: parseFloat($("lib-min-size").value) || 0,
       min_bitrate_mbps: parseFloat($("lib-min-br").value) || 0,
       min_height: parseInt($("lib-min-h").value, 10) || 0,
-      codecs_include: codecs,
-      codecs_exclude: [],
+      codecs_include: codecMatch === "exclude" ? [] : codecs,
+      codecs_exclude: codecMatch === "exclude" ? codecs : [],
       target_codec: $("lib-target-codec") ? $("lib-target-codec").value : "av1",
       dynamic_filters: dyn,
       skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
@@ -2979,9 +2980,12 @@
     const btnA = $("btn-lib-add"); const btnB = $("btn-lib-add-auto");
     if (btnA) btnA.disabled = true; if (btnB) btnB.disabled = true;
     const base = gatherSettings();
+    // Container-Wahl der Bibliothek hat Vorrang vor der Encode-Seite.
+    const libContainer = $("lib-container") ? $("lib-container").value : "";
     let ok = 0;
     for (const p of checked) {
       let payload = { path: p, is_batch: false, ...base };
+      if (libContainer) payload.container = libContainer;
       if (auto) {
         const row = (state.libRows || []).find((m) => m.path === p);
         const sug = row && row.suggest;
@@ -3256,7 +3260,8 @@
     const lang = (a.language || "und").toUpperCase();
     const codec = (a.codec || "?").toUpperCase();
     const ch = a.layout || (a.channels ? a.channels + "ch" : "");
-    return [lang, codec, ch].filter(Boolean).join(" · ") +
+    const br = (a.bitrate_human && a.bitrate_human !== "—") ? a.bitrate_human : "";
+    return [lang, codec, ch, br].filter(Boolean).join(" · ") +
       (a.title ? ` – ${a.title}` : "");
   }
 

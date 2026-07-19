@@ -57,9 +57,16 @@ class VideoInfo:
     def video_bitrate(self) -> int:
         if self.bit_rate:
             return self.bit_rate
-        # Schätzung: Gesamtbitrate aus Größe/Dauer, falls Stream-Bitrate fehlt
-        if self.duration > 0 and self.size_bytes > 0:
-            return int(self.size_bytes * 8 / self.duration)
+        # Ohne Stream-/Tag-Bitrate: aus der Gesamtbitrate die bekannten
+        # Ton-Bitraten abziehen (sonst wäre Video ≈ Gesamt und der Ton-Anteil
+        # würde doppelt zählen). Fällt auf Größe/Dauer zurück, wenn nötig.
+        total = self.overall_bitrate
+        if not total and self.duration > 0 and self.size_bytes > 0:
+            total = int(self.size_bytes * 8 / self.duration)
+        if total:
+            aud = sum(int(a.get("bitrate") or 0) for a in (self.audio or []))
+            est = total - aud
+            return int(est) if est > 0 else int(total)
         return 0
 
     def to_dict(self) -> dict:
@@ -134,12 +141,16 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
         return None, "Kein Video-Stream gefunden."
 
     duration = _f(video.get("duration")) or _f(fmt.get("duration")) or 0.0
-    bit_rate = int(_f(video.get("bit_rate")) or 0)
+    # Video-Bitrate robust bestimmen: ffprobe-bit_rate -> BPS-/Statistik-Tags
+    # (viele MKVs liefern keine Stream-bit_rate, aber mkvmerge-Tags).
+    bit_rate = _stream_bitrate(video, video.get("tags", {}) or {}, duration)
     overall_bitrate = int(_f(fmt.get("bit_rate")) or 0)
     try:
         size_bytes = path.stat().st_size
     except OSError:
         size_bytes = int(_f(fmt.get("size")) or 0)
+    if not overall_bitrate and duration > 0 and size_bytes > 0:
+        overall_bitrate = int(size_bytes * 8 / duration)
 
     pix_fmt = video.get("pix_fmt", "?") or "?"
     transfer = (video.get("color_transfer", "") or "").lower()

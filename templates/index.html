@@ -674,7 +674,14 @@
               <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="lib-min-br" min="0" step="0.5" value="0" /></div>
               <div class="field"><label>Min. Höhe (px)</label><input type="number" id="lib-min-h" min="0" value="0" /></div>
               <div class="field"><label>Codec-Filter (Mehrfachauswahl)</label>
-                <div id="lib-codec-multi" title="Nur diese Codecs anzeigen – nichts gewählt = alle"></div>
+                <div class="codec-filter-row">
+                  <select id="lib-codec-match" class="codec-match" title="Auswahl ein- oder ausschließen">
+                    <option value="include">nur diese</option>
+                    <option value="exclude">alle außer diese</option>
+                  </select>
+                  <div id="lib-codec-multi" title="Codecs wählen – nichts gewählt = alle"></div>
+                </div>
+                <p class="hint">„alle außer diese" + AV1 = alles außer bereits AV1 (typischer Fall).</p>
               </div>
               <div class="field"><label>Projektion für Ziel-Codec</label>
                 <select id="lib-target-codec">
@@ -684,6 +691,13 @@
               </div>
               <div class="field"><label>Dynamik-Filter (Mehrfachauswahl)</label>
                 <div id="lib-dynamic-multi" title="Mehrere Dynamik-Arten möglich – nichts gewählt = alle"></div>
+              </div>
+              <div class="field"><label>Ausgabe-Container</label>
+                <select id="lib-container" title="Container für die zur Warteschlange hinzugefügten Encodes">
+                  <option value="auto">Automatisch (Codec-abhängig)</option>
+                  <option value="mkv">MKV (Matroska)</option>
+                  <option value="mp4">MP4</option>
+                </select>
               </div>
             </div>
             <div class="lib-checks">
