@@ -1484,11 +1484,16 @@ def _output_path(item: QueueItem) -> Path:
         # Fester Ziel-Unterordner → Datei flach dort ablegen.
         target = base / sub / src.name
     else:
-        # In das Output-Volume spiegeln. Bei mehreren Input-Roots enthält der
-        # relative Pfad den Root-Namen als erstes Segment, damit sich
-        # gleichnamige Dateien aus verschiedenen Roots nicht überschreiben.
-        rel = config.rel_input(src)
-        target = (base / rel) if rel else (base / src.name)
+        # Ohne Unterordner die Quellstruktur unter der Basis spiegeln.
+        # Liegt die Quelle bereits unter der Basis (Ziel = Eingabe-Root, also
+        # „neben der Quelle"), relativ dazu spiegeln – sonst würde der Root-Name
+        # doppelt auftauchen. Andernfalls (Output-Volume) den root-aware
+        # relativen Pfad nutzen, damit gleichnamige Dateien getrennt bleiben.
+        try:
+            rel = src.resolve().relative_to(base.resolve()).as_posix()
+        except (ValueError, OSError):
+            rel = config.rel_input(src) or src.name
+        target = base / rel
     return target.with_name(f"{src.stem}{item.settings.suffix}{ext}")
 
 

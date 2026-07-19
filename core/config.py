@@ -116,9 +116,20 @@ def output_roots_public() -> "list[dict]":
 
 
 def resolve_output_base(root_name: str) -> Path:
-    """Basis-Verzeichnis eines Output-Roots (Fallback: erster Root)."""
+    """Basis-Verzeichnis eines Ziel-Roots (Fallback: erster Output-Root).
+
+    Mit dem Präfix ``in:`` wird ein Eingabe-Root als Ziel gewählt (z. B. um ein
+    Remux-Ergebnis neben der Quelle abzulegen).
+    """
+    rn = root_name or ""
+    if rn.startswith("in:"):
+        want = rn[3:]
+        for name, base in INPUT_ROOTS:
+            if name == want:
+                return base
+        return INPUT_ROOTS[0][1]
     for name, base in OUTPUT_ROOTS:
-        if name == (root_name or ""):
+        if name == rn:
             return base
     return OUTPUT_ROOTS[0][1]
 

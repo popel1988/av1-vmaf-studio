@@ -334,9 +334,24 @@
   }
 
   function enableActionButtons() {
-    ["btn-enqueue", "btn-vmaf-start"].forEach((id) => {
+    ["btn-enqueue", "btn-vmaf-start", "btn-clear-selection"].forEach((id) => {
       const b = $(id);
       if (b) b.disabled = false;
+    });
+  }
+
+  // Auswahl (Datei/Ordner) auf der Quellen-Karte aufheben.
+  function clearSelection() {
+    state.selected = null;
+    state.currentInfo = null;
+    const badge = $("selection-badge");
+    if (badge) badge.textContent = "Nichts ausgewählt";
+    const info = $("selected-info");
+    if (info) info.innerHTML = "";
+    document.querySelectorAll("#browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
+    ["btn-enqueue", "btn-vmaf-start", "btn-clear-selection"].forEach((id) => {
+      const b = $(id);
+      if (b) b.disabled = true;
     });
   }
 
@@ -659,6 +674,8 @@
     syncAudio();
 
     $("btn-enqueue").addEventListener("click", enqueue);
+    const clearSel = $("btn-clear-selection");
+    if (clearSel) clearSel.addEventListener("click", clearSelection);
     $("btn-clear").addEventListener("click", async () => {
       await fetch("/api/queue/clear", { method: "POST" });
     });
@@ -842,18 +859,30 @@
     };
   }
 
-  // Output-Root-Dropdowns befüllen; nur einblenden, wenn mehrere Roots existieren.
+  // Ziel-Volume-Dropdowns befüllen: konfigurierte Ausgabe-Ordner PLUS die
+  // Eingabe-Ordner (als "in:<name>"), damit man z. B. neben der Quelle ablegen
+  // kann. Einblenden, sobald es mehr als eine Zielmöglichkeit gibt.
   function initOutputRoots() {
-    const roots = (window.APP_CONFIG && APP_CONFIG.outputRoots) || [];
-    const multi = !!(window.APP_CONFIG && APP_CONFIG.multiOutput);
+    const outRoots = (window.APP_CONFIG && APP_CONFIG.outputRoots) || [];
+    const inRoots = (window.APP_CONFIG && APP_CONFIG.inputRoots) || [];
+    let html = "";
+    if (outRoots.length) {
+      html += '<optgroup label="Ausgabe-Ordner">' +
+        outRoots.map((r) => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join("") +
+        "</optgroup>";
+    }
+    if (inRoots.length) {
+      html += '<optgroup label="Eingabe-Ordner (z. B. neben der Quelle)">' +
+        inRoots.map((r) => `<option value="in:${escapeHtml(r.name)}">${escapeHtml(r.name)} (Eingabe)</option>`).join("") +
+        "</optgroup>";
+    }
+    const total = outRoots.length + inRoots.length;
     ["opt", "remux", "merge", "split"].forEach((prefix) => {
       const sel = $(prefix + "-out-root");
       if (sel) {
-        sel.innerHTML = roots
-          .map((r) => `<option value="${r.name}">${r.name}</option>`)
-          .join("");
+        sel.innerHTML = html;
         const field = sel.closest("[data-out-root-field]");
-        if (field) field.style.display = multi ? "" : "none";
+        if (field) field.style.display = total > 1 ? "" : "none";
       }
       const browse = $(prefix + "-out-browse");
       if (browse) browse.addEventListener("click", () => openOutPicker(prefix));
@@ -896,7 +925,7 @@
       if (bc) {
         bc.innerHTML = "";
         const r = document.createElement("a");
-        r.textContent = root || "Ausgabe";
+        r.textContent = root ? (root.startsWith("in:") ? root.slice(3) + " (Eingabe)" : root) : "Ausgabe";
         r.onclick = () => outPickLoadDir("");
         bc.appendChild(r);
         if (data.path) {
@@ -965,6 +994,13 @@
 
   async function enqueue() {
     if (!state.selected) return;
+    // Original ersetzen: ausdrückliche Bestätigung einholen.
+    const post = $("opt-post") ? $("opt-post").value : "keep";
+    if ((post === "replace" || post === "inplace") &&
+        !window.confirm("Original ersetzen?\n\nDie Quelldatei wird nach erfolgreichem Encode durch die neue Datei ersetzt. " +
+          "Bei aktiver \"sicherer Nachbehandlung\" nur, wenn die Ausgabe intakt ist und die Qualität stimmt.")) {
+      return;
+    }
     const btn = $("btn-enqueue");
     btn.disabled = true;
     const payload = {
@@ -3212,6 +3248,7 @@
     on("btn-remux-extract", remuxExtract);
     on("btn-remux-load-chapters", remuxLoadChapters);
     on("btn-remux-start", remuxStart);
+    on("btn-remux-clear", remuxClearSelection);
     on("btn-merge-add", () => remuxOpenPicker("merge", "aux"));
     on("btn-merge-start", remuxMergeStart);
     on("btn-merge-check", remuxMergeCheck);
@@ -3391,6 +3428,25 @@
     return remuxBrowser ? remuxBrowser.go(path) : undefined;
   }
 
+  // Remux-Quellenauswahl aufheben und Editor zurücksetzen.
+  function remuxClearSelection() {
+    state.remuxSel = null;
+    state.remuxInfo = null;
+    state.remuxExt = [];
+    state.remuxAtt = [];
+    state.remuxChapters = null;
+    state.splitRanges = [];
+    const ed = $("remux-editor"); if (ed) ed.style.display = "none";
+    const badge = $("remux-badge"); if (badge) badge.textContent = "Keine Datei";
+    const info = $("remux-start-info"); if (info) info.textContent = "";
+    const cw = $("remux-chapters-wrap"); if (cw) cw.style.display = "none";
+    document.querySelectorAll("#remux-browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
+    ["btn-remux-start", "btn-split-start", "btn-remux-clear"].forEach((id) => {
+      const b = $(id); if (b) b.disabled = true;
+    });
+    remuxRenderSplitRanges();
+  }
+
   async function remuxSelectFile(f) {
     state.remuxSel = { path: f.rel, name: f.name };
     state.remuxExt = [];
@@ -3400,6 +3456,8 @@
     $("remux-chapters-info").textContent = "";
     const splitBtn = $("btn-split-start");
     if (splitBtn) splitBtn.disabled = false;
+    const clr = $("btn-remux-clear");
+    if (clr) clr.disabled = false;
     $("remux-badge").textContent = `${f.name} · analysiere …`;
     document.querySelectorAll("#remux-browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
     try {
@@ -3931,6 +3989,13 @@
     const conflicts = remuxCheckConflicts(spec);
     if (conflicts.length) {
       $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(conflicts[0])}</span>`;
+      return;
+    }
+    // Original ersetzen: nur nach ausdrücklicher Bestätigung.
+    if ($("remux-post").value === "inplace" &&
+        !window.confirm("Original ersetzen?\n\n\"" + state.remuxSel.name +
+          "\" wird nach erfolgreichem Remux durch die neue Datei ersetzt. " +
+          "Bei aktiver \"sicherer Nachbehandlung\" nur, wenn die Ausgabe intakt ist.")) {
       return;
     }
     const btn = $("btn-remux-start");
