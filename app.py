@@ -81,10 +81,10 @@ async def _auth_middleware(request: Request, call_next):
 
 _LOGIN_HTML = """<!DOCTYPE html><html lang=de><head><meta charset=UTF-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Login</title><link rel=stylesheet href="/static/css/styles.css"></head>
+<title>Video Studio</title><link rel=stylesheet href="/static/css/styles.css"></head>
 <body style="display:flex;align-items:center;justify-content:center;min-height:100vh">
 <form method=post action=/login style="background:var(--surface);padding:32px;border-radius:12px;border:1px solid var(--border);min-width:300px">
-<h2 style="margin-top:0">Compression Studio</h2>
+<h2 style="margin-top:0">Video Studio</h2>
 <p style="color:var(--text-muted);font-size:13px">Bitte Passwort eingeben.</p>
 {error}
 <input type=password name=password placeholder=Passwort autofocus

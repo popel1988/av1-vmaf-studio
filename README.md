@@ -1,4 +1,4 @@
-# AV1 / VMAF Compression Studio
+# Video Studio — VMAF-guided compression & editing
 
 **Repository:** [github.com/popel1988/av1-vmaf-studio](https://github.com/popel1988/av1-vmaf-studio)  
 **Container image (GHCR):** `ghcr.io/popel1988/av1-vmaf-studio:latest`
