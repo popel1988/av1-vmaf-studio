@@ -866,3 +866,46 @@ input[type="range"]::-moz-range-thumb {
 .stats-title { color: var(--accent-2); text-decoration: none; cursor: pointer; }
 .stats-title:hover { text-decoration: underline; }
 .stats-play { padding: 2px 9px; }
+
+/* Super-Tool: Mini-Dropdown für Ton-/Untertitel-Spurauswahl je Datei */
+.st-track-cell { position: relative; }
+.st-track-dd { position: relative; }
+.st-track-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.st-track-btn::after { content: " ▾"; opacity: 0.6; }
+.st-track-btn:hover { border-color: var(--accent); }
+.st-track-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  max-width: 340px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+}
+.st-track-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.st-track-opt:hover { background: var(--surface-2); }
+.st-track-opt input { width: auto; }

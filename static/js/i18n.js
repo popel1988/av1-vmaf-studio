@@ -224,6 +224,31 @@
       "Two-pass (bitrate mode only – more consistent quality)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)":
       "Anime mode (VMAF-NEG scoring + 10-bit against banding)",
+    "Dynamik (HDR / Dolby Vision)": "Dynamic range (HDR / Dolby Vision)",
+    "Automatisch je Datei (empfohlen)": "Automatic per file (recommended)",
+    "HDR / Dolby Vision beibehalten": "Keep HDR / Dolby Vision",
+    "HDR behalten · Dolby Vision verwerfen": "Keep HDR · discard Dolby Vision",
+    "Automatisch wählt pro Datei die sinnvolle Behandlung: Dolby Vision (RPU) bzw. HDR10/HLG bleiben erhalten, SDR bleibt SDR. DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.":
+      "Automatic picks the sensible treatment per file: Dolby Vision (RPU) and HDR10/HLG are preserved, SDR stays SDR. DV reinjection (profile 8.1) only applies to HEVC or AV1 on the CPU.",
+    "Keine": "None",
+    "Bitte prüfen, bevor der Stapel startet:": "Please review before starting the batch:",
+    "Trotzdem fortfahren?": "Continue anyway?",
+    "Dateien ausgewählt – das kann sehr lange dauern und viel Speicher belegen.":
+      "files selected – this can take a very long time and use a lot of disk space.",
+    "Die Auswahl enthält sehr unterschiedliche Qualitäten/Auflösungen. Eine einzige feste Einstellung liefert dann uneinheitliche Ergebnisse – „Ziel-VMAF (pro Datei)\" passt sich besser an.":
+      "The selection contains very different qualities/resolutions. A single fixed setting then yields inconsistent results – \u201CTarget VMAF (per file)\u201D adapts better.",
+    "HDR- und SDR-Dateien gemischt, aber die Dynamik ist fest eingestellt. „Automatisch je Datei\" behandelt jede Datei korrekt.":
+      "HDR and SDR files mixed, but the dynamic range is fixed. \u201CAutomatic per file\u201D treats each file correctly.",
+    "Sprach-Whitelist Ton": "Audio language whitelist",
+    "Sprach-Whitelist Untertitel": "Subtitle language whitelist",
+    "z. B. de, en (leer = alle behalten)": "e.g. de, en (empty = keep all)",
+    "Nur Tonspuren dieser Sprachen behalten. Findet sich keine passende Spur, bleiben alle erhalten (kein Ton-Verlust). Manuelle Spurauswahl in der Liste hat Vorrang.":
+      "Keep only audio tracks in these languages. If no track matches, all are kept (no accidental audio loss). Manual track selection in the list takes precedence.",
+    "Nur Untertitel dieser Sprachen behalten (leer = alle). Ohne Treffer werden keine Untertitel übernommen.":
+      "Keep only subtitles in these languages (empty = all). If none match, no subtitles are kept.",
+    "Warnung ab Anzahl Dateien": "Warn from file count",
+    "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
+      "Warn before start when this many (or more) files are selected (0 = no warning). Stored locally.",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)":
       "Auto-crop: automatically remove black bars (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.":
@@ -793,6 +818,31 @@
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "Solo AV1 (CPU/SVT). 0 = desactivado. Ahorra bits en material con grano.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Dos pasadas (solo en modo bitrate – calidad más uniforme)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Modo anime (puntuación VMAF-NEG + 10 bits contra el banding)",
+    "Dynamik (HDR / Dolby Vision)": "Rango dinámico (HDR / Dolby Vision)",
+    "Automatisch je Datei (empfohlen)": "Automático por archivo (recomendado)",
+    "HDR / Dolby Vision beibehalten": "Mantener HDR / Dolby Vision",
+    "HDR behalten · Dolby Vision verwerfen": "Mantener HDR · descartar Dolby Vision",
+    "Automatisch wählt pro Datei die sinnvolle Behandlung: Dolby Vision (RPU) bzw. HDR10/HLG bleiben erhalten, SDR bleibt SDR. DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.":
+      "El modo automático elige el tratamiento adecuado por archivo: se conservan Dolby Vision (RPU) y HDR10/HLG, el SDR permanece como SDR. La reinyección DV (perfil 8.1) solo se aplica a HEVC o AV1 en la CPU.",
+    "Keine": "Ninguno",
+    "Bitte prüfen, bevor der Stapel startet:": "Revisa antes de iniciar el lote:",
+    "Trotzdem fortfahren?": "¿Continuar de todos modos?",
+    "Dateien ausgewählt – das kann sehr lange dauern und viel Speicher belegen.":
+      "archivos seleccionados: puede tardar mucho y ocupar bastante espacio.",
+    "Die Auswahl enthält sehr unterschiedliche Qualitäten/Auflösungen. Eine einzige feste Einstellung liefert dann uneinheitliche Ergebnisse – „Ziel-VMAF (pro Datei)\" passt sich besser an.":
+      "La selección contiene calidades/resoluciones muy distintas. Un único ajuste fijo dará resultados dispares; «VMAF objetivo (por archivo)» se adapta mejor.",
+    "HDR- und SDR-Dateien gemischt, aber die Dynamik ist fest eingestellt. „Automatisch je Datei\" behandelt jede Datei korrekt.":
+      "Archivos HDR y SDR mezclados, pero el rango dinámico es fijo. «Automático por archivo» trata cada archivo correctamente.",
+    "Sprach-Whitelist Ton": "Lista de idiomas de audio",
+    "Sprach-Whitelist Untertitel": "Lista de idiomas de subtítulos",
+    "z. B. de, en (leer = alle behalten)": "p. ej. de, en (vacío = conservar todos)",
+    "Nur Tonspuren dieser Sprachen behalten. Findet sich keine passende Spur, bleiben alle erhalten (kein Ton-Verlust). Manuelle Spurauswahl in der Liste hat Vorrang.":
+      "Conservar solo las pistas de audio en estos idiomas. Si no coincide ninguna, se conservan todas (sin pérdida de audio). La selección manual en la lista tiene prioridad.",
+    "Nur Untertitel dieser Sprachen behalten (leer = alle). Ohne Treffer werden keine Untertitel übernommen.":
+      "Conservar solo los subtítulos en estos idiomas (vacío = todos). Si no coincide ninguno, no se conservan subtítulos.",
+    "Warnung ab Anzahl Dateien": "Avisar a partir de N archivos",
+    "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
+      "Avisar antes de iniciar cuando se seleccionen tantos archivos o más (0 = sin aviso). Se guarda localmente.",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Auto-recorte: eliminar barras negras automáticamente (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Detecta los bordes letterbox/pillarbox en varios puntos y los recorta antes de codificar – ahorra bitrate. El análisis VMAF y el guardrail usan automáticamente la misma zona recortada.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Codificación adaptativa por bloques (segmentos con CQ según complejidad – solo modo CQ, más lento)",
@@ -1282,6 +1332,31 @@
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "AV1 uniquement (CPU/SVT). 0 = désactivé. Économise des bits sur les images granuleuses.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Deux passes (mode bitrate uniquement – qualité plus régulière)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Mode anime (notation VMAF-NEG + 10 bits contre le banding)",
+    "Dynamik (HDR / Dolby Vision)": "Plage dynamique (HDR / Dolby Vision)",
+    "Automatisch je Datei (empfohlen)": "Automatique par fichier (recommandé)",
+    "HDR / Dolby Vision beibehalten": "Conserver HDR / Dolby Vision",
+    "HDR behalten · Dolby Vision verwerfen": "Conserver HDR · abandonner Dolby Vision",
+    "Automatisch wählt pro Datei die sinnvolle Behandlung: Dolby Vision (RPU) bzw. HDR10/HLG bleiben erhalten, SDR bleibt SDR. DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.":
+      "Le mode automatique choisit le traitement adapté par fichier : Dolby Vision (RPU) et HDR10/HLG sont conservés, le SDR reste SDR. La réinjection DV (profil 8.1) ne s'applique qu'au HEVC ou à l'AV1 sur le CPU.",
+    "Keine": "Aucun",
+    "Bitte prüfen, bevor der Stapel startet:": "À vérifier avant de lancer le lot :",
+    "Trotzdem fortfahren?": "Continuer quand même ?",
+    "Dateien ausgewählt – das kann sehr lange dauern und viel Speicher belegen.":
+      "fichiers sélectionnés – cela peut être très long et occuper beaucoup d'espace.",
+    "Die Auswahl enthält sehr unterschiedliche Qualitäten/Auflösungen. Eine einzige feste Einstellung liefert dann uneinheitliche Ergebnisse – „Ziel-VMAF (pro Datei)\" passt sich besser an.":
+      "La sélection contient des qualités/résolutions très différentes. Un seul réglage fixe donnera des résultats hétérogènes ; « VMAF cible (par fichier) » s'adapte mieux.",
+    "HDR- und SDR-Dateien gemischt, aber die Dynamik ist fest eingestellt. „Automatisch je Datei\" behandelt jede Datei korrekt.":
+      "Fichiers HDR et SDR mélangés, mais la plage dynamique est fixe. « Automatique par fichier » traite chaque fichier correctement.",
+    "Sprach-Whitelist Ton": "Liste blanche de langues audio",
+    "Sprach-Whitelist Untertitel": "Liste blanche de langues de sous-titres",
+    "z. B. de, en (leer = alle behalten)": "p. ex. de, en (vide = tout conserver)",
+    "Nur Tonspuren dieser Sprachen behalten. Findet sich keine passende Spur, bleiben alle erhalten (kein Ton-Verlust). Manuelle Spurauswahl in der Liste hat Vorrang.":
+      "Ne conserver que les pistes audio de ces langues. Si aucune ne correspond, toutes sont conservées (pas de perte audio). La sélection manuelle dans la liste est prioritaire.",
+    "Nur Untertitel dieser Sprachen behalten (leer = alle). Ohne Treffer werden keine Untertitel übernommen.":
+      "Ne conserver que les sous-titres de ces langues (vide = tous). Si aucun ne correspond, aucun sous-titre n'est conservé.",
+    "Warnung ab Anzahl Dateien": "Avertir à partir de N fichiers",
+    "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
+      "Avertir avant le démarrage lorsque autant de fichiers (ou plus) sont sélectionnés (0 = aucun avertissement). Enregistré localement.",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Rognage auto : supprimer automatiquement les bandes noires (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Détecte les bordures letterbox/pillarbox à plusieurs endroits et les rogne avant l'encodage – économise du bitrate. L'analyse VMAF et le garde-fou utilisent automatiquement la même zone rognée.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Encodage adaptatif par blocs (segments avec CQ selon la complexité – mode CQ uniquement, plus lent)",

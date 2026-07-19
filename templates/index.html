@@ -890,6 +890,19 @@
               <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
             </label>
 
+            <div class="field">
+              <label>Dynamik (HDR / Dolby Vision)</label>
+              <select id="st-dynamik">
+                <option value="auto">Automatisch je Datei (empfohlen)</option>
+                <option value="preserve">HDR / Dolby Vision beibehalten</option>
+                <option value="hdr10">HDR behalten · Dolby Vision verwerfen</option>
+                <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+              </select>
+              <p class="hint" id="st-dynamik-hint">Automatisch wählt pro Datei die sinnvolle
+                Behandlung: Dolby Vision (RPU) bzw. HDR10/HLG bleiben erhalten, SDR bleibt SDR.
+                DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.</p>
+            </div>
+
             <div class="field-row" id="st-quality-field" style="display:none">
               <div class="field">
                 <label>Steuerungsmodus</label>
@@ -928,6 +941,28 @@
               </div>
             </div>
 
+            <div class="field-row">
+              <div class="field">
+                <label>Sprach-Whitelist Ton</label>
+                <input type="text" id="st-audio-langs" placeholder="z. B. de, en (leer = alle behalten)" />
+                <p class="hint">Nur Tonspuren dieser Sprachen behalten. Findet sich keine passende Spur,
+                  bleiben alle erhalten (kein Ton-Verlust). Manuelle Spurauswahl in der Liste hat Vorrang.</p>
+              </div>
+              <div class="field">
+                <label>Sprach-Whitelist Untertitel</label>
+                <input type="text" id="st-sub-langs" placeholder="z. B. de, en (leer = alle behalten)" />
+                <p class="hint">Nur Untertitel dieser Sprachen behalten (leer = alle). Ohne Treffer werden
+                  keine Untertitel übernommen.</p>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Warnung ab Anzahl Dateien</label>
+              <input type="number" id="st-warn-count" min="0" max="100000" step="1" value="40" style="max-width:180px" />
+              <p class="hint">Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind
+                (0 = keine Warnung). Wird lokal gespeichert.</p>
+            </div>
+
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-st-scan">Scan – Codec/Bitrate ermitteln</button>
               <span id="st-progress" class="muted"></span>
@@ -937,10 +972,10 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Container</th><th>Codec</th><th>Auflösung</th><th>Bitrate</th><th>Größe</th></tr>
+                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Container</th><th>Codec</th><th>Auflösung</th><th>Dynamik</th><th>Bitrate</th><th>Größe</th><th>Ton</th><th>Untertitel</th></tr>
                 </thead>
                 <tbody id="st-body">
-                  <tr class="empty-row"><td colspan="7">Noch kein Scan.</td></tr>
+                  <tr class="empty-row"><td colspan="10">Noch kein Scan.</td></tr>
                 </tbody>
               </table>
             </div>

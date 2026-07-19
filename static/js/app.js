@@ -3064,6 +3064,17 @@
 
     $("btn-st-scan").addEventListener("click", startSuperScan);
     $("btn-st-start").addEventListener("click", startSuperBatch);
+    stInitTrackHandlers();
+
+    // Warn-Schwelle (viele Dateien) lokal persistieren.
+    const warnEl = $("st-warn-count");
+    if (warnEl) {
+      const saved = localStorage.getItem("st-warn-count");
+      if (saved !== null && saved !== "") warnEl.value = saved;
+      warnEl.addEventListener("change", () => {
+        localStorage.setItem("st-warn-count", warnEl.value);
+      });
+    }
     const all = $("st-check-all");
     if (all) all.addEventListener("change", () => {
       document.querySelectorAll(".st-check").forEach((c) => { c.checked = all.checked; });
@@ -3198,6 +3209,7 @@
   async function startSuperScan() {
     $("st-scan-badge").textContent = "Scan läuft …";
     $("btn-st-start").disabled = true;
+    state.stTracks = {};
     await fetch("/api/supertool/scan", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(stFilters()),
@@ -3221,20 +3233,129 @@
     } catch (e) { /* ignorieren */ }
   }
 
+  function stAudioLabel(a) {
+    const lang = (a.language || "und").toUpperCase();
+    const codec = (a.codec || "?").toUpperCase();
+    const ch = a.layout || (a.channels ? a.channels + "ch" : "");
+    return [lang, codec, ch].filter(Boolean).join(" · ") +
+      (a.title ? ` – ${a.title}` : "");
+  }
+
+  function stSubLabel(s) {
+    const lang = (s.language || "und").toUpperCase();
+    const codec = (s.codec || "?").toUpperCase();
+    const flags = [s.default ? "default" : "", s.forced ? "forced" : ""].filter(Boolean).join("/");
+    return [lang, codec, flags].filter(Boolean).join(" · ") +
+      (s.title ? ` – ${s.title}` : "");
+  }
+
+  // Mini-Dropdown mit Häkchen für Ton- oder Untertitelspuren einer Datei.
+  function stTrackCell(kind, m, tracks) {
+    if (!tracks || !tracks.length) return '<td class="muted">—</td>';
+    const sel = stTrackSel(m.path, kind);
+    const label = kind === "audio" ? stAudioLabel : stSubLabel;
+    const opts = tracks.map((t) =>
+      `<label class="check st-track-opt"><input type="checkbox" data-idx="${t.index}"` +
+      `${sel.has(t.index) ? " checked" : ""} /><span>${escapeHtml(label(t))}</span></label>`
+    ).join("");
+    const btn = stTrackBtnText(sel.size, tracks.length);
+    return `<td class="st-track-cell"><div class="st-track-dd" data-kind="${kind}"` +
+      ` data-path="${escapeHtml(m.path)}"><button type="button" class="st-track-btn">` +
+      `${btn}</button><div class="st-track-panel" hidden>${opts}</div></div></td>`;
+  }
+
+  function stTrackBtnText(sel, total) {
+    if (sel >= total) return `${window.I18N ? I18N.t("Alle") : "Alle"} (${total})`;
+    if (sel === 0) return window.I18N ? I18N.t("Keine") : "Keine";
+    return `${sel}/${total}`;
+  }
+
+  // Aktuelle Auswahl (Set der Indizes) einer Datei/Spurart; initialisiert mit
+  // allen vorhandenen Spuren beim ersten Zugriff.
+  function stTrackSel(path, kind) {
+    if (!state.stTracks) state.stTracks = {};
+    if (!state.stTracks[path]) state.stTracks[path] = {};
+    if (!state.stTracks[path][kind]) {
+      const m = (state.stMatches || {})[path];
+      const list = m ? (kind === "audio" ? m.audio : m.subtitles) || [] : [];
+      state.stTracks[path][kind] = new Set(list.map((t) => t.index));
+    }
+    return state.stTracks[path][kind];
+  }
+
   function renderSuperMatches(rows) {
     const body = $("st-body");
     if (!body) return;
-    body.innerHTML = rows.length ? rows.map((m) => `
+    state.stMatches = {};
+    rows.forEach((m) => { state.stMatches[m.path] = m; });
+    body.innerHTML = rows.length ? rows.map((m) => {
+      const dyn = libDynamicLabel(m);
+      const dynCls = m.dolby_vision ? "accent" : (m.is_hdr ? "warn" : "");
+      return `
       <tr>
         <td><input type="checkbox" class="st-check" value="${escapeHtml(m.path)}" checked /></td>
         <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
         <td>${escapeHtml((m.container || "—").toUpperCase())}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
+        <td><span class="dyn-badge ${dynCls}">${escapeHtml(dyn)}</span></td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
         <td>${escapeHtml(m.size_human)}</td>
-      </tr>`).join("") :
-      '<tr class="empty-row"><td colspan="7">Keine Treffer.</td></tr>';
+        ${stTrackCell("audio", m, m.audio)}
+        ${stTrackCell("subs", m, m.subtitles)}
+      </tr>`; }).join("") :
+      '<tr class="empty-row"><td colspan="10">Keine Treffer.</td></tr>';
+  }
+
+  // Öffnet/schließt die Mini-Dropdowns und pflegt die Auswahl. Delegation auf
+  // dem Tabellenkörper, da dieser bei jedem Scan-Poll neu gerendert wird.
+  function stInitTrackHandlers() {
+    const body = $("st-body");
+    if (!body || body.dataset.trackWired) return;
+    body.dataset.trackWired = "1";
+    body.addEventListener("click", (e) => {
+      if (e.target.closest(".st-track-panel")) { e.stopPropagation(); return; }
+      const btn = e.target.closest(".st-track-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      const panel = btn.nextElementSibling;
+      const isOpen = !panel.hidden;
+      stCloseTrackPanels();
+      if (isOpen) return;
+      // Fixed positionieren, damit das Panel nicht vom horizontal scrollenden
+      // Tabellen-Container abgeschnitten wird.
+      panel.hidden = false;
+      const r = btn.getBoundingClientRect();
+      panel.style.position = "fixed";
+      panel.style.top = `${Math.round(r.bottom + 4)}px`;
+      const w = panel.offsetWidth || 240;
+      panel.style.left = `${Math.round(Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)))}px`;
+      panel.style.right = "auto";
+    });
+    body.addEventListener("change", (e) => {
+      const cb = e.target.closest(".st-track-opt input");
+      if (!cb) return;
+      const dd = cb.closest(".st-track-dd");
+      const kind = dd.dataset.kind;
+      const path = dd.dataset.path;
+      const idx = parseInt(cb.dataset.idx, 10);
+      const sel = stTrackSel(path, kind);
+      if (cb.checked) sel.add(idx); else sel.delete(idx);
+      const total = dd.querySelectorAll(".st-track-opt").length;
+      dd.querySelector(".st-track-btn").textContent = stTrackBtnText(sel.size, total);
+    });
+    document.addEventListener("click", stCloseTrackPanels);
+    window.addEventListener("scroll", stCloseTrackPanels, true);
+  }
+
+  function stCloseTrackPanels() {
+    document.querySelectorAll("#st-body .st-track-panel").forEach((p) => {
+      p.hidden = true;
+      p.style.position = "";
+      p.style.top = "";
+      p.style.left = "";
+      p.style.right = "";
+    });
   }
 
   // Passt Beschriftung, Grenzen und (optional) die Vorgabewerte des Test-Grids
@@ -3281,6 +3402,9 @@
       audio_mode: $("st-audio-mode").value,
       rate_mode: "cq",
       anime: $("st-anime") ? $("st-anime").checked : false,
+      dynamik: $("st-dynamik") ? $("st-dynamik").value : "auto",
+      audio_languages: $("st-audio-langs") ? $("st-audio-langs").value.trim() : "",
+      subtitle_languages: $("st-sub-langs") ? $("st-sub-langs").value.trim() : "",
     };
     if (mode === "target_vmaf" || mode === "representative") {
       // Test-Encode-Konfiguration für die VMAF-Analyse (CQ oder Bitrate).
@@ -3298,15 +3422,85 @@
     return s;
   }
 
+  // Sammelt Pro-Datei-Spurauswahl, aber nur wo der Nutzer vom Standard
+  // (alle Spuren) abgewichen ist – sonst greift das globale Verhalten.
+  function stCollectPerFile(paths) {
+    const out = {};
+    paths.forEach((p) => {
+      const m = (state.stMatches || {})[p];
+      if (!m) return;
+      const entry = {};
+      const audio = (m.audio || []).map((t) => t.index);
+      const subs = (m.subtitles || []).map((t) => t.index);
+      const selA = state.stTracks && state.stTracks[p] && state.stTracks[p].audio;
+      const selS = state.stTracks && state.stTracks[p] && state.stTracks[p].subs;
+      if (selA && audio.length && selA.size !== audio.length) {
+        entry.audio_tracks = audio.filter((i) => selA.has(i));
+      }
+      if (selS && subs.length && selS.size !== subs.length) {
+        entry.subtitle_tracks = subs.filter((i) => selS.has(i));
+      }
+      if (Object.keys(entry).length) out[p] = entry;
+    });
+    return out;
+  }
+
+  function stWarnThreshold() {
+    const el = $("st-warn-count");
+    const v = el ? parseInt(el.value, 10) : 40;
+    return isNaN(v) ? 40 : Math.max(0, v);
+  }
+
+  // Warnungen vor dem Start: sehr viele Dateien bzw. sehr heterogene Qualität
+  // (eine gemeinsame Einstellung passt dann evtl. nicht für alle).
+  function stBatchWarnings(paths) {
+    const tt = (s) => (window.I18N ? I18N.t(s) : s);
+    const warns = [];
+    const threshold = stWarnThreshold();
+    if (threshold > 0 && paths.length >= threshold) {
+      warns.push(`${paths.length} ${tt("Dateien ausgewählt – das kann sehr lange dauern und viel Speicher belegen.")}`);
+    }
+    const ms = paths.map((p) => (state.stMatches || {})[p]).filter(Boolean);
+    if (ms.length >= 2) {
+      const tier = (h) => (h <= 576 ? 0 : h <= 720 ? 1 : h <= 1080 ? 2 : h <= 1440 ? 3 : h <= 2160 ? 4 : 5);
+      const tiers = new Set(ms.map((m) => tier(m.height || 0)));
+      const bpps = ms.map((m) => {
+        const [w, h] = String(m.resolution || "0x0").split("x").map((n) => parseInt(n, 10) || 0);
+        return w && h && m.video_bitrate ? m.video_bitrate / (w * h) : 0;
+      }).filter((v) => v > 0);
+      const ratio = bpps.length >= 2 ? Math.max(...bpps) / Math.min(...bpps) : 1;
+      const hdr = ms.some((m) => m.is_hdr);
+      const sdr = ms.some((m) => !m.is_hdr);
+      const dynamik = $("st-dynamik") ? $("st-dynamik").value : "auto";
+      if (tiers.size >= 3 || ratio >= 4) {
+        warns.push(tt("Die Auswahl enthält sehr unterschiedliche Qualitäten/Auflösungen. Eine einzige feste Einstellung liefert dann uneinheitliche Ergebnisse – „Ziel-VMAF (pro Datei)\" passt sich besser an."));
+      }
+      if (hdr && sdr && dynamik !== "auto") {
+        warns.push(tt("HDR- und SDR-Dateien gemischt, aber die Dynamik ist fest eingestellt. „Automatisch je Datei\" behandelt jede Datei korrekt."));
+      }
+    }
+    return warns;
+  }
+
   async function startSuperBatch() {
     const paths = [...document.querySelectorAll(".st-check:checked")].map((c) => c.value);
     if (!paths.length) return;
+    const tt = (s) => (window.I18N ? I18N.t(s) : s);
+    const warns = stBatchWarnings(paths);
+    if (warns.length) {
+      const msg = tt("Bitte prüfen, bevor der Stapel startet:") + "\n\n• " +
+        warns.join("\n\n• ") + "\n\n" + tt("Trotzdem fortfahren?");
+      if (!window.confirm(msg)) return;
+    }
     const btn = $("btn-st-start");
     btn.disabled = true;
     try {
       const res = await fetch("/api/supertool/start", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paths, mode: $("st-mode").value, settings: stGatherSettings() }),
+        body: JSON.stringify({
+          paths, mode: $("st-mode").value,
+          settings: stGatherSettings(), per_file: stCollectPerFile(paths),
+        }),
       });
       const data = await res.json();
       if (data.error) {

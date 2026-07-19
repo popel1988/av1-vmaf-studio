@@ -122,6 +122,11 @@ def _run(filters: dict) -> None:
                     "video_bitrate": info.video_bitrate,
                     "video_bitrate_human": ff._bitrate_human(info.video_bitrate),
                     "hdr_type": info.hdr_type,
+                    "is_hdr": info.is_hdr,
+                    "dolby_vision": info.dolby_vision,
+                    "dv_profile": info.dv_profile,
+                    "audio": info.audio,
+                    "subtitles": info.subtitles,
                     "duration_human": ff.human_duration(info.duration),
                 })
     except Exception as e:  # pragma: no cover
@@ -183,14 +188,87 @@ def _safe_resolve(rel: str) -> Optional[Path]:
     return config.resolve_input(rel)
 
 
-def start_batch(queue, paths: list, settings: dict, mode: str) -> tuple[int, str, str]:
+# Häufige Sprachbezeichnungen auf einen kanonischen 2-Buchstaben-Code abbilden,
+# damit die Whitelist "de, en" auch ISO-639-2-Codes wie "ger"/"deu"/"eng" trifft.
+_LANG_ALIASES = {
+    "de": {"de", "deu", "ger", "german", "deutsch"},
+    "en": {"en", "eng", "english"},
+    "fr": {"fr", "fra", "fre", "french", "francais", "français"},
+    "es": {"es", "spa", "spanish", "espanol", "español", "castellano"},
+    "it": {"it", "ita", "italian", "italiano"},
+    "pt": {"pt", "por", "portuguese", "portugues", "português"},
+    "nl": {"nl", "nld", "dut", "dutch", "nederlands"},
+    "ru": {"ru", "rus", "russian"},
+    "ja": {"ja", "jpn", "japanese"},
+    "zh": {"zh", "zho", "chi", "chinese", "mandarin"},
+    "ko": {"ko", "kor", "korean"},
+    "pl": {"pl", "pol", "polish"},
+    "sv": {"sv", "swe", "swedish"},
+    "da": {"da", "dan", "danish"},
+    "no": {"no", "nor", "norwegian"},
+    "fi": {"fi", "fin", "finnish"},
+    "cs": {"cs", "cze", "ces", "czech"},
+    "hu": {"hu", "hun", "hungarian"},
+    "tr": {"tr", "tur", "turkish"},
+    "ar": {"ar", "ara", "arabic"},
+    "hi": {"hi", "hin", "hindi"},
+    "und": {"und", "undetermined", "unknown"},
+}
+_LANG_TO_CANON = {form: canon for canon, forms in _LANG_ALIASES.items()
+                  for form in forms}
+
+
+def _canon_lang(s) -> str:
+    t = str(s or "").strip().lower()
+    return _LANG_TO_CANON.get(t, t)
+
+
+def _parse_langs(val) -> set:
+    """Whitelist (Liste oder Komma-/Semikolon-String) → Menge kanonischer Codes."""
+    if isinstance(val, str):
+        parts = val.replace(";", ",").split(",")
+    elif isinstance(val, (list, tuple)):
+        parts = list(val)
+    else:
+        parts = []
+    return {_canon_lang(p) for p in parts if str(p).strip()}
+
+
+def _tracks_by_lang(tracks, wanted: set) -> list:
+    """Relative Indizes der Spuren, deren Sprache in der Whitelist liegt."""
+    return [int(t.get("index", 0)) for t in (tracks or [])
+            if _canon_lang(t.get("language")) in wanted]
+
+
+def start_batch(queue, paths: list, settings: dict, mode: str,
+                per_file: Optional[dict] = None) -> tuple[int, str, str]:
     """Treffer je nach Modus als Batch-Gruppe einreihen.
+
+    ``per_file`` erlaubt pro Datei (Schlüssel = relativer Pfad) individuelle
+    Overrides – aktuell die Auswahl der Ton-/Untertitelspuren aus der
+    Trefferliste. Alles Übrige stammt aus dem gemeinsamen ``settings``.
 
     Rückgabe: (Anzahl hinzugefügt, group_id, Fehlermeldung).
     """
     from .queue_manager import build_job_settings
+    from . import library
 
+    per_file = per_file or {}
     mode = mode if mode in ("target_vmaf", "representative", "fixed") else "representative"
+    # Dynamik-Behandlung (HDR/Dolby Vision) für den ganzen Stapel. ``auto``
+    # entscheidet pro Datei anhand der Quelle (wie im Encoding), die übrigen
+    # Werte erzwingen ein festes Verhalten für alle Treffer.
+    dynamik = str(settings.get("dynamik", "auto") or "auto")
+    _DYN_MAP = {
+        "preserve": ("preserve", "preserve"),
+        "hdr10": ("preserve", "hdr10"),
+        "tonemap": ("tonemap", "tonemap"),
+    }
+    # Sprach-Whitelist (leer = alle behalten). Ein Probe je Datei ist nur nötig,
+    # wenn Auto-Dynamik oder eine Whitelist aktiv ist.
+    audio_langs = _parse_langs(settings.get("audio_languages"))
+    sub_langs = _parse_langs(settings.get("subtitle_languages"))
+    need_probe = (dynamik == "auto") or bool(audio_langs) or bool(sub_langs)
     group = uuid.uuid4().hex[:8]
     batch = uuid.uuid4().hex[:8]  # Dashboard-Kennung über alle Dateien
     added = 0
@@ -200,6 +278,46 @@ def start_batch(queue, paths: list, settings: dict, mode: str) -> tuple[int, str
         if target is None or not target.is_file():
             continue
         d = dict(settings)
+        for k in ("dynamik", "audio_languages", "subtitle_languages"):
+            d.pop(k, None)
+
+        info = None
+        if need_probe:
+            info, _err = ff.probe_with_error(target)
+
+        if dynamik == "auto":
+            if info is not None:
+                sug = library.suggest_encode(info, d.get("codec", "av1"))
+                d["hdr_mode"], d["dv_mode"] = sug["hdr_mode"], sug["dv_mode"]
+            else:
+                d["hdr_mode"], d["dv_mode"] = "tonemap", ""
+        elif dynamik in _DYN_MAP:
+            d["hdr_mode"], d["dv_mode"] = _DYN_MAP[dynamik]
+
+        # Spurauswahl: manuelle Auswahl aus der Trefferliste hat Vorrang,
+        # danach greift die Sprach-Whitelist, sonst bleibt alles beim Standard.
+        pf = per_file.get(rel) or {}
+        if isinstance(pf.get("audio_tracks"), list):
+            d["audio_tracks"] = [int(x) for x in pf["audio_tracks"]]
+            d["audio_per_track"] = False
+        elif audio_langs and info is not None and info.audio:
+            picked = _tracks_by_lang(info.audio, audio_langs)
+            # Ohne Treffer alle Tonspuren behalten (kein versehentlicher Ton-Verlust).
+            if picked:
+                d["audio_tracks"] = picked
+                d["audio_per_track"] = False
+
+        if isinstance(pf.get("subtitle_tracks"), list):
+            subs = [int(x) for x in pf["subtitle_tracks"]]
+            d["subtitle_per_track"] = True
+            d["subtitle_track_settings"] = [{"index": j} for j in subs]
+            d["keep_subtitles"] = bool(subs)
+        elif sub_langs and info is not None:
+            subs = _tracks_by_lang(info.subtitles, sub_langs)
+            d["subtitle_per_track"] = True
+            d["subtitle_track_settings"] = [{"index": j} for j in subs]
+            d["keep_subtitles"] = bool(subs)
+
         d["batch_id"] = batch
         if mode == "fixed":
             d["vmaf_check"] = False

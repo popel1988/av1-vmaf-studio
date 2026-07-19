@@ -968,6 +968,7 @@ class SuperStartRequest(BaseModel):
     paths: list[str] = []
     mode: str = "representative"      # target_vmaf | representative | fixed
     settings: dict = {}
+    per_file: dict = {}              # rel-Pfad -> {audio_tracks, subtitle_tracks}
 
 
 @app.post("/api/supertool/start")
@@ -976,7 +977,7 @@ async def supertool_start(req: SuperStartRequest):
     if not req.paths:
         return JSONResponse({"error": "Keine Dateien ausgewählt"}, status_code=400)
     added, group_id, err = supertool.start_batch(
-        queue, req.paths, req.settings or {}, req.mode)
+        queue, req.paths, req.settings or {}, req.mode, req.per_file or {})
     if err:
         return JSONResponse({"error": err}, status_code=400)
     return {"added": added, "group_id": group_id}
