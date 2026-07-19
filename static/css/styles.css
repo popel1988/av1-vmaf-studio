@@ -909,3 +909,26 @@ input[type="range"]::-moz-range-thumb {
 }
 .st-track-opt:hover { background: var(--surface-2); }
 .st-track-opt input { width: auto; }
+
+/* Super-Tool: Remux-Umschalter + gemeinsame Spurauswahl für alle Dateien */
+.st-toggle { margin: 4px 0 10px; font-weight: 600; }
+.st-common {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+.st-common-head { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.st-common-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.st-common-col { display: flex; flex-direction: column; gap: 4px; }
+.st-common-col strong { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.st-common-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.st-common-opt input { width: auto; }
+@media (max-width: 720px) { .st-common-grid { grid-template-columns: 1fr; } }

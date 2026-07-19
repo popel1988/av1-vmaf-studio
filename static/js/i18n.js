@@ -249,6 +249,16 @@
     "Warnung ab Anzahl Dateien": "Warn from file count",
     "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
       "Warn before start when this many (or more) files are selected (0 = no warning). Stored locally.",
+    "Nur Remuxen (ohne Neucodierung) – nur Spuren/Container ändern":
+      "Remux only (no re-encoding) – change tracks/container only",
+    "Ziel-Container (Remux)": "Target container (remux)",
+    "Wie Quelle": "Same as source",
+    "Das Video wird 1:1 übernommen (kein Re-Encode). Ton/Untertitel filtern sich über die Spurauswahl bzw. die Sprach-Whitelist. Kapitel, Attachments und Metadaten bleiben erhalten.":
+      "The video is copied 1:1 (no re-encode). Audio/subtitles are filtered via the track selection or language whitelist. Chapters, attachments and metadata are kept.",
+    "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
+      "All files have the same tracks – apply selection to all:",
+    "Scan – Spuren ermitteln": "Scan – detect tracks",
+    "Scan – Codec/Bitrate ermitteln": "Scan – detect codec/bitrate",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)":
       "Auto-crop: automatically remove black bars (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.":
@@ -843,6 +853,16 @@
     "Warnung ab Anzahl Dateien": "Avisar a partir de N archivos",
     "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
       "Avisar antes de iniciar cuando se seleccionen tantos archivos o más (0 = sin aviso). Se guarda localmente.",
+    "Nur Remuxen (ohne Neucodierung) – nur Spuren/Container ändern":
+      "Solo remux (sin recodificar) – cambiar solo pistas/contenedor",
+    "Ziel-Container (Remux)": "Contenedor de destino (remux)",
+    "Wie Quelle": "Igual que el origen",
+    "Das Video wird 1:1 übernommen (kein Re-Encode). Ton/Untertitel filtern sich über die Spurauswahl bzw. die Sprach-Whitelist. Kapitel, Attachments und Metadaten bleiben erhalten.":
+      "El vídeo se copia 1:1 (sin recodificar). El audio/subtítulos se filtran mediante la selección de pistas o la lista de idiomas. Se conservan capítulos, adjuntos y metadatos.",
+    "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
+      "Todos los archivos tienen las mismas pistas: aplicar la selección a todos:",
+    "Scan – Spuren ermitteln": "Escanear – detectar pistas",
+    "Scan – Codec/Bitrate ermitteln": "Escanear – detectar códec/tasa de bits",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Auto-recorte: eliminar barras negras automáticamente (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Detecta los bordes letterbox/pillarbox en varios puntos y los recorta antes de codificar – ahorra bitrate. El análisis VMAF y el guardrail usan automáticamente la misma zona recortada.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Codificación adaptativa por bloques (segmentos con CQ según complejidad – solo modo CQ, más lento)",
@@ -1357,6 +1377,16 @@
     "Warnung ab Anzahl Dateien": "Avertir à partir de N fichiers",
     "Vor dem Start warnen, wenn so viele (oder mehr) Dateien ausgewählt sind (0 = keine Warnung). Wird lokal gespeichert.":
       "Avertir avant le démarrage lorsque autant de fichiers (ou plus) sont sélectionnés (0 = aucun avertissement). Enregistré localement.",
+    "Nur Remuxen (ohne Neucodierung) – nur Spuren/Container ändern":
+      "Remux uniquement (sans réencodage) – changer seulement pistes/conteneur",
+    "Ziel-Container (Remux)": "Conteneur cible (remux)",
+    "Wie Quelle": "Comme la source",
+    "Das Video wird 1:1 übernommen (kein Re-Encode). Ton/Untertitel filtern sich über die Spurauswahl bzw. die Sprach-Whitelist. Kapitel, Attachments und Metadaten bleiben erhalten.":
+      "La vidéo est copiée à l'identique (sans réencodage). L'audio/les sous-titres sont filtrés via la sélection de pistes ou la liste blanche de langues. Les chapitres, pièces jointes et métadonnées sont conservés.",
+    "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
+      "Tous les fichiers ont les mêmes pistes – appliquer la sélection à tous :",
+    "Scan – Spuren ermitteln": "Analyser – détecter les pistes",
+    "Scan – Codec/Bitrate ermitteln": "Analyser – détecter codec/débit",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Rognage auto : supprimer automatiquement les bandes noires (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Détecte les bordures letterbox/pillarbox à plusieurs endroits et les rogne avant l'encodage – économise du bitrate. L'analyse VMAF et le garde-fou utilisent automatiquement la même zone rognée.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Encodage adaptatif par blocs (segments avec CQ selon la complexité – mode CQ uniquement, plus lent)",

@@ -240,6 +240,68 @@ def _tracks_by_lang(tracks, wanted: set) -> list:
             if _canon_lang(t.get("language")) in wanted]
 
 
+def _selected_indices(info, pf: dict, audio_langs: set, sub_langs: set):
+    """Zu behaltende Ton-/Untertitel-Indizes je Datei.
+
+    Rückgabe: (audio_sel, sub_sel). ``None`` bedeutet „Standard beibehalten"
+    (bei Ton: alle; bei Untertiteln: alle). Eine leere Liste bei Untertiteln
+    bedeutet bewusst „keine". Precedence: manuelle Auswahl > Sprach-Whitelist.
+    """
+    a_sel = None
+    if isinstance(pf.get("audio_tracks"), list):
+        a_sel = [int(x) for x in pf["audio_tracks"]]
+    elif audio_langs and info is not None and info.audio:
+        picked = _tracks_by_lang(info.audio, audio_langs)
+        if picked:  # ohne Treffer alle behalten (kein Ton-Verlust)
+            a_sel = picked
+
+    s_sel = None
+    if isinstance(pf.get("subtitle_tracks"), list):
+        s_sel = [int(x) for x in pf["subtitle_tracks"]]
+    elif sub_langs and info is not None:
+        s_sel = _tracks_by_lang(info.subtitles, sub_langs)
+    return a_sel, s_sel
+
+
+def _container_choice(info, choice: str) -> str:
+    """Ziel-Container fürs Remuxen: mkv/mp4 oder aus der Quelle ableiten."""
+    c = str(choice or "mkv").lower()
+    if c in ("mkv", "mp4"):
+        return c
+    src = (getattr(info, "container", "") or "").lower()
+    if "mp4" in src or "mov" in src or "m4v" in src or "m4a" in src:
+        return "mp4"
+    return "mkv"
+
+
+def _remux_spec(info, container: str, a_sel, s_sel) -> dict:
+    """Edit-Spec für einen reinen Remux-Job (Video 1:1, Spuren gefiltert).
+
+    Disposition (default/forced), Sprache und Titel werden aus der Quelle
+    übernommen, damit sie beim Remux nicht verloren gehen.
+    """
+    def entry(t, sel):
+        idx = int(t.get("index", 0))
+        return {
+            "index": idx,
+            "keep": (sel is None) or (idx in sel),
+            "default": bool(t.get("default")),
+            "forced": bool(t.get("forced")),
+            "language": t.get("language") or "",
+            "title": t.get("title") or "",
+        }
+    audio = [entry(a, a_sel) for a in (info.audio or [])]
+    subs = [entry(s, s_sel) for s in (info.subtitles or [])]
+    return {
+        "container": container,
+        "audio": audio,
+        "subtitles": subs,
+        "keep_chapters": True,
+        "keep_metadata": True,
+        "keep_attachments": True,
+    }
+
+
 def start_batch(queue, paths: list, settings: dict, mode: str,
                 per_file: Optional[dict] = None) -> tuple[int, str, str]:
     """Treffer je nach Modus als Batch-Gruppe einreihen.
@@ -255,6 +317,10 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
 
     per_file = per_file or {}
     mode = mode if mode in ("target_vmaf", "representative", "fixed") else "representative"
+    # Reiner Remux-Stapel (kein Re-Encode): Video 1:1 kopieren, nur Spuren/
+    # Container ändern. Dynamik/VMAF/Qualität sind dann irrelevant.
+    remux_only = bool(settings.get("remux_only"))
+    remux_container = settings.get("remux_container", "mkv")
     # Dynamik-Behandlung (HDR/Dolby Vision) für den ganzen Stapel. ``auto``
     # entscheidet pro Datei anhand der Quelle (wie im Encoding), die übrigen
     # Werte erzwingen ein festes Verhalten für alle Treffer.
@@ -265,26 +331,52 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
         "tonemap": ("tonemap", "tonemap"),
     }
     # Sprach-Whitelist (leer = alle behalten). Ein Probe je Datei ist nur nötig,
-    # wenn Auto-Dynamik oder eine Whitelist aktiv ist.
+    # wenn Auto-Dynamik, eine Whitelist oder Remux aktiv ist.
     audio_langs = _parse_langs(settings.get("audio_languages"))
     sub_langs = _parse_langs(settings.get("subtitle_languages"))
-    need_probe = (dynamik == "auto") or bool(audio_langs) or bool(sub_langs)
+    need_probe = remux_only or (dynamik == "auto") or bool(audio_langs) or bool(sub_langs)
     group = uuid.uuid4().hex[:8]
     batch = uuid.uuid4().hex[:8]  # Dashboard-Kennung über alle Dateien
     added = 0
+
+    _CLEAN = ("dynamik", "audio_languages", "subtitle_languages",
+              "remux_only", "remux_container")
 
     for i, rel in enumerate(paths):
         target = _safe_resolve(rel)
         if target is None or not target.is_file():
             continue
         d = dict(settings)
-        for k in ("dynamik", "audio_languages", "subtitle_languages"):
+        for k in _CLEAN:
             d.pop(k, None)
 
         info = None
         if need_probe:
             info, _err = ff.probe_with_error(target)
 
+        pf = per_file.get(rel) or {}
+        a_sel, s_sel = _selected_indices(info, pf, audio_langs, sub_langs)
+
+        # --- Reiner Remux (kein Video-Re-Encode) ------------------------------
+        if remux_only:
+            if info is None:
+                continue  # ohne Probe kein sinnvoller Remux
+            container = _container_choice(info, remux_container)
+            d["video_mode"] = "edit"
+            d["vmaf_check"] = False
+            d["workflow"] = "auto"
+            d["container"] = container
+            # Suffix des Encode-Modus (z. B. _av1) ist beim Remux irreführend.
+            d["suffix"] = "_remux"
+            d["edit_spec"] = _remux_spec(info, container, a_sel, s_sel)
+            d["batch_id"] = batch
+            s = build_job_settings(d)
+            item = queue.add_file(str(target), s, group_id=group)
+            if item:
+                added += 1
+            continue
+
+        # --- Encode-Stapel ----------------------------------------------------
         if dynamik == "auto":
             if info is not None:
                 sug = library.suggest_encode(info, d.get("codec", "av1"))
@@ -294,29 +386,14 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
         elif dynamik in _DYN_MAP:
             d["hdr_mode"], d["dv_mode"] = _DYN_MAP[dynamik]
 
-        # Spurauswahl: manuelle Auswahl aus der Trefferliste hat Vorrang,
-        # danach greift die Sprach-Whitelist, sonst bleibt alles beim Standard.
-        pf = per_file.get(rel) or {}
-        if isinstance(pf.get("audio_tracks"), list):
-            d["audio_tracks"] = [int(x) for x in pf["audio_tracks"]]
+        # Spurauswahl (manuelle Auswahl > Sprach-Whitelist > Standard).
+        if a_sel is not None:
+            d["audio_tracks"] = a_sel
             d["audio_per_track"] = False
-        elif audio_langs and info is not None and info.audio:
-            picked = _tracks_by_lang(info.audio, audio_langs)
-            # Ohne Treffer alle Tonspuren behalten (kein versehentlicher Ton-Verlust).
-            if picked:
-                d["audio_tracks"] = picked
-                d["audio_per_track"] = False
-
-        if isinstance(pf.get("subtitle_tracks"), list):
-            subs = [int(x) for x in pf["subtitle_tracks"]]
+        if s_sel is not None:
             d["subtitle_per_track"] = True
-            d["subtitle_track_settings"] = [{"index": j} for j in subs]
-            d["keep_subtitles"] = bool(subs)
-        elif sub_langs and info is not None:
-            subs = _tracks_by_lang(info.subtitles, sub_langs)
-            d["subtitle_per_track"] = True
-            d["subtitle_track_settings"] = [{"index": j} for j in subs]
-            d["keep_subtitles"] = bool(subs)
+            d["subtitle_track_settings"] = [{"index": j} for j in s_sel]
+            d["keep_subtitles"] = bool(s_sel)
 
         d["batch_id"] = batch
         if mode == "fixed":

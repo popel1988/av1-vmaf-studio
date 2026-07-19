@@ -3065,6 +3065,25 @@
     $("btn-st-scan").addEventListener("click", startSuperScan);
     $("btn-st-start").addEventListener("click", startSuperBatch);
     stInitTrackHandlers();
+    stInitCommonHandlers();
+
+    // Remux-Schalter: Encode-Einstellungen aus-/einblenden.
+    const remux = $("st-remux-only");
+    if (remux) {
+      const syncRemux = () => {
+        const on = remux.checked;
+        const enc = $("st-encode-only");
+        if (enc) enc.style.display = on ? "none" : "";
+        const rc = $("st-remux-container-field");
+        if (rc) rc.style.display = on ? "" : "none";
+        const am = $("st-audio-mode-field");
+        if (am) am.style.display = on ? "none" : "";
+        const scan = $("btn-st-scan");
+        if (scan) scan.textContent = on ? "Scan – Spuren ermitteln" : "Scan – Codec/Bitrate ermitteln";
+      };
+      remux.addEventListener("change", syncRemux);
+      syncRemux();
+    }
 
     // Warn-Schwelle (viele Dateien) lokal persistieren.
     const warnEl = $("st-warn-count");
@@ -3286,8 +3305,10 @@
   function renderSuperMatches(rows) {
     const body = $("st-body");
     if (!body) return;
+    state.stRows = rows;
     state.stMatches = {};
     rows.forEach((m) => { state.stMatches[m.path] = m; });
+    stRenderCommon(rows);
     body.innerHTML = rows.length ? rows.map((m) => {
       const dyn = libDynamicLabel(m);
       const dynCls = m.dolby_vision ? "accent" : (m.is_hdr ? "warn" : "");
@@ -3358,6 +3379,80 @@
     });
   }
 
+  // Signatur der Spuren einer Datei (Sprache/Codec/Kanäle) – für die Erkennung
+  // "alle Dateien haben dieselben Spuren" (typisch bei Serien).
+  function stTrackSig(m) {
+    const a = (m.audio || []).map((t) =>
+      `${(t.language || "und").toLowerCase()}|${t.codec}|${t.channels || ""}`).join(",");
+    const s = (m.subtitles || []).map((t) =>
+      `${(t.language || "und").toLowerCase()}|${t.codec}`).join(",");
+    return `${a}##${s}`;
+  }
+
+  // Zeigt oben eine gemeinsame Spurauswahl, wenn alle Treffer identische Spuren
+  // haben – Änderungen gelten dann für alle Dateien.
+  function stRenderCommon(rows) {
+    const box = $("st-common-tracks");
+    if (!box) return;
+    if (!rows || rows.length < 2) { box.style.display = "none"; return; }
+    const sig0 = stTrackSig(rows[0]);
+    const allSame = rows.every((m) => stTrackSig(m) === sig0);
+    const rep = rows[0];
+    const hasTracks = (rep.audio && rep.audio.length) || (rep.subtitles && rep.subtitles.length);
+    if (!allSame || !hasTracks) { box.style.display = "none"; return; }
+
+    const aSel = stTrackSel(rep.path, "audio");
+    const sSel = stTrackSel(rep.path, "subs");
+    const chk = (kind, t, on, label) =>
+      `<label class="check st-common-opt"><input type="checkbox" data-kind="${kind}"` +
+      ` data-idx="${t.index}"${on ? " checked" : ""} /><span>${escapeHtml(label)}</span></label>`;
+    const aBoxes = (rep.audio || []).map((t) => chk("audio", t, aSel.has(t.index), stAudioLabel(t))).join("");
+    const sBoxes = (rep.subtitles || []).map((t) => chk("subs", t, sSel.has(t.index), stSubLabel(t))).join("");
+    const tt = (x) => (window.I18N ? I18N.t(x) : x);
+    box.innerHTML =
+      `<div class="st-common-head">${tt("Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:")}</div>` +
+      `<div class="st-common-grid">` +
+      `<div class="st-common-col"><strong>${tt("Ton")}</strong>${aBoxes || '<span class="muted">—</span>'}</div>` +
+      `<div class="st-common-col"><strong>${tt("Untertitel")}</strong>${sBoxes || '<span class="muted">—</span>'}</div>` +
+      `</div>`;
+    box.style.display = "";
+  }
+
+  function stInitCommonHandlers() {
+    const box = $("st-common-tracks");
+    if (!box || box.dataset.wired) return;
+    box.dataset.wired = "1";
+    box.addEventListener("change", (e) => {
+      const cb = e.target.closest(".st-common-opt input");
+      if (!cb) return;
+      const kind = cb.dataset.kind;
+      const idx = parseInt(cb.dataset.idx, 10);
+      (state.stRows || []).forEach((m) => {
+        const list = (kind === "audio" ? m.audio : m.subtitles) || [];
+        if (!list.some((t) => t.index === idx)) return;
+        const sel = stTrackSel(m.path, kind);
+        if (cb.checked) sel.add(idx); else sel.delete(idx);
+      });
+      stUpdateRowButtons();
+    });
+  }
+
+  // Aktualisiert die Zeilen-Dropdowns (Button-Text + Häkchen) nach einer
+  // gemeinsamen Auswahl, ohne die Tabelle komplett neu zu rendern.
+  function stUpdateRowButtons() {
+    document.querySelectorAll("#st-body .st-track-dd").forEach((dd) => {
+      const kind = dd.dataset.kind;
+      const path = dd.dataset.path;
+      const sel = stTrackSel(path, kind);
+      const total = dd.querySelectorAll(".st-track-opt").length;
+      const btn = dd.querySelector(".st-track-btn");
+      if (btn) btn.textContent = stTrackBtnText(sel.size, total);
+      dd.querySelectorAll(".st-track-opt input").forEach((cb) => {
+        cb.checked = sel.has(parseInt(cb.dataset.idx, 10));
+      });
+    });
+  }
+
   // Passt Beschriftung, Grenzen und (optional) die Vorgabewerte des Test-Grids
   // an den gewählten Steuerungsmodus an (CQ vs. Bitrate).
   function syncVmafRate(resetValues) {
@@ -3405,6 +3500,8 @@
       dynamik: $("st-dynamik") ? $("st-dynamik").value : "auto",
       audio_languages: $("st-audio-langs") ? $("st-audio-langs").value.trim() : "",
       subtitle_languages: $("st-sub-langs") ? $("st-sub-langs").value.trim() : "",
+      remux_only: $("st-remux-only") ? $("st-remux-only").checked : false,
+      remux_container: $("st-remux-container") ? $("st-remux-container").value : "mkv",
     };
     if (mode === "target_vmaf" || mode === "representative") {
       // Test-Encode-Konfiguration für die VMAF-Analyse (CQ oder Bitrate).
@@ -3460,8 +3557,9 @@
     if (threshold > 0 && paths.length >= threshold) {
       warns.push(`${paths.length} ${tt("Dateien ausgewählt – das kann sehr lange dauern und viel Speicher belegen.")}`);
     }
+    const remux = $("st-remux-only") && $("st-remux-only").checked;
     const ms = paths.map((p) => (state.stMatches || {})[p]).filter(Boolean);
-    if (ms.length >= 2) {
+    if (!remux && ms.length >= 2) {
       const tier = (h) => (h <= 576 ? 0 : h <= 720 ? 1 : h <= 1080 ? 2 : h <= 1440 ? 3 : h <= 2160 ? 4 : 5);
       const tiers = new Set(ms.map((m) => tier(m.height || 0)));
       const bpps = ms.map((m) => {

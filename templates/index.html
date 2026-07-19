@@ -811,6 +811,23 @@
 
             <div class="divider"></div>
 
+            <label class="check st-toggle">
+              <input type="checkbox" id="st-remux-only" />
+              <span>Nur Remuxen (ohne Neucodierung) – nur Spuren/Container ändern</span>
+            </label>
+            <div class="field" id="st-remux-container-field" style="display:none">
+              <label>Ziel-Container (Remux)</label>
+              <select id="st-remux-container">
+                <option value="mkv">MKV</option>
+                <option value="mp4">MP4</option>
+                <option value="source">Wie Quelle</option>
+              </select>
+              <p class="hint">Das Video wird 1:1 übernommen (kein Re-Encode). Ton/Untertitel filtern
+                sich über die Spurauswahl bzw. die Sprach-Whitelist. Kapitel, Attachments und
+                Metadaten bleiben erhalten.</p>
+            </div>
+
+            <div id="st-encode-only">
             <div class="field-row">
               <div class="field">
                 <label>GPU / Plattform</label>
@@ -921,6 +938,7 @@
                 <input type="number" id="st-bitrate" min="500" max="50000" step="500" value="6000" />
               </div>
             </div>
+            </div>
 
             <div class="field-row">
               <div class="field">
@@ -931,7 +949,7 @@
                   <option value="archive">Original nach .archiv/ verschieben</option>
                 </select>
               </div>
-              <div class="field">
+              <div class="field" id="st-audio-mode-field">
                 <label>Ton</label>
                 <select id="st-audio-mode">
                   <option value="copy">Original kopieren</option>
@@ -968,6 +986,8 @@
               <span id="st-progress" class="muted"></span>
               <button class="btn btn-ghost btn-sm" id="btn-st-start" disabled>Stapel starten</button>
             </div>
+
+            <div id="st-common-tracks" class="st-common" style="display:none"></div>
 
             <div class="data-table-wrap">
               <table class="data-table">
