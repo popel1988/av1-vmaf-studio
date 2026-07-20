@@ -321,8 +321,10 @@
     "Original behalten + Suffix": "Keep original + suffix",
     "Inplace ersetzen (Original löschen)": "Replace in place (delete original)",
     "Original nach .archiv/ verschieben": "Move original to .archiv/",
+    "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)":
+      "Output integrity check (sample decode + duration match)",
     "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)":
-      "Output integrity check (full decode + duration match)",
+      "Output integrity check (sample decode + duration match)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind":
       "Safe post-processing: only replace/move the original if the integrity check and (if active) the quality guardrail passed",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.":
@@ -991,7 +993,8 @@
     "Original behalten + Suffix": "Mantener original + sufijo",
     "Inplace ersetzen (Original löschen)": "Reemplazar en el sitio (eliminar original)",
     "Original nach .archiv/ verschieben": "Mover el original a .archiv/",
-    "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Comprobación de integridad de la salida (decodificación completa + cotejo de duración)",
+    "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)": "Comprobación de integridad de la salida (decodificación por muestras + cotejo de duración)",
+    "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Comprobación de integridad de la salida (decodificación por muestras + cotejo de duración)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind": "Postprocesado seguro: reemplazar/mover el original solo si se superan la comprobación de integridad y (si está activo) el guardrail de calidad",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.": "Protege contra la pérdida de datos: si la comprobación falla, se conserva el original y la salida queda además en la carpeta de salida.",
     "Zur Warteschlange hinzufügen": "Añadir a la cola",
@@ -1590,7 +1593,8 @@
     "Original behalten + Suffix": "Conserver l'original + suffixe",
     "Inplace ersetzen (Original löschen)": "Remplacer sur place (supprimer l'original)",
     "Original nach .archiv/ verschieben": "Déplacer l'original vers .archiv/",
-    "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Contrôle d'intégrité de la sortie (décodage complet + vérification de durée)",
+    "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)": "Contrôle d'intégrité de la sortie (décodage par échantillons + vérification de durée)",
+    "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Contrôle d'intégrité de la sortie (décodage par échantillons + vérification de durée)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind": "Post-traitement sûr : ne remplacer/déplacer l'original que si le contrôle d'intégrité et (si actif) le garde-fou de qualité sont réussis",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.": "Protège contre la perte de données : si le contrôle échoue, l'original est conservé et la sortie se trouve en plus dans le dossier de sortie.",
     "Zur Warteschlange hinzufügen": "Ajouter à la file",

@@ -727,55 +727,121 @@ def _f(value) -> Optional[float]:
 
 
 # --------------------------------------------------------------- Integritäts-Check
+# Stichproben-Länge je Position (Sekunden). Kurz halten → wenig RAM/Zeit.
+_INTEGRITY_SAMPLE_SEC = 12.0
+# Max. stderr-Zeilen, die wir behalten (vermeidet RAM-Wachstum bei Spam).
+_INTEGRITY_STDERR_MAX = 80
+
+
+def _probe_duration(path: Path) -> float:
+    """Dauer der Datei via ffprobe (0 bei Fehler)."""
+    from . import config
+    try:
+        pr = subprocess.run(
+            [config.FFPROBE, "-v", "error", "-show_entries",
+             "format=duration", "-of", "default=nk=1:nw=1", str(path)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        return _f((pr.stdout or "").strip()) or 0.0
+    except (OSError, subprocess.SubprocessError):
+        return 0.0
+
+
+def _integrity_sample_starts(duration: float, sample_sec: float) -> list[tuple[str, float]]:
+    """Stichproben-Positionen: Anfang, Mitte, Ende (Labels + Startzeit)."""
+    sample_sec = max(2.0, float(sample_sec))
+    if duration <= 0:
+        return [("Anfang", 0.0)]
+    if duration <= sample_sec * 1.5:
+        # Sehr kurz: ein Durchlauf vom Start reicht.
+        return [("Anfang", 0.0)]
+    mid = max(0.0, (duration / 2.0) - (sample_sec / 2.0))
+    end = max(0.0, duration - sample_sec - 0.5)
+    # Bei mittlerer Länge Anfang+Ende, bei längeren Clips auch Mitte.
+    if duration < sample_sec * 4:
+        return [("Anfang", 0.0), ("Ende", end)]
+    return [("Anfang", 0.0), ("Mitte", mid), ("Ende", end)]
+
+
+def _decode_sample(path: Path, start: float, sample_sec: float) -> tuple[bool, str]:
+    """Kurzen Ausschnitt decodieren (nur 1. Video + 1. Audio → -f null)."""
+    from . import config
+
+    cmd = [
+        config.FFMPEG, "-hide_banner", "-nostdin",
+        "-v", "error", "-xerror",
+        "-ss", f"{max(0.0, start):.3f}",
+        "-t", f"{sample_sec:.3f}",
+        "-i", str(path),
+        # Nur erste Spuren: weniger RAM als -map 0:a? (alle Tonspuren).
+        "-map", "0:v:0?", "-map", "0:a:0?",
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        assert proc.stderr is not None
+        lines: list[str] = []
+        for line in proc.stderr:
+            if len(lines) < _INTEGRITY_STDERR_MAX:
+                lines.append(line.rstrip("\n"))
+            # Rest verwerfen, aber weiter lesen (Pipe nicht blockieren).
+        rc = proc.wait(timeout=max(120, int(sample_sec * 30)))
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return False, "Decodier-Timeout"
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"Decoder-Test nicht ausführbar: {e}"
+    if rc != 0:
+        tail = [x for x in lines if x.strip()]
+        return False, f"Decodier-Fehler: {tail[-1] if tail else 'unbekannt'}"
+    return True, "ok"
+
+
 def verify_playable(path: Path, expected_duration: float = 0.0) -> tuple[bool, str]:
     """Prüft, ob die Ausgabedatei sauber decodierbar ist und die Dauer passt.
 
-    1) Voll-Decode (nur Fehler-Log, `-xerror` bricht beim ersten Fehler ab) –
-       erkennt abgeschnittene/korrupte Streams.
-    2) Dauer-Abgleich gegen die erwartete Länge (Toleranz max. 2 s bzw. 1 %).
+    1) Stichproben-Decode (Anfang/Mitte/Ende, je ~12 s) – nur 1. Video- und
+       1. Tonspur nach ``-f null``. Vermeidet Voll-Decode großer Dateien.
+    2) Dauer-Abgleich gegen die erwartete Länge (Toleranz max. 2 s bzw. 1 %).
 
     Gibt (ok, meldung) zurück. Bei ok=True ist die Meldung ein kurzer Status.
     """
-    from . import config
-
     path = Path(path)
     if not path.exists() or path.stat().st_size == 0:
         return False, "Ausgabedatei fehlt oder ist leer"
 
-    # 1) Decodier-Test (Video + Audio), bricht beim ersten Fehler ab.
-    try:
-        res = subprocess.run(
-            [config.FFMPEG, "-v", "error", "-xerror",
-             "-i", str(path), "-map", "0:v:0?", "-map", "0:a?",
-             "-f", "null", "-"],
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        return False, f"Decoder-Test nicht ausführbar: {e}"
-    if res.returncode != 0:
-        tail = (res.stderr or "").strip().splitlines()
-        return False, f"Decodier-Fehler: {tail[-1] if tail else 'unbekannt'}"
+    out_dur = _probe_duration(path)
+    sample_sec = _INTEGRITY_SAMPLE_SEC
+    # Erwartete Dauer hilft bei Seek-Positionen, falls ffprobe scheitert.
+    dur_for_samples = out_dur or float(expected_duration or 0.0)
 
-    # 2) Dauer prüfen (nur wenn eine Erwartung vorliegt).
-    if expected_duration and expected_duration > 0:
-        try:
-            pr = subprocess.run(
-                [config.FFPROBE, "-v", "error", "-show_entries",
-                 "format=duration", "-of", "default=nk=1:nw=1", str(path)],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", check=False,
-            )
-            out_dur = _f((pr.stdout or "").strip()) or 0.0
-        except (OSError, subprocess.SubprocessError):
-            out_dur = 0.0
-        if out_dur > 0:
-            tol = max(2.0, expected_duration * 0.01)
-            if abs(out_dur - expected_duration) > tol:
-                return (False,
-                        f"Dauer weicht ab: {human_duration(out_dur)} statt "
-                        f"{human_duration(expected_duration)}")
-    return True, "ok"
+    for label, start in _integrity_sample_starts(dur_for_samples, sample_sec):
+        # Am Dateiende nicht länger als Rest decoden.
+        remain = (dur_for_samples - start) if dur_for_samples > 0 else sample_sec
+        t = min(sample_sec, remain) if remain > 0 else sample_sec
+        if t < 1.0:
+            t = min(sample_sec, max(1.0, remain))
+        ok, msg = _decode_sample(path, start, t)
+        if not ok:
+            return False, f"{label} (@{human_duration(start)}): {msg}"
+
+    # Dauer prüfen (nur wenn eine Erwartung vorliegt).
+    if expected_duration and expected_duration > 0 and out_dur > 0:
+        tol = max(2.0, expected_duration * 0.01)
+        if abs(out_dur - expected_duration) > tol:
+            return (False,
+                    f"Dauer weicht ab: {human_duration(out_dur)} statt "
+                    f"{human_duration(expected_duration)}")
+    return True, "ok (Stichproben)"
 
 
 # ------------------------------------------------------------------- Auto-Crop

@@ -70,8 +70,8 @@ class JobSettings:
     verify_vmaf: bool = False
     verify_min: float = 93.0
     verify_retry: bool = False
-    # Playability-/Integritäts-Check der Ausgabe nach dem Encode (Voll-Decode +
-    # Dauer-Abgleich). Voraussetzung für die sichere Original-Nachbehandlung.
+    # Playability-/Integritäts-Check der Ausgabe nach dem Encode (Stichproben-
+    # Decode + Dauer-Abgleich). Voraussetzung für die sichere Original-Nachbehandlung.
     integrity_check: bool = True
     # Sichere Original-Nachbehandlung: Original nur löschen/verschieben (inplace/
     # archive), wenn Integritäts-Check UND (falls aktiv) Guardrail bestanden sind.
@@ -1327,7 +1327,7 @@ class QueueManager:
     @staticmethod
     def _run_integrity(item: QueueItem, s: "JobSettings", info,
                        out_path: Path) -> None:
-        """Playability-/Integritäts-Check der Ausgabe (Voll-Decode + Dauer).
+        """Playability-/Integritäts-Check der Ausgabe (Stichproben + Dauer).
 
         Läuft, wenn explizit aktiviert oder eine destruktive Nachbehandlung
         (inplace/archive) ansteht – dann ist der Check die Voraussetzung, um das
@@ -1336,7 +1336,7 @@ class QueueManager:
         need = s.integrity_check or s.post_processing in ("inplace", "archive")
         if not need:
             return
-        item.message = "Integritäts-Check der Ausgabe …"
+        item.message = "Integritäts-Check (Stichproben) …"
         expected = float(getattr(info, "duration", 0.0) or 0.0)
         ok, msg = ff.verify_playable(out_path, expected)
         item.integrity_ok = ok

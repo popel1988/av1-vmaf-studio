@@ -2841,9 +2841,33 @@
     if (s.out_mode !== undefined) set("opt-out-mode", s.out_mode, "change");
     if (s.out_subdir !== undefined) set("opt-out-subdir", s.out_subdir);
     if (s.remux_only) {
-      navTo("supertool");
-      const remux = $("st-remux-only");
-      if (remux) { remux.checked = true; remux.dispatchEvent(new Event("change")); }
+      // Remux-Profil → Remux & Bearbeiten (nicht Super-Tool), Auswahl mitnehmen.
+      applyRemuxProfile(s);
+    }
+  }
+
+  function applyRemuxProfile(s) {
+    navTo("remux");
+    const set = (id, val, ev) => {
+      const el = $(id);
+      if (!el || val === undefined || val === null) return;
+      if (el.type === "checkbox") el.checked = !!val; else el.value = val;
+      el.dispatchEvent(new Event(ev || (el.tagName === "SELECT" ? "change" : "input")));
+    };
+    if (s.suffix !== undefined) set("remux-suffix", s.suffix);
+    if (s.name_pattern !== undefined) set("remux-name-pattern", s.name_pattern);
+    if (s.on_duplicate !== undefined) set("remux-on-duplicate", s.on_duplicate);
+    if (s.container !== undefined) set("remux-container", s.container, "change");
+    if (s.post_processing !== undefined) set("remux-post", s.post_processing, "change");
+    if (s.integrity_check !== undefined) set("remux-integrity", s.integrity_check);
+    if (s.safe_replace !== undefined) set("remux-safe", s.safe_replace);
+    if (s.out_mode !== undefined) set("remux-out-mode", s.out_mode, "change");
+    if (s.out_subdir !== undefined) set("remux-out-subdir", s.out_subdir);
+    // Encode-/Browser-Auswahl in Remux übernehmen (Einzeldatei).
+    const sel = state.selected;
+    if (sel && !sel.isBatch && sel.path) {
+      const already = state.remuxSel && state.remuxSel.path === sel.path;
+      if (!already) remuxSelectFile({ rel: sel.path, name: sel.name || sel.path });
     }
   }
 
