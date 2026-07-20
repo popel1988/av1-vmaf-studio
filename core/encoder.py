@@ -246,7 +246,8 @@ def build_encode_cmd(
         cmd += ["-tag:v", "hvc1"]
     is_bitrate = rate_mode in ("bitrate", "abr") and bitrate_kbps
     if is_bitrate:
-        cmd += ff.bitrate_args(platform, codec, bitrate_kbps, abr=(rate_mode == "abr"))
+        cmd += ff.bitrate_args(platform, codec, int(bitrate_kbps),
+                               abr=(rate_mode == "abr"))
     else:
         cmd += ff.quality_args(platform, quality)
 

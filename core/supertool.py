@@ -287,12 +287,16 @@ def _container_choice(info, choice: str) -> str:
     return "mkv"
 
 
-def _remux_spec(info, container: str, a_sel, s_sel) -> dict:
+def _remux_spec(info, container: str, a_sel, s_sel,
+                prefer_langs: Optional[set] = None,
+                add_sidecar_att: bool = False) -> dict:
     """Edit-Spec für einen reinen Remux-Job (Video 1:1, Spuren gefiltert).
 
-    Disposition (default/forced), Sprache und Titel werden aus der Quelle
-    übernommen, damit sie beim Remux nicht verloren gehen.
+    Disposition wird intelligent gesetzt (Default-Audio/Forced-Subs).
+    Optional: Fonts/Cover neben der Quelle anhängen.
     """
+    from . import remux
+
     def entry(t, sel):
         idx = int(t.get("index", 0))
         return {
@@ -305,7 +309,8 @@ def _remux_spec(info, container: str, a_sel, s_sel) -> dict:
         }
     audio = [entry(a, a_sel) for a in (info.audio or [])]
     subs = [entry(s, s_sel) for s in (info.subtitles or [])]
-    return {
+    remux.apply_smart_disposition(audio, subs, prefer_langs)
+    spec = {
         "container": container,
         "audio": audio,
         "subtitles": subs,
@@ -313,20 +318,31 @@ def _remux_spec(info, container: str, a_sel, s_sel) -> dict:
         "keep_metadata": True,
         "keep_attachments": True,
     }
+    if add_sidecar_att:
+        try:
+            src = Path(info.path)
+            att = remux.find_sidecar_attachments(src)
+            if att:
+                spec["add_attachments"] = att
+        except Exception:
+            pass
+    return spec
 
 
 def start_batch(queue, paths: list, settings: dict, mode: str,
-                per_file: Optional[dict] = None) -> tuple[int, str, str]:
+                per_file: Optional[dict] = None,
+                dry_run: bool = False) -> tuple:
     """Treffer je nach Modus als Batch-Gruppe einreihen.
 
     ``per_file`` erlaubt pro Datei (Schlüssel = relativer Pfad) individuelle
     Overrides – aktuell die Auswahl der Ton-/Untertitelspuren aus der
     Trefferliste. Alles Übrige stammt aus dem gemeinsamen ``settings``.
 
-    Rückgabe: (Anzahl hinzugefügt, group_id, Fehlermeldung).
+    Bei ``dry_run=True``: (0, "", "", preview_dict) ohne Einreihen.
+    Sonst: (Anzahl hinzugefügt, group_id, Fehlermeldung).
     """
     from .queue_manager import build_job_settings
-    from . import library
+    from . import library, job_plan
 
     per_file = per_file or {}
     mode = mode if mode in ("target_vmaf", "representative", "fixed") else "representative"
@@ -334,6 +350,7 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
     # Container ändern. Dynamik/VMAF/Qualität sind dann irrelevant.
     remux_only = bool(settings.get("remux_only"))
     remux_container = settings.get("remux_container", "mkv")
+    sidecar_att = bool(settings.get("sidecar_attachments"))
     # Dynamik-Behandlung (HDR/Dolby Vision) für den ganzen Stapel. ``auto``
     # entscheidet pro Datei anhand der Quelle (wie im Encoding), die übrigen
     # Werte erzwingen ein festes Verhalten für alle Treffer.
@@ -353,7 +370,9 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
     added = 0
 
     _CLEAN = ("dynamik", "audio_languages", "subtitle_languages",
-              "remux_only", "remux_container")
+              "remux_only", "remux_container", "sidecar_attachments")
+    prefer = audio_langs | sub_langs
+    preview_items = []
 
     for i, rel in enumerate(paths):
         target = _safe_resolve(rel)
@@ -381,9 +400,14 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
             d["container"] = container
             # Suffix des Encode-Modus (z. B. _av1) ist beim Remux irreführend.
             d["suffix"] = "_remux"
-            d["edit_spec"] = _remux_spec(info, container, a_sel, s_sel)
+            d["edit_spec"] = _remux_spec(
+                info, container, a_sel, s_sel,
+                prefer_langs=prefer, add_sidecar_att=sidecar_att)
             d["batch_id"] = batch
             s = build_job_settings(d)
+            if dry_run:
+                preview_items.append(job_plan.plan_one(str(target), s))
+                continue
             item = queue.add_file(str(target), s, group_id=group)
             if item:
                 added += 1
@@ -423,12 +447,22 @@ def start_batch(queue, paths: list, settings: dict, mode: str,
             d["vmaf_check"] = (i == 0)
             d["workflow"] = "auto"
         s = build_job_settings(d)
+        if dry_run:
+            preview_items.append(job_plan.plan_one(str(target), s))
+            continue
         # target_vmaf: jede Datei eigene Gruppe, damit sie einzeln analysiert.
         gid = uuid.uuid4().hex[:8] if mode == "target_vmaf" else group
         item = queue.add_file(str(target), s, group_id=gid)
         if item:
             added += 1
 
+    if dry_run:
+        return 0, "", "", {
+            "count": len(preview_items),
+            "duplicates": sum(1 for x in preview_items if x.get("duplicate")),
+            "items": preview_items,
+            "on_duplicate": settings.get("on_duplicate", "ask"),
+        }
     if not added:
         return 0, "", "Keine gültigen Dateien gefunden."
     return added, batch, ""

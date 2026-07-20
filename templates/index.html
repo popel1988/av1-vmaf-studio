@@ -32,6 +32,7 @@
         <button class="nav-item" data-nav="data"><span>💾</span> Daten &amp; Archive</button>
         <button class="nav-item" data-nav="settings"><span>⚙</span> Einstellungen</button>
         <button class="nav-item" data-nav="diag"><span>🩺</span> Diagnose</button>
+        <button class="nav-item" type="button" id="btn-global-search"><span>🔎</span> Suche</button>
       </nav>
 
       <div class="theme-picker">
@@ -42,6 +43,10 @@
           <option value="light">Light Mode</option>
           <option value="cyberpunk">Cyberpunk / Neon</option>
         </select>
+        <label class="check density-toggle" style="margin-top:8px">
+          <input type="checkbox" id="density-compact" />
+          <span>Kompaktmodus</span>
+        </label>
       </div>
 
       <div class="theme-picker">
@@ -157,6 +162,13 @@
                 <select id="opt-profile"><option value="">— kein Profil —</option></select>
                 <button class="btn btn-ghost btn-sm" id="btn-profile-save" title="Aktuelle Einstellungen als Profil speichern">Speichern</button>
                 <button class="btn btn-ghost btn-sm bad-btn" id="btn-profile-delete" title="Gewähltes Profil löschen">Löschen</button>
+              </div>
+              <div class="preset-chips" id="opt-preset-chips" style="margin-top:8px">
+                <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Film">Film</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie">Serie</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime">Anime</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only">Remux-only</button>
               </div>
             </div>
             <div class="divider"></div>
@@ -414,6 +426,33 @@
               <p class="hint" data-out-default-hint>Ziel laut Einstellungen (Quellstruktur wird gespiegelt).</p>
             </div>
 
+            <div class="field-row">
+              <div class="field">
+                <label>Dateiname-Vorlage</label>
+                <input type="text" id="opt-name-pattern" value="{stem}{suffix}" />
+                <p class="hint">Platzhalter: {stem} {suffix} {codec} {height} {height_suffix} {vmaf} {date}</p>
+              </div>
+              <div class="field">
+                <label>Bei Duplikat</label>
+                <select id="opt-on-duplicate">
+                  <option value="ask">Warnen &amp; bestätigen</option>
+                  <option value="skip">Überspringen</option>
+                  <option value="overwrite">Überschreiben</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Max. Ausgabegröße (MB, 0 = aus)</label>
+                <input type="number" id="opt-max-output-mb" min="0" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
+                <input type="number" id="opt-max-bitrate" min="0" step="100" value="0" />
+                <p class="hint">Nach Encode geprüft; bei ABR auch als Encode-Obergrenze.</p>
+              </div>
+            </div>
+
             <label class="check">
               <input type="checkbox" id="opt-integrity" checked />
               <span>Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)</span>
@@ -586,6 +625,7 @@
               <span class="badge badge-done" id="cnt-done">0 fertig</span>
               <span class="badge badge-await" id="cnt-await">0 Auswahl</span>
               <span class="badge badge-fail" id="cnt-fail">0 fehlgeschlagen</span>
+              <span class="badge" id="queue-eta" title="Geschätzte Restzeit der Warteschlange">ETA —</span>
               <button class="btn btn-ghost btn-sm" id="btn-pause">Pausieren</button>
               <button class="btn btn-ghost btn-sm" id="btn-clear">Erledigte entfernen</button>
             </div>
@@ -1001,6 +1041,35 @@
               <p class="hint" data-out-default-hint>Ziel laut Einstellungen (Quellstruktur wird gespiegelt).</p>
             </div>
 
+            <div class="field-row">
+              <div class="field">
+                <label>Dateiname-Vorlage</label>
+                <input type="text" id="st-name-pattern" value="{stem}{suffix}" />
+              </div>
+              <div class="field">
+                <label>Bei Duplikat</label>
+                <select id="st-on-duplicate">
+                  <option value="ask">Warnen &amp; bestätigen</option>
+                  <option value="skip">Überspringen</option>
+                  <option value="overwrite">Überschreiben</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Max. Ausgabegröße (MB, 0 = aus)</label>
+                <input type="number" id="st-max-output-mb" min="0" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
+                <input type="number" id="st-max-bitrate" min="0" step="100" value="0" />
+              </div>
+            </div>
+            <label class="check" id="st-sidecar-field" style="display:none">
+              <input type="checkbox" id="st-sidecar-att" />
+              <span>Sidecar-Attachments (Fonts/Cover neben der Quelle) mitnehmen</span>
+            </label>
+
             <div class="field">
               <label>Warnung ab Anzahl Dateien</label>
               <input type="number" id="st-warn-count" min="0" max="100000" step="1" value="40" style="max-width:180px" />
@@ -1374,6 +1443,20 @@
                 <label class="check"><input type="checkbox" id="remux-keep-chapters" checked /><span>Kapitel übernehmen</span></label>
                 <label class="check"><input type="checkbox" id="remux-keep-metadata" checked /><span>Metadaten übernehmen</span></label>
                 <label class="check"><input type="checkbox" id="remux-keep-att" checked /><span>Attachments (Fonts/Cover) übernehmen – nur MKV</span></label>
+                <div class="field-row" style="margin-top:8px">
+                  <div class="field">
+                    <label>Dateiname-Vorlage</label>
+                    <input type="text" id="remux-name-pattern" value="{stem}{suffix}" />
+                  </div>
+                  <div class="field">
+                    <label>Bei Duplikat</label>
+                    <select id="remux-on-duplicate">
+                      <option value="ask">Warnen &amp; bestätigen</option>
+                      <option value="skip">Überspringen</option>
+                      <option value="overwrite">Überschreiben</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1409,10 +1492,12 @@
                 </table>
               </div>
               <div class="lib-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-remux-smart">Intelligent setzen</button>
                 <button class="btn btn-ghost btn-sm" id="btn-remux-add-ext">+ Externe Datei hinzufügen</button>
                 <button class="btn btn-ghost btn-sm" id="btn-remux-upload">+ Datei vom PC hochladen</button>
                 <input type="file" id="remux-upload-input" style="display:none" />
                 <button class="btn btn-ghost btn-sm" id="btn-remux-add-att">+ Attachment (Font/Cover) hinzufügen</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-sidecar">Fonts/Cover neben Quelle</button>
                 <button class="btn btn-ghost btn-sm" id="btn-remux-extract">Behaltene Spuren extrahieren</button>
               </div>
               <div id="remux-att-list" class="hint" style="display:none"></div>
@@ -1420,6 +1505,7 @@
               <h4 class="sub-head">Kapitel</h4>
               <div class="lib-actions">
                 <button class="btn btn-ghost btn-sm" id="btn-remux-load-chapters">Kapitel laden/bearbeiten</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-import-chapters">Kapitel aus NFO/Datei importieren</button>
                 <span id="remux-chapters-info" class="muted"></span>
               </div>
               <div class="table-wrap" id="remux-chapters-wrap" style="display:none">

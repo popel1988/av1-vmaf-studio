@@ -113,6 +113,21 @@
       localStorage.setItem("theme", t);
       if (state.vmafChart) restyleChart();
     });
+    initDensity();
+  }
+
+  function initDensity() {
+    const compact = localStorage.getItem("density") === "compact";
+    document.documentElement.setAttribute("data-density", compact ? "compact" : "comfortable");
+    const cb = $("density-compact");
+    if (cb) {
+      cb.checked = compact;
+      cb.addEventListener("change", () => {
+        const on = cb.checked;
+        document.documentElement.setAttribute("data-density", on ? "compact" : "comfortable");
+        localStorage.setItem("density", on ? "compact" : "comfortable");
+      });
+    }
   }
 
   function cssVar(name) {
@@ -947,6 +962,10 @@
       audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
       audio_track_settings: perTrack || [],
       container: $("opt-container") ? $("opt-container").value : "auto",
+      name_pattern: $("opt-name-pattern") ? ($("opt-name-pattern").value.trim() || "{stem}{suffix}") : "{stem}{suffix}",
+      on_duplicate: $("opt-on-duplicate") ? $("opt-on-duplicate").value : "ask",
+      max_output_mb: $("opt-max-output-mb") ? (parseFloat($("opt-max-output-mb").value) || 0) : 0,
+      max_video_bitrate_kbps: $("opt-max-bitrate") ? (parseInt($("opt-max-bitrate").value, 10) || 0) : 0,
       ...outTargetVals("opt"),
     };
   }
@@ -1137,12 +1156,16 @@
           "Bei aktiver \"sicherer Nachbehandlung\" nur, wenn die Ausgabe intakt ist und die Qualität stimmt.")) {
       return;
     }
+    const settings = gatherSettings();
+    const paths = [state.selected.path];
+    const ok = await confirmDryRunOrDups(paths, settings);
+    if (!ok) return;
     const btn = $("btn-enqueue");
     btn.disabled = true;
     const payload = {
       path: state.selected.path,
       is_batch: state.selected.isBatch,
-      ...gatherSettings(),
+      ...settings,
     };
     try {
       const res = await fetch("/api/enqueue", {
@@ -1162,6 +1185,101 @@
     } finally {
       btn.disabled = false;
     }
+  }
+
+  /* ------------------------------------ Dry-Run / Duplikat-Vorschau */
+  function tt(s) {
+    return window.I18N ? I18N.t(s) : s;
+  }
+
+  async function fetchPreview(paths, settings, estimates) {
+    const res = await fetch("/api/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, settings: settings || {}, estimates: estimates || {} }),
+    });
+    return res.json();
+  }
+
+  /** Zeigt Dry-Run-Modal. resolve(true) = starten, false = abbrechen. */
+  function showPreviewModal(preview) {
+    const rows = (preview && (preview.items || preview.jobs)) || [];
+    const dups = rows.filter((r) => r.duplicate).length;
+    const table = rows.length ? `
+      <div class="table-wrap preview-table-wrap">
+        <table class="queue-table">
+          <thead><tr>
+            <th>${tt("Quelle")}</th><th>${tt("Ziel")}</th>
+            <th>${tt("Schätzung")}</th><th>${tt("Flags")}</th>
+          </tr></thead>
+          <tbody>${rows.map((r) => {
+            const flags = [];
+            if (r.exists) flags.push(tt("existiert"));
+            if (r.history_done) flags.push(tt("in Historie"));
+            const est = r.est_output_bytes
+              ? formatBytes(r.est_output_bytes)
+              : (r.est_saved_bytes ? ("≈ −" + formatBytes(r.est_saved_bytes)) : "—");
+            return `<tr>
+              <td title="${escapeHtml(r.source)}">${escapeHtml(r.source_name || r.source_rel || "")}</td>
+              <td title="${escapeHtml(r.output)}">${escapeHtml(r.output_name || r.output_rel || "")}</td>
+              <td>${escapeHtml(est)}</td>
+              <td class="${r.duplicate ? "warn" : ""}">${flags.map(escapeHtml).join(", ") || "—"}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:8px">${rows.length} ${tt("Datei(en)")}${dups ? ` · <span class="warn">${dups} ${tt("Duplikat(e)")}</span>` : ""}</p>`
+      : `<p class="muted">${tt("Keine Vorschau.")}</p>`;
+    return new Promise((resolve) => {
+      let settled = false;
+      openModal(tt("Dry-Run Vorschau"), `
+        ${table}
+        <div class="lib-actions" style="margin-top:12px">
+          <button class="btn btn-primary" id="preview-go">${tt("Trotzdem starten")}</button>
+          <button class="btn btn-ghost" id="preview-cancel">${tt("Abbrechen")}</button>
+        </div>`);
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(v);
+      };
+      const go = $("preview-go");
+      const cancel = $("preview-cancel");
+      if (go) go.addEventListener("click", () => done(true));
+      if (cancel) cancel.addEventListener("click", () => done(false));
+      // Escape / X-Button: Abbrechen
+      const m = $("app-modal");
+      const onHide = () => {
+        if (!settled && m && m.style.display === "none") done(false);
+      };
+      const obs = new MutationObserver(onHide);
+      if (m) obs.observe(m, { attributes: true, attributeFilter: ["style"] });
+    });
+  }
+
+  /** Bei on_duplicate=ask immer Preview; sonst nur bei Duplikaten warnen. */
+  async function confirmDryRunOrDups(paths, settings, estimates, { forcePreview = false } = {}) {
+    if (!paths || !paths.length) return false;
+    let preview;
+    try {
+      preview = await fetchPreview(paths, settings, estimates);
+    } catch (e) {
+      return window.confirm(tt("Vorschau fehlgeschlagen. Trotzdem fortfahren?"));
+    }
+    if (preview.error) {
+      alert(preview.error);
+      return false;
+    }
+    const jobs = preview.items || preview.jobs || [];
+    const dups = jobs.filter((j) => j.duplicate);
+    const onDup = (settings.on_duplicate || "ask").toLowerCase();
+    if (forcePreview || onDup === "ask") {
+      return showPreviewModal(preview);
+    }
+    if (dups.length && onDup !== "overwrite" && onDup !== "skip") {
+      return showPreviewModal(preview);
+    }
+    return true;
   }
 
   /* ----------------------------------------------------------- VMAF-TOOL */
@@ -1492,6 +1610,12 @@
     $("global-status").textContent = q.paused ? "Pausiert"
       : (q.gate_message && c.waiting ? `⏸ ${q.gate_message}`
         : (q.status_message || (c.running ? "Verarbeitung läuft" : "Bereit")));
+    const etaEl = $("queue-eta");
+    if (etaEl) {
+      const eta = q.queue_eta_human || "—";
+      etaEl.textContent = `ETA ${eta}`;
+      etaEl.title = tt("Geschätzte Restzeit der Warteschlange");
+    }
 
     const activeIds = q.active_ids || (q.active_id ? [q.active_id] : []);
     state.lastItems = q.items;
@@ -1544,6 +1668,9 @@
     } else if (it.integrity_ok === true) {
       extra += ` <span class="vmaf-verify vv-ok" title="Integritäts-Check bestanden">✓ intakt</span>`;
     }
+    if (it.caps_failed) {
+      extra += ` <span class="vmaf-verify vv-bad" title="Größen-/Bitrate-Cap überschritten">⚠ Cap</span>`;
+    }
     return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}${verify}${extra}`;
   }
 
@@ -1560,6 +1687,8 @@
       const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
+      const requeueBtn = DONE.includes(it.status)
+        ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Erneut einreihen">Erneut</button>` : "";
       const moveBtns = it.status === "wartend"
         ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="Nach oben">↑</button>` +
           `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="Nach unten">↓</button>` : "";
@@ -1577,13 +1706,19 @@
         <td>${settingsLabel(it)}</td>
         <td>${dur}${finished}</td>
         <td class="good">${it.saved_human}</td>
-        <td class="row-actions">${moveBtns}${cancelBtn}</td>
+        <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}</td>
       </tr>`;
     }).join("");
     body.querySelectorAll("[data-cancel]").forEach((b) => {
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         fetch(`/api/queue/${b.dataset.cancel}/cancel`, { method: "POST" });
+      });
+    });
+    body.querySelectorAll("[data-requeue]").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        requeueJob(b.dataset.requeue, false);
       });
     });
     body.querySelectorAll("[data-move]").forEach((b) => {
@@ -1595,6 +1730,20 @@
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
       tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
     });
+  }
+
+  async function requeueJob(id, fromHistory) {
+    if (!id) return;
+    const url = fromHistory
+      ? `/api/history/${encodeURIComponent(id)}/requeue`
+      : `/api/queue/${encodeURIComponent(id)}/requeue`;
+    try {
+      const r = await fetch(url, { method: "POST" });
+      const d = await r.json();
+      if (d.error) alert(d.error);
+    } catch (e) {
+      alert(String(e));
+    }
   }
 
   function renderActiveProgress(items, activeIds) {
@@ -1632,11 +1781,21 @@
       const phase = VMAF_PHASE[p.phase] || "Analyse";
       const step = p.steps ? `${p.step || 0}/${p.steps}` : "—";
       const fps = p.fps ? `${p.fps} fps` : "—";
+      let vmafEta = "—";
+      const stepN = parseInt(p.step, 10) || 0, stepsN = parseInt(p.steps, 10) || 0;
+      if (stepsN > 0 && stepN > 0 && job.started_at) {
+        const elapsed = Math.max(0, (Date.now() / 1000) - job.started_at);
+        const per = elapsed / stepN;
+        vmafEta = formatDuration(per * Math.max(0, stepsN - stepN));
+      } else if (p.eta_human) {
+        vmafEta = p.eta_human;
+      }
       stats = `
         <div class="stat-grid">
           <div class="stat"><span class="stat-label">Phase</span><span class="stat-val">${escapeHtml(phase)}</span></div>
           <div class="stat"><span class="stat-label">Testpunkt</span><span class="stat-val">${step}</span></div>
           <div class="stat"><span class="stat-label">Encode-Speed</span><span class="stat-val">${fps}</span></div>
+          <div class="stat"><span class="stat-label">ETA</span><span class="stat-val">${escapeHtml(vmafEta)}</span></div>
         </div>`;
     } else {
       stats = `
@@ -2487,16 +2646,19 @@
       ? `<button class="btn btn-primary btn-sm" id="modal-ab"
            data-a="${escapeHtml(d.source.rel)}" data-b="${escapeHtml(d.output.rel)}">
            🎞 Im A/B-Vergleich öffnen (alt vs. neu)</button>` : "";
+    const requeueBtn = `<button class="btn btn-ghost btn-sm" id="modal-requeue">${tt("Erneut")}</button>` +
+      `<button class="btn btn-ghost btn-sm" id="modal-requeue-edit">${tt("Erneut mit …")}</button>`;
 
     const html = `
       <div class="stat-grid modal-stats">${statChips}</div>
-      ${abBtn ? `<div class="modal-tabs" style="margin-bottom:8px">${abBtn}</div>` : ""}
+      <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
       ${playToggle}
       <div id="modal-player">${player}</div>
       <div class="modal-cols">
         <div><h4>Quelle</h4>${infoTableHtml(d.source && d.source.info)}</div>
         <div><h4>Ausgabe</h4>${infoTableHtml(d.output && d.output.info)}</div>
-      </div>`;
+      </div>
+      <div id="modal-vmaf-hist" class="hint" style="margin-top:12px">${tt("Lade frühere Läufe …")}</div>`;
     openModal(escapeHtml(d.title || "Details"), html);
 
     const body = $("app-modal-body");
@@ -2510,6 +2672,43 @@
     const ab = $("modal-ab");
     if (ab) ab.addEventListener("click", () =>
       openAbCompare("media", ab.dataset.a, "media", ab.dataset.b));
+    const rq = $("modal-requeue");
+    if (rq) rq.addEventListener("click", () => requeueJob(id, !!d.from_history));
+    const rqe = $("modal-requeue-edit");
+    if (rqe) rqe.addEventListener("click", () => {
+      if (d.settings) applyProfile(d.settings);
+      closeModal();
+      navTo("encode");
+    });
+    loadVmafBySource(d.path || "", "modal-vmaf-hist");
+  }
+
+  async function loadVmafBySource(path, elId) {
+    const el = $(elId);
+    if (!el) return;
+    if (!path) { el.textContent = ""; return; }
+    try {
+      const d = await (await fetch(`/api/vmaf/by-source?path=${encodeURIComponent(path)}`)).json();
+      const jobs = d.jobs || [];
+      const sessions = d.sessions || [];
+      if (!jobs.length && !sessions.length) {
+        el.innerHTML = `<p class="muted">${tt("Keine früheren Läufe für diese Quelle.")}</p>`;
+        return;
+      }
+      const jobRows = jobs.slice(0, 8).map((j) => {
+        const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
+        const v = j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—";
+        return `<li>${escapeHtml(when)} · ${(j.codec || "").toUpperCase()} Q${j.quality || "—"} · VMAF ${v} · ${escapeHtml(j.status || "")}</li>`;
+      }).join("");
+      const sessRows = sessions.slice(0, 5).map((s) =>
+        `<li>${escapeHtml(s.title || s.session)} · ${escapeHtml(s.recommended_label || "")}` +
+        (s.recommended_vmaf != null ? ` (VMAF ${Number(s.recommended_vmaf).toFixed(1)})` : "") + `</li>`).join("");
+      el.innerHTML = `<h4>${tt("Frühere Läufe")}</h4>` +
+        (jobRows ? `<ul class="hist-list">${jobRows}</ul>` : "") +
+        (sessRows ? `<h4 style="margin-top:8px">${tt("VMAF-Sessions")}</h4><ul class="hist-list">${sessRows}</ul>` : "");
+    } catch (e) {
+      el.innerHTML = `<span class="bad">${escapeHtml(String(e))}</span>`;
+    }
   }
 
   /* ----------------------------------------------------------------- UTIL */
@@ -2559,6 +2758,22 @@
       const d = await r.json();
       state.profiles = d.profiles || [];
       renderProfileOptions("");
+    });
+    document.querySelectorAll("#opt-preset-chips [data-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const name = btn.dataset.preset;
+        const p = (state.profiles || []).find((x) => x.name === name);
+        if (!p) {
+          refreshProfiles().then(() => {
+            const p2 = (state.profiles || []).find((x) => x.name === name);
+            if (p2) { applyProfile(p2.settings); renderProfileOptions(name); }
+            else alert(tt("Preset nicht gefunden: ") + name);
+          });
+          return;
+        }
+        applyProfile(p.settings);
+        renderProfileOptions(name);
+      });
     });
   }
 
@@ -2619,6 +2834,17 @@
     set("opt-audio-bitrate", s.audio_bitrate);
     set("opt-audio-channels", s.audio_channels);
     set("opt-audio-normalize", s.audio_normalize);
+    if (s.name_pattern !== undefined) set("opt-name-pattern", s.name_pattern);
+    if (s.on_duplicate !== undefined) set("opt-on-duplicate", s.on_duplicate);
+    if (s.max_output_mb !== undefined) set("opt-max-output-mb", s.max_output_mb);
+    if (s.max_video_bitrate_kbps !== undefined) set("opt-max-bitrate", s.max_video_bitrate_kbps);
+    if (s.out_mode !== undefined) set("opt-out-mode", s.out_mode, "change");
+    if (s.out_subdir !== undefined) set("opt-out-subdir", s.out_subdir);
+    if (s.remux_only) {
+      navTo("supertool");
+      const remux = $("st-remux-only");
+      if (remux) { remux.checked = true; remux.dispatchEvent(new Event("change")); }
+    }
   }
 
   /* ------------------------------------------------------------- STATISTIK */
@@ -2676,7 +2902,10 @@
           <td>${formatDuration(j.duration || 0)}</td>
           <td class="muted">${escapeHtml(when)}</td>
           <td>${escapeHtml(j.status || "")}</td>
-          <td><button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button></td>
+          <td>
+            <button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button>
+            <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Erneut einreihen">Erneut</button>
+          </td>
         </tr>`; }).join("") :
         '<tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>';
       body.querySelectorAll(".stats-title, .stats-play").forEach((el) => {
@@ -2684,6 +2913,13 @@
           e.preventDefault();
           const id = el.dataset.id;
           if (id) openQueueDetails(id);
+        });
+      });
+      body.querySelectorAll(".stats-requeue").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          requeueJob(el.dataset.id, true);
         });
       });
     }
@@ -3016,15 +3252,27 @@
   async function addLibrarySelection(auto) {
     const checked = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
     if (!checked.length) return;
-    const btnA = $("btn-lib-add"); const btnB = $("btn-lib-add-auto");
-    if (btnA) btnA.disabled = true; if (btnB) btnB.disabled = true;
     const base = gatherSettings();
     // Container-Wahl der Bibliothek hat Vorrang vor der Encode-Seite.
     const libContainer = $("lib-container") ? $("lib-container").value : "";
+    if (libContainer) base.container = libContainer;
+    const estimates = {};
+    checked.forEach((p) => {
+      const row = (state.libRows || []).find((m) => m.path === p);
+      if (row) {
+        estimates[p] = {
+          est_saved_bytes: row.est_saved_bytes || 0,
+          est_output_bytes: row.est_output_bytes || 0,
+        };
+      }
+    });
+    const go = await confirmDryRunOrDups(checked, base, estimates, { forcePreview: true });
+    if (!go) return;
+    const btnA = $("btn-lib-add"); const btnB = $("btn-lib-add-auto");
+    if (btnA) btnA.disabled = true; if (btnB) btnB.disabled = true;
     let ok = 0;
     for (const p of checked) {
       let payload = { path: p, is_batch: false, ...base };
-      if (libContainer) payload.container = libContainer;
       if (auto) {
         const row = (state.libRows || []).find((m) => m.path === p);
         const sug = row && row.suggest;
@@ -3124,6 +3372,8 @@
         if (rc) rc.style.display = on ? "" : "none";
         const am = $("st-audio-mode-field");
         if (am) am.style.display = on ? "none" : "";
+        const sc = $("st-sidecar-field");
+        if (sc) sc.style.display = on ? "" : "none";
         const scan = $("btn-st-scan");
         if (scan) scan.textContent = on ? "Scan – Spuren ermitteln" : "Scan – Codec/Bitrate ermitteln";
       };
@@ -3745,6 +3995,11 @@
       subtitle_languages: $("st-sub-langs") ? $("st-sub-langs").value.trim() : "",
       remux_only: $("st-remux-only") ? $("st-remux-only").checked : false,
       remux_container: $("st-remux-container") ? $("st-remux-container").value : "mkv",
+      sidecar_attachments: $("st-sidecar-att") ? $("st-sidecar-att").checked : false,
+      name_pattern: $("st-name-pattern") ? ($("st-name-pattern").value.trim() || "{stem}{suffix}") : "{stem}{suffix}",
+      on_duplicate: $("st-on-duplicate") ? $("st-on-duplicate").value : "ask",
+      max_output_mb: $("st-max-output-mb") ? (parseFloat($("st-max-output-mb").value) || 0) : 0,
+      max_video_bitrate_kbps: $("st-max-bitrate") ? (parseInt($("st-max-bitrate").value, 10) || 0) : 0,
       ...outTargetVals("st"),
     };
     if (mode === "target_vmaf" || mode === "representative") {
@@ -3827,13 +4082,39 @@
   async function startSuperBatch() {
     const paths = [...document.querySelectorAll(".st-check:checked")].map((c) => c.value);
     if (!paths.length) return;
-    const tt = (s) => (window.I18N ? I18N.t(s) : s);
     const warns = stBatchWarnings(paths);
     if (warns.length) {
       const msg = tt("Bitte prüfen, bevor der Stapel startet:") + "\n\n• " +
         warns.join("\n\n• ") + "\n\n" + tt("Trotzdem fortfahren?");
       if (!window.confirm(msg)) return;
     }
+    const settings = stGatherSettings();
+    const estimates = {};
+    paths.forEach((p) => {
+      const m = (state.stMatches || {})[p];
+      if (m) {
+        estimates[p] = {
+          est_saved_bytes: m.est_saved_bytes || 0,
+          est_output_bytes: m.est_output_bytes || 0,
+        };
+      }
+    });
+    // Dry-Run über Super-Tool-API (inkl. Remux-Plan), Fallback /api/preview.
+    let preview;
+    try {
+      const dry = await (await fetch("/api/supertool/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paths, mode: $("st-mode").value, settings,
+          per_file: stCollectPerFile(paths), dry_run: true,
+        }),
+      })).json();
+      preview = dry.preview || dry;
+    } catch (e) {
+      preview = await fetchPreview(paths, settings, estimates);
+    }
+    if (!(await showPreviewModal(preview))) return;
+
     const btn = $("btn-st-start");
     btn.disabled = true;
     try {
@@ -3841,7 +4122,7 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           paths, mode: $("st-mode").value,
-          settings: stGatherSettings(), per_file: stCollectPerFile(paths),
+          settings, per_file: stCollectPerFile(paths),
         }),
       });
       const data = await res.json();
@@ -3960,8 +4241,11 @@
       upIn.value = "";  // gleiche Datei erneut wählbar machen
     });
     on("btn-remux-add-att", () => remuxOpenPicker("att", "att"));
+    on("btn-remux-sidecar", remuxAddSidecarAttachments);
+    on("btn-remux-smart", remuxSmartDisposition);
     on("btn-remux-extract", remuxExtract);
     on("btn-remux-load-chapters", remuxLoadChapters);
+    on("btn-remux-import-chapters", () => remuxOpenPicker("chapters", "aux"));
     on("btn-remux-start", remuxStart);
     on("btn-remux-clear", remuxClearSelection);
     on("btn-merge-add", () => remuxOpenPicker("merge", "aux"));
@@ -4350,6 +4634,7 @@
     ext: "Externe Ton-/Untertiteldatei auswählen",
     att: "Attachment (Font/Cover) auswählen",
     merge: "Datei zum Zusammenführen auswählen",
+    chapters: "Kapiteldatei (NFO/Text) auswählen",
   };
 
   function remuxOpenPicker(mode, kind) {
@@ -4377,8 +4662,124 @@
       state.remuxMerge.push({ path: f.rel, name: f.name });
       closeModal();
       remuxRenderMerge();
+    } else if (mode === "chapters") {
+      closeModal();
+      remuxImportChapters(f.rel || f.path);
     } else {
       remuxAddExternal(f);
+    }
+  }
+
+  async function remuxSmartDisposition() {
+    if (!state.remuxInfo) return;
+    const audio = [];
+    document.querySelectorAll("#remux-audio-body tr[data-aindex]").forEach((tr) => {
+      const q = (c) => tr.querySelector("." + c);
+      audio.push({
+        index: parseInt(tr.dataset.aindex, 10),
+        keep: q("rx-a-keep").checked,
+        default: q("rx-a-default").checked,
+        forced: q("rx-a-forced") ? q("rx-a-forced").checked : false,
+        language: q("rx-a-lang").value.trim(),
+        title: q("rx-a-title").value.trim(),
+      });
+    });
+    const subs = [];
+    document.querySelectorAll("#remux-sub-body tr[data-sindex]").forEach((tr) => {
+      const q = (c) => tr.querySelector("." + c);
+      subs.push({
+        index: parseInt(tr.dataset.sindex, 10),
+        keep: q("rx-s-keep").checked,
+        default: q("rx-s-default").checked,
+        forced: q("rx-s-forced").checked,
+        language: q("rx-s-lang").value.trim(),
+        title: q("rx-s-title").value.trim(),
+      });
+    });
+    const prefer = [];
+    const al = $("st-audio-langs");
+    if (al && al.value.trim()) prefer.push(...al.value.split(/[,;\s]+/).filter(Boolean));
+    try {
+      const d = await (await fetch("/api/remux/smart-disposition", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio, subtitles: subs, prefer_langs: prefer }),
+      })).json();
+      (d.audio || []).forEach((a) => {
+        const tr = document.querySelector(`#remux-audio-body tr[data-aindex="${a.index}"]`);
+        if (!tr) return;
+        const def = tr.querySelector(".rx-a-default");
+        if (def) def.checked = !!a.default;
+      });
+      (d.subtitles || []).forEach((s) => {
+        const tr = document.querySelector(`#remux-sub-body tr[data-sindex="${s.index}"]`);
+        if (!tr) return;
+        const def = tr.querySelector(".rx-s-default");
+        const fr = tr.querySelector(".rx-s-forced");
+        if (def) def.checked = !!s.default;
+        if (fr) fr.checked = !!s.forced;
+      });
+      $("remux-start-info").textContent = tt("Default/Forced intelligent gesetzt.");
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  async function remuxAddSidecarAttachments() {
+    if (!state.remuxSel) return;
+    try {
+      const d = await (await fetch(
+        `/api/remux/sidecar-attachments?path=${encodeURIComponent(state.remuxSel.path)}`)).json();
+      const list = d.attachments || [];
+      if (!list.length) {
+        $("remux-start-info").textContent = tt("Keine Sidecar-Attachments gefunden.");
+        return;
+      }
+      const have = new Set(state.remuxAtt.map((a) => a.path));
+      list.forEach((a) => {
+        if (!have.has(a.path)) state.remuxAtt.push({ path: a.path, name: a.name });
+      });
+      remuxRenderAttachments();
+      $("remux-start-info").textContent = `${list.length} ${tt("Sidecar-Attachment(s) hinzugefügt.")}`;
+    } catch (e) {
+      $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  function remuxApplyChapters(chapters) {
+    state.remuxChapters = chapters || [];
+    const body = $("remux-chapters-body");
+    body.innerHTML = "";
+    if (!state.remuxChapters.length) {
+      $("remux-chapters-info").textContent = tt("Keine Kapitel vorhanden.");
+      $("remux-chapters-wrap").style.display = "none";
+      state.remuxChapters = null;
+      return;
+    }
+    state.remuxChapters.forEach((c, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${i + 1}</td><td>${fmtClock(c.start)}</td>` +
+        `<td><input type="text" class="rx-ch-title" data-i="${i}" value="${escapeHtml(c.title || "")}" style="width:100%"></td>`;
+      body.appendChild(tr);
+    });
+    $("remux-chapters-wrap").style.display = "";
+    $("remux-chapters-info").textContent = `${state.remuxChapters.length} ${tt("Kapitel – Titel bearbeitbar.")}`;
+  }
+
+  async function remuxImportChapters(path) {
+    if (!path) return;
+    $("remux-chapters-info").textContent = tt("Importiere Kapitel …");
+    try {
+      const d = await (await fetch("/api/remux/import-chapters", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      })).json();
+      if (d.error) {
+        $("remux-chapters-info").innerHTML = `<span class="bad">${escapeHtml(d.error)}</span>`;
+        return;
+      }
+      remuxApplyChapters(d.chapters || []);
+    } catch (e) {
+      $("remux-chapters-info").innerHTML = `<span class="bad">${escapeHtml(String(e))}</span>`;
     }
   }
 
@@ -4524,26 +4925,10 @@
     $("remux-chapters-info").textContent = "Lade Kapitel …";
     try {
       const data = await (await fetch(`/api/remux/chapters?path=${encodeURIComponent(state.remuxSel.path)}`)).json();
-      state.remuxChapters = data.chapters || [];
-      const body = $("remux-chapters-body");
-      body.innerHTML = "";
-      if (!state.remuxChapters.length) {
-        $("remux-chapters-info").textContent = "Keine Kapitel vorhanden.";
-        $("remux-chapters-wrap").style.display = "none";
-        state.remuxChapters = null;
-        return;
-      }
-      state.remuxChapters.forEach((c, i) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${i + 1}</td><td>${fmtClock(c.start)}</td>` +
-          `<td><input type="text" class="rx-ch-title" data-i="${i}" value="${escapeHtml(c.title || "")}" style="width:100%"></td>`;
-        body.appendChild(tr);
-      });
-      $("remux-chapters-wrap").style.display = "";
-      $("remux-chapters-info").textContent = `${state.remuxChapters.length} Kapitel – Titel bearbeitbar.`;
+      remuxApplyChapters(data.chapters || []);
       // Kapitel auch als Bereichsvorlage für den Ausschnitt-Export anbieten.
       const chSel = $("split-range-chapter");
-      if (chSel) {
+      if (chSel && state.remuxChapters) {
         chSel.innerHTML = '<option value="">Kapitel als Bereich …</option>' +
           state.remuxChapters.map((c, i) =>
             `<option value="${i}">${i + 1}. ${escapeHtml(c.title || fmtClock(c.start))}</option>`).join("");
@@ -4747,6 +5132,16 @@
           "Bei aktiver \"sicherer Nachbehandlung\" nur, wenn die Ausgabe intakt ist.")) {
       return;
     }
+    const remuxSettings = {
+      suffix: $("remux-suffix").value.trim() || "_remux",
+      name_pattern: $("remux-name-pattern")
+        ? ($("remux-name-pattern").value.trim() || "{stem}{suffix}") : "{stem}{suffix}",
+      on_duplicate: $("remux-on-duplicate") ? $("remux-on-duplicate").value : "ask",
+      container: spec.container,
+      post_processing: $("remux-post").value,
+      ...outTargetVals("remux"),
+    };
+    if (!(await confirmDryRunOrDups([state.remuxSel.path], remuxSettings))) return;
     const btn = $("btn-remux-start");
     btn.disabled = true;
     $("remux-start-info").textContent = "Wird eingereiht …";
@@ -4760,7 +5155,9 @@
           post_processing: $("remux-post").value,
           integrity_check: $("remux-integrity").checked,
           safe_replace: $("remux-safe").checked,
-          suffix: $("remux-suffix").value.trim() || "_remux",
+          suffix: remuxSettings.suffix,
+          name_pattern: remuxSettings.name_pattern,
+          on_duplicate: remuxSettings.on_duplicate,
           ...outTargetVals("remux"),
         }),
       });
@@ -5196,6 +5593,89 @@
     });
   }
 
+  function initGlobalSearch() {
+    const btn = $("btn-global-search");
+    if (!btn) return;
+    btn.addEventListener("click", openGlobalSearch);
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openGlobalSearch();
+      }
+    });
+  }
+
+  function openGlobalSearch() {
+    openModal(tt("Globale Suche"), `
+      <div class="field">
+        <input type="search" id="gs-q" placeholder="${tt("Dateiname …")}" autofocus style="width:100%" />
+      </div>
+      <div id="gs-results" class="table-wrap" style="margin-top:10px;max-height:420px;overflow:auto">
+        <p class="muted">${tt("Tippen zum Suchen (Medienordner).")}</p>
+      </div>`);
+    const inp = $("gs-q");
+    let timer = null;
+    const run = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => globalSearchRun(inp.value.trim()), 280);
+    };
+    if (inp) {
+      inp.addEventListener("input", run);
+      inp.focus();
+    }
+  }
+
+  async function globalSearchRun(q) {
+    const box = $("gs-results");
+    if (!box) return;
+    if (!q || q.length < 2) {
+      box.innerHTML = `<p class="muted">${tt("Mindestens 2 Zeichen.")}</p>`;
+      return;
+    }
+    box.innerHTML = `<p class="muted">${tt("Suche …")}</p>`;
+    try {
+      const d = await (await fetch(
+        `/api/search?q=${encodeURIComponent(q)}&kind=video&limit=80`)).json();
+      const files = d.files || [];
+      if (!files.length) {
+        box.innerHTML = `<p class="muted">${tt("Keine Treffer.")}</p>`;
+        return;
+      }
+      box.innerHTML = `<table class="queue-table"><thead><tr>
+        <th>${tt("Datei")}</th><th>${tt("Ordner")}</th><th></th></tr></thead><tbody>` +
+        files.map((f) => {
+          const path = f.rel || f.path || "";
+          const name = f.name || path;
+          const folder = f.folder || (path.includes("/") ? path.replace(/\/[^/]+$/, "") : "") || "—";
+          return `<tr>
+            <td title="${escapeHtml(path)}">${escapeHtml(name)}</td>
+            <td class="muted">${escapeHtml(folder)}</td>
+            <td class="row-actions">
+              <button class="btn btn-ghost btn-sm gs-act" data-act="play" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">▶</button>
+              <button class="btn btn-ghost btn-sm gs-act" data-act="encode" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→E</button>
+              <button class="btn btn-ghost btn-sm gs-act" data-act="remux" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→R</button>
+              <button class="btn btn-ghost btn-sm gs-act" data-act="vmaf" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→V</button>
+            </td></tr>`;
+        }).join("") + `</tbody></table>` +
+        (d.truncated ? `<p class="muted" style="margin-top:6px">${tt("Ergebnisse gekürzt.")}</p>` : "");
+      box.querySelectorAll(".gs-act").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const act = b.dataset.act, path = b.dataset.path, name = b.dataset.name;
+          closeModal();
+          if (act === "play") { openPlayer("media", path, name); return; }
+          if (act === "remux") {
+            navTo("remux");
+            await remuxSelectFile({ rel: path, name });
+            return;
+          }
+          await libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", null);
+        });
+      });
+    } catch (e) {
+      box.innerHTML = `<p class="bad">${escapeHtml(String(e))}</p>`;
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     initSettings();
@@ -5217,6 +5697,7 @@
     initDiagnostics();
     initOutTargets();
     initMediaSettings();
+    initGlobalSearch();
     loadCapabilities();
     // Haupt-Browser (Encoding/Quellenauswahl): Dateien wählbar, abspielbar,
     // Batch-Button + Library-Ordner werden über onNavigate aktualisiert.

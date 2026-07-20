@@ -5,6 +5,7 @@ und eine dauerhaft offene Verbindung (check_same_thread=False).
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -21,6 +22,15 @@ _conn: Optional[sqlite3.Connection] = None
 
 def _db_path() -> str:
     return str(config.DATA_DIR / "history.db")
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Migration: settings_json / output_path nachrüsten."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "settings_json" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN settings_json TEXT")
+    if "output_path" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN output_path TEXT")
 
 
 def init_db() -> None:
@@ -49,19 +59,18 @@ def init_db() -> None:
                 saved_bytes   INTEGER,
                 duration      REAL,
                 created       REAL,
-                finished      REAL
+                finished      REAL,
+                settings_json TEXT,
+                output_path   TEXT
             )
             """
         )
+        _ensure_columns(_conn)
         _conn.commit()
 
 
 def _pick_vmaf(item) -> Optional[float]:
-    """Bestes/gewähltes VMAF-Ergebnis aus dem Analyse-Dict ziehen (oder None).
-
-    Der per Guardrail gemessene VMAF der Ausgabe hat Vorrang, da er den echten
-    Wert der fertigen Datei widerspiegelt (nicht nur die Test-Encode-Prognose).
-    """
+    """Bestes/gewähltes VMAF-Ergebnis aus dem Analyse-Dict ziehen (oder None)."""
     measured = getattr(item, "vmaf_verify", None)
     if measured is not None:
         return float(measured)
@@ -83,6 +92,10 @@ def record_job(item, duration: float = 0.0) -> None:
     if _conn is None:
         return
     s = item.settings
+    try:
+        settings_json = json.dumps(s.__dict__, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        settings_json = "{}"
     row = (
         item.id,
         item.title,
@@ -99,6 +112,8 @@ def record_job(item, duration: float = 0.0) -> None:
         float(duration or 0.0),
         float(getattr(item, "created_at", 0.0) or 0.0),
         time.time(),
+        settings_json,
+        str(getattr(item, "output_path", "") or ""),
     )
     try:
         with _lock:
@@ -107,8 +122,8 @@ def record_job(item, duration: float = 0.0) -> None:
                 INSERT OR REPLACE INTO jobs
                 (id, title, path, status, platform, codec, rate_mode, quality,
                  vmaf, original_size, output_size, saved_bytes, duration,
-                 created, finished)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 created, finished, settings_json, output_path)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row,
             )
@@ -137,6 +152,10 @@ def stats() -> dict:
                 "FROM jobs WHERE status='fertig' AND output_size > 0 "
                 "GROUP BY codec ORDER BY c DESC"
             ).fetchall()
+            avg_dur = _conn.execute(
+                "SELECT AVG(duration) a FROM jobs "
+                "WHERE status='fertig' AND duration > 0 LIMIT 1"
+            ).fetchone()
     except sqlite3.Error as e:
         logger.warning("Statistik konnte nicht gelesen werden: %s", e)
         return _empty_stats()
@@ -153,6 +172,7 @@ def stats() -> dict:
         "saved_percent": round(ratio, 1),
         "encode_seconds": int(done["d"] or 0),
         "avg_vmaf": round(done["v"], 2) if done["v"] is not None else None,
+        "avg_duration": float(avg_dur["a"] or 0) if avg_dur else 0.0,
         "by_codec": [
             {"codec": r["codec"], "count": r["c"], "saved_bytes": int(r["s"] or 0)}
             for r in by_codec
@@ -188,6 +208,24 @@ def get(job_id: str) -> Optional[dict]:
         return None
 
 
+def by_source(path: str, limit: int = 20) -> list[dict]:
+    """Jobs zu einem Quellpfad (für VMAF-/Encode-Historie)."""
+    if _conn is None or not path:
+        return []
+    try:
+        with _lock:
+            rows = _conn.execute(
+                "SELECT id, title, path, status, platform, codec, quality, "
+                "rate_mode, vmaf, original_size, output_size, saved_bytes, "
+                "duration, finished, output_path FROM jobs "
+                "WHERE path=? ORDER BY finished DESC LIMIT ?",
+                (str(path), int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.Error:
+        return []
+
+
 def is_processed(path: str) -> bool:
     """True, wenn zu diesem Quellpfad bereits ein erfolgreicher Job existiert."""
     if _conn is None or not path:
@@ -217,5 +255,5 @@ def _empty_stats() -> dict:
     return {
         "count_done": 0, "count_failed": 0, "original_bytes": 0,
         "output_bytes": 0, "saved_bytes": 0, "saved_percent": 0.0,
-        "encode_seconds": 0, "avg_vmaf": None, "by_codec": [],
+        "encode_seconds": 0, "avg_vmaf": None, "avg_duration": 0.0, "by_codec": [],
     }

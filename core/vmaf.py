@@ -730,6 +730,42 @@ def load_session(name: str) -> Optional[dict]:
     return data
 
 
+def sessions_for_source(abs_path: str, limit: int = 20) -> list[dict]:
+    """Archivierte VMAF-Sessions zu einem Quellpfad."""
+    if not abs_path:
+        return []
+    want = str(Path(abs_path).resolve()) if Path(abs_path).exists() else str(abs_path)
+    out: list[dict] = []
+    root = config.PREVIEW_DIR
+    if not root.exists():
+        return []
+    for meta in root.glob("*/analysis.json"):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        src = data.get("source_path") or ""
+        try:
+            src_r = str(Path(src).resolve()) if src and Path(src).exists() else src
+        except OSError:
+            src_r = src
+        if src_r != want and src != abs_path:
+            continue
+        analysis = data.get("analysis", {})
+        results = analysis.get("results", [])
+        rec = next((r for r in results if r.get("recommended")), None)
+        out.append({
+            "session": data.get("session", meta.parent.name),
+            "title": data.get("title", meta.parent.name),
+            "created": data.get("created", meta.stat().st_mtime),
+            "recommended_label": (rec or {}).get("label", ""),
+            "recommended_vmaf": (rec or {}).get("vmaf"),
+            "count": len(results),
+        })
+    out.sort(key=lambda d: d.get("created", 0), reverse=True)
+    return out[:limit]
+
+
 def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return

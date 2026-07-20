@@ -91,6 +91,13 @@ class JobSettings:
     post_processing: str = "keep"
     container: str = "auto"        # auto | mkv | mp4 (Ausgabe-Container)
     suffix: str = "_av1"
+    # Dateiname: Platzhalter {stem}{suffix}{codec}{height}{height_suffix}{vmaf}{date}
+    name_pattern: str = "{stem}{suffix}"
+    # Bei existierendem Ziel / History: ask | skip | overwrite
+    on_duplicate: str = "ask"
+    # Caps: 0 = aus. Nach Encode prüfen; bei ABR zusätzlich als Obergrenze.
+    max_output_mb: float = 0.0
+    max_video_bitrate_kbps: int = 0
     # Audio
     audio_mode: str = "copy"       # copy | encode | none
     audio_codec: str = "aac"       # aac | opus | ac3 | eac3 | flac
@@ -132,6 +139,7 @@ class QueueItem:
     verify_attempts: int = 0             # Anzahl Encode-Versuche (>1 = Retry lief)
     integrity_ok: Optional[bool] = None  # Playability-/Integritäts-Check bestanden?
     integrity_msg: str = ""              # Kurzbegründung des Integritäts-Checks
+    caps_failed: bool = False            # Größen-/Bitrate-Cap überschritten
     crop: str = ""                       # erkannter Auto-Crop "w:h:x:y" (leer = kein)
     message: str = ""
     created_at: float = field(default_factory=time.time)
@@ -169,9 +177,11 @@ class QueueItem:
             "verify_attempts": self.verify_attempts,
             "integrity_ok": self.integrity_ok,
             "integrity_msg": self.integrity_msg,
+            "caps_failed": self.caps_failed,
             "crop": self.crop,
             "output_path": self.output_path,
             "created_at": self.created_at,
+            "started_at": self.started_at,
             "finished_at": self.finished_at,
             "duration": round(dur, 1),
             "duration_human": ff.human_duration(dur) if dur else "—",
@@ -337,9 +347,16 @@ class QueueManager:
 
     # ------------------------------------------------------------- Hinzufügen
     def add_file(self, path: str, settings: JobSettings, group_id: Optional[str] = None) -> Optional[QueueItem]:
+        from . import job_plan
         p = Path(path)
         if not p.is_file():
             return None
+        # Duplikat: skip → nicht einreihen; ask/overwrite → einreihen (UI warnt vorher).
+        on_dup = (getattr(settings, "on_duplicate", "ask") or "ask").lower()
+        if on_dup == "skip":
+            plan = job_plan.plan_one(str(p), settings)
+            if plan.get("duplicate"):
+                return None
         item = QueueItem(
             id=uuid.uuid4().hex[:10],
             title=p.name,
@@ -461,6 +478,34 @@ class QueueManager:
             paused = self._paused
             gate_msg = self._gate_msg
         total_saved = sum(i["saved_bytes"] for i in items if i["saved_bytes"] > 0)
+        # Gesamt-ETA: Summe aktiver ETAs + wartende Jobs × Ø-Dauer aus Historie.
+        from . import history as _hist
+        avg_dur = float((_hist.stats() or {}).get("avg_duration") or 0)
+        eta_active = 0.0
+        waiting_n = 0
+        for i in items:
+            st = i.get("status") or ""
+            if st in ("in arbeit", "vmaf-test"):
+                p = i.get("progress") or {}
+                eta = p.get("eta")
+                if eta is None and p.get("eta_human"):
+                    eta = 0
+                try:
+                    eta_active += max(0.0, float(eta or 0))
+                except (TypeError, ValueError):
+                    pass
+                # VMAF: grobe ETA aus Schrittfortschritt, falls keine Encode-ETA.
+                if (not eta) and st == "vmaf-test":
+                    step = int(p.get("step") or 0)
+                    steps = int(p.get("steps") or 0)
+                    started = float(i.get("started_at") or 0)
+                    if steps > 0 and step > 0 and started:
+                        elapsed = max(0.0, time.time() - started)
+                        per = elapsed / step
+                        eta_active += per * max(0, steps - step)
+            elif st == "wartend":
+                waiting_n += 1
+        eta_total = eta_active + waiting_n * avg_dur
         return {
             "items": items,
             "active_ids": active_ids,
@@ -472,6 +517,9 @@ class QueueManager:
             "total_saved_bytes": total_saved,
             "total_saved_human": ff.human_size(total_saved) if total_saved else "0 B",
             "counts": _counts(items),
+            "avg_job_duration": round(avg_dur, 1),
+            "queue_eta_seconds": round(eta_total, 0),
+            "queue_eta_human": ff.human_duration(eta_total) if eta_total else "—",
         }
 
     # ------------------------------------------------------------------ Worker
@@ -807,6 +855,7 @@ class QueueManager:
                 item.error = (f"Qualitätswarnung: gemessener VMAF "
                               f"{item.vmaf_verify:.1f} < Ziel {s.verify_min:.0f}.")
             self._run_integrity(item, s, info, out_path)
+            self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -874,6 +923,7 @@ class QueueManager:
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
             self._run_integrity(item, s, info, out_path)
+            self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -937,6 +987,7 @@ class QueueManager:
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = max(0, item.original_size - item.output_size)
             self._run_integrity(item, s, info, out_path)
+            self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -1010,6 +1061,7 @@ class QueueManager:
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
             item.saved_bytes = item.original_size - item.output_size
             self._run_integrity(item, s, info, out_path)
+            self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
             item.status = STATUS_DONE
@@ -1152,7 +1204,11 @@ class QueueManager:
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
-            enc_kw["bitrate_kbps"] = s.quality
+            br = int(s.quality or 0)
+            cap = int(getattr(s, "max_video_bitrate_kbps", 0) or 0)
+            if cap > 0:
+                br = min(br, cap) if br > 0 else cap
+            enc_kw["bitrate_kbps"] = br
 
         runner = EncodeRunner(on_progress=on_prog)
         with self._lock:
@@ -1293,6 +1349,42 @@ class QueueManager:
             logger.warning("Integritäts-Check fehlgeschlagen (%s): %s",
                            item.title, msg)
 
+    @staticmethod
+    def _run_caps(item: QueueItem, s: "JobSettings", out_path: Path) -> None:
+        """Größen-/Bitrate-Obergrenzen prüfen (Warnung, safe_replace blockieren)."""
+        item.caps_failed = False
+        max_mb = float(getattr(s, "max_output_mb", 0) or 0)
+        max_br = int(getattr(s, "max_video_bitrate_kbps", 0) or 0)
+        if max_mb <= 0 and max_br <= 0:
+            return
+        reasons = []
+        size = out_path.stat().st_size if out_path.exists() else 0
+        if max_mb > 0 and size > max_mb * 1024 * 1024:
+            reasons.append(f"Größe {size / (1024 * 1024):.1f} MB > Cap {max_mb:.0f} MB")
+        if max_br > 0 and size > 0:
+            dur = 0.0
+            try:
+                info2, _ = ff.probe_with_error(out_path)
+                if info2:
+                    dur = float(info2.duration or 0)
+                    vbr = int(getattr(info2, "video_bitrate", 0) or 0)
+                    if vbr > max_br * 1000:
+                        reasons.append(
+                            f"Video-Bitrate {vbr // 1000} kbit/s > Cap {max_br} kbit/s")
+                    elif dur > 1 and vbr <= 0:
+                        overall = int(size * 8 / dur)
+                        if overall > max_br * 1000 * 1.15:
+                            reasons.append(
+                                f"Ø-Bitrate ~{overall // 1000} kbit/s > Cap {max_br} kbit/s")
+            except Exception:
+                pass
+        if reasons:
+            item.caps_failed = True
+            msg = "; ".join(reasons)
+            item.error = ((item.error + " ") if item.error else "") + \
+                f"Cap-Warnung: {msg}."
+            logger.warning("Cap überschritten (%s): %s", item.title, msg)
+
     # ------------------------------------------------------------ Postprocessing
     @staticmethod
     def _post_process(item: QueueItem, out_path: Path) -> None:
@@ -1307,9 +1399,12 @@ class QueueManager:
             quality_ok = True
             if s.verify_vmaf and item.vmaf_verify is not None:
                 quality_ok = item.vmaf_verify >= s.verify_min
-            if item.integrity_ok is False or not quality_ok:
+            caps_ok = not getattr(item, "caps_failed", False)
+            if item.integrity_ok is False or not quality_ok or not caps_ok:
                 if item.integrity_ok is False:
                     reason = "Integritäts-Check fehlgeschlagen"
+                elif not caps_ok:
+                    reason = "Größen-/Bitrate-Cap überschritten"
                 else:
                     reason = (f"VMAF {item.vmaf_verify:.1f} < Ziel "
                               f"{s.verify_min:.0f}")
@@ -1442,6 +1537,10 @@ def build_job_settings(d: dict) -> JobSettings:
         out_mode=str(d.get("out_mode", "") or "default"),
         out_root=str(d.get("out_root", "") or ""),
         out_subdir=str(d.get("out_subdir", "") or ""),
+        name_pattern=str(d.get("name_pattern", "") or "{stem}{suffix}"),
+        on_duplicate=str(d.get("on_duplicate", "") or "ask"),
+        max_output_mb=float(d.get("max_output_mb", 0) or 0),
+        max_video_bitrate_kbps=int(d.get("max_video_bitrate_kbps", 0) or 0),
     )
 
 
@@ -1486,37 +1585,13 @@ def _effective_out_mode(s: JobSettings) -> str:
 
 
 def _output_path(item: QueueItem) -> Path:
-    src = Path(item.path)
-    ext = _container_ext(item.settings)
-    s = item.settings
-    if s.post_processing == "inplace":
-        return src.with_name(f"{src.stem}.__tmp__{ext}")
-
-    mode = _effective_out_mode(s)
-    sub = config.safe_subdir(getattr(s, "out_subdir", ""))
-    name = f"{src.stem}{s.suffix}{ext}"
-
-    if mode == "beside":
-        return src.parent / name
-
-    if mode == "custom" and sub:
-        base = config.resolve_input(sub)
-        if base is None:
-            base = config.default_output_path()
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        return base / name
-
-    # Standard-Ausgabe: Quellstruktur darunter spiegeln.
-    base = config.default_output_path()
+    from . import job_plan
+    out = job_plan.planned_output_path(Path(item.path), item.settings)
     try:
-        base.mkdir(parents=True, exist_ok=True)
+        out.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    rel = config.rel_input(src) or src.name
-    return (base / rel).with_name(name)
+    return out
 
 
 def _quality_label(s: JobSettings) -> str:

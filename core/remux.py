@@ -166,6 +166,14 @@ def _mimetype(path: str) -> str:
     return _FONT_MIME.get(Path(path).suffix.lower(), "application/octet-stream")
 
 
+def _attach_filename_meta(path: Path, att_out: int) -> list[str]:
+    """filename= + mimetype für Player-Font-Namen."""
+    return [
+        f"-metadata:s:t:{att_out}", f"mimetype={_mimetype(str(path))}",
+        f"-metadata:s:t:{att_out}", f"filename={path.name}",
+    ]
+
+
 def _count_attachments(path: Path) -> int:
     """Zahl der Attachment-Streams einer Datei (für korrekte t:-Indizes)."""
     try:
@@ -382,8 +390,7 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
             target = _abs_external(add.get("path") if isinstance(add, dict) else add)
             if target is None:
                 return [], f"Attachment nicht gefunden: {add}"
-            cmd += ["-attach", str(target),
-                    f"-metadata:s:t:{att_out}", f"mimetype={_mimetype(str(target))}"]
+            cmd += ["-attach", str(target)] + _attach_filename_meta(target, att_out)
             att_out += 1
 
     # --- Kapitel ---------------------------------------------------------------
@@ -711,3 +718,147 @@ def build_single_cut_cmd(src: Path, out: Path, start, end) -> tuple[list, str]:
     cmd += ["-i", str(src), "-t", f"{e - s:.3f}", "-map", "0", "-c", "copy",
             "-avoid_negative_ts", "make_zero", str(out)]
     return cmd, ""
+
+
+# --- Heuristiken / Import-Helfer --------------------------------------------
+
+def apply_smart_disposition(audio: list, subs: list,
+                            prefer_langs: Optional[set] = None) -> None:
+    """Default/Forced intelligent setzen (in-place).
+
+    - Genau eine Default-Audio (Whitelist-Sprache bevorzugt, sonst erste)
+    - Forced-Subs: Flag oder Titel enthält forced/zwang/signs
+    - Genau ein Default-Sub (nicht-forced bevorzugt, sonst erste Forced)
+    """
+    prefer_langs = prefer_langs or set()
+
+    def _lang(t):
+        return str(t.get("language") or "").strip().lower()
+
+    def _title(t):
+        return str(t.get("title") or "").lower()
+
+    # Audio defaults
+    for a in audio:
+        a["default"] = False
+    kept_a = [a for a in audio if a.get("keep", True)]
+    pick = None
+    if prefer_langs:
+        pick = next((a for a in kept_a if _lang(a) in prefer_langs), None)
+    if pick is None and kept_a:
+        pick = next((a for a in kept_a if a.get("default")), kept_a[0])
+    if pick is not None:
+        pick["default"] = True
+
+    # Subs: forced from title/flag
+    for s in subs:
+        title = _title(s)
+        if any(k in title for k in ("forced", "zwang", "signs", "song")):
+            s["forced"] = True
+        s["default"] = False
+    kept_s = [s for s in subs if s.get("keep", True)]
+    forced = [s for s in kept_s if s.get("forced")]
+    normal = [s for s in kept_s if not s.get("forced")]
+    # Default: erste Whitelist-Sprache unter normalen, sonst erste normale, sonst forced
+    pick_s = None
+    pool = normal or forced
+    if prefer_langs and pool:
+        pick_s = next((s for s in pool if _lang(s) in prefer_langs), None)
+    if pick_s is None and pool:
+        pick_s = pool[0]
+    if pick_s is not None:
+        pick_s["default"] = True
+
+
+def find_sidecar_attachments(video_path: Path) -> list[dict]:
+    """Fonts/Cover neben der Quelle: Fonts/-Ordner + Stem-gleiche Dateien."""
+    found: list[Path] = []
+    parent = video_path.parent
+    fonts_dir = parent / "Fonts"
+    if fonts_dir.is_dir():
+        for f in fonts_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in config.ATTACHMENT_EXTENSIONS:
+                found.append(f)
+    stem = video_path.stem
+    for f in parent.iterdir():
+        if not f.is_file():
+            continue
+        if f.suffix.lower() not in config.ATTACHMENT_EXTENSIONS:
+            continue
+        if f.stem == stem or f.stem.startswith(stem + "."):
+            found.append(f)
+    # Dedup
+    seen = set()
+    out = []
+    for f in found:
+        key = str(f.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        rel = config.rel_input(f)
+        out.append({"path": rel or str(f), "name": f.name})
+    return out
+
+
+def parse_chapters_file(path: Path) -> list[dict]:
+    """Kapitel aus NFO (Kodi), ffmetadata oder 'HH:MM:SS Titel'-Text lesen."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    chapters: list[dict] = []
+    # FFMETADATA
+    if ";FFMETADATA" in text or "[CHAPTER]" in text.upper():
+        cur = None
+        for line in text.splitlines():
+            line = line.strip()
+            if line.upper() == "[CHAPTER]":
+                if cur and "start" in cur:
+                    chapters.append(cur)
+                cur = {}
+            elif cur is not None and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip().lower(), v.strip()
+                if k == "start":
+                    cur["start"] = int(v) / 1000.0 if int(v) > 10000 else float(v)
+                elif k == "end":
+                    cur["end"] = int(v) / 1000.0 if int(v) > 10000 else float(v)
+                elif k == "title":
+                    cur["title"] = v
+        if cur and "start" in cur:
+            chapters.append(cur)
+        return chapters
+
+    # Kodi NFO XML (einfach)
+    if "<chapter" in text.lower() or "<file>" in text.lower():
+        import re
+        for m in re.finditer(
+            r"<chapter[^>]*>.*?<start[^>]*>([^<]+)</start>.*?"
+            r"(?:<name[^>]*>([^<]*)</name>|<title[^>]*>([^<]*)</title>)?.*?</chapter>",
+            text, flags=re.I | re.S):
+            try:
+                start = parse_time(m.group(1).strip())
+            except Exception:
+                continue
+            title = (m.group(2) or m.group(3) or "").strip()
+            chapters.append({"start": start, "end": 0, "title": title})
+        # Endzeiten auffüllen
+        for i, ch in enumerate(chapters):
+            if i + 1 < len(chapters):
+                ch["end"] = chapters[i + 1]["start"]
+        return chapters
+
+    # Zeilen: HH:MM:SS Titel  oder  Sekunden Titel
+    import re
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        m = re.match(r"^(\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?|\d+(?:\.\d+)?)\s+(.+)$", line)
+        if not m:
+            continue
+        chapters.append({"start": parse_time(m.group(1)), "end": 0, "title": m.group(2).strip()})
+    for i, ch in enumerate(chapters):
+        if i + 1 < len(chapters):
+            ch["end"] = chapters[i + 1]["start"]
+    return chapters

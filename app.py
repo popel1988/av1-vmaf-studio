@@ -130,6 +130,8 @@ async def _startup() -> None:
     config.ensure_dirs()
     from core import history
     history.init_db()
+    from core import profiles as prof
+    prof.ensure_builtins()
     # Offene Aufträge aus der letzten Sitzung wiederherstellen (überleben Neustart).
     queue.restore()
     # Echte Encoder-Fähigkeiten im Hintergrund testen (nur falls noch kein Cache).
@@ -461,6 +463,11 @@ class EnqueueRequest(BaseModel):
     audio_track_settings: list[dict] = []  # je Spur: index/mode/codec/bitrate/…
     out_mode: str = "default"        # default | beside | custom
     out_subdir: str = ""             # bei custom: media-relativer Zielordner
+    name_pattern: str = "{stem}{suffix}"
+    on_duplicate: str = "ask"        # ask | skip | overwrite
+    max_output_mb: float = 0
+    max_video_bitrate_kbps: int = 0
+    suffix: str = "_av1"
 
 
 class ApproveRequest(BaseModel):
@@ -494,6 +501,8 @@ class RemuxEnqueueRequest(BaseModel):
     safe_replace: bool = True
     integrity_check: bool = True
     suffix: str = "_remux"
+    name_pattern: str = "{stem}{suffix}"
+    on_duplicate: str = "ask"
     out_mode: str = "default"
     out_subdir: str = ""
 
@@ -766,6 +775,8 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
         "safe_replace": req.safe_replace,
         "integrity_check": req.integrity_check,
         "suffix": req.suffix or "_remux",
+        "name_pattern": req.name_pattern or "{stem}{suffix}",
+        "on_duplicate": req.on_duplicate or "ask",
         "edit_spec": spec,
         "out_mode": req.out_mode,
         "out_subdir": req.out_subdir,
@@ -814,7 +825,7 @@ class ProfileRequest(BaseModel):
 @app.get("/api/profiles")
 async def list_profiles():
     from core import profiles
-    return {"profiles": profiles.load()}
+    return {"profiles": profiles.ensure_builtins()}
 
 
 @app.post("/api/profiles")
@@ -827,6 +838,100 @@ async def save_profile(req: ProfileRequest):
 async def delete_profile(name: str):
     from core import profiles
     return {"profiles": profiles.delete(name)}
+
+
+@app.post("/api/queue/{item_id}/requeue")
+async def requeue_item(item_id: str):
+    """Live-Job mit denselben Settings erneut einreihen."""
+    from core.queue_manager import build_job_settings
+    item = queue.get_item(item_id)
+    if item is None:
+        return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
+    settings = build_job_settings(item.settings.__dict__)
+    new = queue.add_file(item.path, settings)
+    if new is None:
+        return JSONResponse({"error": "Konnte nicht erneut eingereiht werden"}, status_code=400)
+    return {"added": 1, "id": new.id}
+
+
+@app.post("/api/history/{item_id}/requeue")
+async def requeue_history(item_id: str):
+    """Historien-Job erneut einreihen (benötigt settings_json)."""
+    import json
+    from core import history
+    from core.queue_manager import build_job_settings
+    rec = history.get(item_id)
+    if not rec:
+        return JSONResponse({"error": "Nicht in Historie"}, status_code=404)
+    raw = rec.get("settings_json") or "{}"
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        d = {}
+    if not d:
+        return JSONResponse({"error": "Keine Settings gespeichert (älterer Eintrag)"},
+                            status_code=400)
+    path = rec.get("path") or ""
+    target = Path(path)
+    if not target.is_file():
+        return JSONResponse({"error": "Quelldatei nicht mehr vorhanden"}, status_code=404)
+    new = queue.add_file(str(target), build_job_settings(d))
+    if new is None:
+        return JSONResponse({"error": "Konnte nicht erneut eingereiht werden"}, status_code=400)
+    return {"added": 1, "id": new.id}
+
+
+@app.get("/api/vmaf/by-source")
+async def vmaf_by_source(path: str = ""):
+    """VMAF-/Encode-Historie zu einer Quelldatei (Sessions + Jobs)."""
+    from core import history, vmaf
+    if not path:
+        return {"jobs": [], "sessions": []}
+    target = _safe_resolve(path)
+    abs_path = str(target) if target else path
+    return {
+        "jobs": history.by_source(abs_path),
+        "sessions": vmaf.sessions_for_source(abs_path),
+        "path": abs_path,
+    }
+
+
+@app.post("/api/remux/smart-disposition")
+async def remux_smart_disposition(req: dict):
+    """Default/Forced-Heuristik auf übergebene Spurlisten anwenden."""
+    from core import remux
+    audio = list(req.get("audio") or [])
+    subs = list(req.get("subtitles") or [])
+    langs = req.get("prefer_langs") or []
+    prefer = {str(x).lower() for x in langs if str(x).strip()}
+    remux.apply_smart_disposition(audio, subs, prefer)
+    return {"audio": audio, "subtitles": subs}
+
+
+@app.post("/api/remux/import-chapters")
+async def remux_import_chapters(req: dict):
+    """Kapitel aus NFO/ffmetadata/Textdatei importieren."""
+    from core import remux
+    path = req.get("path") or ""
+    target = _safe_resolve(path) if path else None
+    if target is None or not target.is_file():
+        p = Path(path)
+        if p.is_file() and config.rel_input(p) is not None:
+            target = p
+        else:
+            return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    chapters = remux.parse_chapters_file(target)
+    return {"chapters": chapters, "count": len(chapters)}
+
+
+@app.get("/api/remux/sidecar-attachments")
+async def remux_sidecar_attachments(path: str = ""):
+    """Fonts/Cover neben einer Videodatei auflisten."""
+    from core import remux
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    return {"attachments": remux.find_sidecar_attachments(target)}
 
 
 class LibraryScanRequest(BaseModel):
@@ -938,6 +1043,7 @@ class SuperStartRequest(BaseModel):
     mode: str = "representative"      # target_vmaf | representative | fixed
     settings: dict = {}
     per_file: dict = {}              # rel-Pfad -> {audio_tracks, subtitle_tracks}
+    dry_run: bool = False
 
 
 @app.post("/api/supertool/start")
@@ -945,11 +1051,31 @@ async def supertool_start(req: SuperStartRequest):
     from core import supertool
     if not req.paths:
         return JSONResponse({"error": "Keine Dateien ausgewählt"}, status_code=400)
-    added, group_id, err = supertool.start_batch(
-        queue, req.paths, req.settings or {}, req.mode, req.per_file or {})
+    result = supertool.start_batch(
+        queue, req.paths, req.settings or {}, req.mode, req.per_file or {},
+        dry_run=req.dry_run)
+    if req.dry_run:
+        _a, _g, _e, preview = result
+        return {"dry_run": True, "preview": preview}
+    added, group_id, err = result
     if err:
         return JSONResponse({"error": err}, status_code=400)
     return {"added": added, "group_id": group_id}
+
+
+class PreviewRequest(BaseModel):
+    paths: list[str] = []
+    settings: dict = {}
+    estimates: dict = {}
+
+
+@app.post("/api/preview")
+async def preview_jobs(req: PreviewRequest):
+    """Dry-Run: geplante Ausgaben ohne Einreihen."""
+    from core import job_plan
+    if not req.paths:
+        return JSONResponse({"error": "Keine Dateien"}, status_code=400)
+    return job_plan.preview_batch(req.paths, req.settings or {}, req.estimates or {})
 
 
 class AudioScanRequest(BaseModel):
@@ -1426,9 +1552,30 @@ def _details_from_history(rec: dict) -> dict:
         "savings_percent": (round(saved / orig * 100, 1) if orig and saved else None),
         "speed_x": None, "avg_fps": None,
     }
+    out = None
+    out_abs = rec.get("output_path") or ""
+    if out_abs:
+        op = Path(out_abs)
+        orel = config.rel_input(op)
+        out = {"name": op.name, "exists": op.is_file(), "media": None,
+               "info": None, "root": "media", "rel": orel}
+        if orel is not None and op.is_file():
+            out["media"] = f"/api/media?root=media&path={quote(orel)}"
+            info, _ = ff.probe_with_error(op)
+            if info:
+                out["info"] = info.to_dict()
+    settings = {}
+    raw = rec.get("settings_json") or ""
+    if raw:
+        import json as _json
+        try:
+            settings = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (TypeError, ValueError):
+            settings = {}
     return {"id": rec.get("id"), "title": rec.get("title") or "Details",
-            "status": rec.get("status") or "—",
-            "source": src, "output": None, "stats": stats}
+            "status": rec.get("status") or "—", "path": src_abs,
+            "from_history": True, "settings": settings,
+            "source": src, "output": out, "stats": stats}
 
 
 @app.get("/api/queue/{item_id}/details")
@@ -1486,7 +1633,8 @@ async def queue_details(item_id: str):
 
     return {
         "id": item.id, "title": item.title, "status": item.status,
-        "source": src, "output": out, "stats": stats,
+        "path": item.path, "source": src, "output": out, "stats": stats,
+        "settings": item.settings.__dict__ if item.settings else {},
     }
 
 
