@@ -23,8 +23,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
     PYTHONUNBUFFERED=1 \
-    INPUT_DIR=/media/input \
-    OUTPUT_DIR=/media/output \
+    MEDIA_DIR=/media \
     VMAF_MODEL_DIR=/usr/local/share/model
 
 # ----------------------------------------------------------------- System-Deps

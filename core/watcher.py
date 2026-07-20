@@ -31,7 +31,7 @@ def _state_path():
 def default_config() -> dict:
     return {
         "enabled": False,
-        "folder": "",          # relativ zu INPUT_DIR ("" = gesamter Eingabeordner)
+        "folder": "",          # relativ zu MEDIA_DIR ("" = gesamter Medienbaum)
         "interval_min": 15,    # Prüfintervall in Minuten
         "profile": "",         # anzuwendendes Encode-Profil (Name) oder leer
         "active_start": None,  # Startstunde (0–23) oder null = immer

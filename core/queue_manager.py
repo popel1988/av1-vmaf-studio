@@ -105,10 +105,11 @@ class JobSettings:
     # Remux-/Bearbeiten-Modus (video_mode="edit"): Spuren entfernen/umsortieren,
     # Flags/Sprache/Titel ändern, externe Spuren hinzufügen – ohne Re-Encode.
     edit_spec: dict = field(default_factory=dict)
-    # Freier Ablageort: Output-Root (Volume) + optionaler Unterordner. Leer =
-    # Standard (erster Output-Root, gespiegelte Eingabestruktur).
-    out_root: str = ""
+    # Ablageort: default = Standard-Ausgabe (Settings), beside = neben Quelle,
+    # custom = out_subdir als media-relativer Ordner.
+    out_mode: str = "default"
     out_subdir: str = ""
+    out_root: str = ""  # veraltet (Queue-Persistenz); wird über out_mode abgebildet
 
 
 @dataclass
@@ -1316,7 +1317,7 @@ class QueueManager:
                     f"Original behalten (Sicherheit): {reason}."
                 logger.warning("Sichere Nachbehandlung – Original behalten (%s): %s",
                                item.title, reason)
-                return  # Original bleibt unangetastet, Output liegt in OUTPUT_DIR
+                return  # Original bleibt unangetastet, Output liegt in der Standard-Ausgabe
 
         try:
             if mode == "inplace":
@@ -1329,7 +1330,7 @@ class QueueManager:
                 archive_dir = src.parent / config.ARCHIVE_DIRNAME
                 archive_dir.mkdir(parents=True, exist_ok=True)
                 src.replace(archive_dir / src.name)
-            # mode == "keep": Original bleibt, Output liegt in OUTPUT_DIR
+            # mode == "keep": Original bleibt, Output liegt in der Standard-Ausgabe
         except OSError as e:
             item.error = f"Post-Processing-Warnung: {e}"
 
@@ -1438,6 +1439,7 @@ def build_job_settings(d: dict) -> JobSettings:
         audio_track_settings=list(d.get("audio_track_settings", [])),
         batch_id=str(d.get("batch_id", "") or ""),
         edit_spec=dict(d.get("edit_spec", {}) or {}),
+        out_mode=str(d.get("out_mode", "") or "default"),
         out_root=str(d.get("out_root", "") or ""),
         out_subdir=str(d.get("out_subdir", "") or ""),
     )
@@ -1472,29 +1474,49 @@ def _container_ext(s: JobSettings) -> str:
     return CONTAINER.get(s.codec, ".mkv")
 
 
+def _effective_out_mode(s: JobSettings) -> str:
+    mode = str(getattr(s, "out_mode", "") or "").strip().lower()
+    if mode in ("default", "beside", "custom"):
+        return mode
+    # Alte Queue-Einträge: in:* bedeutete „neben der Quelle".
+    root = str(getattr(s, "out_root", "") or "")
+    if root.startswith("in:"):
+        return "beside"
+    return "default"
+
+
 def _output_path(item: QueueItem) -> Path:
     src = Path(item.path)
     ext = _container_ext(item.settings)
-    if item.settings.post_processing == "inplace":
-        # Temporäre Datei neben dem Original
+    s = item.settings
+    if s.post_processing == "inplace":
         return src.with_name(f"{src.stem}.__tmp__{ext}")
-    base = config.resolve_output_base(getattr(item.settings, "out_root", ""))
-    sub = config.safe_subdir(getattr(item.settings, "out_subdir", ""))
-    if sub:
-        # Fester Ziel-Unterordner → Datei flach dort ablegen.
-        target = base / sub / src.name
-    else:
-        # Ohne Unterordner die Quellstruktur unter der Basis spiegeln.
-        # Liegt die Quelle bereits unter der Basis (Ziel = Eingabe-Root, also
-        # „neben der Quelle"), relativ dazu spiegeln – sonst würde der Root-Name
-        # doppelt auftauchen. Andernfalls (Output-Volume) den root-aware
-        # relativen Pfad nutzen, damit gleichnamige Dateien getrennt bleiben.
+
+    mode = _effective_out_mode(s)
+    sub = config.safe_subdir(getattr(s, "out_subdir", ""))
+    name = f"{src.stem}{s.suffix}{ext}"
+
+    if mode == "beside":
+        return src.parent / name
+
+    if mode == "custom" and sub:
+        base = config.resolve_input(sub)
+        if base is None:
+            base = config.default_output_path()
         try:
-            rel = src.resolve().relative_to(base.resolve()).as_posix()
-        except (ValueError, OSError):
-            rel = config.rel_input(src) or src.name
-        target = base / rel
-    return target.with_name(f"{src.stem}{item.settings.suffix}{ext}")
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return base / name
+
+    # Standard-Ausgabe: Quellstruktur darunter spiegeln.
+    base = config.default_output_path()
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    rel = config.rel_input(src) or src.name
+    return (base / rel).with_name(name)
 
 
 def _quality_label(s: JobSettings) -> str:

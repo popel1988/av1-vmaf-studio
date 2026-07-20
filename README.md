@@ -47,7 +47,7 @@ DE/EN language toggle:
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes. |
-| **Library** | Recursive scan of `INPUT_DIR` with filters and savings estimates. |
+| **Library** | Recursive scan of the media tree with filters and savings estimates. |
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
 | **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
@@ -56,7 +56,7 @@ Other highlights:
 
 - **Sidebar with live hardware rings**: CPU, RAM, and GPU(s) via `psutil`,
   `nvidia-smi`, sysfs (AMD `gpu_busy_percent`), and `intel_gpu_top`.
-- **Structured file/folder browser** for `/media/input` (recursive, with filter/sort).
+- **Structured file/folder browser** for `/media` (recursive, with filter/sort).
 - **Multiple named input roots** and **multiple output volumes** (see below).
 - **Per-job target folder**: pick the output volume and/or a subfolder for every
   encode, remux, merge, split, and extract job (with an output folder browser).
@@ -182,23 +182,18 @@ through the normal queue.
 
 ---
 
-## Multiple input & output locations
+## Media tree & output
 
-You are not limited to a single mounted folder:
+One media mount is enough — sources and encodes live in the same tree:
 
-- **Multiple input roots** — mount several folders and list them via `INPUT_DIRS`
-  (`Name=/path`, separated by `;` or newlines). The browser then shows each root
-  as a named virtual folder, and output paths keep the root name as a prefix so
-  identically named files from different roots never collide.
-- **Multiple output volumes** — define named targets via `OUTPUT_DIRS` (same
-  format). Each job can pick its output volume.
-- **Per-job target folder** — every encode, remux, merge, split, and extract job
-  has an optional **target subfolder** field plus an **output folder browser**.
-  Leave it empty to mirror the source structure into the output volume, or pick a
-  folder to place the result there directly.
-
-Both are optional — without `INPUT_DIRS`/`OUTPUT_DIRS` the single `INPUT_DIR` /
-`OUTPUT_DIR` behavior is unchanged.
+- **`MEDIA_PATH` → `/media`** — host folder mounted as the media tree (read + write).
+- **Standard output** — set in **Settings → Media & output** (default: `output` →
+  `/media/output`). The source folder structure is mirrored underneath.
+- **Per-job output mode** — Standard output · Next to source · Custom folder
+  (browser in the media tree).
+- **Optional extra roots** — mount more folders and list them via `MEDIA_DIRS`
+  (`Name=/path`, `;`/newline separated). The browser shows each root as a named
+  virtual folder.
 
 ---
 
@@ -225,7 +220,7 @@ Both are optional — without `INPUT_DIRS`/`OUTPUT_DIRS` the single `INPUT_DIR` 
 
 ## Automation & integration
 
-- **Watch folder**: automatically enqueue new files in `INPUT_DIR` (with a time
+- **Watch folder**: automatically enqueue new files in the media tree (with a time
   window, configurable in the UI).
 - **Notifications**: generic webhook, **Discord**, and **Telegram**
   (via env or UI).
@@ -269,11 +264,12 @@ You do **not** need to copy anything onto the server manually.
    - **Compose path**: `docker-compose.yml`
    - (private repo: enable authentication/token)
 3. Under **Environment variables**, set the paths (no file editing needed):
-   - `INPUT_PATH = /mnt/videos`
-   - `OUTPUT_PATH = /mnt/output`
+   - `MEDIA_PATH = /mnt/videos` (sources + encodes)
    - `DATA_PATH = /mnt/appdata/av1-studio` (persistent app folder)
    - optionally `WEB_PORT = 8080`
 4. **Deploy the stack** — Portainer builds the image and starts the container.
+5. In the UI under **Settings → Media & output**, set the standard output folder
+   (e.g. `output` → `/media/output`).
 
 > No Nvidia on the host? Remove the `runtime: nvidia` lines and the entire
 > `deploy:` block from `docker-compose.yml`, otherwise startup will fail.
@@ -281,7 +277,7 @@ You do **not** need to copy anything onto the server manually.
 ### B) Build locally & start with Compose
 
 ```bash
-INPUT_PATH=/mnt/videos OUTPUT_PATH=/mnt/output DATA_PATH=./data docker compose up -d --build
+MEDIA_PATH=/mnt/videos DATA_PATH=./data docker compose up -d --build
 ```
 
 Open the dashboard: <http://SERVER-IP:8080>
@@ -319,7 +315,7 @@ builds the image automatically and publishes it under
 ```bash
 pip install -r requirements.txt
 # FFmpeg/ffprobe with libvmaf, dovi_tool, and VMAF models must be available
-export INPUT_DIR=/path/videos OUTPUT_DIR=/path/output VMAF_MODEL_DIR=/path/model
+export MEDIA_DIR=/path/videos VMAF_MODEL_DIR=/path/model
 python app.py
 ```
 
@@ -367,8 +363,7 @@ docker-compose.yml      Portainer stack
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INPUT_PATH` | `/media/input` | Host source folder → `/media/input` |
-| `OUTPUT_PATH` | `/media/output` | Host output folder → `/media/output` |
+| `MEDIA_PATH` | `/media` | Host media tree → `/media` (read + write) |
 | `DATA_PATH` | `./data` | Persistent app folder → `/data` |
 | `WEB_PORT` | `8080` | Host port of the dashboard |
 
@@ -376,10 +371,8 @@ docker-compose.yml      Portainer stack
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INPUT_DIR` | `/media/input` | Source directory (read) |
-| `OUTPUT_DIR` | `/media/output` | Output directory |
-| `INPUT_DIRS` | – | Multiple named input roots, e.g. `Movies=/media/movies;Series=/media/series` (`;`/newline separated). Overrides the single `INPUT_DIR`. |
-| `OUTPUT_DIRS` | – | Multiple named output volumes, e.g. `Local=/media/output;NAS=/mnt/nas/encodes`. Selectable per job. |
+| `MEDIA_DIR` | `/media` | Media tree inside the container |
+| `MEDIA_DIRS` | – | Extra named roots, e.g. `Movies=/media/movies;Series=/media/series` (`;`/newline). |
 | `DATA_DIR` | `/data` | Root for queue, history, sessions, cache |
 | `VMAF_MODEL_DIR` | `/usr/local/share/model` | Path to VMAF models |
 | `RETAIN_VMAF_SESSIONS` | `true` | Keep VMAF artifacts after analysis |

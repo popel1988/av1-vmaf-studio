@@ -208,6 +208,7 @@ def _encoder_options() -> list[dict]:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    from core import app_settings
     plats = monitor.available_platforms()
     return templates.TemplateResponse(
         "index.html",
@@ -220,11 +221,10 @@ async def index(request: Request):
             ],
             "encoder_options": _encoder_options(),
             "video_extensions": sorted(e.lstrip(".") for e in config.VIDEO_EXTENSIONS),
-            "input_dir": str(config.INPUT_DIR),
-            "input_roots": config.input_roots_public(),
-            "multi_input": config.MULTI_INPUT,
-            "output_roots": config.output_roots_public(),
-            "multi_output": config.MULTI_OUTPUT,
+            "media_dir": str(config.MEDIA_DIR),
+            "media_roots": config.media_roots_public(),
+            "multi_media": config.MULTI_MEDIA,
+            "default_output": app_settings.default_output_rel(),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
             "capacity": CAPACITY,
@@ -250,23 +250,23 @@ def _asset_version() -> str:
 
 # ------------------------------------------------------------------- Browser
 def _safe_resolve(rel: str) -> Optional[Path]:
-    """Verhindert Pfad-Traversal: alles muss innerhalb eines Input-Roots liegen.
+    """Verhindert Pfad-Traversal: alles muss innerhalb eines Media-Roots liegen.
 
     Bei genau einem Root und leerem Pfad wird der Root selbst geliefert
     (Verzeichnis-Listing). Bei mehreren Roots ist "" die virtuelle Wurzel und
     hat keinen Dateisystem-Pfad – das behandelt der Browser separat.
     """
-    if not rel and not config.MULTI_INPUT:
-        return config.INPUT_ROOTS[0][1].resolve()
+    if not rel and not config.MULTI_MEDIA:
+        return config.MEDIA_ROOTS[0][1].resolve()
     return config.resolve_input(rel)
 
 
 @app.get("/api/browse")
 async def browse_input(path: str = "", kind: str = "video"):
     # Virtuelle Wurzel bei mehreren Roots: die Roots als "Ordner" auflisten.
-    if not path and config.MULTI_INPUT:
+    if not path and config.MULTI_MEDIA:
         dirs = [{"name": r["name"], "rel": r["name"]}
-                for r in config.input_roots_public()]
+                for r in config.media_roots_public()]
         return {"path": "", "parent": None, "is_root": True,
                 "roots": True, "dirs": dirs, "files": []}
 
@@ -310,17 +310,17 @@ async def browse_input(path: str = "", kind: str = "video"):
 
     rel_here = config.rel_input(target) or ""
     # Elternpfad: leer, wenn wir auf einem Root-Top stehen (dann zur Root-Liste
-    # bei Multi-Input bzw. zum Root-Inhalt bei Einzel-Input).
-    is_root_top = any(target.resolve() == b.resolve() for _, b in config.INPUT_ROOTS)
+    # bei Multi-Media bzw. zum Root-Inhalt bei Einzel-Root).
+    is_root_top = any(target.resolve() == b.resolve() for _, b in config.MEDIA_ROOTS)
     if is_root_top:
         # Multi-Root: von einem Root-Top zurück zur virtuellen Wurzel ("").
-        parent = "" if config.MULTI_INPUT else None
+        parent = "" if config.MULTI_MEDIA else None
     else:
         parent = config.rel_input(target.parent)
     return {
         "path": rel_here,
         "parent": parent,
-        "is_root": is_root_top and not config.MULTI_INPUT,
+        "is_root": is_root_top and not config.MULTI_MEDIA,
         "dirs": dirs,
         "files": files,
     }
@@ -328,45 +328,11 @@ async def browse_input(path: str = "", kind: str = "video"):
 
 @app.get("/api/browse-output")
 async def browse_output(root: str = "", path: str = ""):
-    """Ordner-Browser fürs Ausgabe-Volume (nur Unterordner). `root` wählt das
-    Output-Root (bei mehreren), `path` ist der relative Unterordner darin."""
-    base = config.resolve_output_base(root)
-    sub = config.safe_subdir(path)
-    target = (base / sub) if sub else base
-    try:
-        base_r = base.resolve()
-        target_r = target.resolve()
-    except OSError as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-    if not (target_r == base_r or config._within(target_r, base_r)):
-        return JSONResponse({"error": "Pfad außerhalb des Ausgabeordners"},
-                            status_code=400)
-    dirs, files = [], []
-    if target_r.is_dir():
-        try:
-            for entry in sorted(target_r.iterdir(), key=lambda p: p.name.lower()):
-                if entry.name.startswith("."):
-                    continue
-                if entry.is_dir():
-                    rel = config.safe_subdir(f"{sub}/{entry.name}" if sub else entry.name)
-                    dirs.append({"name": entry.name, "rel": rel})
-                elif entry.suffix.lower() in config.VIDEO_EXTENSIONS:
-                    try:
-                        size = entry.stat().st_size
-                    except OSError:
-                        size = 0
-                    rel = config.safe_subdir(f"{sub}/{entry.name}" if sub else entry.name)
-                    files.append({"name": entry.name, "rel": rel,
-                                  "size": size, "size_human": ff.human_size(size)})
-        except OSError as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
-    if sub:
-        parent = config.safe_subdir(str(Path(sub).parent))
-        parent = "" if parent in (".", "") else parent
-    else:
-        parent = None
-    return {"root": root, "path": sub, "parent": parent, "is_root": not sub,
-            "exists": target_r.is_dir(), "dirs": dirs, "files": files}
+    """Ordner-Browser im Medienbaum (gleich /api/browse).
+
+    `root` wird ignoriert; `path` ist media-relativ.
+    """
+    return await browse_input(path=path, kind="video")
 
 
 @app.get("/api/search")
@@ -493,8 +459,8 @@ class EnqueueRequest(BaseModel):
     audio_tracks: list[int] = []     # leer = alle Tonspuren
     audio_per_track: bool = False    # Audio pro Spur konfiguriert
     audio_track_settings: list[dict] = []  # je Spur: index/mode/codec/bitrate/…
-    out_root: str = ""               # Ziel-Volume (Output-Root), leer = Standard
-    out_subdir: str = ""             # optionaler Ziel-Unterordner
+    out_mode: str = "default"        # default | beside | custom
+    out_subdir: str = ""             # bei custom: media-relativer Zielordner
 
 
 class ApproveRequest(BaseModel):
@@ -528,7 +494,7 @@ class RemuxEnqueueRequest(BaseModel):
     safe_replace: bool = True
     integrity_check: bool = True
     suffix: str = "_remux"
-    out_root: str = ""
+    out_mode: str = "default"
     out_subdir: str = ""
 
 
@@ -600,7 +566,7 @@ async def remux_chapters(path: str):
 class RemuxExtractRequest(BaseModel):
     path: str
     tracks: list[dict] = []          # je Spur: type (audio|subtitle), index
-    out_root: str = ""
+    out_mode: str = "default"
     out_subdir: str = ""
 
 
@@ -618,13 +584,7 @@ async def remux_extract(req: RemuxExtractRequest):
     if info is None:
         return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
 
-    base = config.resolve_output_base(req.out_root)
-    sub = config.safe_subdir(req.out_subdir)
-    if sub:
-        out_dir = base / sub
-    else:
-        rel = config.rel_input(target) or target.name
-        out_dir = (base / rel).parent
+    out_dir = config.resolve_out_dir(target, req.out_mode, req.out_subdir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results, errors = [], []
     for cmd, out_path in remux.build_extract_cmds(info, out_dir, req.tracks):
@@ -652,7 +612,7 @@ class RemuxConcatRequest(BaseModel):
     platform: str = "cpu"            # Re-Encode: Plattform/Codec/CQ
     codec: str = "av1"
     cq: int = 30
-    out_root: str = ""
+    out_mode: str = "default"
     out_subdir: str = ""
 
 
@@ -696,7 +656,7 @@ async def remux_concat(req: RemuxConcatRequest):
             "unify": bool(req.unify), "platform": req.platform,
             "codec": req.codec, "cq": req.cq,
         },
-        "out_root": req.out_root, "out_subdir": req.out_subdir,
+        "out_mode": req.out_mode, "out_subdir": req.out_subdir,
     }
     item = queue.add_file(str(first), build_job_settings(d))
     if item is None:
@@ -712,7 +672,7 @@ class RemuxSplitRequest(BaseModel):
     ranges: list[dict] = []          # [{start,end,title?}] bei mode=range (Ausschnitt)
     container: str = "mkv"
     suffix: str = "_part"
-    out_root: str = ""
+    out_mode: str = "default"
     out_subdir: str = ""
 
 
@@ -732,7 +692,7 @@ async def remux_split(req: RemuxSplitRequest):
                       "split_times": list(req.times or []),
                       "split_ranges": list(req.ranges or []),
                       "container": container},
-        "out_root": req.out_root, "out_subdir": req.out_subdir,
+        "out_mode": req.out_mode, "out_subdir": req.out_subdir,
     }
     item = queue.add_file(str(target), build_job_settings(d))
     if item is None:
@@ -807,7 +767,7 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
         "integrity_check": req.integrity_check,
         "suffix": req.suffix or "_remux",
         "edit_spec": spec,
-        "out_root": req.out_root,
+        "out_mode": req.out_mode,
         "out_subdir": req.out_subdir,
     }
     settings = build_job_settings(d)
@@ -1048,7 +1008,7 @@ def _resolve_under_input(raw: str):
             rp = p.resolve()
         except OSError:
             return None
-        for _, base in config.INPUT_ROOTS:
+        for _, base in config.MEDIA_ROOTS:
             if config._within(rp, base.resolve()):
                 return rp if rp.exists() else None
         return None
@@ -1357,18 +1317,55 @@ async def set_parallel(req: ParallelRequest):
     return {"value": queue.set_parallel(n)}
 
 
-def _resolve_media_root(path: str, root: str):
-    """Datei aus 'input' (root-aware) oder 'output' sicher auflösen."""
-    from pathlib import Path
-    if root == "output":
-        base = config.OUTPUT_DIR.resolve()
-        target = (base / path.lstrip("/")).resolve()
-        return target if config._within(target, base) else None
+class AppSettingsRequest(BaseModel):
+    default_output: str = "output"
+
+
+@app.get("/api/settings")
+async def get_app_settings():
+    from core import app_settings
+    cfg = app_settings.load()
+    out_abs = config.default_output_path()
+    return {
+        **cfg,
+        "default_output_abs": str(out_abs),
+        "media_dir": str(config.MEDIA_DIR),
+        "media_roots": config.media_roots_public(),
+    }
+
+
+@app.post("/api/settings")
+async def set_app_settings(req: AppSettingsRequest):
+    from core import app_settings
+    rel = config.safe_subdir(req.default_output)
+    if rel:
+        # Erlaubter Pfad unter Media-Roots (auch wenn Ordner noch fehlt).
+        probe = config.resolve_input(rel)
+        if probe is None and config.MULTI_MEDIA:
+            # Bei Multi-Root muss das erste Segment ein Root-Name sein.
+            first = rel.split("/", 1)[0]
+            if first not in {n for n, _ in config.MEDIA_ROOTS}:
+                return JSONResponse(
+                    {"error": "Pfad liegt außerhalb der Media-Roots"},
+                    status_code=400)
+        elif probe is None and not config.MULTI_MEDIA:
+            # Einzel-Root: relativen Pfad immer akzeptieren und anlegen.
+            pass
+    cfg = app_settings.save({"default_output": rel or "output"})
+    try:
+        config.default_output_path().mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return {**cfg, "default_output_abs": str(config.default_output_path())}
+
+
+def _resolve_media_root(path: str, root: str = "media"):
+    """Datei im Medienbaum sicher auflösen (`root` nur noch für API-Kompatibilität)."""
     return config.resolve_input(path)
 
 
 @app.get("/api/media")
-async def media(path: str, root: str = "input"):
+async def media(path: str, root: str = "media"):
     """Streamt eine Video-Datei (mit Range-Support) für den A/B-Vergleichsplayer."""
     target = _resolve_media_root(path, root)
     if target is None:
@@ -1379,8 +1376,8 @@ async def media(path: str, root: str = "input"):
 
 
 @app.get("/api/ffprobe")
-async def ffprobe_any(path: str, root: str = "input"):
-    """ffprobe für eine Datei aus dem Input- oder Output-Ordner (Detail-Ansicht)."""
+async def ffprobe_any(path: str, root: str = "media"):
+    """ffprobe für eine Datei im Medienbaum (Detail-Ansicht)."""
     target = _resolve_media_root(path, root)
     if target is None:
         return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
@@ -1409,9 +1406,9 @@ def _details_from_history(rec: dict) -> dict:
         p = Path(src_abs)
         rel = config.rel_input(p)
         src = {"name": p.name, "exists": p.is_file(), "media": None,
-               "info": None, "root": "input", "rel": rel}
+               "info": None, "root": "media", "rel": rel}
         if rel is not None and p.is_file():
-            src["media"] = f"/api/media?root=input&path={quote(rel)}"
+            src["media"] = f"/api/media?root=media&path={quote(rel)}"
             info, _ = ff.probe_with_error(p)
             if info:
                 src["info"] = info.to_dict()
@@ -1448,23 +1445,23 @@ async def queue_details(item_id: str):
             return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
         return _details_from_history(rec)
 
-    def _pack(abs_path, root):
+    def _pack(abs_path, root="media"):
         from pathlib import Path
         if not abs_path:
             return None
         p = Path(abs_path)
-        rel = config.rel_input(p) if root == "input" else _rel_to(config.OUTPUT_DIR, p)
+        rel = config.rel_input(p)
         entry = {"name": p.name, "exists": p.is_file(), "media": None,
                  "info": None, "root": root, "rel": rel}
         if rel is not None and p.is_file():
-            entry["media"] = f"/api/media?root={root}&path={quote(rel)}"
+            entry["media"] = f"/api/media?root=media&path={quote(rel)}"
             info, _ = ff.probe_with_error(p)
             if info:
                 entry["info"] = info.to_dict()
         return entry
 
-    src = _pack(item.path, "input")
-    out = _pack(item.output_path, "output")
+    src = _pack(item.path)
+    out = _pack(item.output_path)
 
     # Encode-Kennzahlen: Geschwindigkeit (x-fach), Ø FPS, Ersparnis.
     stats = {

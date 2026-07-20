@@ -49,19 +49,15 @@ def auth_token() -> str:
     """Cookie-Token, das nur bei korrektem Passwort reproduzierbar ist."""
     return _hashlib.sha256(("vcompress:" + APP_PASSWORD).encode()).hexdigest()
 
-# --- Medien-Volumes (Quelle / fertige Encodes) --------------------------------
-INPUT_DIR = Path(os.getenv("INPUT_DIR", "/media/input"))
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/media/output"))
-
-# --- Mehrere Eingabe-Ordner ("virtuelle Roots") ------------------------------
-# Wer verschiedene Ordnerstrukturen einbinden will (Filme, Serien, Anime …),
-# ohne das ganze Laufwerk zu mounten, gibt sie über INPUT_DIRS an:
-#   INPUT_DIRS="Filme=/media/filme;Serien=/media/serien;Anime=/media/anime"
-# Einträge sind durch ; oder Zeilenumbruch getrennt, jeweils "Name=/pfad"
-# (Name optional – sonst der Ordnername). Ohne INPUT_DIRS gilt der einzelne
-# INPUT_DIR wie bisher. Relative Pfade sind bei mehreren Roots mit dem Root-Namen
-# als erstem Segment prefixed ("Filme/Unterordner/film.mkv").
+# --- Medienbaum (lesen + schreiben) ------------------------------------------
+# Ein Mount reicht: Host-Ordner → /media. Optional weitere Bäume über MEDIA_DIRS.
+#   MEDIA_DIR=/media
+#   MEDIA_DIRS="Filme=/media/filme;Serien=/media/serien"
+# Die Standard-Ausgabe liegt als Unterordner darin und wird in den Einstellungen
+# gesetzt (Default: "output" → /media/output) – kein separates Output-Volume.
 from typing import Iterator, Optional  # noqa: E402
+
+MEDIA_DIR = Path(os.getenv("MEDIA_DIR", "/media"))
 
 
 def _slug(name: str) -> str:
@@ -96,42 +92,13 @@ def _parse_roots(env_name: str, default_dir: Path,
     return roots
 
 
-INPUT_ROOTS: "list[tuple[str, Path]]" = _parse_roots("INPUT_DIRS", INPUT_DIR, "input")
-MULTI_INPUT = len(INPUT_ROOTS) > 1
-
-# --- Mehrere Ausgabe-Ordner (optional, analog zu INPUT_DIRS) -----------------
-# OUTPUT_DIRS="Standard=/media/output;NAS=/mnt/nas/encodes" – erlaubt pro Job die
-# Wahl eines Ziel-Volumes. Ohne die Variable gilt der einzelne OUTPUT_DIR.
-OUTPUT_ROOTS: "list[tuple[str, Path]]" = _parse_roots("OUTPUT_DIRS", OUTPUT_DIR, "output")
-MULTI_OUTPUT = len(OUTPUT_ROOTS) > 1
+MEDIA_ROOTS: "list[tuple[str, Path]]" = _parse_roots("MEDIA_DIRS", MEDIA_DIR, "media")
+MULTI_MEDIA = len(MEDIA_ROOTS) > 1
 
 
-def input_roots_public() -> "list[dict]":
+def media_roots_public() -> "list[dict]":
     """Roots für UI/API (Name + Pfad + Existenz)."""
-    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in INPUT_ROOTS]
-
-
-def output_roots_public() -> "list[dict]":
-    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in OUTPUT_ROOTS]
-
-
-def resolve_output_base(root_name: str) -> Path:
-    """Basis-Verzeichnis eines Ziel-Roots (Fallback: erster Output-Root).
-
-    Mit dem Präfix ``in:`` wird ein Eingabe-Root als Ziel gewählt (z. B. um ein
-    Remux-Ergebnis neben der Quelle abzulegen).
-    """
-    rn = root_name or ""
-    if rn.startswith("in:"):
-        want = rn[3:]
-        for name, base in INPUT_ROOTS:
-            if name == want:
-                return base
-        return INPUT_ROOTS[0][1]
-    for name, base in OUTPUT_ROOTS:
-        if name == rn:
-            return base
-    return OUTPUT_ROOTS[0][1]
+    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in MEDIA_ROOTS]
 
 
 def safe_subdir(sub: str) -> str:
@@ -154,14 +121,14 @@ def _within(target: Path, base: Path) -> bool:
 
 
 def resolve_input(rel: str) -> Optional[Path]:
-    """Relativen (root-aware) Pfad sicher in einen absoluten Pfad auflösen.
+    """Relativen (root-aware) Medienpfad sicher in einen absoluten Pfad auflösen.
 
     Einzel-Root: `rel` ist relativ zum Root (optionaler Root-Prefix erlaubt).
     Multi-Root: erstes Segment = Root-Name, Rest = Unterpfad.
     """
     rel = (rel or "").strip().strip("/")
-    if len(INPUT_ROOTS) == 1:
-        name, base = INPUT_ROOTS[0]
+    if len(MEDIA_ROOTS) == 1:
+        name, base = MEDIA_ROOTS[0]
         base = base.resolve()
         first, _, rest = rel.partition("/")
         if first == name:
@@ -171,7 +138,7 @@ def resolve_input(rel: str) -> Optional[Path]:
     if not rel:
         return None
     first, _, rest = rel.partition("/")
-    for name, base in INPUT_ROOTS:
+    for name, base in MEDIA_ROOTS:
         if name == first:
             b = base.resolve()
             target = (b / rest).resolve() if rest else b
@@ -180,20 +147,47 @@ def resolve_input(rel: str) -> Optional[Path]:
 
 
 def rel_input(abs_path) -> Optional[str]:
-    """Absoluten Pfad in einen root-aware relativen Pfad umwandeln (für UI/Output).
+    """Absoluten Pfad in einen root-aware relativen Medienpfad umwandeln.
 
-    Einzel-Root: Unterpfad ohne Prefix (rückwärtskompatibel).
+    Einzel-Root: Unterpfad ohne Prefix.
     Multi-Root: "Root-Name/Unterpfad".
     """
     ap = Path(abs_path).resolve()
-    for name, base in INPUT_ROOTS:
+    for name, base in MEDIA_ROOTS:
         b = base.resolve()
         if _within(ap, b):
             sub = ap.relative_to(b).as_posix()
-            if len(INPUT_ROOTS) == 1:
+            if len(MEDIA_ROOTS) == 1:
                 return "" if sub == "." else sub
             return name if sub == "." else f"{name}/{sub}"
     return None
+
+
+def default_output_path() -> Path:
+    """Absoluter Standard-Ausgabeordner (Settings → Media-Root, Fallback output/)."""
+    from . import app_settings
+    rel = app_settings.default_output_rel()
+    target = resolve_input(rel)
+    if target is not None:
+        return target
+    # Relativ zum ersten Root, falls der Settings-Pfad noch nicht existiert.
+    _, base = MEDIA_ROOTS[0]
+    return (base / (rel or "output")).resolve()
+
+
+def resolve_out_dir(src: Path, out_mode: str = "default",
+                    out_subdir: str = "") -> Path:
+    """Zielordner für synchrone Aktionen (Extract o. Ä.) anhand out_mode."""
+    mode = (out_mode or "default").strip().lower()
+    sub = safe_subdir(out_subdir)
+    if mode == "beside":
+        return src.parent
+    if mode == "custom" and sub:
+        p = resolve_input(sub)
+        return p if p is not None else default_output_path()
+    base = default_output_path()
+    rel = rel_input(src) or src.name
+    return (base / rel).parent
 
 
 def scan_targets(root_rel: str) -> "list[Path]":
@@ -206,11 +200,11 @@ def scan_targets(root_rel: str) -> "list[Path]":
         target = resolve_input(rel)
         if target and target.is_dir():
             return [target]
-    return [b.resolve() for _, b in INPUT_ROOTS if b.exists()]
+    return [b.resolve() for _, b in MEDIA_ROOTS if b.exists()]
 
 
 def iter_input_files(root_rel: str, exts: set) -> "Iterator[Path]":
-    """Alle passenden Dateien unter dem/den Ziel-Root(s) (rekursiv)."""
+    """Alle passenden Dateien unter dem/den Media-Root(s) (rekursiv)."""
     for scan_dir in scan_targets(root_rel):
         for f in scan_dir.rglob("*"):
             if f.is_file() and f.suffix.lower() in exts:
@@ -345,15 +339,22 @@ def data_paths_dict() -> dict:
         "work_dir": str(WORK_DIR),
         "preview_dir": str(PREVIEW_DIR),
         "vmaf_sessions_dir": str(VMAF_SESSIONS_DIR),
-        "input_dir": str(INPUT_DIR),
-        "output_dir": str(OUTPUT_DIR),
+        "media_dir": str(MEDIA_DIR),
+        "default_output": str(default_output_path()),
         "retain_vmaf_sessions": RETAIN_VMAF_SESSIONS,
     }
 
 
 def ensure_dirs() -> None:
     """Stellt sicher, dass alle Arbeitsverzeichnisse existieren."""
-    for d in (INPUT_DIR, OUTPUT_DIR, DATA_DIR, WORK_DIR, PREVIEW_DIR, VMAF_SESSIONS_DIR):
+    dirs = [MEDIA_DIR, DATA_DIR, WORK_DIR, PREVIEW_DIR, VMAF_SESSIONS_DIR, UPLOAD_DIR]
+    for _, base in MEDIA_ROOTS:
+        dirs.append(base)
+    try:
+        dirs.append(default_output_path())
+    except Exception:
+        pass
+    for d in dirs:
         try:
             d.mkdir(parents=True, exist_ok=True)
         except OSError:

@@ -37,13 +37,12 @@
     outPick: null,      // Zielordner-Picker (prefix/root/path)
   };
 
-  // Absoluten Quellpfad (aus der Queue) in einen relativen Pfad zum
-  // Eingabeordner umwandeln (für erneute Auswahl/Enqueue).
+  // Absoluten Pfad in einen relativen Medienpfad umwandeln.
   function inputRelPath(abs) {
     if (!abs) return "";
     const p = String(abs).replace(/\\/g, "/");
-    const roots = (window.APP_CONFIG && window.APP_CONFIG.inputRoots) || [];
-    const multi = !!(window.APP_CONFIG && window.APP_CONFIG.multiInput);
+    const roots = (window.APP_CONFIG && window.APP_CONFIG.mediaRoots) || [];
+    const multi = !!(window.APP_CONFIG && window.APP_CONFIG.multiMedia);
     for (const r of roots) {
       const base = String(r.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
       if (base && (p === base || p.startsWith(base + "/"))) {
@@ -220,7 +219,7 @@
       crumbEl.innerHTML = "";
       const root = document.createElement("a");
       root.textContent = opts.rootLabel ||
-        ((window.APP_CONFIG && APP_CONFIG.multiInput) ? "Ordner" : "/media/input");
+        ((window.APP_CONFIG && APP_CONFIG.multiMedia) ? "Medien" : "/media");
       root.onclick = () => go("");
       crumbEl.appendChild(root);
       if (data.path) {
@@ -249,7 +248,7 @@
       files.forEach((f) => listEl.appendChild(makeRow(
         "file", f.name, f.size_human, null,
         opts.pickFile ? () => opts.pickFile(f) : null,
-        opts.playFile ? f.rel : null, opts.playRoot || "input")));
+        opts.playFile ? f.rel : null, opts.playRoot || "media")));
       if (!dirs.length && !files.length) {
         listEl.innerHTML = q
           ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
@@ -277,7 +276,7 @@
           const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
           listEl.appendChild(makeRow("file", label, f.size_human, null,
             opts.pickFile ? () => opts.pickFile(f) : null,
-            opts.playFile ? f.rel : null, opts.playRoot || "input"));
+            opts.playFile ? f.rel : null, opts.playRoot || "media"));
         });
         if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
         count.textContent = `${(data.files || []).length} Treffer${data.truncated ? " (begrenzt)" : ""}`;
@@ -322,7 +321,7 @@
       play.textContent = "▶";
       play.addEventListener("click", (e) => {
         e.stopPropagation();
-        openPlayer(playRoot || "input", playRel, name);
+        openPlayer(playRoot || "media", playRel, name);
       });
       row.appendChild(play);
     }
@@ -365,23 +364,18 @@
     if (picker) picker.go(opts.start || "");
   }
 
-  // Modal-Dateiauswahl (Video). onPick({rel,name}). root: "input" | "output".
+  // Modal-Dateiauswahl (Video). onPick({rel,name}).
   function openFilePickerModal(opts) {
     opts = opts || {};
-    const isOut = opts.root && opts.root !== "input";
     openModal(opts.title || "Datei wählen",
       '<div class="breadcrumb" id="fp-crumb"></div>' +
       '<div class="browser browser-sm" id="fp-browser"><div class="browser-loading">Lade …</div></div>');
     const picker = makeFolderBrowser({
       listId: "fp-browser", crumbId: "fp-crumb",
       kind: "video", showFiles: true,
-      rootLabel: isOut ? "Ausgabe" : undefined,
-      playRoot: isOut ? "output" : "input",
+      rootLabel: opts.rootLabel || "Medien",
+      playRoot: "media",
       searchPlaceholder: "Im Ordner suchen … (Name)",
-      browseUrl: isOut
-        ? ((p) => `/api/browse-output?root=${encodeURIComponent(opts.outRoot || "")}&path=${encodeURIComponent(p)}`)
-        : undefined,
-      searchUrl: isOut ? null : undefined,
       pickFile: (f) => { closeModal(); if (opts.onPick) opts.onPick(f); },
     });
     if (picker) picker.go("");
@@ -710,7 +704,7 @@
   }
 
   function selectFolder(path, isRoot) {
-    const name = isRoot ? "/media/input (alle Unterordner)" : path.split("/").pop();
+    const name = isRoot ? "/media (alle Unterordner)" : path.split("/").pop();
     state.selected = { path: path, name: name, isBatch: true };
     $("selection-badge").textContent = "Ordner ausgewählt (Batch)";
     enableActionButtons();
@@ -957,50 +951,83 @@
     };
   }
 
-  // Zielort (Output-Root + Unterordner) für ein Feld-Präfix (z. B. "opt", "remux").
+  // Ausgabe-Ziel für ein Feld-Präfix (z. B. "opt", "remux").
   function outTargetVals(prefix) {
-    const rootEl = $(prefix + "-out-root");
+    const modeEl = $(prefix + "-out-mode");
     const subEl = $(prefix + "-out-subdir");
+    const mode = modeEl ? modeEl.value : "default";
     return {
-      out_root: rootEl ? rootEl.value : "",
-      out_subdir: subEl ? (subEl.value || "").trim() : "",
+      out_mode: mode,
+      out_subdir: (mode === "custom" && subEl) ? (subEl.value || "").trim() : "",
     };
   }
 
-  // Ziel-Volume-Dropdowns befüllen: konfigurierte Ausgabe-Ordner PLUS die
-  // Eingabe-Ordner (als "in:<name>"), damit man z. B. neben der Quelle ablegen
-  // kann. Einblenden, sobald es mehr als eine Zielmöglichkeit gibt.
-  function initOutputRoots() {
-    const outRoots = (window.APP_CONFIG && APP_CONFIG.outputRoots) || [];
-    const inRoots = (window.APP_CONFIG && APP_CONFIG.inputRoots) || [];
-    let html = "";
-    if (outRoots.length) {
-      html += '<optgroup label="Ausgabe-Ordner">' +
-        outRoots.map((r) => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join("") +
-        "</optgroup>";
+  function syncOutModeUI(prefix) {
+    const modeEl = $(prefix + "-out-mode");
+    if (!modeEl) return;
+    const box = modeEl.closest("[data-out-target]");
+    const custom = box ? box.querySelector("[data-out-custom]") : null;
+    if (custom) custom.style.display = modeEl.value === "custom" ? "" : "none";
+    const hint = box ? box.querySelector("[data-out-default-hint]") : null;
+    if (hint) {
+      const def = (window.APP_CONFIG && APP_CONFIG.defaultOutput) || "output";
+      hint.style.display = modeEl.value === "default" ? "" : "none";
+      hint.textContent = `Standard-Ausgabe: ${def} (Quellstruktur wird gespiegelt).`;
     }
-    if (inRoots.length) {
-      html += '<optgroup label="Eingabe-Ordner (z. B. neben der Quelle)">' +
-        inRoots.map((r) => `<option value="in:${escapeHtml(r.name)}">${escapeHtml(r.name)} (Eingabe)</option>`).join("") +
-        "</optgroup>";
-    }
-    const total = outRoots.length + inRoots.length;
-    ["opt", "remux", "merge", "split"].forEach((prefix) => {
-      const sel = $(prefix + "-out-root");
-      if (sel) {
-        sel.innerHTML = html;
-        const field = sel.closest("[data-out-root-field]");
-        if (field) field.style.display = total > 1 ? "" : "none";
+  }
+
+  function initOutTargets() {
+    ["opt", "remux", "merge", "split", "st"].forEach((prefix) => {
+      const modeEl = $(prefix + "-out-mode");
+      if (modeEl) {
+        modeEl.addEventListener("change", () => syncOutModeUI(prefix));
+        syncOutModeUI(prefix);
       }
       const browse = $(prefix + "-out-browse");
       if (browse) browse.addEventListener("click", () => openOutPicker(prefix));
     });
   }
 
-  // Ordner-Browser fürs Ausgabe-Volume: Unterordner auswählen (oder Wurzel).
+  function initMediaSettings() {
+    const inp = $("cfg-default-output");
+    if (!inp) return;
+    const abs = $("cfg-default-output-abs");
+    const badge = $("media-settings-badge");
+    const apply = (d) => {
+      inp.value = d.default_output || "output";
+      if (abs) abs.textContent = d.default_output_abs
+        ? `Absolut: ${d.default_output_abs}` : "";
+      if (badge) badge.textContent = d.default_output || "output";
+      const lbl = $("default-output-label");
+      if (lbl) lbl.textContent = d.default_output || "output";
+      if (window.APP_CONFIG) APP_CONFIG.defaultOutput = d.default_output || "output";
+      ["opt", "remux", "merge", "split", "st"].forEach(syncOutModeUI);
+    };
+    fetch("/api/settings").then((r) => r.json()).then(apply).catch(() => {});
+    const save = $("btn-media-settings-save");
+    if (save) save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const d = await (await fetch("/api/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ default_output: inp.value.trim() || "output" }),
+        })).json();
+        if (d.error) { alert(d.error); return; }
+        apply(d);
+      } finally { save.disabled = false; }
+    });
+    const browse = $("btn-default-out-browse");
+    if (browse) browse.addEventListener("click", () => {
+      openFolderPickerModal({
+        title: "Standard-Ausgabeordner wählen",
+        onPick: (folder) => { inp.value = folder || "output"; },
+      });
+    });
+  }
+
+  // Ordner im Medienbaum wählen → media-relativer Pfad in out-subdir.
   function openOutPicker(prefix) {
-    const rootEl = $(prefix + "-out-root");
-    state.outPick = { prefix, root: rootEl ? rootEl.value : "", path: "" };
+    state.outPick = { prefix, path: "" };
     openModal("Zielordner wählen",
       '<div class="breadcrumb" id="out-pick-crumb"></div>' +
       '<div class="browser browser-sm" id="out-pick-browser"><div class="browser-loading">Lade …</div></div>' +
@@ -1012,6 +1039,8 @@
       const sub = (state.outPick || {}).path || "";
       const el = $(prefix + "-out-subdir");
       if (el) el.value = sub;
+      const modeEl = $(prefix + "-out-mode");
+      if (modeEl) { modeEl.value = "custom"; syncOutModeUI(prefix); }
       closeModal();
     });
     outPickLoadDir("");
@@ -1020,20 +1049,19 @@
   async function outPickLoadDir(path) {
     const el = $("out-pick-browser");
     if (!el) return;
-    const root = (state.outPick || {}).root || "";
     el.innerHTML = '<div class="browser-loading">Lade Verzeichnis …</div>';
     try {
       const data = await (await fetch(
-        `/api/browse-output?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`)).json();
+        `/api/browse?path=${encodeURIComponent(path)}`)).json();
       if (data.error) { el.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
       state.outPick.path = data.path || "";
       const sel = $("out-pick-sel");
-      if (sel) sel.textContent = data.path ? `Ziel: ${data.path}` : "Ziel: (Wurzel)";
+      if (sel) sel.textContent = data.path ? `Ziel: ${data.path}` : "Ziel: (Medienwurzel)";
       const bc = $("out-pick-crumb");
       if (bc) {
         bc.innerHTML = "";
         const r = document.createElement("a");
-        r.textContent = root ? (root.startsWith("in:") ? root.slice(3) + " (Eingabe)" : root) : "Ausgabe";
+        r.textContent = "Medien";
         r.onclick = () => outPickLoadDir("");
         bc.appendChild(r);
         if (data.path) {
@@ -2481,7 +2509,7 @@
     });
     const ab = $("modal-ab");
     if (ab) ab.addEventListener("click", () =>
-      openAbCompare("input", ab.dataset.a, "output", ab.dataset.b));
+      openAbCompare("media", ab.dataset.a, "media", ab.dataset.b));
   }
 
   /* ----------------------------------------------------------------- UTIL */
@@ -2963,7 +2991,7 @@
     const path = btn.dataset.path;
     const name = btn.dataset.name;
     const act = btn.dataset.act;
-    if (act === "play") { openPlayer("input", path, name); return; }
+    if (act === "play") { openPlayer("media", path, name); return; }
     const row = (state.libRows || []).find((m) => m.path === path);
     libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
   }
@@ -3425,7 +3453,7 @@
     const path = btn.dataset.path;
     const name = btn.dataset.name;
     const act = btn.dataset.act;
-    if (act === "play") { openPlayer("input", path, name); return; }
+    if (act === "play") { openPlayer("media", path, name); return; }
     if (act === "remux" || (act === "encode" && $("st-remux-only") && $("st-remux-only").checked)) {
       navTo("remux");
       await remuxSelectFile({ rel: path, name });
@@ -3717,6 +3745,7 @@
       subtitle_languages: $("st-sub-langs") ? $("st-sub-langs").value.trim() : "",
       remux_only: $("st-remux-only") ? $("st-remux-only").checked : false,
       remux_container: $("st-remux-container") ? $("st-remux-container").value : "mkv",
+      ...outTargetVals("st"),
     };
     if (mode === "target_vmaf" || mode === "representative") {
       // Test-Encode-Konfiguration für die VMAF-Analyse (CQ oder Bitrate).
@@ -4044,7 +4073,7 @@
   // Nutzt die native Zeitleiste des Players (keine Wellenform).
   function remuxOpenPreview() {
     if (!state.remuxSel) { $("split-download-info").innerHTML = '<span class="bad">Erst oben eine Quelle wählen.</span>'; return; }
-    const url = `/api/media?root=input&path=${encodeURIComponent(state.remuxSel.path)}`;
+    const url = `/api/media?root=media&path=${encodeURIComponent(state.remuxSel.path)}`;
     openModal("Vorschau & Ausschnitt-Marker",
       videoHtml(url) +
       '<div class="preview-marks">' +
@@ -4879,11 +4908,13 @@
     });
 
     const browse = (which) => {
-      const root = $("ab-root-" + which).value;
       openFilePickerModal({
         title: `Video ${which.toUpperCase()} wählen`,
-        root: root === "output" ? "output" : "input",
-        onPick: (f) => { $("ab-path-" + which).value = f.rel; },
+        onPick: (f) => {
+          $("ab-path-" + which).value = f.rel;
+          const rootEl = $("ab-root-" + which);
+          if (rootEl) rootEl.value = "media";
+        },
       });
     };
     const ba = $("btn-ab-browse-a");
@@ -5184,7 +5215,8 @@
     initAbCompare();
     initAudioOpt();
     initDiagnostics();
-    initOutputRoots();
+    initOutTargets();
+    initMediaSettings();
     loadCapabilities();
     // Haupt-Browser (Encoding/Quellenauswahl): Dateien wählbar, abspielbar,
     // Batch-Button + Library-Ordner werden über onNavigate aktualisiert.
