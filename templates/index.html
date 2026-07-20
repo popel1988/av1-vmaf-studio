@@ -443,20 +443,28 @@
             </div>
             <div class="field-row">
               <div class="field">
-                <label>Max. Ausgabegröße (MB, 0 = aus)</label>
-                <input type="number" id="opt-max-output-mb" min="0" step="1" value="0" />
+                <label>Größenziel (MB Gesamt, 0 = aus)</label>
+                <input type="number" id="opt-size-target" min="0" step="1" value="0" />
+                <p class="hint">Steuert die Videobitrate so, dass Video + Tonspuren unter das Ziel passen.
+                  <span id="opt-size-target-hint" class="muted"></span></p>
               </div>
               <div class="field">
-                <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
-                <input type="number" id="opt-max-bitrate" min="0" step="100" value="0" />
-                <p class="hint">Nach Encode geprüft; bei ABR auch als Encode-Obergrenze.</p>
+                <label>Max. Ausgabegröße Cap (MB, 0 = aus)</label>
+                <input type="number" id="opt-max-output-mb" min="0" step="1" value="0" />
+                <p class="hint">Nur Nachprüfung nach dem Encode (Warnung / Safe-Replace).</p>
               </div>
+            </div>
+            <div class="field">
+              <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
+              <input type="number" id="opt-max-bitrate" min="0" step="100" value="0" />
+              <p class="hint">Nach Encode geprüft; bei ABR auch als Encode-Obergrenze.</p>
             </div>
 
             <label class="check">
               <input type="checkbox" id="opt-integrity" checked />
               <span>Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)</span>
             </label>
+            <p class="hint">Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem (Schutz vor Datenverlust).</p>
 
             <label class="check">
               <input type="checkbox" id="opt-safe-replace" checked />
@@ -707,7 +715,22 @@
             <span class="badge" id="lib-scan-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Durchsucht den Eingabeordner rekursiv und filtert Videos (z. B. „alle H.264 &gt; 10 Mbit/s"). Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.</p>
+            <p class="hint">Durchsucht den Medienbaum (oder eine Unterbibliothek) rekursiv und filtert Videos.
+              Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.</p>
+            <div class="lib-library-bar field-row" style="align-items:flex-end;margin-bottom:12px">
+              <div class="field" style="flex:1">
+                <label>Unterbibliothek</label>
+                <select id="lib-library">
+                  <option value="">— gesamter Medienbaum —</option>
+                </select>
+                <p class="hint">Eigene Bereiche (Filme, Serien, …) mit Ordnerzuweisung.</p>
+              </div>
+              <div class="lib-actions" style="margin:0;padding-bottom:2px">
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-add-library" title="Neue Unterbibliothek">+ Hinzufügen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-edit-library" title="Ausgewählte umbenennen/Pfad ändern" disabled>Bearbeiten</button>
+                <button type="button" class="btn btn-ghost btn-sm bad-btn" id="btn-lib-del-library" title="Ausgewählte löschen" disabled>Löschen</button>
+              </div>
+            </div>
             <div class="lib-filters">
               <div class="field"><label>Name enthält</label><input type="text" id="lib-name" placeholder="optional" /></div>
               <div class="field"><label>Name ausschließen</label><input type="text" id="lib-exclude" placeholder="z. B. sample, trailer, .archiv" title="Kommagetrennt – Dateien, deren Pfad einen dieser Begriffe enthält, werden übersprungen" /></div>
@@ -1055,9 +1078,14 @@
                 </select>
               </div>
             </div>
-            <div class="field-row">
+                        <div class="field-row">
               <div class="field">
-                <label>Max. Ausgabegröße (MB, 0 = aus)</label>
+                <label>Größenziel (MB Gesamt, 0 = aus)</label>
+                <input type="number" id="st-size-target" min="0" step="1" value="0" />
+                <p class="hint">Videobitrate inkl. Tonspuren unter Ziel</p>
+              </div>
+              <div class="field">
+                <label>Max. Ausgabegröße Cap (MB, 0 = aus)</label>
                 <input type="number" id="st-max-output-mb" min="0" step="1" value="0" />
               </div>
               <div class="field">

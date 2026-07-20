@@ -467,6 +467,7 @@ class EnqueueRequest(BaseModel):
     on_duplicate: str = "ask"        # ask | skip | overwrite
     max_output_mb: float = 0
     max_video_bitrate_kbps: int = 0
+    size_target_mb: float = 0        # Encode-Ziel Gesamtgröße inkl. Ton (0 = aus)
     suffix: str = "_av1"
 
 
@@ -1078,6 +1079,39 @@ async def preview_jobs(req: PreviewRequest):
     return job_plan.preview_batch(req.paths, req.settings or {}, req.estimates or {})
 
 
+class SizeTargetPreviewRequest(BaseModel):
+    path: str = ""
+    size_target_mb: float = 0
+    audio_tracks: list = []
+    audio_mode: str = "copy"
+    audio_languages: str = ""
+
+
+@app.post("/api/size-target/preview")
+async def size_target_preview(req: SizeTargetPreviewRequest):
+    """Berechnete Video-Bitrate für ein Größenziel (inkl. Tonspuren)."""
+    from core import size_target
+    from types import SimpleNamespace
+    target = _safe_resolve(req.path) if req.path else None
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    info, err = ff.probe_with_error(target)
+    if info is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+    settings = SimpleNamespace(
+        audio_tracks=list(req.audio_tracks or []),
+        audio_mode=req.audio_mode or "copy",
+        audio_languages=req.audio_languages or "",
+    )
+    tracks = size_target.select_audio_tracks(info, settings)
+    res = size_target.compute_video_bitrate_kbps(
+        size_target_mb=req.size_target_mb,
+        duration=float(info.duration or 0),
+        audio_tracks=tracks,
+    )
+    return {**res, "audio_tracks": len(tracks), "duration": info.duration}
+
+
 class AudioScanRequest(BaseModel):
     folder: str = ""
     extensions: list[str] = []
@@ -1485,6 +1519,48 @@ async def set_app_settings(req: AppSettingsRequest):
     return {**cfg, "default_output_abs": str(config.default_output_path())}
 
 
+class LibraryDefRequest(BaseModel):
+    name: str = ""
+    path: str = ""
+
+
+@app.get("/api/libraries")
+async def libraries_list():
+    from core import app_settings
+    return {"libraries": app_settings.list_libraries()}
+
+
+@app.post("/api/libraries")
+async def libraries_add(req: LibraryDefRequest):
+    from core import app_settings
+    lib, err = app_settings.add_library(req.name, req.path)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    return {"library": lib, "libraries": app_settings.list_libraries()}
+
+
+@app.put("/api/libraries/{lib_id}")
+async def libraries_update(lib_id: str, req: LibraryDefRequest):
+    from core import app_settings
+    # Nur gesetzte Felder aktualisieren (leerer name im Body = nicht ändern).
+    name = req.name if req.name.strip() else None
+    # path: immer übernehmen wenn im Request (auch leer = gesamter Baum)
+    lib, err = app_settings.update_library(lib_id, name=name, path=req.path)
+    if err:
+        code = 404 if err == "Nicht gefunden" else 400
+        return JSONResponse({"error": err}, status_code=code)
+    return {"library": lib, "libraries": app_settings.list_libraries()}
+
+
+@app.delete("/api/libraries/{lib_id}")
+async def libraries_delete(lib_id: str):
+    from core import app_settings
+    ok, err = app_settings.delete_library(lib_id)
+    if not ok:
+        return JSONResponse({"error": err}, status_code=404)
+    return {"libraries": app_settings.list_libraries()}
+
+
 def _resolve_media_root(path: str, root: str = "media"):
     """Datei im Medienbaum sicher auflösen (`root` nur noch für API-Kompatibilität)."""
     return config.resolve_input(path)
@@ -1499,6 +1575,48 @@ async def media(path: str, root: str = "media"):
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     return FileResponse(target)
+
+
+@app.get("/api/media/stream")
+async def media_stream(path: str, root: str = "media", audio: int = 0):
+    """Live-Playback: Video copy + gewählte Tonspur als AAC (fragmentiertes MP4).
+
+    ``audio=-1`` = ohne Ton. Browser-kompatibler als Rohstream bei TrueHD/DTS-HD.
+    """
+    from fastapi.responses import StreamingResponse
+    from core import media_stream as ms
+
+    target = _resolve_media_root(path, root)
+    if target is None:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    aidx = None if audio < 0 else int(audio)
+    cmd = ms.build_play_cmd(target, aidx)
+    return StreamingResponse(
+        ms.stream_bytes(cmd),
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/api/media/vtt")
+async def media_vtt(path: str, root: str = "media", subtitle: int = 0):
+    """Text-Untertitelspur als WebVTT für den HTML5-Player."""
+    from fastapi.responses import StreamingResponse
+    from core import media_stream as ms
+
+    target = _resolve_media_root(path, root)
+    if target is None:
+        return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    cmd = ms.build_vtt_cmd(target, int(subtitle))
+    return StreamingResponse(
+        ms.stream_bytes(cmd),
+        media_type="text/vtt; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/ffprobe")

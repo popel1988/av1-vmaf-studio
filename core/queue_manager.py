@@ -98,6 +98,8 @@ class JobSettings:
     # Caps: 0 = aus. Nach Encode prüfen; bei ABR zusätzlich als Obergrenze.
     max_output_mb: float = 0.0
     max_video_bitrate_kbps: int = 0
+    # Größenziel (MB Gesamt inkl. Ton): vor Encode → ABR-Videobitrate. 0 = aus.
+    size_target_mb: float = 0.0
     # Audio
     audio_mode: str = "copy"       # copy | encode | none
     audio_codec: str = "aac"       # aac | opus | ac3 | eac3 | flac
@@ -779,6 +781,14 @@ class QueueManager:
                 s.codec = gq.get("codec", s.codec)
                 s.platform = gq.get("platform", s.platform)
                 s.suffix = "_" + s.codec
+
+        # --- Größenziel → ABR-Videobitrate (inkl. Tonspuren) -------------------
+        if float(getattr(s, "size_target_mb", 0) or 0) > 0:
+            from . import size_target as _st
+            msg = _st.apply_size_target(s, info)
+            if msg:
+                logger.info("Größenziel %s: %s", item.title, msg)
+                item.message = msg
 
         # --- Haupt-Encode -----------------------------------------------------
         item.status = STATUS_RUNNING
@@ -1541,6 +1551,7 @@ def build_job_settings(d: dict) -> JobSettings:
         on_duplicate=str(d.get("on_duplicate", "") or "ask"),
         max_output_mb=float(d.get("max_output_mb", 0) or 0),
         max_video_bitrate_kbps=int(d.get("max_video_bitrate_kbps", 0) or 0),
+        size_target_mb=float(d.get("size_target_mb", 0) or 0),
     )
 
 

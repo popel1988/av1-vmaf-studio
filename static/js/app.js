@@ -490,8 +490,35 @@
       const hdrField = $("hdr-field");
       if (hdrField) hdrField.style.display = info.is_hdr ? "" : "none";
       applyDolbyVision(info);
+      refreshSizeTargetHint();
     } catch (e) {
       $("selected-info").innerHTML = `<span class="bad">Analyse-Fehler: ${escapeHtml(String(e))}</span>`;
+    }
+  }
+
+  async function refreshSizeTargetHint() {
+    const hint = $("opt-size-target-hint");
+    const inp = $("opt-size-target");
+    if (!hint || !inp) return;
+    const mb = parseFloat(inp.value) || 0;
+    if (mb <= 0 || !state.selected || state.selected.isBatch) {
+      hint.textContent = "";
+      return;
+    }
+    try {
+      const d = await (await fetch("/api/size-target/preview", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: state.selected.path,
+          size_target_mb: mb,
+          audio_tracks: gatherAudioTracks(),
+          audio_mode: $("opt-audio-mode") ? $("opt-audio-mode").value : "copy",
+        }),
+      })).json();
+      hint.textContent = d.message ? (" · " + d.message) : "";
+      if (d.ok === false) hint.classList.add("bad"); else hint.classList.remove("bad");
+    } catch (e) {
+      hint.textContent = "";
     }
   }
 
@@ -966,6 +993,7 @@
       on_duplicate: $("opt-on-duplicate") ? $("opt-on-duplicate").value : "ask",
       max_output_mb: $("opt-max-output-mb") ? (parseFloat($("opt-max-output-mb").value) || 0) : 0,
       max_video_bitrate_kbps: $("opt-max-bitrate") ? (parseInt($("opt-max-bitrate").value, 10) || 0) : 0,
+      size_target_mb: $("opt-size-target") ? (parseFloat($("opt-size-target").value) || 0) : 0,
       ...outTargetVals("opt"),
     };
   }
@@ -2563,8 +2591,81 @@
     $("app-modal-body").innerHTML = "";
   }
 
-  function videoHtml(mediaUrl) {
-    return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}"></video>`;
+  function videoHtml(mediaUrl, trackUrl) {
+    const track = trackUrl
+      ? `<track kind="subtitles" src="${trackUrl}" srclang="und" label="Subs" default>`
+      : "";
+    return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}">${track}</video>`;
+  }
+
+  async function openPlayer(root, rel, name) {
+    openModal(name || "Wiedergabe", `<p class="muted">${tt("Lade Spuren …")}</p>`);
+    let info = null;
+    try {
+      info = await (await fetch(`/api/probe?path=${encodeURIComponent(rel)}`)).json();
+      if (info.error) info = null;
+    } catch (e) { info = null; }
+    const audio = (info && info.audio) || [];
+    const subs = (info && info.subtitles) || [];
+    const textSubs = subs.filter((s) => {
+      const c = (s.codec || "").toLowerCase();
+      return c && !/pgs|dvd_sub|dvb_sub|xsub|hdmv/.test(c);
+    });
+    const audioOpts = audio.length
+      ? audio.map((a, i) => {
+          const lab = [a.language || "und", a.codec || "", a.channels ? `${a.channels}ch` : "", a.title || ""]
+            .filter(Boolean).join(" · ");
+          return `<option value="${i}">${i}: ${escapeHtml(lab)}</option>`;
+        }).join("")
+      : `<option value="-1">${tt("Kein Ton")}</option>`;
+    const subOpts = `<option value="-1">${tt("Keine Untertitel")}</option>` +
+      textSubs.map((s) => {
+        // Relativer Untertitel-Index für ffmpeg 0:s:N (Position in info.subtitles).
+        const idx = subs.indexOf(s);
+        const lab = [s.language || "und", s.codec || "", s.title || ""].filter(Boolean).join(" · ");
+        return `<option value="${idx}">${escapeHtml(lab)}</option>`;
+      }).join("");
+    const imgNote = subs.length > textSubs.length
+      ? `<p class="hint warn">${tt("Bild-Untertitel (PGS o. Ä.) können im Browser nicht eingeblendet werden.")}</p>`
+      : "";
+    openModal(name || "Wiedergabe", `
+      <div class="player-controls field-row" style="margin-bottom:10px;align-items:flex-end">
+        <div class="field" style="flex:1">
+          <label>${tt("Tonspur")}</label>
+          <select id="player-audio">${audioOpts}</select>
+        </div>
+        <div class="field" style="flex:1">
+          <label>${tt("Untertitel")}</label>
+          <select id="player-sub">${subOpts}</select>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="player-reload">${tt("Neu laden")}</button>
+      </div>
+      <div id="player-wrap">${videoHtml(_playerStreamUrl(root, rel, audio.length ? 0 : -1), "")}</div>
+      <p class="muted" style="margin-top:8px;font-size:12px">
+        ${tt("Ton wird für die Wiedergabe als AAC umgewandelt. Der Video-Codec hängt vom Browser ab (AV1/HEVC).")}
+      </p>
+      ${imgNote}`);
+    const reload = () => {
+      const a = parseInt(($("player-audio") || {}).value, 10);
+      const s = parseInt(($("player-sub") || {}).value, 10);
+      const vUrl = _playerStreamUrl(root, rel, isNaN(a) ? 0 : a);
+      const tUrl = (!isNaN(s) && s >= 0)
+        ? `/api/media/vtt?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}&subtitle=${s}`
+        : "";
+      const wrap = $("player-wrap");
+      if (wrap) wrap.innerHTML = videoHtml(vUrl, tUrl);
+    };
+    const btn = $("player-reload");
+    if (btn) btn.addEventListener("click", reload);
+    ["player-audio", "player-sub"].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("change", reload);
+    });
+  }
+
+  function _playerStreamUrl(root, rel, audioIdx) {
+    return `/api/media/stream?root=${encodeURIComponent(root || "media")}`
+      + `&path=${encodeURIComponent(rel)}&audio=${audioIdx}`;
   }
 
   // Direkt in den A/B-Vergleich springen und beide Videos laden.
@@ -2576,12 +2677,6 @@
     set("ab-root-b", rootB); set("ab-path-b", pathB);
     const load = $("btn-ab-load");
     if (load) load.click();
-  }
-
-  function openPlayer(root, rel, name) {
-    const url = `/api/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`;
-    openModal(name || "Wiedergabe", videoHtml(url) +
-      `<p class="muted" style="margin-top:8px;font-size:12px">Läuft die Wiedergabe nicht, unterstützt der Browser den Codec (z. B. HEVC/AV1) evtl. nicht direkt.</p>`);
   }
 
   // Kompakte ffprobe-Übersicht (Video-/Audio-/Untertitelspuren) als HTML.
@@ -2838,6 +2933,7 @@
     if (s.on_duplicate !== undefined) set("opt-on-duplicate", s.on_duplicate);
     if (s.max_output_mb !== undefined) set("opt-max-output-mb", s.max_output_mb);
     if (s.max_video_bitrate_kbps !== undefined) set("opt-max-bitrate", s.max_video_bitrate_kbps);
+    if (s.size_target_mb !== undefined) set("opt-size-target", s.size_target_mb);
     if (s.out_mode !== undefined) set("opt-out-mode", s.out_mode, "change");
     if (s.out_subdir !== undefined) set("opt-out-subdir", s.out_subdir);
     if (s.remux_only) {
@@ -2968,6 +3064,7 @@
     if (rs) rs.addEventListener("input", renderLibrary);
     const grp = $("lib-group");
     if (grp) grp.addEventListener("change", renderLibrary);
+    initLibLibraries();
     // Sortierbare Spalten
     document.querySelectorAll(".lib-table th.sortable").forEach((th) => {
       th.addEventListener("click", () => {
@@ -3020,12 +3117,20 @@
     ).join("") || '<span class="empty">Keine Formate.</span>';
   }
 
+  function libSelectedRoot() {
+    const sel = $("lib-library");
+    const id = sel ? sel.value : "";
+    if (!id) return "";
+    const lib = (state.libraries || []).find((l) => l.id === id);
+    return lib ? (lib.path || "") : "";
+  }
+
   function libFilters() {
     const codecs = state.libCodecMulti ? state.libCodecMulti.getValues() : [];
     const dyn = state.libDynMulti ? state.libDynMulti.getValues() : [];
     const codecMatch = $("lib-codec-match") ? $("lib-codec-match").value : "include";
     const f = {
-      root: state.currentPath || "",
+      root: libSelectedRoot(),
       extensions: [...document.querySelectorAll(".lib-fmt:checked")].map((c) => c.value),
       name_contains: $("lib-name").value.trim(),
       name_exclude: ($("lib-exclude") ? $("lib-exclude").value : "")
@@ -3041,6 +3146,137 @@
       skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
     };
     return f;
+  }
+
+  function initLibLibraries() {
+    const sel = $("lib-library");
+    if (!sel) return;
+    refreshLibraries().then(() => {
+      const saved = localStorage.getItem("libLibraryId") || "";
+      if (saved && (state.libraries || []).some((l) => l.id === saved)) sel.value = saved;
+      syncLibLibraryButtons();
+    });
+    sel.addEventListener("change", () => {
+      localStorage.setItem("libLibraryId", sel.value || "");
+      syncLibLibraryButtons();
+    });
+    const add = $("btn-lib-add-library");
+    const edit = $("btn-lib-edit-library");
+    const del = $("btn-lib-del-library");
+    if (add) add.addEventListener("click", () => openLibraryEditor(null));
+    if (edit) edit.addEventListener("click", () => {
+      const lib = (state.libraries || []).find((l) => l.id === sel.value);
+      if (lib) openLibraryEditor(lib);
+    });
+    if (del) del.addEventListener("click", async () => {
+      const id = sel.value;
+      if (!id) return;
+      const lib = (state.libraries || []).find((l) => l.id === id);
+      if (!lib || !confirm(tt("Unterbibliothek löschen?") + `\n${lib.name}`)) return;
+      const r = await fetch(`/api/libraries/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      state.libraries = d.libraries || [];
+      renderLibraryOptions("");
+      syncLibLibraryButtons();
+    });
+  }
+
+  async function refreshLibraries() {
+    try {
+      const d = await (await fetch("/api/libraries")).json();
+      state.libraries = d.libraries || [];
+      renderLibraryOptions(($("lib-library") || {}).value || "");
+    } catch (e) {
+      state.libraries = [];
+    }
+  }
+
+  function renderLibraryOptions(selected) {
+    const sel = $("lib-library");
+    if (!sel) return;
+    const cur = selected != null ? selected : sel.value;
+    sel.innerHTML = `<option value="">${tt("— gesamter Medienbaum —")}</option>` +
+      (state.libraries || []).map((l) =>
+        `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}` +
+        (l.path ? ` (${escapeHtml(l.path)})` : "") + `</option>`).join("");
+    if (cur) sel.value = cur;
+    syncLibLibraryButtons();
+  }
+
+  function syncLibLibraryButtons() {
+    const has = !!( $("lib-library") && $("lib-library").value );
+    ["btn-lib-edit-library", "btn-lib-del-library"].forEach((id) => {
+      const el = $(id); if (el) el.disabled = !has;
+    });
+  }
+
+  function openLibraryEditor(existing) {
+    const isEdit = !!(existing && existing.id);
+    openModal(isEdit ? tt("Unterbibliothek bearbeiten") : tt("Unterbibliothek hinzufügen"), `
+      <div class="field">
+        <label>${tt("Name")}</label>
+        <input type="text" id="lib-ed-name" value="${escapeHtml((existing && existing.name) || "")}"
+               placeholder="${tt("z. B. Filme")}" style="width:100%" />
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>${tt("Ordner (Medienpfad)")}</label>
+        <div class="subdir-row">
+          <input type="text" id="lib-ed-path" value="${escapeHtml((existing && existing.path) || "")}"
+                 placeholder="${tt("leer = gesamter Baum")}" style="flex:1" />
+          <button type="button" class="btn btn-ghost btn-sm" id="lib-ed-browse">${tt("Durchsuchen")}</button>
+        </div>
+        <p class="hint">${tt("Relativer Pfad unter /media, z. B. Filme oder Serien/Anime.")}</p>
+      </div>
+      <div class="lib-actions" style="margin-top:12px">
+        <button class="btn btn-primary" id="lib-ed-save">${tt("Speichern")}</button>
+        <button class="btn btn-ghost" id="lib-ed-cancel">${tt("Abbrechen")}</button>
+        <span id="lib-ed-err" class="bad"></span>
+      </div>`);
+    const browse = $("lib-ed-browse");
+    if (browse) browse.addEventListener("click", () => {
+      const draft = {
+        id: existing && existing.id,
+        name: (($("lib-ed-name") || {}).value || ""),
+        path: (($("lib-ed-path") || {}).value || ""),
+      };
+      openFolderPickerModal({
+        title: tt("Ordner für Unterbibliothek"),
+        start: draft.path || "",
+        onPick: (rel) => openLibraryEditor({ ...draft, path: rel || "" }),
+      });
+    });
+    const cancel = $("lib-ed-cancel");
+    if (cancel) cancel.addEventListener("click", closeModal);
+    const save = $("lib-ed-save");
+    if (save) save.addEventListener("click", async () => {
+      const name = ($("lib-ed-name") || {}).value || "";
+      const path = ($("lib-ed-path") || {}).value || "";
+      const errEl = $("lib-ed-err");
+      try {
+        let r;
+        if (isEdit) {
+          r = await fetch(`/api/libraries/${encodeURIComponent(existing.id)}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name.trim(), path: path.trim() }),
+          });
+        } else {
+          r = await fetch("/api/libraries", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name.trim(), path: path.trim() }),
+          });
+        }
+        const d = await r.json();
+        if (d.error) { if (errEl) errEl.textContent = d.error; return; }
+        state.libraries = d.libraries || [];
+        const pick = (d.library && d.library.id) || (existing && existing.id) || "";
+        renderLibraryOptions(pick);
+        localStorage.setItem("libLibraryId", pick || "");
+        closeModal();
+      } catch (e) {
+        if (errEl) errEl.textContent = String(e);
+      }
+    });
   }
 
   function renderLibProjection(st) {
@@ -4024,6 +4260,7 @@
       on_duplicate: $("st-on-duplicate") ? $("st-on-duplicate").value : "ask",
       max_output_mb: $("st-max-output-mb") ? (parseFloat($("st-max-output-mb").value) || 0) : 0,
       max_video_bitrate_kbps: $("st-max-bitrate") ? (parseInt($("st-max-bitrate").value, 10) || 0) : 0,
+      size_target_mb: $("st-size-target") ? (parseFloat($("st-size-target").value) || 0) : 0,
       ...outTargetVals("st"),
     };
     if (mode === "target_vmaf" || mode === "representative") {
@@ -5722,6 +5959,12 @@
     initOutTargets();
     initMediaSettings();
     initGlobalSearch();
+    const sizeT = $("opt-size-target");
+    if (sizeT) sizeT.addEventListener("change", refreshSizeTargetHint);
+    if (sizeT) sizeT.addEventListener("input", () => {
+      clearTimeout(sizeT._hintTimer);
+      sizeT._hintTimer = setTimeout(refreshSizeTargetHint, 400);
+    });
     loadCapabilities();
     // Haupt-Browser (Encoding/Quellenauswahl): Dateien wählbar, abspielbar,
     // Batch-Button + Library-Ordner werden über onNavigate aktualisiert.
