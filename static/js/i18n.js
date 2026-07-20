@@ -259,6 +259,11 @@
       "The video is copied 1:1 (no re-encode). Audio/subtitles are filtered via the track selection or language whitelist. Chapters, attachments and metadata are kept.",
     "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
       "All files have the same tracks – apply selection to all:",
+    "Gemeinsame Spuren aller Dateien – Auswahl für alle übernehmen:":
+      "Common tracks across all files – apply selection to all:",
+    "Sonder-Spuren einzelner Dateien bleiben unberührt und können pro Zeile angepasst werden.":
+      "Extra tracks on individual files stay untouched and can be adjusted per row.",
+    "Ins Remux übernehmen": "Transfer to Remux",
     "Scan – Spuren ermitteln": "Scan – detect tracks",
     "Scan – Codec/Bitrate ermitteln": "Scan – detect codec/bitrate",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)":
@@ -875,6 +880,11 @@
       "El vídeo se copia 1:1 (sin recodificar). El audio/subtítulos se filtran mediante la selección de pistas o la lista de idiomas. Se conservan capítulos, adjuntos y metadatos.",
     "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
       "Todos los archivos tienen las mismas pistas: aplicar la selección a todos:",
+    "Gemeinsame Spuren aller Dateien – Auswahl für alle übernehmen:":
+      "Pistas comunes a todos los archivos: aplicar la selección a todos:",
+    "Sonder-Spuren einzelner Dateien bleiben unberührt und können pro Zeile angepasst werden.":
+      "Las pistas especiales de archivos individuales no se tocan y se pueden ajustar por fila.",
+    "Ins Remux übernehmen": "Transferir a Remux",
     "Scan – Spuren ermitteln": "Escanear – detectar pistas",
     "Scan – Codec/Bitrate ermitteln": "Escanear – detectar códec/tasa de bits",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Auto-recorte: eliminar barras negras automáticamente (cropdetect)",
@@ -1411,6 +1421,11 @@
       "La vidéo est copiée à l'identique (sans réencodage). L'audio/les sous-titres sont filtrés via la sélection de pistes ou la liste blanche de langues. Les chapitres, pièces jointes et métadonnées sont conservés.",
     "Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:":
       "Tous les fichiers ont les mêmes pistes – appliquer la sélection à tous :",
+    "Gemeinsame Spuren aller Dateien – Auswahl für alle übernehmen:":
+      "Pistes communes à tous les fichiers – appliquer la sélection à tous :",
+    "Sonder-Spuren einzelner Dateien bleiben unberührt und können pro Zeile angepasst werden.":
+      "Les pistes spéciales de fichiers individuels restent intactes et peuvent être ajustées par ligne.",
+    "Ins Remux übernehmen": "Transférer vers Remux",
     "Scan – Spuren ermitteln": "Analyser – détecter les pistes",
     "Scan – Codec/Bitrate ermitteln": "Analyser – détecter codec/débit",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Rognage auto : supprimer automatiquement les bandes noires (cropdetect)",

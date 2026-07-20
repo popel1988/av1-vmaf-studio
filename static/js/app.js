@@ -3083,6 +3083,7 @@
     if (stCancel) stCancel.addEventListener("click", cancelSuperScan);
     stInitTrackHandlers();
     stInitCommonHandlers();
+    stInitLangWhitelist();
 
     // Remux-Schalter: Encode-Einstellungen aus-/einblenden.
     const remux = $("st-remux-only");
@@ -3283,6 +3284,9 @@
         stScanRunning(false);
         $("st-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
         $("btn-st-start").disabled = st.matched.length === 0;
+        // Whitelist (falls schon gesetzt) direkt auf die neue Trefferliste anwenden.
+        if (($("st-audio-langs") || {}).value) stApplyLangWhitelist("audio");
+        if (($("st-sub-langs") || {}).value) stApplyLangWhitelist("subs");
       }
     } catch (e) { /* ignorieren */ }
   }
@@ -3360,8 +3364,14 @@
         <td>${escapeHtml(m.size_human)}</td>
         ${stTrackCell("audio", m, m.audio)}
         ${stTrackCell("subs", m, m.subtitles)}
+        <td class="lib-row-actions">
+          <button class="lib-act" data-act="play" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Abspielen">▶</button>
+          <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
+          <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
+          <button class="lib-act" data-act="remux" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Remux übernehmen">→R</button>
+        </td>
       </tr>`; }).join("") :
-      '<tr class="empty-row"><td colspan="10">Keine Treffer.</td></tr>';
+      '<tr class="empty-row"><td colspan="11">Keine Treffer.</td></tr>';
   }
 
   // Öffnet/schließt die Mini-Dropdowns und pflegt die Auswahl. Delegation auf
@@ -3371,6 +3381,8 @@
     if (!body || body.dataset.trackWired) return;
     body.dataset.trackWired = "1";
     body.addEventListener("click", (e) => {
+      const actBtn = e.target.closest(".lib-act");
+      if (actBtn) { onStAction(e); return; }
       if (e.target.closest(".st-track-panel")) { e.stopPropagation(); return; }
       const btn = e.target.closest(".st-track-btn");
       if (!btn) return;
@@ -3400,9 +3412,26 @@
       if (cb.checked) sel.add(idx); else sel.delete(idx);
       const total = dd.querySelectorAll(".st-track-opt").length;
       dd.querySelector(".st-track-btn").textContent = stTrackBtnText(sel.size, total);
+      stRenderCommon(state.stRows || []);
     });
     document.addEventListener("click", stCloseTrackPanels);
     window.addEventListener("scroll", stCloseTrackPanels, true);
+  }
+
+  async function onStAction(e) {
+    const btn = e.target.closest(".lib-act");
+    if (!btn) return;
+    e.stopPropagation();
+    const path = btn.dataset.path;
+    const name = btn.dataset.name;
+    const act = btn.dataset.act;
+    if (act === "play") { openPlayer("input", path, name); return; }
+    if (act === "remux" || (act === "encode" && $("st-remux-only") && $("st-remux-only").checked)) {
+      navTo("remux");
+      await remuxSelectFile({ rel: path, name });
+      return;
+    }
+    await libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", null);
   }
 
   function stCloseTrackPanels() {
@@ -3415,38 +3444,99 @@
     });
   }
 
-  // Signatur der Spuren einer Datei (Sprache/Codec/Kanäle) – für die Erkennung
-  // "alle Dateien haben dieselben Spuren" (typisch bei Serien).
-  function stTrackSig(m) {
-    const a = (m.audio || []).map((t) =>
-      `${(t.language || "und").toLowerCase()}|${t.codec}|${t.channels || ""}`).join(",");
-    const s = (m.subtitles || []).map((t) =>
-      `${(t.language || "und").toLowerCase()}|${t.codec}`).join(",");
-    return `${a}##${s}`;
+  // Spur-Signatur (Sprache/Codec/…) – für Schnittmenge über Dateien hinweg.
+  // Ohne Titel, damit Serien mit leicht abweichenden Spur-Namen matchen;
+  // Extra-Spuren einzelner Folgen (andere Sprache/Forced) fallen aus der Schnittmenge.
+  function stOneTrackSig(kind, t) {
+    const lang = (t.language || "und").toLowerCase();
+    if (kind === "audio") {
+      return `${lang}|${(t.codec || "").toLowerCase()}|${t.channels || ""}`;
+    }
+    return `${lang}|${(t.codec || "").toLowerCase()}|${t.forced ? "f" : ""}`;
   }
 
-  // Zeigt oben eine gemeinsame Spurauswahl, wenn alle Treffer identische Spuren
-  // haben – Änderungen gelten dann für alle Dateien.
+  function stTracksOf(m, kind) {
+    return (kind === "audio" ? m.audio : m.subtitles) || [];
+  }
+
+  // Signaturen, die in jeder Datei mindestens einmal vorkommen.
+  function stCommonSigs(rows, kind) {
+    if (!rows || !rows.length) return [];
+    let common = null;
+    const order = [];
+    const seen = new Set();
+    rows.forEach((m) => {
+      const set = new Set();
+      stTracksOf(m, kind).forEach((t) => {
+        const sig = stOneTrackSig(kind, t);
+        set.add(sig);
+        if (!seen.has(sig)) { seen.add(sig); order.push(sig); }
+      });
+      common = common === null ? set : new Set([...common].filter((s) => set.has(s)));
+    });
+    return order.filter((s) => common && common.has(s));
+  }
+
+  function stFindTrackBySig(m, kind, sig) {
+    return stTracksOf(m, kind).find((t) => stOneTrackSig(kind, t) === sig) || null;
+  }
+
+  function stSigSelectedInAll(rows, kind, sig) {
+    return rows.every((m) => {
+      const matches = stTracksOf(m, kind).filter((t) => stOneTrackSig(kind, t) === sig);
+      if (!matches.length) return false;
+      const sel = stTrackSel(m.path, kind);
+      return matches.every((t) => sel.has(t.index));
+    });
+  }
+
+  function stApplySigToAll(rows, kind, sig, on) {
+    rows.forEach((m) => {
+      const sel = stTrackSel(m.path, kind);
+      stTracksOf(m, kind).forEach((t) => {
+        if (stOneTrackSig(kind, t) !== sig) return;
+        if (on) sel.add(t.index); else sel.delete(t.index);
+      });
+    });
+  }
+
+  // Gemeinsame Spurauswahl über die Schnittmenge (nicht nur bei exakter Gleichheit).
   function stRenderCommon(rows) {
     const box = $("st-common-tracks");
     if (!box) return;
     if (!rows || rows.length < 2) { box.style.display = "none"; return; }
-    const sig0 = stTrackSig(rows[0]);
-    const allSame = rows.every((m) => stTrackSig(m) === sig0);
-    const rep = rows[0];
-    const hasTracks = (rep.audio && rep.audio.length) || (rep.subtitles && rep.subtitles.length);
-    if (!allSame || !hasTracks) { box.style.display = "none"; return; }
 
-    const aSel = stTrackSel(rep.path, "audio");
-    const sSel = stTrackSel(rep.path, "subs");
-    const chk = (kind, t, on, label) =>
+    const aSigs = stCommonSigs(rows, "audio");
+    const sSigs = stCommonSigs(rows, "subs");
+    if (!aSigs.length && !sSigs.length) { box.style.display = "none"; return; }
+
+    const allExact = (() => {
+      const sig0 = (m) =>
+        stTracksOf(m, "audio").map((t) => stOneTrackSig("audio", t)).join(",") + "##" +
+        stTracksOf(m, "subs").map((t) => stOneTrackSig("subs", t)).join(",");
+      const s0 = sig0(rows[0]);
+      return rows.every((m) => sig0(m) === s0);
+    })();
+
+    const chk = (kind, sig, on, label) =>
       `<label class="check st-common-opt"><input type="checkbox" data-kind="${kind}"` +
-      ` data-idx="${t.index}"${on ? " checked" : ""} /><span>${escapeHtml(label)}</span></label>`;
-    const aBoxes = (rep.audio || []).map((t) => chk("audio", t, aSel.has(t.index), stAudioLabel(t))).join("");
-    const sBoxes = (rep.subtitles || []).map((t) => chk("subs", t, sSel.has(t.index), stSubLabel(t))).join("");
+      ` data-sig="${escapeHtml(sig)}"${on ? " checked" : ""} /><span>${escapeHtml(label)}</span></label>`;
+    const aBoxes = aSigs.map((sig) => {
+      const t = stFindTrackBySig(rows[0], "audio", sig);
+      return t ? chk("audio", sig, stSigSelectedInAll(rows, "audio", sig), stAudioLabel(t)) : "";
+    }).join("");
+    const sBoxes = sSigs.map((sig) => {
+      const t = stFindTrackBySig(rows[0], "subs", sig);
+      return t ? chk("subs", sig, stSigSelectedInAll(rows, "subs", sig), stSubLabel(t)) : "";
+    }).join("");
     const tt = (x) => (window.I18N ? I18N.t(x) : x);
+    const head = allExact
+      ? tt("Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:")
+      : tt("Gemeinsame Spuren aller Dateien – Auswahl für alle übernehmen:");
+    const hint = allExact ? "" :
+      `<p class="hint">${tt("Sonder-Spuren einzelner Dateien bleiben unberührt und können pro Zeile angepasst werden.")}</p>`;
     box.innerHTML =
-      `<div class="st-common-head">${tt("Alle Dateien haben dieselben Spuren – Auswahl für alle übernehmen:")}</div>` +
+      `<div class="st-common-head">${head}</div>${hint}` +
       `<div class="st-common-grid">` +
       `<div class="st-common-col"><strong>${tt("Ton")}</strong>${aBoxes || '<span class="muted">—</span>'}</div>` +
       `<div class="st-common-col"><strong>${tt("Untertitel")}</strong>${sBoxes || '<span class="muted">—</span>'}</div>` +
@@ -3462,15 +3552,104 @@
       const cb = e.target.closest(".st-common-opt input");
       if (!cb) return;
       const kind = cb.dataset.kind;
-      const idx = parseInt(cb.dataset.idx, 10);
-      (state.stRows || []).forEach((m) => {
-        const list = (kind === "audio" ? m.audio : m.subtitles) || [];
-        if (!list.some((t) => t.index === idx)) return;
-        const sel = stTrackSel(m.path, kind);
-        if (cb.checked) sel.add(idx); else sel.delete(idx);
-      });
+      const sig = cb.dataset.sig;
+      if (!sig) return;
+      stApplySigToAll(state.stRows || [], kind, sig, cb.checked);
       stUpdateRowButtons();
     });
+  }
+
+  // Sprach-Whitelist (wie Backend) → kanonische 2-Buchstaben-Codes.
+  const ST_LANG_TO_CANON = (() => {
+    const aliases = {
+      de: ["de", "deu", "ger", "german", "deutsch"],
+      en: ["en", "eng", "english"],
+      fr: ["fr", "fra", "fre", "french", "francais", "français"],
+      es: ["es", "spa", "spanish", "espanol", "español", "castellano"],
+      it: ["it", "ita", "italian", "italiano"],
+      pt: ["pt", "por", "portuguese", "portugues", "português"],
+      nl: ["nl", "nld", "dut", "dutch", "nederlands"],
+      ru: ["ru", "rus", "russian"],
+      ja: ["ja", "jpn", "japanese"],
+      zh: ["zh", "zho", "chi", "chinese", "mandarin"],
+      ko: ["ko", "kor", "korean"],
+      pl: ["pl", "pol", "polish"],
+      sv: ["sv", "swe", "swedish"],
+      da: ["da", "dan", "danish"],
+      no: ["no", "nor", "norwegian"],
+      fi: ["fi", "fin", "finnish"],
+      cs: ["cs", "cze", "ces", "czech"],
+      hu: ["hu", "hun", "hungarian"],
+      tr: ["tr", "tur", "turkish"],
+      ar: ["ar", "ara", "arabic"],
+      hi: ["hi", "hin", "hindi"],
+      und: ["und", "undetermined", "unknown"],
+    };
+    const map = {};
+    Object.keys(aliases).forEach((c) => aliases[c].forEach((f) => { map[f] = c; }));
+    return map;
+  })();
+
+  function stCanonLang(s) {
+    const t = String(s || "").trim().toLowerCase();
+    return ST_LANG_TO_CANON[t] || t;
+  }
+
+  function stParseLangs(val) {
+    return new Set(String(val || "").replace(/;/g, ",").split(",")
+      .map((p) => stCanonLang(p)).filter(Boolean));
+  }
+
+  function stInitLangWhitelist() {
+    [["st-audio-langs", "audio"], ["st-sub-langs", "subs"]].forEach(([id, kind]) => {
+      const el = $(id);
+      if (!el || el.dataset.wlWired) return;
+      el.dataset.wlWired = "1";
+      let t = null;
+      el.addEventListener("input", () => {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => stApplyLangWhitelist(kind), 200);
+      });
+    });
+  }
+
+  // Whitelist sofort auf die Spurauswahl in der Trefferliste anwenden.
+  // kind: "audio" | "subs" – nur die betreffende Spurart wird angepasst.
+  function stApplyLangWhitelist(kind) {
+    const rows = state.stRows || [];
+    if (!rows.length) return;
+    const doAudio = kind === "audio";
+    const doSubs = kind === "subs";
+    if (!doAudio && !doSubs) return;
+    const aLangs = stParseLangs($("st-audio-langs") ? $("st-audio-langs").value : "");
+    const sLangs = stParseLangs($("st-sub-langs") ? $("st-sub-langs").value : "");
+    rows.forEach((m) => {
+      if (doAudio) {
+        const aList = m.audio || [];
+        const aSel = stTrackSel(m.path, "audio");
+        aSel.clear();
+        if (aLangs.size) {
+          const picked = aList.filter((t) => aLangs.has(stCanonLang(t.language)));
+          // Ohne Treffer alle behalten (kein Ton-Verlust, analog Backend).
+          (picked.length ? picked : aList).forEach((t) => aSel.add(t.index));
+        } else {
+          aList.forEach((t) => aSel.add(t.index));
+        }
+      }
+      if (doSubs) {
+        const sList = m.subtitles || [];
+        const sSel = stTrackSel(m.path, "subs");
+        sSel.clear();
+        if (sLangs.size) {
+          sList.filter((t) => sLangs.has(stCanonLang(t.language)))
+            .forEach((t) => sSel.add(t.index));
+        } else {
+          sList.forEach((t) => sSel.add(t.index));
+        }
+      }
+    });
+    stUpdateRowButtons();
+    stRenderCommon(rows);
   }
 
   // Aktualisiert die Zeilen-Dropdowns (Button-Text + Häkchen) nach einer
