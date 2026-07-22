@@ -292,59 +292,91 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
 
     audio_src = {int(a.get("index", 0)): a for a in (info.audio or [])}
 
-    # --- Tonspuren (Quelle) ----------------------------------------------------
-    out_a = 0
-    for a in spec.get("audio", []) or []:
-        if not a.get("keep"):
-            continue
+    def _ext_key(entry: dict) -> tuple:
+        return (str(entry.get("path") or ""), int(entry.get("stream", 0) or 0))
+
+    def _is_ext_entry(entry: dict) -> bool:
+        return bool(entry.get("external") or entry.get("path"))
+
+    def _map_audio_internal(a: dict, out_idx: int) -> list[str]:
         idx = int(a.get("index", 0))
         src = audio_src.get(idx, {})
         codec = (src.get("codec") or "").lower()
         transcode = bool(a.get("transcode"))
-        # In MP4 nicht kopierbare Codecs erzwingen Transcode.
         if is_mp4 and not transcode and not _codec_ok_in_container(codec, "mp4", "audio"):
             transcode = True
-        cmd += ["-map", f"0:a:{idx}?"]
+        args = ["-map", f"0:a:{idx}?"]
         if transcode:
             tgt = (a.get("codec") or ("aac" if is_mp4 else "eac3")).lower()
             enc = ff.AUDIO_ENCODERS.get(tgt, "aac" if is_mp4 else "eac3")
-            cmd += [f"-c:a:{out_a}", enc]
+            args += [f"-c:a:{out_idx}", enc]
             if enc != "flac":
                 br = int(a.get("bitrate") or 0) or 640
-                cmd += [f"-b:a:{out_a}", f"{max(32, br)}k"]
+                args += [f"-b:a:{out_idx}", f"{max(32, br)}k"]
             ch = int(a.get("channels") or 0)
             if ch in (1, 2, 6, 8):
-                cmd += [f"-ac:a:{out_a}", str(ch)]
+                args += [f"-ac:a:{out_idx}", str(ch)]
         else:
-            cmd += [f"-c:a:{out_a}", "copy"]
-        cmd += _disp("a", out_a, a)
-        cmd += _meta("a", out_a, a)
-        out_a += 1
+            args += [f"-c:a:{out_idx}", "copy"]
+        args += _disp("a", out_idx, a)
+        args += _meta("a", out_idx, a)
+        return args
 
-    # --- Externe Tonspuren -----------------------------------------------------
-    for e in externals:
-        if e["_kind"] != "audio":
-            continue
+    def _map_audio_external(e: dict, out_idx: int) -> list[str]:
         transcode = bool(e.get("transcode"))
-        # In MP4 nicht kopierbare Codecs (z. B. DTS aus .dtshd) -> Transcode.
         if is_mp4 and not transcode and not _codec_ok_in_container(
                 (e.get("src_codec") or "").lower(), "mp4", "audio"):
             transcode = True
-        cmd += ["-map", f"{e['_input']}:a:{e['_stream']}?"]
+        args = ["-map", f"{e['_input']}:a:{e['_stream']}?"]
         if transcode:
             tgt = (e.get("codec") or ("aac" if is_mp4 else "eac3")).lower()
             enc = ff.AUDIO_ENCODERS.get(tgt, "aac" if is_mp4 else "eac3")
-            cmd += [f"-c:a:{out_a}", enc]
+            args += [f"-c:a:{out_idx}", enc]
             if enc != "flac":
                 br = int(e.get("bitrate") or 0) or 640
-                cmd += [f"-b:a:{out_a}", f"{max(32, br)}k"]
+                args += [f"-b:a:{out_idx}", f"{max(32, br)}k"]
             ch = int(e.get("channels") or 0)
             if ch in (1, 2, 6, 8):
-                cmd += [f"-ac:a:{out_a}", str(ch)]
+                args += [f"-ac:a:{out_idx}", str(ch)]
         else:
-            cmd += [f"-c:a:{out_a}", "copy"]
-        cmd += _disp("a", out_a, e)
-        cmd += _meta("a", out_a, e)
+            args += [f"-c:a:{out_idx}", "copy"]
+        args += _disp("a", out_idx, e)
+        args += _meta("a", out_idx, e)
+        return args
+
+    # --- Tonspuren in Spec-Reihenfolge (intern + extern gemischt) --------------
+    ext_audio = { _ext_key(e): e for e in externals if e["_kind"] == "audio" }
+    audio_entries = list(spec.get("audio", []) or [])
+    used_ext_audio: set[tuple] = set()
+    out_a = 0
+    for a in audio_entries:
+        if a.get("keep") is False:
+            continue
+        if _is_ext_entry(a):
+            key = _ext_key(a)
+            e = ext_audio.get(key)
+            if e is None or e.get("keep") is False:
+                continue
+            merged = {**e}
+            for k in ("transcode", "codec", "bitrate", "channels",
+                      "default", "forced", "language", "title"):
+                if k in a:
+                    merged[k] = a[k]
+            cmd += _map_audio_external(merged, out_a)
+            used_ext_audio.add(key)
+            out_a += 1
+        else:
+            cmd += _map_audio_internal(a, out_a)
+            out_a += 1
+
+    # Legacy: externe Tonspuren, die nicht in audio[] stehen, ans Ende.
+    for e in externals:
+        if e["_kind"] != "audio" or e.get("keep") is False:
+            continue
+        key = _ext_key(e)
+        if key in used_ext_audio:
+            continue
+        cmd += _map_audio_external(e, out_a)
         out_a += 1
 
     if out_a == 0:
@@ -352,26 +384,46 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         # UI warnt. Hier kein harter Fehler.
         pass
 
-    # --- Untertitel (Quelle) ---------------------------------------------------
+    # --- Untertitel in Spec-Reihenfolge (intern + extern gemischt) -------------
     sub_src = {int(s.get("index", 0)): s for s in (info.subtitles or [])}
     out_s = 0
     sub_codec = "mov_text" if is_mp4 else "copy"
-    for s in spec.get("subtitles", []) or []:
-        if not s.get("keep"):
+    ext_subs = { _ext_key(e): e for e in externals if e["_kind"] == "subtitle" }
+    sub_entries = list(spec.get("subtitles", []) or [])
+    used_ext_subs: set[tuple] = set()
+    for s in sub_entries:
+        if s.get("keep") is False:
             continue
-        idx = int(s.get("index", 0))
-        src = sub_src.get(idx, {})
-        codec = (src.get("codec") or "").lower()
-        if is_mp4 and codec in _IMAGE_SUBS:
-            continue  # Bild-Untertitel in MP4 nicht möglich → auslassen
-        cmd += ["-map", f"0:s:{idx}?", f"-c:s:{out_s}", sub_codec]
-        cmd += _disp("s", out_s, s)
-        cmd += _meta("s", out_s, s)
-        out_s += 1
+        if _is_ext_entry(s):
+            key = _ext_key(s)
+            e = ext_subs.get(key)
+            if e is None or e.get("keep") is False:
+                continue
+            meta = {**e, **{k: s[k] for k in ("default", "forced", "language", "title")
+                            if k in s}}
+            cmd += ["-map", f"{e['_input']}:s:{e['_stream']}?", f"-c:s:{out_s}", sub_codec]
+            cmd += _disp("s", out_s, meta)
+            cmd += _meta("s", out_s, meta)
+            used_ext_subs.add(key)
+            out_s += 1
+        else:
+            if not s.get("keep", True):
+                continue
+            idx = int(s.get("index", 0))
+            src = sub_src.get(idx, {})
+            codec = (src.get("codec") or "").lower()
+            if is_mp4 and codec in _IMAGE_SUBS:
+                continue  # Bild-Untertitel in MP4 nicht möglich → auslassen
+            cmd += ["-map", f"0:s:{idx}?", f"-c:s:{out_s}", sub_codec]
+            cmd += _disp("s", out_s, s)
+            cmd += _meta("s", out_s, s)
+            out_s += 1
 
-    # --- Externe Untertitel ----------------------------------------------------
     for e in externals:
-        if e["_kind"] != "subtitle":
+        if e["_kind"] != "subtitle" or e.get("keep") is False:
+            continue
+        key = _ext_key(e)
+        if key in used_ext_subs:
             continue
         cmd += ["-map", f"{e['_input']}:s:{e['_stream']}?", f"-c:s:{out_s}", sub_codec]
         cmd += _disp("s", out_s, e)

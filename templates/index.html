@@ -641,7 +641,7 @@
           <div class="card-body">
             <table class="data-table queue-table">
               <thead>
-                <tr><th>Titel</th><th>Auflösung</th><th>Status</th><th>Q</th><th>Dauer</th><th>Ersparnis</th><th></th></tr>
+                <tr><th>Titel</th><th>Auflösung</th><th>Status</th><th>Modus</th><th>Dauer</th><th>Ersparnis</th><th></th></tr>
               </thead>
               <tbody id="queue-body">
                 <tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>
@@ -698,7 +698,7 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th>Titel</th><th>Codec</th><th>Q</th><th>VMAF</th><th>Original</th><th>Ergebnis</th><th>Ersparnis</th><th>Dauer</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
+                  <tr><th>Titel</th><th>Art</th><th>Modus</th><th>VMAF</th><th>Original</th><th>Ergebnis</th><th>Ersparnis</th><th>Dauer</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
                 </thead>
                 <tbody id="stats-body">
                   <tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>
@@ -715,25 +715,55 @@
             <span class="badge" id="lib-scan-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Durchsucht den Medienbaum (oder eine Unterbibliothek) rekursiv und filtert Videos.
+            <p class="hint">Bibliothek scannen, dann live filtern. Neue Dateien erscheinen erst nach erneutem Scan.
               Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.</p>
-            <div class="lib-library-bar field-row" style="align-items:flex-end;margin-bottom:12px">
-              <div class="field" style="flex:1">
-                <label>Unterbibliothek</label>
+
+            <!-- 1) Bibliothek wählen + Scan -->
+            <div class="lib-library-bar">
+              <div class="field lib-library-select">
+                <label>Bibliothek / Unterbibliothek</label>
                 <select id="lib-library">
                   <option value="">— gesamter Medienbaum —</option>
                 </select>
-                <p class="hint">Eigene Bereiche (Filme, Serien, …) mit Ordnerzuweisung.</p>
               </div>
-              <div class="lib-actions" style="margin:0;padding-bottom:2px">
+              <div class="lib-actions lib-scan-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="btn-lib-scan">Scan</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-cancel" disabled title="Laufenden Scan abbrechen">Abbrechen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-clear" title="Scan-Ergebnisse leeren">Leeren</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-add-library" title="Neue Unterbibliothek">+ Hinzufügen</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-edit-library" title="Ausgewählte umbenennen/Pfad ändern" disabled>Bearbeiten</button>
                 <button type="button" class="btn btn-ghost btn-sm bad-btn" id="btn-lib-del-library" title="Ausgewählte löschen" disabled>Löschen</button>
               </div>
             </div>
+            <p class="hint" id="lib-progress" style="margin-top:4px"></p>
+
+            <!-- 2) Statistik zum (gefilterten) Scan -->
+            <div class="lib-projection" id="lib-projection" style="display:none">
+              <div class="stat-box"><span class="stat-val" id="lib-proj-count">0</span><span class="stat-lbl">Treffer</span></div>
+              <div class="stat-box"><span class="stat-val" id="lib-proj-size">0 B</span><span class="stat-lbl">Gesamtgröße</span></div>
+              <div class="stat-box"><span class="stat-val good" id="lib-proj-saved">0 B</span><span class="stat-lbl">Einsparung (ca.)</span></div>
+              <div class="stat-box"><span class="stat-val" id="lib-proj-pct">0%</span><span class="stat-lbl">Anteil</span></div>
+            </div>
+            <div class="lib-dashboard" id="lib-dashboard" style="display:none">
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Codec-Verteilung</div>
+                <div id="lib-dash-codecs" class="lib-dash-bars"></div>
+              </div>
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Dynamik</div>
+                <div id="lib-dash-dynamic" class="lib-dash-bars"></div>
+              </div>
+              <div class="lib-dash-col">
+                <div class="lib-dash-title">Größte Einsparpotenziale</div>
+                <ol id="lib-dash-hogs" class="lib-dash-hogs"></ol>
+              </div>
+            </div>
+
+            <!-- 3) Live-Filter auf dem letzten Scan -->
+            <h4 class="sub-head" style="margin-top:14px">Filter <span class="muted" style="font-size:11px;text-transform:none">(live auf letzten Scan)</span></h4>
             <div class="lib-filters">
               <div class="field"><label>Name enthält</label><input type="text" id="lib-name" placeholder="optional" /></div>
-              <div class="field"><label>Name ausschließen</label><input type="text" id="lib-exclude" placeholder="z. B. sample, trailer, .archiv" title="Kommagetrennt – Dateien, deren Pfad einen dieser Begriffe enthält, werden übersprungen" /></div>
+              <div class="field"><label>Name ausschließen</label><input type="text" id="lib-exclude" placeholder="z. B. sample, trailer, .archiv" title="Kommagetrennt – Dateien, deren Pfad einen dieser Begriffe enthält, werden ausgeblendet" /></div>
               <div class="field"><label>Min. Größe (MB)</label><input type="number" id="lib-min-size" min="0" value="0" /></div>
               <div class="field"><label>Min. Video-Bitrate (Mbit/s)</label><input type="number" id="lib-min-br" min="0" step="0.5" value="0" /></div>
               <div class="field"><label>Min. Höhe (px)</label><input type="number" id="lib-min-h" min="0" value="0" /></div>
@@ -760,41 +790,16 @@
             <div class="field">
               <label>Container / Formate</label>
               <div id="lib-formats" class="fmt-checks"></div>
-              <p class="hint">Nur diese Dateiendungen durchsuchen. Nichts auswählen = alle unterstützten Formate.</p>
+              <p class="hint">Nichts auswählen = alle Formate aus dem Scan anzeigen.</p>
             </div>
             <div class="lib-checks">
               <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span>Bereits effiziente Dateien ausblenden</span></label>
               <label class="check"><input type="checkbox" id="lib-skip-processed" /><span>Bereits verarbeitete Dateien ausblenden</span></label>
             </div>
-            <div class="lib-projection" id="lib-projection" style="display:none">
-              <div class="stat-box"><span class="stat-val" id="lib-proj-count">0</span><span class="stat-lbl">Treffer</span></div>
-              <div class="stat-box"><span class="stat-val" id="lib-proj-size">0 B</span><span class="stat-lbl">Gesamtgröße</span></div>
-              <div class="stat-box"><span class="stat-val good" id="lib-proj-saved">0 B</span><span class="stat-lbl">Einsparung (ca.)</span></div>
-              <div class="stat-box"><span class="stat-val" id="lib-proj-pct">0%</span><span class="stat-lbl">Anteil</span></div>
-            </div>
 
-            <!-- Dashboard: Codec-Verteilung, Dynamik-Anteil, größte Platzfresser -->
-            <div class="lib-dashboard" id="lib-dashboard" style="display:none">
-              <div class="lib-dash-col">
-                <div class="lib-dash-title">Codec-Verteilung</div>
-                <div id="lib-dash-codecs" class="lib-dash-bars"></div>
-              </div>
-              <div class="lib-dash-col">
-                <div class="lib-dash-title">Dynamik</div>
-                <div id="lib-dash-dynamic" class="lib-dash-bars"></div>
-              </div>
-              <div class="lib-dash-col">
-                <div class="lib-dash-title">Größte Einsparpotenziale</div>
-                <ol id="lib-dash-hogs" class="lib-dash-hogs"></ol>
-              </div>
-            </div>
-
-            <div class="lib-actions">
-              <button class="btn btn-primary btn-sm" id="btn-lib-scan">Scan starten</button>
-              <button class="btn btn-ghost btn-sm" id="btn-lib-cancel" disabled title="Laufenden Scan abbrechen">Abbrechen</button>
-              <button class="btn btn-ghost btn-sm" id="btn-lib-clear" title="Treffer/Ergebnisse leeren">Leeren</button>
-              <span id="lib-progress" class="muted"></span>
-              <button class="btn btn-ghost btn-sm" id="btn-lib-csv" disabled title="Treffer als CSV exportieren">CSV-Export</button>
+            <!-- 4) Liste + Aktionen -->
+            <div class="lib-actions" style="margin-top:12px">
+              <button class="btn btn-ghost btn-sm" id="btn-lib-csv" disabled title="Gefilterte Treffer als CSV exportieren">CSV-Export</button>
               <button class="btn btn-ghost btn-sm" id="btn-lib-add" disabled>Auswahl zur Warteschlange</button>
               <button class="btn btn-primary btn-sm" id="btn-lib-add-auto" disabled title="Mit automatisch je Datei vorgeschlagenen Einstellungen (Codec/HDR/DV)">Auswahl mit Auto-Einstellungen</button>
             </div>
@@ -827,6 +832,7 @@
                 </tbody>
               </table>
             </div>
+            <div class="lib-pager" id="lib-pager" style="display:none" aria-label="Seiten"></div>
           </div>
         </section>
 
@@ -1131,7 +1137,7 @@
               <div class="data-table-wrap">
                 <table class="data-table">
                   <thead>
-                    <tr><th>Datei</th><th>Status</th><th>Q</th><th>Dauer</th><th>Ersparnis</th></tr>
+                    <tr><th>Datei</th><th>Status</th><th>Modus</th><th>Dauer</th><th>Ersparnis</th></tr>
                   </thead>
                   <tbody id="st-dash-body"></tbody>
                 </table>

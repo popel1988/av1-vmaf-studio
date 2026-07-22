@@ -80,8 +80,19 @@ services:
 
     # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
     # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.
+    #
+    # Optional: CPU-/RAM-Limits (auskommentiert). Bei memory-Überschreitung wird
+    # der Container vom Kernel beendet (OOM) – Werte an den Host anpassen.
+    # GPU-VRAM wird hier nicht begrenzt. Parallel-Encodes in der App zusätzlich
+    # niedrig halten, wenn der Host knapp ist.
     deploy:
       resources:
+        # limits:
+        #   cpus: "8.0"       # max. CPU-Kerne (Anteil)
+        #   memory: 24G       # hartes RAM-Limit
+        # reservations:
+        #   cpus: "2.0"       # optionale Mindestreserve
+        #   memory: 4G
         reservations:
           devices:
             - driver: nvidia

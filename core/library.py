@@ -1,11 +1,12 @@
-"""Bibliotheks-Scan: Eingabeordner rekursiv nach Videos durchsuchen, per
-ffprobe analysieren und nach Kriterien filtern (z. B. „alle H.264 > 10 Mbit/s").
+"""Bibliotheks-Scan: Eingabeordner rekursiv nach Videos durchsuchen und per
+ffprobe analysieren.
 
-Läuft als Hintergrund-Thread mit Fortschritt, da das Proben vieler Dateien
-dauert. Ergebnisse werden im Speicher gehalten, per Endpoint abgefragt und nach
-Abschluss zusätzlich als JSON gecacht (letzter Scan bleibt über Neustarts hinweg
-verfügbar). Pro Treffer werden HDR/DV-Infos, eine Einspar-Schätzung sowie ein
-automatischer Encode-Vorschlag mitgeliefert.
+Der Scan liefert die **volle** Bibliothek (alle Video-Endungen im gewählten
+Root). Filter (Name, Codec, Bitrate, …) werden in der UI live auf den letzten
+Scan angewendet – ein Rescan ist nur nötig, wenn neue Dateien hinzukommen.
+
+Läuft als Hintergrund-Thread mit Fortschritt. Ergebnisse werden im Speicher
+gehalten, per Endpoint abgefragt und nach Abschluss als JSON gecacht.
 """
 from __future__ import annotations
 
@@ -280,86 +281,57 @@ def _dynamic_match(info, dynamic_filters: list) -> bool:
 
 
 def _run(root_rel: str, filters: dict) -> None:
+    """Scannt die Bibliothek vollständig (ffprobe).
+
+    Filter (Name, Codec, Bitrate, …) werden **nicht** mehr serverseitig
+    angewendet – die UI filtert den letzten Scan live. ``filters`` wird nur
+    noch für optionale Kompatibilität akzeptiert; der Scan nimmt immer alle
+    bekannten Video-Endungen im gewählten Root.
+    """
     try:
-        # Format-/Container-Filter: gewählte Endungen (ohne Punkt) oder alle.
-        exts_raw = [str(e).lower().lstrip(".") for e in (filters.get("extensions") or [])]
-        allowed = {"." + e for e in exts_raw if e} or set(config.VIDEO_EXTENSIONS)
+        from . import history
+
+        _ = filters  # bewusst ungenutzt (Live-Filter in der UI)
+        allowed = set(config.VIDEO_EXTENSIONS)
         files = list(config.iter_input_files(root_rel, allowed))
         with _lock:
             _state["total"] = len(files)
+            _state["root"] = root_rel or ""
 
-        min_size = float(filters.get("min_size_mb") or 0) * 1024 * 1024
-        min_bitrate = float(filters.get("min_bitrate_mbps") or 0) * 1_000_000
-        min_height = int(filters.get("min_height") or 0)
-        name_contains = str(filters.get("name_contains") or "").lower()
-        name_exclude = [str(t).lower() for t in (filters.get("name_exclude") or [])
-                        if str(t).strip()]
-        inc = {c.lower() for c in (filters.get("codecs_include") or [])}
-        exc = {c.lower() for c in (filters.get("codecs_exclude") or [])}
-        target_codec = str(filters.get("target_codec") or "av1")
-        # Mehrfach-Auswahl (dynamic_filters) mit Rückfall auf Einzelwert.
-        dynamic_filters = [str(d) for d in (filters.get("dynamic_filters") or []) if str(d)]
-        single = str(filters.get("dynamic_filter") or "")
-        if single and not dynamic_filters:
-            dynamic_filters = [single]
-        skip_optimized = bool(filters.get("skip_optimized"))
-        skip_processed = bool(filters.get("skip_processed"))
-        if skip_processed:
-            from . import history
+        # Default-Projektion AV1 (UI rechnet bei Ziel-Codec-Wechsel neu).
+        target_codec = "av1"
 
         for f in files:
             if _stop.is_set():
                 break
             with _lock:
                 _state["scanned"] += 1
-            try:
-                if name_contains and name_contains not in f.name.lower():
-                    continue
-                # Ausschluss: greift auf den gesamten (relativen) Pfad, damit auch
-                # ganze Ordner wie „.archiv" übersprungen werden können.
-                if name_exclude:
-                    rel_low = (config.rel_input(f) or f.name).lower()
-                    if any(t in rel_low for t in name_exclude):
-                        continue
-                if min_size and f.stat().st_size < min_size:
-                    continue
-            except OSError:
-                continue
 
-            info, err = ff.probe_with_error(f)
+            info, _err = ff.probe_with_error(f)
             if info is None:
-                continue
-            codec = (info.codec or "").lower()
-            if inc and codec not in inc:
-                continue
-            if exc and codec in exc:
-                continue
-            if min_height and info.height < min_height:
-                continue
-            if min_bitrate and info.video_bitrate < min_bitrate:
-                continue
-            if not _dynamic_match(info, dynamic_filters):
                 continue
 
             rel = config.rel_input(f) or f.name
-
-            # Bereits verarbeitete Dateien überspringen (Historie).
-            if skip_processed and history.is_processed(str(f)):
-                continue
-
-            proj = project_savings(info, target_codec)
-            if skip_optimized and proj["already_optimized"]:
-                continue
             folder = str(Path(rel).parent).replace("\\", "/")
+            proj = project_savings(info, target_codec)
+            sug = suggest_encode(info, target_codec)
+            processed = False
+            try:
+                processed = history.is_processed(str(f.resolve()))
+            except OSError:
+                processed = history.is_processed(str(f))
+
             with _lock:
                 _state["matched"].append({
                     "path": rel,
                     "name": f.name,
                     "folder": "" if folder == "." else folder,
+                    "ext": f.suffix.lower().lstrip("."),
                     "size_bytes": info.size_bytes,
                     "size_human": ff.human_size(info.size_bytes),
                     "codec": info.codec,
                     "resolution": f"{info.width}x{info.height}",
+                    "width": info.width,
                     "height": info.height,
                     "video_bitrate": info.video_bitrate,
                     "video_bitrate_human": ff._bitrate_human(info.video_bitrate),
@@ -369,10 +341,11 @@ def _run(root_rel: str, filters: dict) -> None:
                     "dv_profile": info.dv_profile,
                     "duration": round(info.duration, 2),
                     "duration_human": ff.human_duration(info.duration),
+                    "processed": processed,
                     "already_optimized": proj["already_optimized"],
                     "est_saved_bytes": proj["est_saved_bytes"],
                     "est_saved_human": ff.human_size(proj["est_saved_bytes"]),
-                    "suggest": suggest_encode(info, target_codec),
+                    "suggest": sug,
                 })
                 _state["total_size_bytes"] += info.size_bytes
                 _state["total_saved_bytes"] += proj["est_saved_bytes"]

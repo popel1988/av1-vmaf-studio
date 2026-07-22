@@ -33,6 +33,77 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN output_path TEXT")
 
 
+def job_kind_fields(settings) -> tuple[str, str, int]:
+    """Anzeige-Felder (codec, rate_mode, quality) für Historie/Statistik.
+
+    Remux/Copy/Merge/Split haben keine Encode-CQ – speichern wir als
+    eigene „Codec"-Labels statt Default AV1/CQ28.
+    """
+    if settings is None:
+        return "av1", "cq", 28
+    if isinstance(settings, dict):
+        mode = str(settings.get("video_mode") or "encode")
+        remux_only = bool(settings.get("remux_only"))
+        container = (settings.get("edit_spec") or {}).get("container") \
+            if isinstance(settings.get("edit_spec"), dict) else None
+        container = container or settings.get("container") or "mkv"
+        codec = str(settings.get("codec") or "av1")
+        rate_mode = str(settings.get("rate_mode") or "cq")
+        quality = int(settings.get("quality") or 0)
+    else:
+        mode = str(getattr(settings, "video_mode", "encode") or "encode")
+        remux_only = bool(getattr(settings, "remux_only", False))
+        spec = getattr(settings, "edit_spec", None) or {}
+        container = (spec.get("container") if isinstance(spec, dict) else None) \
+            or getattr(settings, "container", None) or "mkv"
+        codec = str(getattr(settings, "codec", "av1") or "av1")
+        rate_mode = str(getattr(settings, "rate_mode", "cq") or "cq")
+        quality = int(getattr(settings, "quality", 0) or 0)
+
+    if remux_only or mode == "edit":
+        return "remux", str(container or "mkv"), 0
+    if mode == "copy":
+        return "audio-opt", "copy", 0
+    if mode == "concat":
+        return "concat", "copy", 0
+    if mode == "split":
+        return "split", "copy", 0
+    return codec, rate_mode, quality
+
+
+def _migrate_kind_labels(conn: sqlite3.Connection) -> None:
+    """Einmalig: Remux-/Copy-Jobs nicht mehr als AV1 CQ28 in codec/quality belassen."""
+    try:
+        rows = conn.execute(
+            "SELECT id, codec, quality, settings_json FROM jobs "
+            "WHERE settings_json IS NOT NULL AND settings_json != ''"
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    updated = 0
+    for row in rows:
+        raw = row["settings_json"] or ""
+        try:
+            d = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        mode = str(d.get("video_mode") or "encode")
+        if not (d.get("remux_only") or mode in ("edit", "copy", "concat", "split")):
+            continue
+        codec, rate_mode, quality = job_kind_fields(d)
+        if (row["codec"] or "") == codec and int(row["quality"] or 0) == quality:
+            continue
+        conn.execute(
+            "UPDATE jobs SET codec=?, rate_mode=?, quality=? WHERE id=?",
+            (codec, rate_mode, quality, row["id"]),
+        )
+        updated += 1
+    if updated:
+        logger.info("Historie: %s Remux/Copy-Jobs neu gelabelt (codec/quality).", updated)
+
+
 def init_db() -> None:
     """Legt DB/Tabelle an (idempotent)."""
     global _conn
@@ -66,6 +137,7 @@ def init_db() -> None:
             """
         )
         _ensure_columns(_conn)
+        _migrate_kind_labels(_conn)
         _conn.commit()
 
 
@@ -96,15 +168,16 @@ def record_job(item, duration: float = 0.0) -> None:
         settings_json = json.dumps(s.__dict__, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         settings_json = "{}"
+    hist_codec, hist_rate, hist_q = job_kind_fields(s)
     row = (
         item.id,
         item.title,
         item.path,
         item.status,
         s.platform,
-        s.codec,
-        s.rate_mode,
-        int(s.quality or 0),
+        hist_codec,
+        hist_rate,
+        int(hist_q or 0),
         _pick_vmaf(item),
         int(getattr(item, "original_size", 0) or 0),
         int(getattr(item, "output_size", 0) or 0),
@@ -217,7 +290,7 @@ def by_source(path: str, limit: int = 20) -> list[dict]:
             rows = _conn.execute(
                 "SELECT id, title, path, status, platform, codec, quality, "
                 "rate_mode, vmaf, original_size, output_size, saved_bytes, "
-                "duration, finished, output_path FROM jobs "
+                "duration, finished, output_path, settings_json FROM jobs "
                 "WHERE path=? ORDER BY finished DESC LIMIT ?",
                 (str(path), int(limit)),
             ).fetchall()

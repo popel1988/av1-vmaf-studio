@@ -24,6 +24,8 @@
     libRows: [],       // Bibliotheks-Treffer (für Sortierung/Filter/Gruppierung)
     libStats: null,    // Dashboard-Statistik des letzten Scans
     libSort: { key: "est_saved_bytes", dir: "desc" },
+    libPage: 1,        // aktuelle Seite der Ergebnisliste
+    libPageSize: 50,   // Einträge pro Seite
     remuxLoaded: false, // Remux-Seite initialisiert
     remuxSel: null,     // { path, name } der Remux-Quelle
     remuxInfo: null,    // ffprobe-Info der Remux-Quelle
@@ -1673,14 +1675,60 @@
     return CODEC_SHORT[`${s.platform}:${s.codec}`] || (s.codec || "").toUpperCase();
   }
 
+  /** Job-Art aus Settings (encode | edit | copy | concat | split). */
+  function jobKind(s) {
+    if (!s) return "encode";
+    if (s.remux_only || s.video_mode === "edit") return "edit";
+    const m = s.video_mode || "encode";
+    if (m === "copy" || m === "concat" || m === "split") return m;
+    return "encode";
+  }
+
+  /** Kurzes Badge + Detail für Queue/Stats (kein Encode-CQ bei Remux). */
+  function jobModeParts(s) {
+    const kind = jobKind(s);
+    if (kind === "edit") {
+      const cont = (((s.edit_spec || {}).container) || s.container || "mkv");
+      return { badge: "Remux", detail: String(cont).toUpperCase(), kind };
+    }
+    if (kind === "copy") return { badge: "Audio-Opt", detail: "Video-Copy", kind };
+    if (kind === "concat") return { badge: "Merge", detail: "—", kind };
+    if (kind === "split") return { badge: "Split", detail: "—", kind };
+    let detail;
+    if (s.rate_mode === "bitrate") detail = `${s.quality} kbit/s`;
+    else if (s.rate_mode === "abr") detail = `ABR ${s.quality}`;
+    else detail = `CQ ${s.quality}`;
+    return { badge: codecName(s), detail, kind };
+  }
+
+  /** Historien-Zeile → Anzeige (settings_json oder gespeicherte codec/quality). */
+  function histModeParts(j) {
+    let s = null;
+    const raw = j.settings_json;
+    if (raw) {
+      try { s = typeof raw === "string" ? JSON.parse(raw) : raw; } catch (_) { s = null; }
+    }
+    if (s && typeof s === "object") return jobModeParts(s);
+    const c = String(j.codec || "").toLowerCase();
+    if (c === "remux") return { badge: "Remux", detail: (j.rate_mode || "mkv").toUpperCase(), kind: "edit" };
+    if (c === "audio-opt") return { badge: "Audio-Opt", detail: "Video-Copy", kind: "copy" };
+    if (c === "concat") return { badge: "Merge", detail: "—", kind: "concat" };
+    if (c === "split") return { badge: "Split", detail: "—", kind: "split" };
+    // Legacy Encode-Zeile
+    let detail = "—";
+    if (j.quality) {
+      if (j.rate_mode === "bitrate") detail = `${j.quality} kbit/s`;
+      else if (j.rate_mode === "abr") detail = `ABR ${j.quality}`;
+      else detail = `CQ ${j.quality}`;
+    }
+    return { badge: (j.codec || "?").toUpperCase(), detail, kind: "encode" };
+  }
+
   function settingsLabel(it) {
-    const s = it.settings;
-    let val;
-    if (s.rate_mode === "bitrate") val = `${s.quality} kbit/s`;
-    else if (s.rate_mode === "abr") val = `ABR ${s.quality}`;
-    else val = `CQ ${s.quality}`;
+    const s = it.settings || {};
+    const { badge, detail, kind } = jobModeParts(s);
     let verify = "";
-    if (it.vmaf_verify != null) {
+    if (kind === "encode" && it.vmaf_verify != null) {
       const min = (s.verify_min != null) ? s.verify_min : 93;
       const ok = it.vmaf_verify >= min;
       const retry = it.verify_attempts > 1 ? ` ·${it.verify_attempts}×` : "";
@@ -1699,7 +1747,8 @@
     if (it.caps_failed) {
       extra += ` <span class="vmaf-verify vv-bad" title="Größen-/Bitrate-Cap überschritten">⚠ Cap</span>`;
     }
-    return `<span class="codec-badge">${escapeHtml(codecName(s))}</span> ${val}${verify}${extra}`;
+    const det = detail && detail !== "—" ? ` ${escapeHtml(detail)}` : "";
+    return `<span class="codec-badge">${escapeHtml(badge)}</span>${det}${verify}${extra}`;
   }
 
   function renderQueueTable(items, activeIds) {
@@ -1760,18 +1809,101 @@
     });
   }
 
+  function showRequeueConflictModal(outputName) {
+    return new Promise((resolve) => {
+      const name = outputName || tt("die Ausgabedatei");
+      openModal(tt("Erneut einreihen"), `
+        <p>${tt("Die Ausgabedatei existiert bereits und wird bei „Erneut“ sofort überschrieben")}:
+          <strong>${escapeHtml(name)}</strong></p>
+        <p class="hint">${tt("Alternativ einen neuen Dateinamen mit Suffix (_remux2, …) verwenden.")}</p>
+        <div class="lib-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="rq-overwrite">${tt("Überschreiben")}</button>
+          <button class="btn btn-ghost btn-sm" id="rq-suffix">${tt("Neuer Name (_…2)")}</button>
+          <button class="btn btn-ghost btn-sm" id="rq-cancel">${tt("Abbrechen")}</button>
+        </div>`);
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(v);
+      };
+      const ow = $("rq-overwrite");
+      const suf = $("rq-suffix");
+      const can = $("rq-cancel");
+      if (ow) ow.addEventListener("click", () => done("overwrite"));
+      if (suf) suf.addEventListener("click", () => done("suffix"));
+      if (can) can.addEventListener("click", () => done(null));
+      const m = $("app-modal");
+      const onHide = () => {
+        if (!settled && m && m.style.display === "none") done(null);
+      };
+      const obs = new MutationObserver(onHide);
+      if (m) obs.observe(m, { attributes: true, attributeFilter: ["style"] });
+    });
+  }
+
   async function requeueJob(id, fromHistory) {
     if (!id) return;
+    let mode = "overwrite";
+    try {
+      const det = await (await fetch(`/api/queue/${encodeURIComponent(id)}/details`)).json();
+      if (det && det.output && det.output.exists) {
+        const choice = await showRequeueConflictModal(det.output.name || "");
+        if (!choice) return;
+        mode = choice;
+      }
+    } catch (_) { /* ohne Details: überschreiben */ }
     const url = fromHistory
       ? `/api/history/${encodeURIComponent(id)}/requeue`
       : `/api/queue/${encodeURIComponent(id)}/requeue`;
     try {
-      const r = await fetch(url, { method: "POST" });
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
       const d = await r.json();
       if (d.error) alert(d.error);
+      else if (d.conflict_mode === "suffix" && d.output_name) {
+        alert(tt("Erneut eingereiht als") + ": " + d.output_name);
+      }
     } catch (e) {
       alert(String(e));
     }
+  }
+
+  async function reopenJobWithSettings(d) {
+    const s = (d && d.settings) || {};
+    const rel = (d.source && d.source.rel) || null;
+    const name = (d.source && d.source.name)
+      || (d.path ? String(d.path).split(/[/\\]/).pop() : "") || "Datei";
+    const isRemux = !!(s.remux_only || s.video_mode === "edit");
+    closeModal();
+    if (isRemux) {
+      navTo("remux");
+      applyRemuxProfile(s);
+      if (rel) {
+        try {
+          await remuxSelectFile({ rel, name });
+          if (s.edit_spec) remuxApplyEditSpec(s.edit_spec);
+        } catch (e) {
+          $("remux-start-info").innerHTML =
+            `<span class="bad">${escapeHtml(String(e))}</span>`;
+        }
+      }
+      return;
+    }
+    navTo("encode");
+    if (rel) {
+      try {
+        await selectFile({ rel, name, size_human: "" });
+      } catch (_) {
+        state.selected = { path: rel, name, isBatch: false };
+        if (typeof enableActionButtons === "function") enableActionButtons();
+      }
+    }
+    applyProfile(s);
   }
 
   function renderActiveProgress(items, activeIds) {
@@ -2598,6 +2730,47 @@
     return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}">${track}</video>`;
   }
 
+  /** Ob Browser Video+Ton vermutlich nativ abspielen kann (volle Dauer/Seek). */
+  function playerCanNative(info, audioIdx) {
+    if (!info) return false;
+    // Rohdatei nur bei gängigen Browser-Containern — MKV/TS gehen über Live-Remux.
+    const fmt = String(info.container || "").toLowerCase();
+    const isMp4 = /\b(mp4|mov|m4v|isom|iso5|iso6)\b/.test(fmt);
+    const isWebm = /\bwebm\b/.test(fmt) && !/\bmatroska\b/.test(fmt);
+    if (!isMp4 && !isWebm) return false;
+    const v = document.createElement("video");
+    const vc = (info.codec || "").toLowerCase();
+    let vMime = "";
+    if (isMp4 && (/^(h264|avc)/.test(vc) || vc === "avc1")) vMime = 'video/mp4; codecs="avc1.640028"';
+    else if (isMp4 && /^(h265|hevc|hev1|hvc1)/.test(vc)) vMime = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
+    else if (/^(av1|av01)/.test(vc)) {
+      vMime = isWebm ? 'video/webm; codecs="av01.0.05M.08"' : 'video/mp4; codecs="av01.0.05M.08"';
+    } else if (isWebm && /^vp9/.test(vc)) vMime = 'video/webm; codecs="vp9"';
+    else return false;
+    if (!v.canPlayType(vMime)) return false;
+    if (audioIdx == null || audioIdx < 0) return true;
+    const a = ((info.audio || [])[audioIdx]) || null;
+    if (!a) return true;
+    const ac = (a.codec || "").toLowerCase();
+    // Nur klar browser-gängige Toncodecs → sonst Live-Remux (AAC).
+    if (/^(aac|mp3|mp4a)/.test(ac)) return true;
+    if (ac === "opus" && v.canPlayType('audio/webm; codecs="opus"')) return true;
+    return false;
+  }
+
+  function _playerNativeUrl(root, rel) {
+    return `/api/media?root=${encodeURIComponent(root || "media")}`
+      + `&path=${encodeURIComponent(rel)}`;
+  }
+
+  function _playerStreamUrl(root, rel, audioIdx, startSec, audioCodec) {
+    let u = `/api/media/stream?root=${encodeURIComponent(root || "media")}`
+      + `&path=${encodeURIComponent(rel)}&audio=${audioIdx}`;
+    if (startSec && startSec > 0) u += `&start=${encodeURIComponent(String(startSec))}`;
+    if (audioCodec) u += `&acodec=${encodeURIComponent(audioCodec)}`;
+    return u;
+  }
+
   async function openPlayer(root, rel, name) {
     openModal(name || "Wiedergabe", `<p class="muted">${tt("Lade Spuren …")}</p>`);
     let info = null;
@@ -2607,6 +2780,7 @@
     } catch (e) { info = null; }
     const audio = (info && info.audio) || [];
     const subs = (info && info.subtitles) || [];
+    const knownDur = (info && info.duration) ? Number(info.duration) : 0;
     const textSubs = subs.filter((s) => {
       const c = (s.codec || "").toLowerCase();
       return c && !/pgs|dvd_sub|dvb_sub|xsub|hdmv/.test(c);
@@ -2620,7 +2794,6 @@
       : `<option value="-1">${tt("Kein Ton")}</option>`;
     const subOpts = `<option value="-1">${tt("Keine Untertitel")}</option>` +
       textSubs.map((s) => {
-        // Relativer Untertitel-Index für ffmpeg 0:s:N (Position in info.subtitles).
         const idx = subs.indexOf(s);
         const lab = [s.language || "und", s.codec || "", s.title || ""].filter(Boolean).join(" · ");
         return `<option value="${idx}">${escapeHtml(lab)}</option>`;
@@ -2640,32 +2813,111 @@
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="player-reload">${tt("Neu laden")}</button>
       </div>
-      <div id="player-wrap">${videoHtml(_playerStreamUrl(root, rel, audio.length ? 0 : -1), "")}</div>
-      <p class="muted" style="margin-top:8px;font-size:12px">
-        ${tt("Ton wird für die Wiedergabe als AAC umgewandelt. Der Video-Codec hängt vom Browser ab (AV1/HEVC).")}
-      </p>
+      <div id="player-wrap"></div>
+      <div class="player-stream-seek" id="player-seek-row" style="display:none">
+        <input type="range" id="player-seek" min="0" max="1000" value="0" />
+        <span class="muted" id="player-time">0:00 / 0:00</span>
+      </div>
+      <p class="muted" style="margin-top:8px;font-size:12px" id="player-mode-hint"></p>
       ${imgNote}`);
-    const reload = () => {
-      const a = parseInt(($("player-audio") || {}).value, 10);
+
+    const ctx = { startOffset: 0, useStream: true };
+
+    const vttUrl = () => {
       const s = parseInt(($("player-sub") || {}).value, 10);
-      const vUrl = _playerStreamUrl(root, rel, isNaN(a) ? 0 : a);
-      const tUrl = (!isNaN(s) && s >= 0)
+      return (!isNaN(s) && s >= 0)
         ? `/api/media/vtt?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}&subtitle=${s}`
         : "";
-      const wrap = $("player-wrap");
-      if (wrap) wrap.innerHTML = videoHtml(vUrl, tUrl);
     };
+
+    const bindStreamSeek = (video) => {
+      const row = $("player-seek-row");
+      const seek = $("player-seek");
+      const time = $("player-time");
+      if (!knownDur || !row || !seek) {
+        if (row) row.style.display = "none";
+        return;
+      }
+      row.style.display = "";
+      let dragging = false;
+      const tick = () => {
+        if (dragging) return;
+        const t = ctx.startOffset + (video.currentTime || 0);
+        seek.value = String(Math.round(Math.min(1, Math.max(0, t / knownDur)) * 1000));
+        if (time) time.textContent = fmtClock(t) + " / " + fmtClock(knownDur);
+      };
+      video.addEventListener("timeupdate", tick);
+      video.addEventListener("loadedmetadata", tick);
+      seek.oninput = () => {
+        dragging = true;
+        const t = (parseInt(seek.value, 10) / 1000) * knownDur;
+        if (time) time.textContent = fmtClock(t) + " / " + fmtClock(knownDur);
+      };
+      // Erst beim Loslassen neu streamen (sonst FFmpeg-Sturm beim Ziehen).
+      const commit = () => {
+        if (!dragging) return;
+        dragging = false;
+        const t = (parseInt(seek.value, 10) / 1000) * knownDur;
+        loadAt(t, true);
+      };
+      seek.addEventListener("change", commit);
+      seek.addEventListener("pointerup", commit);
+      tick();
+    };
+
+    const loadAt = (startSec, autoplay) => {
+      const a = parseInt(($("player-audio") || {}).value, 10);
+      const aIdx = isNaN(a) ? (audio.length ? 0 : -1) : a;
+      const wrap = $("player-wrap");
+      const hint = $("player-mode-hint");
+      const seekRow = $("player-seek-row");
+      if (!wrap) return;
+
+      const native = playerCanNative(info, aIdx);
+      ctx.useStream = !native;
+      ctx.startOffset = native ? 0 : Math.max(0, startSec || 0);
+
+      if (native) {
+        if (seekRow) seekRow.style.display = "none";
+        wrap.innerHTML = videoHtml(_playerNativeUrl(root, rel), vttUrl());
+        if (hint) {
+          hint.textContent = tt("Native Wiedergabe (volle Dauer & Suche). Tonspur wird vom Browser direkt gelesen.");
+        }
+        const va = wrap.querySelector("video");
+        if (va && startSec > 0) {
+          va.addEventListener("loadedmetadata", () => {
+            try { va.currentTime = startSec; } catch (e) { /* ignore */ }
+            if (autoplay) va.play().catch(() => {});
+          }, { once: true });
+        } else if (va && autoplay) {
+          va.play().catch(() => {});
+        }
+        return;
+      }
+
+      const acodec = (aIdx >= 0 && audio[aIdx]) ? (audio[aIdx].codec || "") : "";
+      const vUrl = _playerStreamUrl(root, rel, aIdx, ctx.startOffset, acodec);
+      wrap.innerHTML = videoHtml(vUrl, vttUrl());
+      if (hint) {
+        hint.textContent = tt("Live-Remux (Ton → AAC): Dauer aus Analyse. Zum Springen den Schieberegler darunter nutzen (Neustart ab Position).");
+      }
+      const va = wrap.querySelector("video");
+      if (va) {
+        bindStreamSeek(va);
+        if (autoplay) {
+          va.addEventListener("loadeddata", () => va.play().catch(() => {}), { once: true });
+        }
+      }
+    };
+
+    const reload = () => loadAt(0, false);
     const btn = $("player-reload");
     if (btn) btn.addEventListener("click", reload);
     ["player-audio", "player-sub"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("change", reload);
     });
-  }
-
-  function _playerStreamUrl(root, rel, audioIdx) {
-    return `/api/media/stream?root=${encodeURIComponent(root || "media")}`
-      + `&path=${encodeURIComponent(rel)}&audio=${audioIdx}`;
+    loadAt(0, false);
   }
 
   // Direkt in den A/B-Vergleich springen und beide Videos laden.
@@ -2770,11 +3022,7 @@
     const rq = $("modal-requeue");
     if (rq) rq.addEventListener("click", () => requeueJob(id, !!d.from_history));
     const rqe = $("modal-requeue-edit");
-    if (rqe) rqe.addEventListener("click", () => {
-      if (d.settings) applyProfile(d.settings);
-      closeModal();
-      navTo("encode");
-    });
+    if (rqe) rqe.addEventListener("click", () => reopenJobWithSettings(d));
     loadVmafBySource(d.path || "", "modal-vmaf-hist");
   }
 
@@ -2792,8 +3040,9 @@
       }
       const jobRows = jobs.slice(0, 8).map((j) => {
         const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
-        const v = j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—";
-        return `<li>${escapeHtml(when)} · ${(j.codec || "").toUpperCase()} Q${j.quality || "—"} · VMAF ${v} · ${escapeHtml(j.status || "")}</li>`;
+        const mode = histModeParts(j);
+        const v = (mode.kind === "encode" && j.vmaf != null) ? Number(j.vmaf).toFixed(1) : "—";
+        return `<li>${escapeHtml(when)} · ${escapeHtml(mode.badge)} ${escapeHtml(mode.detail)} · VMAF ${v} · ${escapeHtml(j.status || "")}</li>`;
       }).join("");
       const sessRows = sessions.slice(0, 5).map((s) =>
         `<li>${escapeHtml(s.title || s.session)} · ${escapeHtml(s.recommended_label || "")}` +
@@ -2936,14 +3185,19 @@
     if (s.size_target_mb !== undefined) set("opt-size-target", s.size_target_mb);
     if (s.out_mode !== undefined) set("opt-out-mode", s.out_mode, "change");
     if (s.out_subdir !== undefined) set("opt-out-subdir", s.out_subdir);
-    if (s.remux_only) {
+    if (s.remux_only || s.video_mode === "edit") {
       // Remux-Profil → Remux & Bearbeiten (nicht Super-Tool), Auswahl mitnehmen.
+      navTo("remux");
       applyRemuxProfile(s);
+      const sel = state.selected;
+      if (sel && !sel.isBatch && sel.path) {
+        const already = state.remuxSel && state.remuxSel.path === sel.path;
+        if (!already) remuxSelectFile({ rel: sel.path, name: sel.name || sel.path });
+      }
     }
   }
 
   function applyRemuxProfile(s) {
-    navTo("remux");
     const set = (id, val, ev) => {
       const el = $(id);
       if (!el || val === undefined || val === null) return;
@@ -2953,18 +3207,17 @@
     if (s.suffix !== undefined) set("remux-suffix", s.suffix);
     if (s.name_pattern !== undefined) set("remux-name-pattern", s.name_pattern);
     if (s.on_duplicate !== undefined) set("remux-on-duplicate", s.on_duplicate);
-    if (s.container !== undefined) set("remux-container", s.container, "change");
+    const cont = (s.edit_spec && s.edit_spec.container) || s.container;
+    if (cont && cont !== "auto") set("remux-container", cont, "change");
     if (s.post_processing !== undefined) set("remux-post", s.post_processing, "change");
     if (s.integrity_check !== undefined) set("remux-integrity", s.integrity_check);
     if (s.safe_replace !== undefined) set("remux-safe", s.safe_replace);
     if (s.out_mode !== undefined) set("remux-out-mode", s.out_mode, "change");
     if (s.out_subdir !== undefined) set("remux-out-subdir", s.out_subdir);
-    // Encode-/Browser-Auswahl in Remux übernehmen (Einzeldatei).
-    const sel = state.selected;
-    if (sel && !sel.isBatch && sel.path) {
-      const already = state.remuxSel && state.remuxSel.path === sel.path;
-      if (!already) remuxSelectFile({ rel: sel.path, name: sel.name || sel.path });
-    }
+    const spec = s.edit_spec || {};
+    if (spec.keep_chapters !== undefined) set("remux-keep-chapters", spec.keep_chapters);
+    if (spec.keep_metadata !== undefined) set("remux-keep-metadata", spec.keep_metadata);
+    if (spec.keep_attachments !== undefined) set("remux-keep-att", spec.keep_attachments);
   }
 
   /* ------------------------------------------------------------- STATISTIK */
@@ -3002,20 +3255,25 @@
     }
     const codecs = $("stat-codecs");
     if (codecs) {
-      codecs.innerHTML = (st.by_codec || []).map((c) =>
-        `<span class="codec-chip">${escapeHtml((c.codec || "?").toUpperCase())}: ${c.count}× · ${formatBytes(c.saved_bytes)}</span>`).join("");
+      codecs.innerHTML = (st.by_codec || []).map((c) => {
+        const label = ({
+          remux: "Remux", "audio-opt": "Audio-Opt", concat: "Merge", split: "Split",
+        })[(c.codec || "").toLowerCase()] || (c.codec || "?").toUpperCase();
+        return `<span class="codec-chip">${escapeHtml(label)}: ${c.count}× · ${formatBytes(c.saved_bytes)}</span>`;
+      }).join("");
     }
     const body = $("stats-body");
     if (body) {
       body.innerHTML = recent.length ? recent.map((j) => {
         const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
         const id = escapeHtml(j.id || "");
+        const mode = histModeParts(j);
         return `
         <tr>
           <td><a href="#" class="stats-title" data-id="${id}" title="Details & Wiedergabe öffnen">${escapeHtml(j.title || "")}</a></td>
-          <td>${escapeHtml((j.codec || "").toUpperCase())}</td>
-          <td>${j.quality || "—"}</td>
-          <td>${j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—"}</td>
+          <td><span class="codec-badge">${escapeHtml(mode.badge)}</span></td>
+          <td>${escapeHtml(mode.detail)}</td>
+          <td>${mode.kind === "encode" && j.vmaf != null ? Number(j.vmaf).toFixed(1) : "—"}</td>
           <td>${formatBytes(j.original_size)}</td>
           <td>${formatBytes(j.output_size)}</td>
           <td class="${(j.saved_bytes || 0) >= 0 ? "good" : "bad"}">${formatBytes(j.saved_bytes)}</td>
@@ -3047,25 +3305,40 @@
 
   /* ------------------------------------------------------------ BIBLIOTHEK */
   let libPoll = null;
+
+  function libBindLiveFilters() {
+    const refresh = () => libRefreshView();
+    ["lib-name", "lib-exclude", "lib-min-size", "lib-min-br", "lib-min-h",
+      "lib-codec-match", "lib-target-codec", "lib-skip-optimized", "lib-skip-processed"]
+      .forEach((id) => {
+        const el = $(id);
+        if (!el) return;
+        el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", refresh);
+      });
+    const fmts = $("lib-formats");
+    if (fmts) fmts.addEventListener("change", refresh);
+  }
+
   function initLibrary() {
     const scanBtn = $("btn-lib-scan");
     if (!scanBtn) return;
+    state.libScanAll = state.libScanAll || [];
+    state.libScanRoot = state.libScanRoot || "";
     scanBtn.addEventListener("click", startLibraryScan);
     $("btn-lib-add").addEventListener("click", () => addLibrarySelection(false));
     const auto = $("btn-lib-add-auto");
     if (auto) auto.addEventListener("click", () => addLibrarySelection(true));
     const csv = $("btn-lib-csv");
-    if (csv) csv.addEventListener("click", () => window.open("/api/library/export.csv", "_blank"));
+    if (csv) csv.addEventListener("click", exportLibCsv);
     const all = $("lib-check-all");
     if (all) all.addEventListener("change", () => {
       document.querySelectorAll(".lib-check").forEach((c) => { c.checked = all.checked; });
     });
     const rs = $("lib-result-search");
-    if (rs) rs.addEventListener("input", renderLibrary);
+    if (rs) rs.addEventListener("input", () => { state.libPage = 1; renderLibrary(); });
     const grp = $("lib-group");
-    if (grp) grp.addEventListener("change", renderLibrary);
+    if (grp) grp.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
     initLibLibraries();
-    // Sortierbare Spalten
     document.querySelectorAll(".lib-table th.sortable").forEach((th) => {
       th.addEventListener("click", () => {
         const key = th.dataset.sort;
@@ -3073,14 +3346,24 @@
         state.libSort = (cur.key === key)
           ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
           : { key, dir: (key === "name" || key === "codec") ? "asc" : "desc" };
+        state.libPage = 1;
         renderLibrary();
       });
     });
-    // Aktionen (Play / →Encode / →VMAF) delegiert.
+    const pager = $("lib-pager");
+    if (pager) pager.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-lib-page]");
+      if (!b) return;
+      const p = parseInt(b.dataset.libPage, 10);
+      if (!p || p === state.libPage) return;
+      state.libPage = p;
+      renderLibrary();
+      const wrap = document.querySelector(".lib-table");
+      if (wrap) wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
     const body = $("lib-body");
     if (body) body.addEventListener("click", onLibAction);
 
-    // Mehrfach-Auswahl-Dropdowns für Codec- und Dynamik-Filter.
     state.libCodecMulti = makeMultiSelect($("lib-codec-multi"), [
       { value: "h264", label: "H.264" },
       { value: "hevc", label: "HEVC/H.265" },
@@ -3089,7 +3372,7 @@
       { value: "mpeg2video", label: "MPEG-2" },
       { value: "mpeg4", label: "MPEG-4" },
       { value: "vc1", label: "VC-1" },
-    ], { placeholder: "Alle Codecs" });
+    ], { placeholder: "Alle Codecs", onChange: () => libRefreshView() });
     state.libDynMulti = makeMultiSelect($("lib-dynamic-multi"), [
       { value: "sdr", label: "SDR" },
       { value: "hdr", label: "HDR (ohne DV)" },
@@ -3097,7 +3380,7 @@
       { value: "dv5", label: "DV Profil 5" },
       { value: "dv7", label: "DV Profil 7" },
       { value: "dv8", label: "DV Profil 8" },
-    ], { placeholder: "Alle" });
+    ], { placeholder: "Alle", onChange: () => libRefreshView() });
 
     const cancel = $("btn-lib-cancel");
     if (cancel) cancel.addEventListener("click", cancelLibraryScan);
@@ -3105,6 +3388,7 @@
     if (clear) clear.addEventListener("click", clearLibrary);
 
     libBuildFormats();
+    libBindLiveFilters();
     loadLastLibrary();
   }
 
@@ -3129,15 +3413,15 @@
     const codecs = state.libCodecMulti ? state.libCodecMulti.getValues() : [];
     const dyn = state.libDynMulti ? state.libDynMulti.getValues() : [];
     const codecMatch = $("lib-codec-match") ? $("lib-codec-match").value : "include";
-    const f = {
+    return {
       root: libSelectedRoot(),
       extensions: [...document.querySelectorAll(".lib-fmt:checked")].map((c) => c.value),
-      name_contains: $("lib-name").value.trim(),
+      name_contains: ($("lib-name") ? $("lib-name").value : "").trim(),
       name_exclude: ($("lib-exclude") ? $("lib-exclude").value : "")
         .split(",").map((s) => s.trim()).filter(Boolean),
-      min_size_mb: parseFloat($("lib-min-size").value) || 0,
-      min_bitrate_mbps: parseFloat($("lib-min-br").value) || 0,
-      min_height: parseInt($("lib-min-h").value, 10) || 0,
+      min_size_mb: parseFloat(($("lib-min-size") || {}).value) || 0,
+      min_bitrate_mbps: parseFloat(($("lib-min-br") || {}).value) || 0,
+      min_height: parseInt(($("lib-min-h") || {}).value, 10) || 0,
       codecs_include: codecMatch === "exclude" ? [] : codecs,
       codecs_exclude: codecMatch === "exclude" ? codecs : [],
       target_codec: $("lib-target-codec") ? $("lib-target-codec").value : "av1",
@@ -3145,7 +3429,194 @@
       skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
       skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
     };
-    return f;
+  }
+
+  function libTargetBitrateKbps(height, isHdr, targetCodec) {
+    let base = height <= 720 ? 2000 : height <= 1080 ? 4000 : height <= 1440 ? 7000 : 12000;
+    if (isHdr) base = Math.floor(base * 1.5);
+    if (targetCodec === "hevc") base = Math.floor(base * 1.25);
+    return base;
+  }
+
+  function libProjectSavings(m, targetCodec) {
+    const codec = (m.codec || "").toLowerCase();
+    const srcBr = m.video_bitrate || 0;
+    const targetBr = libTargetBitrateKbps(m.height || 0, !!m.is_hdr, targetCodec) * 1000;
+    const efficient = ["av1", "libsvtav1", "av01"].includes(codec);
+    const already = efficient || (srcBr > 0 && srcBr <= targetBr * 1.15);
+    const dur = m.duration || 0;
+    if (already || dur <= 0 || srcBr <= 0) {
+      return { already_optimized: !!already || efficient, est_saved_bytes: 0 };
+    }
+    const srcVideo = Math.floor(srcBr / 8 * dur);
+    const newVideo = Math.floor(targetBr / 8 * dur);
+    const rest = Math.max(0, (m.size_bytes || 0) - srcVideo);
+    const estNew = newVideo + rest;
+    return { already_optimized: false, est_saved_bytes: Math.max(0, (m.size_bytes || 0) - estNew) };
+  }
+
+  function libSuggestEncode(m, targetCodec) {
+    const codec = targetCodec === "hevc" ? "hevc" : "av1";
+    let hdr_mode = "", dv_mode = "", label;
+    if (m.dolby_vision) {
+      const prof = m.dv_profile || 0;
+      dv_mode = prof === 5 ? "tonemap" : "preserve";
+    } else if (m.is_hdr) {
+      hdr_mode = "preserve";
+    } else {
+      hdr_mode = "tonemap";
+    }
+    if (dv_mode === "preserve") label = `${codec.toUpperCase()} · DV übernehmen`;
+    else if (dv_mode === "tonemap") label = `${codec.toUpperCase()} · DV → SDR (Tonemap)`;
+    else if (hdr_mode === "preserve") label = `${codec.toUpperCase()} · HDR behalten`;
+    else label = `${codec.toUpperCase()} · SDR`;
+    return { codec, hdr_mode, dv_mode, label };
+  }
+
+  function libDynMatch(m, filters) {
+    const active = (filters || []).filter(Boolean);
+    if (!active.length) return true;
+    return active.some((d) => {
+      if (d === "sdr") return !m.is_hdr;
+      if (d === "hdr") return !!m.is_hdr && !m.dolby_vision;
+      if (d === "dv") return !!m.dolby_vision;
+      if (d.startsWith("dv")) {
+        const want = parseInt(d.slice(2), 10);
+        return !!m.dolby_vision && (!want || (m.dv_profile || 0) === want);
+      }
+      return true;
+    });
+  }
+
+  function libEnrichRow(m, targetCodec) {
+    const proj = libProjectSavings(m, targetCodec);
+    return {
+      ...m,
+      already_optimized: proj.already_optimized,
+      est_saved_bytes: proj.est_saved_bytes,
+      est_saved_human: formatBytes(proj.est_saved_bytes),
+      suggest: libSuggestEncode(m, targetCodec),
+    };
+  }
+
+  function libApplyLiveFilters(all) {
+    const f = libFilters();
+    const name = (f.name_contains || "").toLowerCase();
+    const excl = (f.name_exclude || []).map((t) => t.toLowerCase());
+    const minSize = (f.min_size_mb || 0) * 1024 * 1024;
+    const minBr = (f.min_bitrate_mbps || 0) * 1e6;
+    const minH = f.min_height || 0;
+    const inc = (f.codecs_include || []).map((c) => c.toLowerCase());
+    const exc = (f.codecs_exclude || []).map((c) => c.toLowerCase());
+    const exts = (f.extensions || []).map((e) => String(e).toLowerCase().replace(/^\./, ""));
+    const target = f.target_codec || "av1";
+    return (all || []).map((m) => libEnrichRow(m, target)).filter((m) => {
+      if (name && !(m.name || "").toLowerCase().includes(name)) return false;
+      if (excl.length) {
+        const pathLow = ((m.path || m.name || "")).toLowerCase();
+        if (excl.some((t) => pathLow.includes(t))) return false;
+      }
+      if (minSize && (m.size_bytes || 0) < minSize) return false;
+      if (minH && (m.height || 0) < minH) return false;
+      if (minBr && (m.video_bitrate || 0) < minBr) return false;
+      const codec = (m.codec || "").toLowerCase();
+      if (inc.length && !inc.includes(codec)) return false;
+      if (exc.length && exc.includes(codec)) return false;
+      if (exts.length) {
+        const ext = (m.ext || (m.name || "").split(".").pop() || "").toLowerCase();
+        if (!exts.includes(ext)) return false;
+      }
+      if (!libDynMatch(m, f.dynamic_filters)) return false;
+      if (f.skip_optimized && m.already_optimized) return false;
+      if (f.skip_processed && m.processed) return false;
+      return true;
+    });
+  }
+
+  function libComputeStats(matched) {
+    const byCodec = {};
+    let hdr = 0, dv = 0, sdr = 0;
+    (matched || []).forEach((m) => {
+      const c = (m.codec || "?").toLowerCase();
+      byCodec[c] = (byCodec[c] || 0) + 1;
+      if (m.dolby_vision) dv += 1;
+      else if (m.is_hdr) hdr += 1;
+      else sdr += 1;
+    });
+    const codec_distribution = Object.keys(byCodec)
+      .map((k) => ({ codec: k, count: byCodec[k] }))
+      .sort((a, b) => b.count - a.count);
+    const top_hogs = (matched || []).slice()
+      .sort((a, b) => (b.est_saved_bytes || 0) - (a.est_saved_bytes || 0))
+      .slice(0, 10)
+      .map((h) => ({
+        name: h.name, path: h.path, size_human: h.size_human,
+        est_saved_human: h.est_saved_human, est_saved_bytes: h.est_saved_bytes || 0,
+      }));
+    return { codec_distribution, hdr_count: hdr, dv_count: dv, sdr_count: sdr, top_hogs };
+  }
+
+  function libRefreshView() {
+    const all = state.libScanAll || [];
+    state.libRows = libApplyLiveFilters(all);
+    state.libPage = 1;
+    state.libStats = libComputeStats(state.libRows);
+    const size = state.libRows.reduce((a, m) => a + (m.size_bytes || 0), 0);
+    const saved = state.libRows.reduce((a, m) => a + (m.est_saved_bytes || 0), 0);
+    renderLibrary();
+    renderLibProjection({
+      matched: state.libRows,
+      total_size_bytes: size,
+      total_saved_bytes: saved,
+      total_size_human: formatBytes(size),
+      total_saved_human: formatBytes(saved),
+    });
+    renderLibDashboard(state.libStats, state.libRows.length);
+    const has = state.libRows.length > 0;
+    ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
+      const b = $(id); if (b) b.disabled = !has;
+    });
+    libUpdateScanBadge();
+  }
+
+  function libUpdateScanBadge(running) {
+    const badge = $("lib-scan-badge");
+    if (!badge) return;
+    if (running) { badge.textContent = "Scan läuft …"; return; }
+    const all = (state.libScanAll || []).length;
+    const n = (state.libRows || []).length;
+    if (!all) { badge.textContent = "Bereit"; return; }
+    const rootNow = libSelectedRoot();
+    if ((state.libScanRoot || "") !== (rootNow || "")) {
+      badge.textContent = `${all} im Cache · anderer Ordner – neu scannen`;
+      return;
+    }
+    badge.textContent = n === all ? `${n} Dateien` : `${n} / ${all} gefiltert`;
+  }
+
+  function exportLibCsv() {
+    const rows = state.libRows || [];
+    if (!rows.length) return;
+    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const lines = [[
+      "Pfad", "Ordner", "Codec", "Aufloesung", "Bitrate", "HDR/DV",
+      "Dauer", "Groesse", "Einsparung", "Vorschlag",
+    ].join(";")];
+    rows.forEach((m) => {
+      const dyn = m.dolby_vision ? ("DV" + (m.dv_profile ? " P" + m.dv_profile : ""))
+        : (m.is_hdr ? (m.hdr_type || "HDR") : "SDR");
+      lines.push([
+        m.path, m.folder, m.codec, m.resolution, m.video_bitrate_human, dyn,
+        m.duration_human, m.size_human, m.est_saved_human,
+        (m.suggest && m.suggest.label) || "",
+      ].map(esc).join(";"));
+    });
+    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "bibliothek.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   function initLibLibraries() {
@@ -3159,6 +3630,7 @@
     sel.addEventListener("change", () => {
       localStorage.setItem("libLibraryId", sel.value || "");
       syncLibLibraryButtons();
+      libUpdateScanBadge();
     });
     const add = $("btn-lib-add-library");
     const edit = $("btn-lib-edit-library");
@@ -3325,11 +3797,12 @@
   }
 
   async function startLibraryScan() {
-    $("lib-scan-badge").textContent = "Scan läuft …";
+    libUpdateScanBadge(true);
     libSetRunning(true);
+    // Nur Root scannen – Filter greifen live auf dem Ergebnis.
     await fetch("/api/library/scan", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(libFilters()),
+      body: JSON.stringify({ root: libSelectedRoot() }),
     });
     if (libPoll) clearInterval(libPoll);
     libPoll = setInterval(pollLibrary, 1200);
@@ -3345,44 +3818,49 @@
   }
 
   async function clearLibrary() {
-    if (libPoll) return;  // während des Scans nicht leeren
+    if (libPoll) return;
     try { await fetch("/api/library/clear", { method: "POST" }); }
     catch (e) { /* ignorieren */ }
+    state.libScanAll = [];
+    state.libScanRoot = "";
     state.libRows = [];
     state.libStats = null;
-    renderLibrary();
-    renderLibProjection({ matched: [] });
-    renderLibDashboard(null, 0);
-    ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
-      const el = $(id); if (el) el.disabled = true;
-    });
-    $("lib-progress").textContent = "";
-    $("lib-scan-badge").textContent = "Bereit";
+    libRefreshView();
+    const prog = $("lib-progress");
+    if (prog) prog.textContent = "";
+    libUpdateScanBadge();
   }
 
   function applyLibState(st) {
-    state.libRows = st.matched || [];
-    state.libStats = st.stats || null;
-    renderLibrary();
-    renderLibProjection(st);
-    renderLibDashboard(st.stats, state.libRows.length);
-    const has = state.libRows.length > 0;
-    ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
-      const b = $(id); if (b) b.disabled = !has;
-    });
+    state.libScanAll = st.matched || [];
+    state.libScanRoot = st.root || "";
+    state.libScanAt = st.generated_at || 0;
+    libRefreshView();
   }
 
   async function pollLibrary() {
     try {
       const r = await fetch("/api/library/scan");
       const st = await r.json();
-      $("lib-progress").textContent =
-        `${st.scanned}/${st.total} geprüft · ${st.matched.length} Treffer · ca. ${st.total_saved_human || "0 B"} einsparbar`;
+      const prog = $("lib-progress");
+      if (prog) {
+        prog.textContent = st.running
+          ? `${st.scanned}/${st.total} geprüft · ${st.matched.length} Dateien im Scan`
+          : `${st.matched.length} Dateien gescannt` +
+            (st.generated_at ? ` · ${new Date(st.generated_at * 1000).toLocaleString()}` : "");
+      }
       applyLibState(st);
       if (!st.running) {
         clearInterval(libPoll); libPoll = null;
         libSetRunning(false);
-        $("lib-scan-badge").textContent = st.error ? "Fehler" : `${st.matched.length} Treffer`;
+        if (st.error) {
+          const badge = $("lib-scan-badge");
+          if (badge) badge.textContent = "Fehler";
+        } else {
+          libUpdateScanBadge();
+        }
+      } else {
+        libUpdateScanBadge(true);
       }
     } catch (e) { /* ignorieren */ }
   }
@@ -3393,9 +3871,9 @@
       const st = await r.json();
       if (st && (st.matched || []).length) {
         applyLibState(st);
+        const prog = $("lib-progress");
         const when = st.generated_at ? new Date(st.generated_at * 1000).toLocaleString() : "";
-        $("lib-scan-badge").textContent = `${st.matched.length} Treffer`;
-        if (when) $("lib-progress").textContent = `Letzter Scan: ${when}`;
+        if (prog && when) prog.textContent = `Letzter Scan: ${when} · ${(st.matched || []).length} Dateien`;
       }
     } catch (e) { /* kein Cache */ }
   }
@@ -3449,35 +3927,93 @@
       </tr>`;
   }
 
+  function libRenderPager(totalRows) {
+    const pager = $("lib-pager");
+    if (!pager) return;
+    const size = state.libPageSize || 50;
+    const pages = Math.max(1, Math.ceil(totalRows / size));
+    let page = Math.max(1, Math.min(state.libPage || 1, pages));
+    state.libPage = page;
+    if (totalRows <= size) {
+      pager.style.display = "none";
+      pager.innerHTML = "";
+      return;
+    }
+    pager.style.display = "";
+    const btn = (p, label, { active = false, disabled = false } = {}) =>
+      `<button type="button" class="btn btn-ghost btn-sm lib-page-btn${active ? " active" : ""}"`
+      + ` data-lib-page="${p}"${disabled || active ? " disabled" : ""}>${label}</button>`;
+    const nums = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2]);
+    const sorted = [...nums].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+    let html = btn(Math.max(1, page - 1), "‹", { disabled: page <= 1 });
+    let prev = 0;
+    sorted.forEach((n) => {
+      if (prev && n > prev + 1) html += `<span class="lib-page-info">…</span>`;
+      html += btn(n, String(n), { active: n === page });
+      prev = n;
+    });
+    html += `<span class="lib-page-info">${page} / ${pages}</span>`;
+    html += btn(Math.min(pages, page + 1), "›", { disabled: page >= pages });
+    pager.innerHTML = html;
+  }
+
   function renderLibrary() {
     const body = $("lib-body");
     if (!body) return;
     const rows = libViewRows();
+    const size = state.libPageSize || 50;
+    const pages = Math.max(1, Math.ceil(rows.length / size));
+    if ((state.libPage || 1) > pages) state.libPage = pages;
+    const page = state.libPage || 1;
+    const start = (page - 1) * size;
+    const pageRows = rows.slice(start, start + size);
+
     const cnt = $("lib-result-count");
-    if (cnt) cnt.textContent = rows.length
-      ? `${rows.length} von ${(state.libRows || []).length} angezeigt` : "";
-    if (!rows.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="11">Keine Treffer.</td></tr>';
+    const allN = (state.libScanAll || []).length;
+    const filtN = (state.libRows || []).length;
+    if (cnt) {
+      if (!allN) cnt.textContent = "";
+      else {
+        const range = rows.length
+          ? `${start + 1}–${Math.min(start + pageRows.length, rows.length)} von ${rows.length}`
+          : "0";
+        let extra = "";
+        if (rows.length !== filtN) extra = ` · Suche in ${filtN}`;
+        else if (filtN !== allN) extra = ` · Filter von ${allN}`;
+        cnt.textContent = `${range}${extra}`;
+      }
+    }
+
+    const pager = $("lib-pager");
+    if (!allN) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="11">Noch kein Scan. Oben Bibliothek wählen und „Scan" starten.</td></tr>';
+      if (pager) { pager.style.display = "none"; pager.innerHTML = ""; }
       return;
     }
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="11">Keine Treffer für die aktuellen Filter.</td></tr>';
+      if (pager) { pager.style.display = "none"; pager.innerHTML = ""; }
+      return;
+    }
+
     const grouped = $("lib-group") && $("lib-group").checked;
     if (!grouped) {
-      body.innerHTML = rows.map(libRowHtml).join("");
-      return;
+      body.innerHTML = pageRows.map(libRowHtml).join("");
+    } else {
+      const byFolder = {};
+      pageRows.forEach((m) => {
+        const k = m.folder || "(Wurzel)";
+        (byFolder[k] = byFolder[k] || []).push(m);
+      });
+      body.innerHTML = Object.keys(byFolder).sort().map((folder) => {
+        const items = byFolder[folder];
+        const saved = items.reduce((a, m) => a + (m.est_saved_bytes || 0), 0);
+        return `<tr class="lib-group-row"><td colspan="11">📁 ${escapeHtml(folder)} `
+          + `<span class="muted">· ${items.length} Dateien · ca. ${escapeHtml(formatBytes(saved))} einsparbar</span></td></tr>`
+          + items.map(libRowHtml).join("");
+      }).join("");
     }
-    // Nach Ordner gruppieren.
-    const byFolder = {};
-    rows.forEach((m) => {
-      const k = m.folder || "(Wurzel)";
-      (byFolder[k] = byFolder[k] || []).push(m);
-    });
-    body.innerHTML = Object.keys(byFolder).sort().map((folder) => {
-      const items = byFolder[folder];
-      const saved = items.reduce((a, m) => a + (m.est_saved_bytes || 0), 0);
-      return `<tr class="lib-group-row"><td colspan="11">📁 ${escapeHtml(folder)} `
-        + `<span class="muted">· ${items.length} Dateien · ca. ${escapeHtml(formatBytes(saved))} einsparbar</span></td></tr>`
-        + items.map(libRowHtml).join("");
-    }).join("");
+    libRenderPager(rows.length);
   }
 
   function onLibAction(e) {
@@ -4753,6 +5289,90 @@
       `</select>`;
   }
 
+  function remuxBindTrackRowEvents() {
+    ["rx-a-keep", "rx-s-keep", "rx-a-tc"].forEach((c) =>
+      document.querySelectorAll(`#remux-editor .${c}`).forEach((el) =>
+        el.addEventListener("change", remuxUpdateConflicts)));
+    document.querySelectorAll("#remux-audio-body .rx-up, #remux-audio-body .rx-down, #remux-sub-body .rx-up, #remux-sub-body .rx-down")
+      .forEach((b) => b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        remuxMoveRow(b.closest("tr"), b.classList.contains("rx-up") ? -1 : 1);
+      }));
+    document.querySelectorAll("#remux-audio-body .rx-ext-del, #remux-sub-body .rx-ext-del")
+      .forEach((b) => b.addEventListener("click", () => {
+        const i = parseInt(b.dataset.i, 10);
+        if (Number.isNaN(i)) return;
+        remuxSyncExternalInputs();
+        state.remuxExt.splice(i, 1);
+        remuxRenderEditor();
+      }));
+    document.querySelectorAll("#remux-audio-body .rx-a-tc[data-ext]").forEach((b) =>
+      b.addEventListener("change", () => {
+        const i = b.dataset.i;
+        ["rx-a-codec", "rx-a-br"].forEach((c) => {
+          const el = document.querySelector(
+            `#remux-audio-body tr[data-ext-i="${i}"] .${c}`);
+          if (el) el.disabled = !b.checked;
+        });
+      }));
+  }
+
+  function remuxAppendExternalRows() {
+    const ab = $("remux-audio-body");
+    const sb = $("remux-sub-body");
+    if (ab) ab.querySelectorAll("tr.empty-row").forEach((r) => r.remove());
+    if (sb) sb.querySelectorAll("tr.empty-row").forEach((r) => r.remove());
+    state.remuxExt.forEach((e, i) => {
+      const tr = document.createElement("tr");
+      tr.dataset.extI = String(i);
+      if (e.type === "subtitle") {
+        tr.innerHTML = `
+          <td><input type="checkbox" class="rx-s-keep" checked></td>
+          <td title="${escapeHtml(e.path || "")}">
+            <span class="muted">Extern</span> · ${escapeHtml(e.name || "?")}
+            ${e.desc ? `<div class="muted" style="font-size:11px">${escapeHtml(e.desc)}</div>` : ""}
+            <label class="muted" style="font-size:11px">Delay
+              <input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:60px"> s
+            </label>
+          </td>
+          <td><input type="checkbox" class="rx-s-default"${e.default ? " checked" : ""}></td>
+          <td><input type="checkbox" class="rx-s-forced"${e.forced ? " checked" : ""}></td>
+          <td><input type="text" class="rx-s-lang rx-e-lang" data-i="${i}" value="${escapeHtml(e.language || "")}" size="4"></td>
+          <td><input type="text" class="rx-s-title rx-e-title" data-i="${i}" value="${escapeHtml(e.title || "")}"></td>
+          <td class="row-actions">${remuxOrderBtns()}
+            <button class="btn btn-ghost btn-sm bad-btn rx-ext-del" data-i="${i}" title="Entfernen">✕</button></td>`;
+        if (sb) sb.appendChild(tr);
+      } else {
+        const dis = e.transcode ? "" : " disabled";
+        tr.innerHTML = `
+          <td><input type="checkbox" class="rx-a-keep" checked></td>
+          <td title="${escapeHtml(e.path || "")}">
+            <span class="muted">Extern</span> · ${escapeHtml(e.name || "?")}
+            ${e.desc ? `<div class="muted" style="font-size:11px">${escapeHtml(e.desc)}</div>` : ""}
+            <label class="muted" style="font-size:11px">Delay
+              <input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:60px"> s
+            </label>
+          </td>
+          <td><input type="checkbox" class="rx-a-default"${e.default ? " checked" : ""}></td>
+          <td><input type="checkbox" class="rx-a-forced"${e.forced ? " checked" : ""}></td>
+          <td><input type="text" class="rx-a-lang rx-e-lang" data-i="${i}" value="${escapeHtml(e.language || "")}" size="4"></td>
+          <td><input type="text" class="rx-a-title rx-e-title" data-i="${i}" value="${escapeHtml(e.title || "")}"></td>
+          <td class="rx-tc-cell">
+            <label class="check"><input type="checkbox" class="rx-a-tc" data-ext="1" data-i="${i}"${e.transcode ? " checked" : ""}><span>→</span></label>
+            ${remuxAudioCodecSelect("rx-a-codec", e.codec || "eac3").replace("<select", `<select${dis}`)}
+            <input type="number" class="rx-a-br" value="${e.bitrate || 640}" min="64" max="1536" step="64" style="width:70px"${dis}>
+          </td>
+          <td class="row-actions">${remuxOrderBtns()}
+            <button class="btn btn-ghost btn-sm bad-btn rx-ext-del" data-i="${i}" title="Entfernen">✕</button></td>`;
+        if (ab) ab.appendChild(tr);
+      }
+    });
+    if (ab && !ab.children.length)
+      ab.innerHTML = '<tr class="empty-row"><td colspan="8">Keine Tonspuren.</td></tr>';
+    if (sb && !sb.children.length)
+      sb.innerHTML = '<tr class="empty-row"><td colspan="7">Keine Untertitel.</td></tr>';
+  }
+
   function remuxRenderEditor() {
     const info = state.remuxInfo || {};
     // Audio-Tabelle
@@ -4776,7 +5396,6 @@
         <td class="row-actions">${remuxOrderBtns()}</td>`;
       ab.appendChild(tr);
     });
-    if (!(info.audio || []).length) ab.innerHTML = '<tr class="empty-row"><td colspan="8">Keine Tonspuren.</td></tr>';
 
     // Untertitel-Tabelle
     const sb = $("remux-sub-body");
@@ -4794,17 +5413,9 @@
         <td class="row-actions">${remuxOrderBtns()}</td>`;
       sb.appendChild(tr);
     });
-    if (!(info.subtitles || []).length) sb.innerHTML = '<tr class="empty-row"><td colspan="7">Keine Untertitel.</td></tr>';
 
-    ["rx-a-keep", "rx-s-keep", "rx-a-tc"].forEach((c) =>
-      document.querySelectorAll(`#remux-editor .${c}`).forEach((el) =>
-        el.addEventListener("change", remuxUpdateConflicts)));
-    document.querySelectorAll("#remux-audio-body .rx-up, #remux-audio-body .rx-down, #remux-sub-body .rx-up, #remux-sub-body .rx-down")
-      .forEach((b) => b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        remuxMoveRow(b.closest("tr"), b.classList.contains("rx-up") ? -1 : 1);
-      }));
-
+    remuxAppendExternalRows();
+    remuxBindTrackRowEvents();
     remuxRenderExternals();
     remuxUpdateConflicts();
     $("btn-remux-start").disabled = false;
@@ -4828,60 +5439,48 @@
   }
 
   function remuxRenderExternals() {
+    // Externe Spuren liegen in den Ton-/UT-Tabellen oben (gemeinsame Reihenfolge).
     const eb = $("remux-ext-body");
-    eb.innerHTML = "";
-    if (!state.remuxExt.length) {
-      eb.innerHTML = '<tr class="empty-row"><td colspan="10">Keine externen Spuren.</td></tr>';
-      return;
-    }
-    state.remuxExt.forEach((e, i) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${escapeHtml(e.name)}${e.desc ? `<div class="muted" style="font-size:11px">${escapeHtml(e.desc)}</div>` : ""}</td>
-        <td>${e.type === "subtitle" ? "Untertitel" : "Ton"}</td>
-        <td><input type="text" class="rx-e-lang" data-i="${i}" value="${escapeHtml(e.language || "")}" size="4"></td>
-        <td><input type="text" class="rx-e-title" data-i="${i}" value="${escapeHtml(e.title || "")}"></td>
-        <td><input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:70px"></td>
-        <td><input type="checkbox" class="rx-e-default" data-i="${i}"${e.default ? " checked" : ""}></td>
-        <td><input type="checkbox" class="rx-e-forced" data-i="${i}"${e.forced ? " checked" : ""}></td>
-        ${remuxExtEncCell(e, i)}
-        <td class="row-actions"><button class="btn btn-ghost btn-sm iconbtn rx-e-up" data-i="${i}" title="Nach oben">↑</button><button class="btn btn-ghost btn-sm iconbtn rx-e-down" data-i="${i}" title="Nach unten">↓</button></td>
-        <td><button class="btn btn-ghost btn-sm bad-btn rx-e-del" data-i="${i}">✕</button></td>`;
-      eb.appendChild(tr);
-    });
-    const flush = () => { remuxSyncExternalInputs(); remuxRenderExternals(); remuxUpdateConflicts(); };
-    document.querySelectorAll(".rx-e-del").forEach((b) =>
-      b.addEventListener("click", () => { state.remuxExt.splice(parseInt(b.dataset.i, 10), 1); flush(); }));
-    document.querySelectorAll(".rx-e-up").forEach((b) =>
-      b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), -1); flush(); }));
-    document.querySelectorAll(".rx-e-down").forEach((b) =>
-      b.addEventListener("click", () => { remuxArrMove(state.remuxExt, parseInt(b.dataset.i, 10), 1); flush(); }));
-    // Encoden-Checkbox schaltet Codec/Bitrate/Kanäle der Zeile frei.
-    document.querySelectorAll(".rx-e-tc").forEach((b) =>
-      b.addEventListener("change", () => {
-        const i = b.dataset.i;
-        ["rx-e-codec", "rx-e-br", "rx-e-ch"].forEach((c) => {
-          const el = document.querySelector(`.${c}[data-i="${i}"]`);
-          if (el) el.disabled = !b.checked;
-        });
-        remuxSyncExternalInputs();
-      }));
+    if (!eb) return;
+    const n = state.remuxExt.length;
+    eb.innerHTML = n
+      ? `<tr class="empty-row"><td colspan="10">${n} ${tt("externe Spur(en) in den Tabellen oben – dort sortieren/entfernen.")}</td></tr>`
+      : `<tr class="empty-row"><td colspan="10">${tt("Keine externen Spuren.")}</td></tr>`;
   }
 
-  // Vor dem Neu-Rendern die editierten Werte aus dem DOM in den State übernehmen,
-  // damit Reihenfolge-Änderungen nichts überschreiben.
+  // Vor dem Neu-Rendern die editierten Werte aus dem DOM in den State übernehmen.
   function remuxSyncExternalInputs() {
     state.remuxExt.forEach((e, i) => {
-      const g = (c) => document.querySelector(`.${c}[data-i="${i}"]`);
-      if (g("rx-e-lang")) e.language = g("rx-e-lang").value.trim();
-      if (g("rx-e-title")) e.title = g("rx-e-title").value.trim();
-      if (g("rx-e-delay")) e.delay = parseFloat(g("rx-e-delay").value) || 0;
-      if (g("rx-e-default")) e.default = g("rx-e-default").checked;
-      if (g("rx-e-forced")) e.forced = g("rx-e-forced").checked;
-      if (g("rx-e-tc")) e.transcode = g("rx-e-tc").checked;
-      if (g("rx-e-codec")) e.codec = g("rx-e-codec").value;
-      if (g("rx-e-br")) e.bitrate = parseInt(g("rx-e-br").value, 10) || 640;
-      if (g("rx-e-ch")) e.channels = parseInt(g("rx-e-ch").value, 10) || 0;
+      const tr = document.querySelector(
+        `#remux-audio-body tr[data-ext-i="${i}"], #remux-sub-body tr[data-ext-i="${i}"]`);
+      if (!tr) return;
+      const delay = tr.querySelector(".rx-e-delay");
+      if (delay) e.delay = parseFloat(delay.value) || 0;
+      if (e.type === "subtitle") {
+        const lang = tr.querySelector(".rx-s-lang");
+        const title = tr.querySelector(".rx-s-title");
+        const def = tr.querySelector(".rx-s-default");
+        const forced = tr.querySelector(".rx-s-forced");
+        if (lang) e.language = lang.value.trim();
+        if (title) e.title = title.value.trim();
+        if (def) e.default = def.checked;
+        if (forced) e.forced = forced.checked;
+      } else {
+        const lang = tr.querySelector(".rx-a-lang");
+        const title = tr.querySelector(".rx-a-title");
+        const def = tr.querySelector(".rx-a-default");
+        const forced = tr.querySelector(".rx-a-forced");
+        const tc = tr.querySelector(".rx-a-tc");
+        const codec = tr.querySelector(".rx-a-codec");
+        const br = tr.querySelector(".rx-a-br");
+        if (lang) e.language = lang.value.trim();
+        if (title) e.title = title.value.trim();
+        if (def) e.default = def.checked;
+        if (forced) e.forced = forced.checked;
+        if (tc) e.transcode = tc.checked;
+        if (codec) e.codec = codec.value;
+        if (br) e.bitrate = parseInt(br.value, 10) || 640;
+      }
     });
   }
 
@@ -5044,6 +5643,25 @@
     }
   }
 
+  function remuxConfirmDurationMatch(data, name) {
+    const main = (state.remuxInfo && state.remuxInfo.duration) || 0;
+    const ext = (data && data.duration) || 0;
+    if (!main || !ext) return true;
+    const diff = Math.abs(main - ext);
+    const tol = Math.max(2.0, main * 0.02);
+    if (diff <= tol) return true;
+    const mainH = state.remuxInfo.duration_human
+      || (typeof formatDuration === "function" ? formatDuration(main) : (Math.round(main) + "s"));
+    const extH = data.duration_human
+      || (typeof formatDuration === "function" ? formatDuration(ext) : (Math.round(ext) + "s"));
+    return window.confirm(
+      tt("Dauer weicht ab") + ":\n\n"
+      + `„${name}“: ${extH}\n`
+      + `${tt("Quelle")}: ${mainH}\n`
+      + `${tt("Differenz")}: ${Math.round(diff)}s\n\n`
+      + tt("Trotzdem hinzufügen? (Sync/Versatz ggf. mit Delay korrigieren)"));
+  }
+
   // Aus einem probe-Ergebnis externe Spuren in state.remuxExt übernehmen.
   // refPath ist der Pfad, unter dem die Datei im Backend aufgelöst wird
   // (rel-Pfad eines Input-Roots oder "upload:<name>" für PC-Uploads).
@@ -5066,6 +5684,7 @@
       language: (st.language && st.language !== "und") ? st.language : "",
       title: st.title || "", delay: 0, default: false, forced: false,
       transcode: false, codec: "eac3", bitrate: 640, channels: 0,
+      duration: data.duration || 0,
     }));
     return streams.length;
   }
@@ -5076,6 +5695,10 @@
     try {
       const data = await (await fetch(`/api/remux/probe?path=${encodeURIComponent(f.rel)}`)).json();
       if (data.error) { $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`; return; }
+      if (!remuxConfirmDurationMatch(data, f.name)) {
+        $("remux-start-info").textContent = tt("Hinzufügen abgebrochen.");
+        return;
+      }
       const n = remuxAddStreamsFromProbe(data, f.rel, f.name);
       if (!n) {
         $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(f.name)}: keine Ton-/Untertitelspuren gefunden.</span>`;
@@ -5086,8 +5709,8 @@
       $("remux-start-info").innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
       return;
     }
-    remuxRenderExternals();
-    remuxUpdateConflicts();
+    remuxSyncExternalInputs();
+    remuxRenderEditor();
   }
 
   async function remuxUploadExternal(file) {
@@ -5101,6 +5724,10 @@
         $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
         return;
       }
+      if (!remuxConfirmDurationMatch(data, data.name || file.name)) {
+        $("remux-start-info").textContent = tt("Hinzufügen abgebrochen.");
+        return;
+      }
       const n = remuxAddStreamsFromProbe(data, data.path, data.name || file.name);
       if (!n) {
         $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(data.name || file.name)}: keine Ton-/Untertitelspuren gefunden.</span>`;
@@ -5111,13 +5738,150 @@
       $("remux-start-info").innerHTML = `<span class="bad">Upload-Fehler: ${escapeHtml(String(e))}</span>`;
       return;
     }
-    remuxRenderExternals();
+    remuxSyncExternalInputs();
+    remuxRenderEditor();
+  }
+
+  function remuxApplyEditSpec(spec) {
+    if (!spec || !state.remuxInfo) return;
+    const set = (id, val, ev) => {
+      const el = $(id);
+      if (!el || val === undefined || val === null) return;
+      if (el.type === "checkbox") el.checked = !!val; else el.value = val;
+      el.dispatchEvent(new Event(ev || (el.tagName === "SELECT" ? "change" : "input")));
+    };
+    if (spec.container) set("remux-container", spec.container, "change");
+    if (spec.keep_chapters !== undefined) set("remux-keep-chapters", spec.keep_chapters);
+    if (spec.keep_metadata !== undefined) set("remux-keep-metadata", spec.keep_metadata);
+    if (spec.keep_attachments !== undefined) set("remux-keep-att", spec.keep_attachments);
+    if (spec.trim) {
+      if (spec.trim.start != null) set("remux-trim-start", spec.trim.start);
+      if (spec.trim.end != null) set("remux-trim-end", spec.trim.end);
+    }
+    state.remuxExt = (spec.external || []).map((e) => ({
+      path: e.path, name: e.name || e.path, type: e.type || "audio",
+      stream: e.stream || 0, desc: e.desc || "",
+      src_codec: e.src_codec || "",
+      language: e.language || "", title: e.title || "",
+      delay: e.delay || 0, default: !!e.default, forced: !!e.forced,
+      transcode: !!e.transcode, codec: e.codec || "eac3",
+      bitrate: e.bitrate || 640, channels: e.channels || 0,
+      duration: e.duration || 0,
+    }));
+    remuxRenderEditor();
+
+    const applyAudioRow = (tr, a) => {
+      const q = (c) => tr.querySelector("." + c);
+      if (q("rx-a-keep")) q("rx-a-keep").checked = a.keep !== false;
+      if (q("rx-a-default")) q("rx-a-default").checked = !!a.default;
+      if (q("rx-a-forced")) q("rx-a-forced").checked = !!a.forced;
+      if (q("rx-a-lang") && a.language != null) q("rx-a-lang").value = a.language;
+      if (q("rx-a-title") && a.title != null) q("rx-a-title").value = a.title;
+      if (q("rx-a-tc")) q("rx-a-tc").checked = !!a.transcode;
+      if (q("rx-a-codec") && a.codec) q("rx-a-codec").value = a.codec;
+      if (q("rx-a-br") && a.bitrate) q("rx-a-br").value = a.bitrate;
+      if (q("rx-a-tc")) q("rx-a-tc").dispatchEvent(new Event("change"));
+    };
+    const applySubRow = (tr, s) => {
+      const q = (c) => tr.querySelector("." + c);
+      if (q("rx-s-keep")) q("rx-s-keep").checked = s.keep !== false;
+      if (q("rx-s-default")) q("rx-s-default").checked = !!s.default;
+      if (q("rx-s-forced")) q("rx-s-forced").checked = !!s.forced;
+      if (q("rx-s-lang") && s.language != null) q("rx-s-lang").value = s.language;
+      if (q("rx-s-title") && s.title != null) q("rx-s-title").value = s.title;
+    };
+
+    (spec.audio || []).forEach((a) => {
+      if (a.external || a.path) {
+        const i = state.remuxExt.findIndex(
+          (e) => e.path === a.path && Number(e.stream) === Number(a.stream || 0)
+            && e.type !== "subtitle");
+        const tr = i >= 0
+          ? document.querySelector(`#remux-audio-body tr[data-ext-i="${i}"]`) : null;
+        if (tr) applyAudioRow(tr, a);
+        return;
+      }
+      const tr = document.querySelector(
+        `#remux-audio-body tr[data-aindex="${a.index}"]`);
+      if (tr) applyAudioRow(tr, a);
+    });
+    (spec.subtitles || []).forEach((s) => {
+      if (s.external || s.path) {
+        const i = state.remuxExt.findIndex(
+          (e) => e.path === s.path && Number(e.stream) === Number(s.stream || 0)
+            && e.type === "subtitle");
+        const tr = i >= 0
+          ? document.querySelector(`#remux-sub-body tr[data-ext-i="${i}"]`) : null;
+        if (tr) applySubRow(tr, s);
+        return;
+      }
+      const tr = document.querySelector(
+        `#remux-sub-body tr[data-sindex="${s.index}"]`);
+      if (tr) applySubRow(tr, s);
+    });
+
+    // DOM-Reihenfolge an gespeicherte Spec-Reihenfolge anpassen.
+    const ab = $("remux-audio-body");
+    if (ab && (spec.audio || []).length) {
+      (spec.audio || []).forEach((a) => {
+        let tr = null;
+        if (a.external || a.path) {
+          const i = state.remuxExt.findIndex(
+            (e) => e.path === a.path && Number(e.stream) === Number(a.stream || 0)
+              && e.type !== "subtitle");
+          if (i >= 0) tr = ab.querySelector(`tr[data-ext-i="${i}"]`);
+        } else {
+          tr = ab.querySelector(`tr[data-aindex="${a.index}"]`);
+        }
+        if (tr) ab.appendChild(tr);
+      });
+    }
+    const sb = $("remux-sub-body");
+    if (sb && (spec.subtitles || []).length) {
+      (spec.subtitles || []).forEach((s) => {
+        let tr = null;
+        if (s.external || s.path) {
+          const i = state.remuxExt.findIndex(
+            (e) => e.path === s.path && Number(e.stream) === Number(s.stream || 0)
+              && e.type === "subtitle");
+          if (i >= 0) tr = sb.querySelector(`tr[data-ext-i="${i}"]`);
+        } else {
+          tr = sb.querySelector(`tr[data-sindex="${s.index}"]`);
+        }
+        if (tr) sb.appendChild(tr);
+      });
+    }
     remuxUpdateConflicts();
   }
 
   function remuxGatherSpec() {
+    remuxSyncExternalInputs();
     const audio = [];
-    document.querySelectorAll("#remux-audio-body tr[data-aindex]").forEach((tr) => {
+    document.querySelectorAll("#remux-audio-body tr[data-aindex], #remux-audio-body tr[data-ext-i]").forEach((tr) => {
+      if (tr.dataset.extI !== undefined) {
+        const i = parseInt(tr.dataset.extI, 10);
+        const e = state.remuxExt[i];
+        if (!e) return;
+        const q = (c) => tr.querySelector("." + c);
+        audio.push({
+          external: true,
+          path: e.path,
+          stream: e.stream,
+          keep: q("rx-a-keep") ? q("rx-a-keep").checked : true,
+          default: q("rx-a-default") ? q("rx-a-default").checked : !!e.default,
+          forced: q("rx-a-forced") ? q("rx-a-forced").checked : !!e.forced,
+          language: q("rx-a-lang") ? q("rx-a-lang").value.trim() : (e.language || ""),
+          title: q("rx-a-title") ? q("rx-a-title").value.trim() : (e.title || ""),
+          transcode: q("rx-a-tc") ? q("rx-a-tc").checked : !!e.transcode,
+          codec: q("rx-a-codec") ? q("rx-a-codec").value : (e.codec || "eac3"),
+          bitrate: q("rx-a-br") ? (parseInt(q("rx-a-br").value, 10) || 640) : (e.bitrate || 640),
+          delay: e.delay || 0,
+          src_codec: e.src_codec || "",
+          name: e.name || "",
+          type: "audio",
+        });
+        return;
+      }
       const q = (c) => tr.querySelector("." + c);
       audio.push({
         index: parseInt(tr.dataset.aindex, 10),
@@ -5132,7 +5896,27 @@
       });
     });
     const subtitles = [];
-    document.querySelectorAll("#remux-sub-body tr[data-sindex]").forEach((tr) => {
+    document.querySelectorAll("#remux-sub-body tr[data-sindex], #remux-sub-body tr[data-ext-i]").forEach((tr) => {
+      if (tr.dataset.extI !== undefined) {
+        const i = parseInt(tr.dataset.extI, 10);
+        const e = state.remuxExt[i];
+        if (!e) return;
+        const q = (c) => tr.querySelector("." + c);
+        subtitles.push({
+          external: true,
+          path: e.path,
+          stream: e.stream,
+          keep: q("rx-s-keep") ? q("rx-s-keep").checked : true,
+          default: q("rx-s-default") ? q("rx-s-default").checked : !!e.default,
+          forced: q("rx-s-forced") ? q("rx-s-forced").checked : !!e.forced,
+          language: q("rx-s-lang") ? q("rx-s-lang").value.trim() : (e.language || ""),
+          title: q("rx-s-title") ? q("rx-s-title").value.trim() : (e.title || ""),
+          delay: e.delay || 0,
+          name: e.name || "",
+          type: "subtitle",
+        });
+        return;
+      }
       const q = (c) => tr.querySelector("." + c);
       subtitles.push({
         index: parseInt(tr.dataset.sindex, 10),
@@ -5143,8 +5927,6 @@
         title: q("rx-s-title").value.trim(),
       });
     });
-    // Externe: Werte aus DOM aktualisieren
-    remuxSyncExternalInputs();
     const spec = {
       container: $("remux-container").value,
       keep_chapters: $("remux-keep-chapters").checked,

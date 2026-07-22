@@ -225,6 +225,9 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   box-shadow: var(--shadow);
   overflow: hidden;
 }
+/* Filter-Dropdowns (Bibliothek/Super-Tool) nicht am Card-Rand abschneiden */
+.card:has(.lib-filters) { overflow: visible; }
+.card:has(.lib-filters) .card-body { overflow: visible; }
 .span-2 { grid-column: span 2; }
 .span-3 { grid-column: span 3; }
 .card-head {
@@ -267,12 +270,50 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 
 /* Remux & Bearbeiten */
 .sub-head { margin: 16px 0 6px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
-.rx-tc-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.rx-e-enc-cell { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
-.rx-e-enc-cell select, .rx-e-enc-cell input { min-width: 0; }
+/* Transcode-Spalte: Checkbox + Codec + Bitrate in einer Zeile
+   (globale select/input width:100% sonst stapelt alles). */
+.rx-tc-cell,
+.rx-e-enc-cell {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  min-width: 200px;
+}
+.rx-tc-cell .check,
+.rx-e-enc-cell .check { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+.rx-tc-cell select,
+.rx-tc-cell input[type="number"],
+.rx-e-enc-cell select,
+.rx-e-enc-cell input[type="number"] {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.rx-tc-cell .rx-a-codec,
+.rx-e-enc-cell .rx-e-codec { width: 78px; }
+.rx-tc-cell .rx-a-br,
+.rx-e-enc-cell .rx-e-br { width: 64px; }
+.rx-e-enc-cell .rx-e-ch { width: 64px; }
 .preview-marks { margin-top: 12px; }
 #remux-audio-table input[type="text"], #remux-sub-table input[type="text"] { width: 100%; min-width: 60px; }
 #remux-audio-table td, #remux-sub-table td, #remux-ext-table td { vertical-align: middle; }
+#remux-audio-table th:nth-child(7),
+#remux-audio-table td.rx-tc-cell { min-width: 220px; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+
+/* Player: Seek bei Live-Remux (Browser kennt fMP4-Dauer oft nicht) */
+.player-stream-seek {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 8px;
+}
+.player-stream-seek input[type="range"] { flex: 1; min-width: 0; }
+.player-stream-seek #player-time {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; font-size: 12.5px;
+}
 
 /* A/B-Vergleichsplayer */
 .ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
@@ -325,6 +366,18 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 /* Ergebnis-Toolbar + Tabelle */
 .lib-result-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; }
 .lib-result-toolbar input[type="search"] { flex: 1; min-width: 180px; }
+.lib-pager {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  gap: 6px; margin: 12px 0 4px;
+}
+.lib-pager .lib-page-btn {
+  min-width: 34px; padding: 5px 9px;
+}
+.lib-pager .lib-page-btn.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent); color: var(--text); font-weight: 600;
+}
+.lib-pager .lib-page-info { color: var(--text-muted); font-size: 12.5px; margin: 0 6px; }
 .lib-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .lib-table th.sortable:hover { color: var(--accent); }
 .lib-group-row td { background: var(--surface-3); font-weight: 700; font-size: 12px; }
@@ -585,9 +638,49 @@ input[type="range"]::-moz-range-thumb {
 .subhead { margin: 6px 0 8px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
 .data-table-wrap { overflow-x: auto; }
 
-/* ------------------------------------------------------------- BIBLIOTHEK */
-.lib-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin: 10px 0; }
-.lib-filters input, .lib-filters select { width: 100%; }
+/* ------------------------------------------------------------- BIBLIOTHEK / Super-Tool-Filter */
+.lib-library-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+.lib-library-select { flex: 1 1 260px; min-width: 200px; margin: 0; }
+.lib-scan-actions { margin: 0; flex: 0 1 auto; }
+
+/* Feste Label-Zeile (2 Zeilen reserviert), damit Inputs einer Reihe bündig bleiben
+   und längere Labels („Min. Video-Bitrate …“) nichts nach unten schieben. */
+.lib-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px 14px;
+  margin: 10px 0;
+  align-items: start;
+}
+.lib-filters .field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+  /* Dropdowns (Mehrfachauswahl) über Nachbarfelder legen */
+  z-index: 1;
+}
+.lib-filters .field:focus-within { z-index: 40; }
+.lib-filters .field > label {
+  min-height: 2.7em;
+  line-height: 1.35;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: flex-end;
+}
+.lib-filters .field > .hint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.lib-filters input,
+.lib-filters select { width: 100%; max-width: 100%; box-sizing: border-box; }
 .lib-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 
 /* ---------------------------------------------------------------- PROFIL */
@@ -872,9 +965,38 @@ input[type="range"]::-moz-range-thumb {
 }
 .multiselect-opt:hover { background: var(--surface-2); }
 .multiselect-opt input { width: auto; }
-.codec-filter-row { display: flex; gap: 8px; align-items: stretch; }
-.codec-filter-row .codec-match { flex: 0 0 auto; width: auto; }
-.codec-filter-row .multiselect { flex: 1 1 auto; position: relative; }
+.codec-filter-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  min-width: 0;
+  width: 100%;
+}
+.codec-filter-row .codec-match {
+  flex: 0 0 auto;
+  width: auto !important;
+  max-width: 42%;
+  padding: 10px 8px;
+}
+.codec-filter-row .multiselect {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+}
+/* Codec-/Dynamik-Mehrfachfelder brauchen etwas mehr Breite */
+.lib-filters .field:has(.codec-filter-row),
+.lib-filters .field:has(.multiselect) {
+  grid-column: span 2;
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .lib-filters .field:has(.codec-filter-row),
+  .lib-filters .field:has(.multiselect) {
+    grid-column: span 1;
+  }
+  .rx-tc-cell,
+  .rx-e-enc-cell { flex-wrap: wrap; white-space: normal; }
+}
 
 /* Klickbare Statistik-Titel */
 .stats-title { color: var(--accent-2); text-decoration: none; cursor: pointer; }

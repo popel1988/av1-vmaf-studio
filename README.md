@@ -19,10 +19,12 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264**).
 - [Containers](#containers)
 - [HDR & Dolby Vision](#hdr--dolby-vision)
 - [Rate control & quality](#rate-control--quality)
+- [Naming, duplicates & dry-run](#naming-duplicates--dry-run)
 - [Remux & editing (no re-encode)](#remux--editing-no-re-encode)
-- [Multiple input & output locations](#multiple-input--output-locations)
+- [Media tree & output](#media-tree--output)
 - [Quality assurance](#quality-assurance)
 - [Automation & integration](#automation--integration)
+- [REST API](#rest-api)
 - [Persistence & data layout](#persistence--data-layout)
 - [Deployment](#deployment)
 - [Local development](#local-development-without-docker)
@@ -34,37 +36,42 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264**).
 ## Feature overview
 
 The dashboard (FastAPI + HTML/CSS/JS, no frontend build step) is split into
-several pages — switchable via the sidebar, including multiple themes and a
-DE/EN language toggle:
+several pages — switchable via the sidebar, with multiple themes, **compact
+mode**, and language support for **DE / EN / ES / FR**:
 
 | Page | Purpose |
 |------|---------|
-| **Encoding** | Direct encoding with a manual quality value and all video/audio/HDR options. |
+| **Encoding** | Direct encoding with CQ/bitrate/ABR, size target, naming templates, audio/HDR options, dry-run preview. |
 | **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. |
-| **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders. |
+| **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
 | **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
-| **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel. |
-| **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes. |
-| **Library** | Recursive scan of the media tree with filters and savings estimates. |
+| **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
+| **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
+| **Library** | Recursive scan with filters, savings estimates, **sub-libraries**, codec/dynamic filters, CSV export. |
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
-| **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles. |
+| **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles, default output folder. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
 
 Other highlights:
 
 - **Sidebar with live hardware rings**: CPU, RAM, and GPU(s) via `psutil`,
   `nvidia-smi`, sysfs (AMD `gpu_busy_percent`), and `intel_gpu_top`.
+- **Global search** across the media tree (sidebar).
 - **Structured file/folder browser** for `/media` (recursive, with filter/sort).
-- **Multiple named input roots** and **multiple output volumes** (see below).
-- **Per-job target folder**: pick the output volume and/or a subfolder for every
-  encode, remux, merge, split, and extract job (with an output folder browser).
+- **Multiple named input roots** via `MEDIA_DIRS` (optional extra mounts).
+- **Per-job output mode**: standard output · next to source · custom folder
+  (browser in the media tree).
+- **In-browser media player** with audio/subtitle track selection
+  (`/api/media/stream`, WebVTT for text subs).
 - **Functional encoder detection**: mini test encodes verify what the hardware
   can actually do; unavailable options are hidden in the UI.
 - **Dynamic GPU capacity**: configurable number of concurrent encodes per GPU.
 - **Persistent queue**: open jobs survive restarts/rebuilds; “awaiting selection”
   jobs keep their already computed VMAF analysis.
+- **Requeue**: finished jobs can be run again (overwrite warning or auto-suffix
+  like `_remux2`) or opened with their exact settings (“Again with …”).
 
 ---
 
@@ -86,6 +93,18 @@ matching FFmpeg encoder:
   error (instead of failing silently) and available encoders are listed.
 - In the **VMAF Tool**, multiple encoders/codecs can be compared at once;
   CQ test values are shifted per codec into a comparable quality range.
+
+**Image toolchain (current defaults):**
+
+| Component | Version / notes |
+|-----------|-----------------|
+| Base image | CUDA **12.6.3** runtime (Ubuntu 24.04) |
+| FFmpeg | BtbN **n8.1** (GPL, with NVENC / libvmaf / …) |
+| `dovi_tool` | **2.3.3** |
+| libva | **2.22** (Intel VAAPI) |
+
+Older Nvidia host drivers may refuse to start the container (CUDA version check).
+See `docker-compose.yml` for `NVIDIA_DISABLE_REQUIRE` and related notes.
 
 ---
 
@@ -140,7 +159,10 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
 ## Rate control & quality
 
 - **Rate modes**: CQ/QP/CRF (quality number), fixed bitrate (CBR), or average
-  bitrate (VBR target).
+  bitrate (VBR / ABR target).
+- **Size target (MB)**: optional total output budget including audio — the app
+  derives an ABR video bitrate before encode (distinct from the post-encode
+  size cap below).
 - **Two-pass** (CPU encoders in bitrate mode) for more consistent quality;
   NVENC uses `-multipass` instead.
 - **Chunked adaptive encoding** (CQ mode): segments with complexity-based CQ —
@@ -156,6 +178,21 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   channel downmix, and loudness normalization (EBU R128).
 - **Per-track subtitles & chapters**, metadata preservation, automatic
   `mov_text`/`tx3g`→SRT conversion.
+- **Post-encode caps**: optional max output size (MB) and max video bitrate
+  (kbit/s); failed caps are reported after the job.
+
+---
+
+## Naming, duplicates & dry-run
+
+- **Name pattern**: placeholders `{stem}`, `{suffix}`, `{codec}`, `{height}`,
+  `{height_suffix}`, `{vmaf}`, `{date}`.
+- **On duplicate**: `ask` (preview modal) · `skip` · `overwrite`.
+- **Dry-run preview**: planned output paths, existing-file / history flags, and
+  estimated savings before enqueue.
+- **Requeue**: if the planned output already exists, choose overwrite or a free
+  suffix (`_remux` → `_remux2`, …). Job settings (including remux `edit_spec`)
+  are stored in history for “Again with …”.
 
 ---
 
@@ -169,16 +206,17 @@ through the normal queue.
 | Capability | Details |
 |------------|---------|
 | **Track selection** | Keep/remove individual audio & subtitle tracks. |
-| **Reorder** | Move tracks up/down; the order defines the output order. |
+| **Reorder** | Move tracks up/down; the order defines the output order (internal and external tracks share the same tables). |
 | **Track metadata** | Edit `default`/`forced` disposition, language, and title per track. |
-| **External tracks** | Add audio/subtitle files (also several streams from one file), with optional delay, language, and title. |
-| **Attachments** | Keep existing and add new fonts/covers (MKV only). |
-| **Chapters** | Keep, remove, rename, or import chapters (FFmetadata). |
+| **Smart disposition** | One-click intelligent Default/Forced suggestions. |
+| **External tracks** | Add audio/subtitle files from the media tree or upload from the PC; duration is compared to the source (warning if they differ). Optional delay, language, title, per-track audio transcode. |
+| **Attachments** | Keep existing and add new fonts/covers (MKV only); optional sidecar fonts/covers next to the source. |
+| **Chapters** | Keep, remove, rename, or import chapters (FFmetadata / NFO). |
 | **Trim** | Lossless cut by start/end time. |
 | **Extract** | Export selected tracks to standalone files. |
 | **Container compatibility** | MP4 limitations are checked up front (e.g. image subtitles), with warnings and optional per-track transcode of incompatible audio. |
-| **Merge (concat)** | Join multiple files losslessly (same codecs/parameters). |
-| **Split** | Split one file at chapter boundaries or into fixed-length segments. |
+| **Merge (concat)** | Join multiple files losslessly (same codecs/parameters) or with optional re-encode. |
+| **Split** | Split at chapter boundaries, fixed-length segments, or custom ranges. |
 
 ---
 
@@ -194,6 +232,8 @@ One media mount is enough — sources and encodes live in the same tree:
 - **Optional extra roots** — mount more folders and list them via `MEDIA_DIRS`
   (`Name=/path`, `;`/newline separated). The browser shows each root as a named
   virtual folder.
+- **Sub-libraries** — named subsets of the media tree for Library scans
+  (managed in the Library UI / `settings.json`).
 
 ---
 
@@ -210,8 +250,10 @@ One media mount is enough — sources and encodes live in the same tree:
 - **Quality guardrail**: after encoding, the real VMAF of the output is measured
   on sample clips. If it is below target, it can optionally re-encode at higher
   quality — otherwise it is flagged as a warning.
-- **Integrity / playability check**: full decode of the output (error detection)
-  plus duration match against the source.
+- **Integrity / playability check**: **sampled** decode of the output (start /
+  middle / end, ~9–12 s each) plus duration match against the source — not a
+  full-file decode (avoids huge RAM/time cost on large files). Toggleable; forced
+  on for inplace/archive post-processing.
 - **Safe original post-processing**: “replace in place” or “move to `.archiv/`”
   deletes/moves the original **only** if the integrity check and (if enabled) the
   guardrail passed — protects against data loss.
@@ -224,11 +266,32 @@ One media mount is enough — sources and encodes live in the same tree:
   window, configurable in the UI).
 - **Notifications**: generic webhook, **Discord**, and **Telegram**
   (via env or UI).
-- **REST API + API keys**: integrate with `*arr`/Jellyfin & scripts; jobs can be
-  enqueued programmatically.
-- **Profiles**: save/load reusable settings sets.
+- **REST API + API keys**: see [REST API](#rest-api); Sonarr/Radarr webhooks
+  supported.
+- **Profiles**: save/load reusable settings sets (including remux-only profiles
+  that open **Remux & edit** with the current selection).
 - **Post-processing**: keep original (+suffix), replace in place, or move to
   `.archiv/` (each safeguarded as above).
+
+---
+
+## REST API
+
+Authenticated with API keys from **Settings**. Base path: `/api/v1`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/health` | Liveness + FFmpeg version |
+| `GET` | `/api/v1/queue` | Current queue state |
+| `GET` | `/api/v1/stats` | Aggregated history stats |
+| `POST` | `/api/v1/enqueue` | Enqueue a file/folder (`path`, optional `profile` / `settings`, `is_batch`) |
+| `POST` | `/api/v1/webhook/arr` | Sonarr/Radarr “On Import” / “On Upgrade” webhook (`?profile=…`) |
+
+Optional path remapping for *arr hosts: env `ARR_PATH_MAP=from:to,from2:to2`.
+
+The dashboard itself uses many additional `/api/*` endpoints (probe, remux,
+library, media stream, …) — those are session/UI oriented, not the stable
+external integration surface.
 
 ---
 
@@ -239,9 +302,18 @@ survive rebuilds/restarts as long as the volume is kept:
 
 ```
 /data/queue.json            Queue (open jobs, restored on start)
-/data/history.db            Job history/stats (SQLite)
-/data/previews/<session>/   VMAF screenshots + analysis.json (results, source, params)
+/data/history.db            Job history/stats (SQLite; includes settings_json)
+/data/settings.json         App settings (default output, sub-libraries, …)
+/data/profiles.json         Saved encode/remux profiles
+/data/apikeys.json          REST API keys
+/data/notify.json           Notification config
+/data/watch*.json           Watch-folder state
+/data/scheduler.json        Schedule / time windows
+/data/capabilities.json     Cached encoder capability tests
+/data/library_scan.json     Last library scan cache
+/data/previews/<session>/   VMAF screenshots + analysis.json
 /data/vmaf/                 optionally retained VMAF session artifacts
+/data/uploads/              User-uploaded external audio/subtitle files
 /data/work/                 short-lived encode scratch files
 ```
 
@@ -298,13 +370,15 @@ builds the image automatically and publishes it under
 
 ### Hardware notes
 
-- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`).
+- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`). Image is based on **CUDA 12.6**; older host drivers may need `NVIDIA_DISABLE_REQUIRE=true` (see compose comments).
 - **Intel/AMD**: `/dev/dri` is passed through. On pure Intel/AMD hosts without
-  Nvidia, remove the `runtime: nvidia` and `deploy:` blocks.
+  Nvidia, remove the `runtime: nvidia` and `deploy:` blocks. Set
+  `LIBVA_DRIVER_NAME=iHD` (Intel) and `VAAPI_DEVICE` as needed.
 - With multiple GPUs (e.g. Nvidia + Intel iGPU), `renderD128` may not be the
   iGPU — set `VAAPI_DEVICE` to `renderD129` or similar.
 - `privileged: true` ensures reliable hardware metric readout. A finer-grained
   device/cap mapping is prepared as an alternative.
+- Optional CPU/RAM limits are commented in `docker-compose.yml` (`deploy.resources.limits`).
 - **Full NVENC GPU pipeline** (`NVENC_FULL_GPU=1`) is faster but can produce green
   output depending on driver/source; the default is the robust decode-to-RAM path.
 
@@ -319,6 +393,9 @@ export MEDIA_DIR=/path/videos VMAF_MODEL_DIR=/path/model
 python app.py
 ```
 
+Compose uses host vars `MEDIA_PATH` / `DATA_PATH`; inside the app the equivalents
+are `MEDIA_DIR` / `DATA_DIR`.
+
 ---
 
 ## Project structure
@@ -327,20 +404,24 @@ python app.py
 app.py                  FastAPI app, routes, file-browser API, WebSocket, REST API
 core/
   config.py             Paths, VMAF parameters, env configuration
+  app_settings.py       Persistent settings.json (default output, sub-libraries)
   hardware.py           CPU/RAM/GPU monitoring (Nvidia/Intel/AMD)
   capabilities.py       Functional encoder capability tests (mini encodes)
-  ffmpeg_utils.py       ffprobe, encoder mapping, integrity check, auto-crop
+  ffmpeg_utils.py       ffprobe, encoder mapping, sampled integrity check, auto-crop
   encoder.py            FFmpeg command builder, filter chains, progress parser
   vmaf.py               VMAF pipeline (VMAF/PSNR/SSIM/percentiles, sessions)
   dolby_vision.py       Dolby Vision RPU preservation via dovi_tool (HEVC 8.1)
   chunked.py            Chunked adaptive encoding
+  size_target.py        Size-target → ABR bitrate preview
+  job_plan.py           Naming templates, dry-run, duplicate / requeue paths
   audio_opt.py          Audio-only remux/optimization
   remux.py              Lossless remux/edit: tracks, attachments, chapters, trim, concat/split
+  media_stream.py       Browser player: stream + VTT subtitles
   queue_manager.py      Async queue, guardrail, post-processing, persistence
   supertool.py          Guided batch processing (target/representative VMAF)
   library.py            Library scan + savings estimate
   data_browser.py       Data/archive browser
-  history.py            Job history (SQLite)
+  history.py            Job history (SQLite, settings_json)
   watcher.py            Watch-folder automation
   scheduler.py          Scheduling/time windows
   notify.py             Notifications (webhook/Discord/Telegram)
@@ -350,8 +431,8 @@ core/
 templates/index.html    Dashboard markup
 static/css/styles.css   Theme system
 static/js/app.js        Dashboard logic (WebSocket, charts, browser)
-static/js/i18n.js       DE/EN translation
-Dockerfile              All-in-one image (FFmpeg + libvmaf + dovi_tool + models)
+static/js/i18n.js       DE / EN / ES / FR translations
+Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n8.1 + dovi_tool + models)
 docker-compose.yml      Portainer stack
 ```
 
@@ -374,6 +455,10 @@ docker-compose.yml      Portainer stack
 | `MEDIA_DIR` | `/media` | Media tree inside the container |
 | `MEDIA_DIRS` | – | Extra named roots, e.g. `Movies=/media/movies;Series=/media/series` (`;`/newline). |
 | `DATA_DIR` | `/data` | Root for queue, history, sessions, cache |
+| `WORK_DIR` | `$DATA_DIR/work` | Encode scratch directory |
+| `PREVIEW_DIR` | `$DATA_DIR/previews` | VMAF preview / screenshot sessions |
+| `UPLOAD_DIR` | `$DATA_DIR/uploads` | Uploaded external tracks |
+| `VMAF_SESSIONS_DIR` | `$DATA_DIR/vmaf` | Retained VMAF artifacts |
 | `VMAF_MODEL_DIR` | `/usr/local/share/model` | Path to VMAF models |
 | `RETAIN_VMAF_SESSIONS` | `true` | Keep VMAF artifacts after analysis |
 | `METRICS_INTERVAL` | `1.5` | Live metrics refresh interval (s) |
@@ -386,8 +471,11 @@ docker-compose.yml      Portainer stack
 | `PARALLEL_ENCODES_LIMIT` | `6` | Max parallelism selectable in the UI |
 | `INTEL_ENCODER` | `vaapi` | Intel backend: `vaapi` or `qsv` |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | DRM render node for QSV/VAAPI |
+| `LIBVA_DRIVER_NAME` | – | e.g. `iHD` for Intel iGPU (set in compose) |
 | `NVENC_FULL_GPU` | `false` | Force full GPU pipeline (faster, riskier) |
 | `CQ_SWEETSPOT` | – | CQ fine-tuning, e.g. `cpu:hevc=22,nvidia:av1=33` |
+| `FFMPEG_BIN` / `FFPROBE_BIN` / `DOVI_TOOL_BIN` | – | Override tool paths |
+| `ARR_PATH_MAP` | – | *arr path remap: `from:to,from2:to2` |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `LOG_FFMPEG_CMD` | `true` | Log the full FFmpeg command line |
 | `APP_PASSWORD` | – | Optional login protection (empty = open) |

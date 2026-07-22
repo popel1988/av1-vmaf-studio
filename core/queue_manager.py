@@ -114,6 +114,8 @@ class JobSettings:
     # Remux-/Bearbeiten-Modus (video_mode="edit"): Spuren entfernen/umsortieren,
     # Flags/Sprache/Titel ändern, externe Spuren hinzufügen – ohne Re-Encode.
     edit_spec: dict = field(default_factory=dict)
+    # Marker für UI/Profile: Job kam aus Remux & Bearbeiten (nicht Super-Tool).
+    remux_only: bool = False
     # Ablageort: default = Standard-Ausgabe (Settings), beside = neben Quelle,
     # custom = out_subdir als media-relativer Ordner.
     out_mode: str = "default"
@@ -1544,6 +1546,7 @@ def build_job_settings(d: dict) -> JobSettings:
         audio_track_settings=list(d.get("audio_track_settings", [])),
         batch_id=str(d.get("batch_id", "") or ""),
         edit_spec=dict(d.get("edit_spec", {}) or {}),
+        remux_only=bool(d.get("remux_only", False)),
         out_mode=str(d.get("out_mode", "") or "default"),
         out_root=str(d.get("out_root", "") or ""),
         out_subdir=str(d.get("out_subdir", "") or ""),

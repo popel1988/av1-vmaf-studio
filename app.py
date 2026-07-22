@@ -769,6 +769,7 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
     spec["container"] = container
     d = {
         "video_mode": "edit",
+        "remux_only": True,
         "vmaf_check": False,
         "workflow": "auto",
         "container": container,
@@ -841,25 +842,34 @@ async def delete_profile(name: str):
     return {"profiles": profiles.delete(name)}
 
 
+class RequeueRequest(BaseModel):
+    # overwrite = gleiches Ziel ersetzen; suffix = neuer Name (_remux2, …)
+    mode: str = "overwrite"
+
+
 @app.post("/api/queue/{item_id}/requeue")
-async def requeue_item(item_id: str):
+async def requeue_item(item_id: str, req: RequeueRequest | None = None):
     """Live-Job mit denselben Settings erneut einreihen."""
+    from core import job_plan
     from core.queue_manager import build_job_settings
     item = queue.get_item(item_id)
     if item is None:
         return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
-    settings = build_job_settings(item.settings.__dict__)
-    new = queue.add_file(item.path, settings)
+    mode = (req.mode if req else "overwrite")
+    d, plan = job_plan.apply_requeue_conflict(
+        item.settings.__dict__, item.path, mode)
+    new = queue.add_file(item.path, build_job_settings(d))
     if new is None:
         return JSONResponse({"error": "Konnte nicht erneut eingereiht werden"}, status_code=400)
-    return {"added": 1, "id": new.id}
+    return {"added": 1, "id": new.id, "output_name": plan.get("output_name"),
+            "conflict_mode": plan.get("conflict_mode"), "suffix": d.get("suffix")}
 
 
 @app.post("/api/history/{item_id}/requeue")
-async def requeue_history(item_id: str):
+async def requeue_history(item_id: str, req: RequeueRequest | None = None):
     """Historien-Job erneut einreihen (benötigt settings_json)."""
     import json
-    from core import history
+    from core import history, job_plan
     from core.queue_manager import build_job_settings
     rec = history.get(item_id)
     if not rec:
@@ -876,10 +886,13 @@ async def requeue_history(item_id: str):
     target = Path(path)
     if not target.is_file():
         return JSONResponse({"error": "Quelldatei nicht mehr vorhanden"}, status_code=404)
+    mode = (req.mode if req else "overwrite")
+    d, plan = job_plan.apply_requeue_conflict(d, str(target), mode)
     new = queue.add_file(str(target), build_job_settings(d))
     if new is None:
         return JSONResponse({"error": "Konnte nicht erneut eingereiht werden"}, status_code=400)
-    return {"added": 1, "id": new.id}
+    return {"added": 1, "id": new.id, "output_name": plan.get("output_name"),
+            "conflict_mode": plan.get("conflict_mode"), "suffix": d.get("suffix")}
 
 
 @app.get("/api/vmaf/by-source")
@@ -1578,10 +1591,17 @@ async def media(path: str, root: str = "media"):
 
 
 @app.get("/api/media/stream")
-async def media_stream(path: str, root: str = "media", audio: int = 0):
+async def media_stream(
+    path: str,
+    root: str = "media",
+    audio: int = 0,
+    start: float = 0.0,
+    acodec: str = "",
+):
     """Live-Playback: Video copy + gewählte Tonspur als AAC (fragmentiertes MP4).
 
-    ``audio=-1`` = ohne Ton. Browser-kompatibler als Rohstream bei TrueHD/DTS-HD.
+    ``audio=-1`` = ohne Ton. ``start`` = Seek in Sekunden (Keyframe).
+    ``acodec`` = Quell-Codec der Tonspur (für Copy statt Re-Encode, z. B. aac).
     """
     from fastapi.responses import StreamingResponse
     from core import media_stream as ms
@@ -1592,7 +1612,10 @@ async def media_stream(path: str, root: str = "media", audio: int = 0):
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     aidx = None if audio < 0 else int(audio)
-    cmd = ms.build_play_cmd(target, aidx)
+    cmd = ms.build_play_cmd(
+        target, aidx, start_sec=max(0.0, float(start or 0.0)),
+        audio_codec=acodec or "",
+    )
     return StreamingResponse(
         ms.stream_bytes(cmd),
         media_type="video/mp4",

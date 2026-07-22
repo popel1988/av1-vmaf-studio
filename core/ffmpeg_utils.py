@@ -360,8 +360,14 @@ def probe_streams(path: Path) -> tuple[Optional[dict], Optional[str]]:
     subs = [_subtitle_entry(s, i) for i, s in
             enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
     has_video = any(s.get("codec_type") == "video" for s in streams)
-    return {"audio": audio, "subtitles": subs, "has_video": has_video,
-            "container": fmt.get("format_name", "") or ""}, None
+    return {
+        "audio": audio,
+        "subtitles": subs,
+        "has_video": has_video,
+        "container": fmt.get("format_name", "") or "",
+        "duration": round(duration, 3) if duration else 0.0,
+        "duration_human": human_duration(duration) if duration else "",
+    }, None
 
 
 # ----------------------------------------------------------------- Encoder-Map
