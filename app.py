@@ -132,7 +132,7 @@ async def _startup() -> None:
     history.init_db()
     from core import profiles as prof
     prof.ensure_builtins()
-    # Offene Aufträge aus der letzten Sitzung wiederherstellen (überleben Neustart).
+    # Warteschlange aus /data/queue.json wiederherstellen (offen + fertig).
     queue.restore()
     # Echte Encoder-Fähigkeiten im Hintergrund testen (nur falls noch kein Cache).
     from core import capabilities as caps

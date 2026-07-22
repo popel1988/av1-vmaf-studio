@@ -360,8 +360,21 @@ def probe_streams(path: Path) -> tuple[Optional[dict], Optional[str]]:
     streams = data.get("streams", [])
     fmt = data.get("format", {})
     duration = _f(fmt.get("duration")) or 0.0
-    audio = [_audio_entry(s, i, duration) for i, s in
-             enumerate(s for s in streams if s.get("codec_type") == "audio")]
+    # Gesambitrate der Datei – Fallback für Elementary Streams (.dts/.eac3/…),
+    # bei denen der Audio-Stream selbst oft keine bit_rate liefert.
+    fmt_br = int(_f(fmt.get("bit_rate")) or 0)
+    fmt_size = int(_f(fmt.get("size")) or 0)
+    if not fmt_br and fmt_size > 0 and duration > 0:
+        fmt_br = int(fmt_size * 8 / duration)
+
+    audio_raw = [s for s in streams if s.get("codec_type") == "audio"]
+    audio = []
+    for i, s in enumerate(audio_raw):
+        entry = _audio_entry(s, i, duration)
+        if not entry.get("bitrate") and fmt_br and len(audio_raw) == 1:
+            entry["bitrate"] = fmt_br
+            entry["bitrate_human"] = _bitrate_human(fmt_br)
+        audio.append(entry)
     subs = [_subtitle_entry(s, i) for i, s in
             enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
     has_video = any(s.get("codec_type") == "video" for s in streams)

@@ -21,7 +21,10 @@ services:
     volumes:
       # Full media tree (sources + encodes)
       - ${MEDIA_PATH:-/media}:/media
-      # Persistent app data (settings, queue, screenshots, cache)
+      # Persistent app data (settings, queue.json, history.db, cache).
+      # IMPORTANT: use a stable absolute host path across rebuilds/updates
+      # (e.g. DATA_PATH=/volume1/docker/av1-studio/data). A relative ./data
+      # is fine only if the stack always starts from the same directory.
       - ${DATA_PATH:-./data}:/data
       # --- Extra media folders (optional) ----------------------------------
       # To mount separate trees, add more volume mounts and list them under

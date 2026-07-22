@@ -213,37 +213,68 @@ class QueueManager:
         # laufende Encodes werden nie unterbrochen.
         self._gate = None
         self._gate_msg = ""
-        # Persistenz der Warteschlange: offene Aufträge überleben Neustarts.
+        # Persistenz: gesamte Queue-Liste (offen + fertig) unter DATA_DIR.
         self._persist_path = config.DATA_DIR / "queue.json"
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
     # ------------------------------------------------------------- Persistenz
-    # Nur nicht-terminale Zustände werden gesichert; beim Laden auf "wartend"
-    # normalisiert, damit unterbrochene Jobs sauber neu starten.
-    _PERSIST_STATES = (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
+    # Offene Jobs + zuletzt abgeschlossene (fertig/fehler/abgebrochen), damit
+    # die UI-Liste Rebuilds/Updates überlebt. „Leeren" entfernt nur Terminale.
+    _OPEN_STATES = (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
+    _TERMINAL_STATES = (STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED)
+    _MAX_TERMINAL_PERSIST = 200  # Deckel gegen unbegrenztes Wachstum von queue.json
 
     def _persistable_locked(self) -> list[dict]:
-        out: list[dict] = []
+        open_items: list[QueueItem] = []
+        terminal: list[QueueItem] = []
         for it in self._items:
-            if it.status not in self._PERSIST_STATES:
-                continue
+            if it.status in self._OPEN_STATES:
+                open_items.append(it)
+            elif it.status in self._TERMINAL_STATES:
+                terminal.append(it)
+        # Neueste fertige zuerst behalten
+        if len(terminal) > self._MAX_TERMINAL_PERSIST:
+            terminal = sorted(
+                terminal,
+                key=lambda x: x.finished_at or x.created_at or 0,
+                reverse=True,
+            )[: self._MAX_TERMINAL_PERSIST]
+            terminal.sort(key=lambda x: x.created_at or 0)
+
+        out: list[dict] = []
+        for it in open_items + terminal:
             entry = {
                 "id": it.id,
                 "title": it.title,
                 "path": it.path,
                 "group_id": it.group_id,
+                "status": it.status,
                 "settings": asdict(it.settings),
                 "info": it.info,
                 "original_size": it.original_size,
+                "output_size": it.output_size,
+                "output_path": it.output_path,
+                "saved_bytes": it.saved_bytes,
+                "error": it.error or "",
+                "message": it.message or "",
+                "progress": it.progress or {},
+                "vmaf_verify": it.vmaf_verify,
+                "verify_attempts": it.verify_attempts,
+                "integrity_ok": it.integrity_ok,
+                "integrity_msg": it.integrity_msg or "",
+                "caps_failed": bool(it.caps_failed),
+                "crop": it.crop or "",
                 "created_at": it.created_at,
+                "started_at": it.started_at,
+                "finished_at": it.finished_at,
+                "duration": it.duration,
             }
-            # „Auswahl"-Jobs (manuelles Approval) zusätzlich mit ihrer bereits
-            # berechneten VMAF-Analyse sichern, damit sie nach einem Neustart/
-            # Rebuild nicht neu analysiert werden müssen, sondern direkt wieder
-            # zur Auswahl bereitstehen.
+            # „Auswahl"-Jobs: VMAF-Analyse mitsichern (kein erneuter Test).
             if it.status == STATUS_AWAITING and it.vmaf:
-                entry["status"] = STATUS_AWAITING
+                entry["vmaf"] = it.vmaf
+            # Fertige mit VMAF-Ergebnis ebenfalls behalten (Anzeige/Erneut).
+            elif it.status in self._TERMINAL_STATES and it.vmaf:
                 entry["vmaf"] = it.vmaf
             out.append(entry)
         return out
@@ -257,12 +288,14 @@ class QueueManager:
             tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             tmp.replace(self._persist_path)
         except Exception as e:  # pragma: no cover - Persistenz darf nie crashen
-            logger.debug("Queue-Persistenz fehlgeschlagen: %s", e)
+            logger.warning("Queue-Persistenz fehlgeschlagen (%s): %s",
+                           self._persist_path, e)
 
     def restore(self) -> int:
-        """Gesicherte, offene Aufträge nach einem Neustart wieder einreihen."""
+        """Gesicherte Queue nach Neustart/Rebuild wiederherstellen."""
         try:
             if not self._persist_path.exists():
+                logger.info("Keine gespeicherte Warteschlange (%s)", self._persist_path)
                 return 0
             data = json.loads(self._persist_path.read_text(encoding="utf-8"))
         except Exception as e:  # pragma: no cover
@@ -270,40 +303,74 @@ class QueueManager:
             return 0
         fields = set(JobSettings.__dataclass_fields__)
         restored = 0
+        skipped_missing = 0
         with self._lock:
             existing = {it.id for it in self._items}
             for d in data if isinstance(data, list) else []:
                 path = d.get("path", "")
-                # Nur Dateien wieder aufnehmen, die es noch gibt.
-                if not path or not Path(path).is_file():
+                status = d.get("status") or STATUS_WAITING
+                is_terminal = status in self._TERMINAL_STATES
+                # Offene Jobs brauchen eine existierende Quelldatei.
+                # Terminale bleiben sichtbar (auch wenn Quelle verschoben wurde).
+                if not is_terminal and (not path or not Path(path).is_file()):
+                    skipped_missing += 1
+                    logger.warning(
+                        "Queue-Eintrag übersprungen (Quelle fehlt): %s",
+                        path or d.get("title") or d.get("id"))
                     continue
                 if d.get("id") in existing:
                     continue
                 raw = d.get("settings", {}) or {}
                 s = JobSettings(**{k: v for k, v in raw.items() if k in fields})
-                # „Auswahl"-Jobs mit gesicherter Analyse wieder als AWAITING
-                # herstellen (kein erneutes Analysieren nötig). Alle übrigen
-                # unterbrochenen Jobs starten sauber neu als „wartend".
                 saved_vmaf = d.get("vmaf")
-                is_awaiting = (d.get("status") == STATUS_AWAITING
+                is_awaiting = (status == STATUS_AWAITING
                                and isinstance(saved_vmaf, dict)
                                and saved_vmaf.get("results"))
+                if is_terminal:
+                    final_status = status
+                elif is_awaiting:
+                    final_status = STATUS_AWAITING
+                else:
+                    # Unterbrochene läuft/vmaf-test → sauber neu als wartend.
+                    final_status = STATUS_WAITING
                 item = QueueItem(
                     id=d.get("id") or uuid.uuid4().hex[:10],
-                    title=d.get("title") or Path(path).name,
-                    path=path,
+                    title=d.get("title") or (Path(path).name if path else "?"),
+                    path=path or "",
                     settings=s,
                     group_id=d.get("group_id") or uuid.uuid4().hex[:8],
-                    status=STATUS_AWAITING if is_awaiting else STATUS_WAITING,
+                    status=final_status,
                     info=d.get("info"),
-                    vmaf=saved_vmaf if is_awaiting else None,
+                    vmaf=saved_vmaf if (is_awaiting or is_terminal) else None,
+                    error=str(d.get("error") or ""),
+                    message=str(d.get("message") or ""),
+                    progress=d.get("progress") if isinstance(d.get("progress"), dict) else {},
                     original_size=int(d.get("original_size", 0) or 0),
+                    output_size=int(d.get("output_size", 0) or 0),
+                    output_path=str(d.get("output_path") or ""),
+                    saved_bytes=int(d.get("saved_bytes", 0) or 0),
+                    vmaf_verify=d.get("vmaf_verify"),
+                    verify_attempts=int(d.get("verify_attempts", 0) or 0),
+                    integrity_ok=d.get("integrity_ok"),
+                    integrity_msg=str(d.get("integrity_msg") or ""),
+                    caps_failed=bool(d.get("caps_failed")),
+                    crop=str(d.get("crop") or ""),
                     created_at=float(d.get("created_at", time.time())),
+                    started_at=float(d.get("started_at", 0) or 0),
+                    finished_at=float(d.get("finished_at", 0) or 0),
+                    duration=float(d.get("duration", 0) or 0),
                 )
                 self._items.append(item)
                 restored += 1
+        if skipped_missing:
+            logger.warning(
+                "Warteschlange: %d offene Einträge übersprungen (Quelldatei fehlt)",
+                skipped_missing)
         if restored:
-            logger.info("Warteschlange wiederhergestellt: %d offene Auftrag/Aufträge", restored)
+            open_n = sum(1 for it in self._items if it.status in self._OPEN_STATES)
+            logger.info(
+                "Warteschlange wiederhergestellt: %d Einträge (%d offen) aus %s",
+                restored, open_n, self._persist_path)
             self._wake.set()
         return restored
 
@@ -464,7 +531,7 @@ class QueueManager:
         with self._lock:
             self._items = [
                 it for it in self._items
-                if it.status in (STATUS_WAITING, STATUS_RUNNING, STATUS_ANALYZING, STATUS_AWAITING)
+                if it.status in self._OPEN_STATES
             ]
         self._persist()
 
@@ -1447,6 +1514,8 @@ class QueueManager:
             for runner in self._active.values():
                 if runner:
                     runner.cancel()
+        # Letzten Stand sichern (inkl. fertiger Einträge), bevor der Prozess endet.
+        self._persist()
         self._wake.set()
 
 

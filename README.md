@@ -68,8 +68,9 @@ Other highlights:
 - **Functional encoder detection**: mini test encodes verify what the hardware
   can actually do; unavailable options are hidden in the UI.
 - **Dynamic GPU capacity**: configurable number of concurrent encodes per GPU.
-- **Persistent queue**: open jobs survive restarts/rebuilds; “awaiting selection”
-  jobs keep their already computed VMAF analysis.
+- **Persistent queue**: the queue list (open + recent finished/failed) survives
+  restarts/rebuilds via `/data/queue.json` (keep a stable `DATA_PATH` volume);
+  “awaiting selection” jobs keep their already computed VMAF analysis.
 - **Requeue**: finished jobs can be run again (overwrite warning or auto-suffix
   like `_remux2`) or opened with their exact settings (“Again with …”).
 
@@ -301,7 +302,7 @@ Everything persistent lives under **`/data`** (mount as a Docker volume). Conten
 survive rebuilds/restarts as long as the volume is kept:
 
 ```
-/data/queue.json            Queue (open jobs, restored on start)
+/data/queue.json            Queue list (open + recent finished; restored on start)
 /data/history.db            Job history/stats (SQLite; includes settings_json)
 /data/settings.json         App settings (default output, sub-libraries, …)
 /data/profiles.json         Saved encode/remux profiles

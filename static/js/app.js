@@ -5523,11 +5523,16 @@
         if (sb) sb.appendChild(tr);
       } else {
         const dis = e.transcode ? "" : " disabled";
+        const srcLine = [
+          e.src_codec || "",
+          e.channels ? `${e.channels}ch` : "",
+          e.src_bitrate_human || "",
+        ].filter(Boolean).join(" · ") || (e.desc || "");
         tr.innerHTML = `
           <td><input type="checkbox" class="rx-a-keep" checked></td>
           <td title="${escapeHtml(e.path || "")}">
             <span class="muted">Extern</span> · ${escapeHtml(e.name || "?")}
-            ${e.desc ? `<div class="muted" style="font-size:11px">${escapeHtml(e.desc)}</div>` : ""}
+            ${srcLine ? `<div class="muted" style="font-size:11px">${escapeHtml(srcLine)}</div>` : ""}
             <label class="muted" style="font-size:11px">Delay
               <input type="number" class="rx-e-delay" data-i="${i}" value="${e.delay || 0}" step="0.1" style="width:60px"> s
             </label>
@@ -5846,23 +5851,33 @@
   // (rel-Pfad eines Input-Roots oder "upload:<name>" für PC-Uploads).
   function remuxAddStreamsFromProbe(data, refPath, name) {
     const streams = [];
-    (data.audio || []).forEach((a) => streams.push({
-      type: "audio", stream: a.index, src_codec: a.codec,
-      desc: `Ton #${a.index} · ${a.codec} ${a.channels || "?"}ch · ${a.bitrate_human || "—"}`,
-      language: a.language, title: a.title,
-    }));
+    (data.audio || []).forEach((a) => {
+      const brH = a.bitrate_human || (a.bitrate ? `${Math.round(a.bitrate / 1000)} kbit/s` : "—");
+      const ch = a.channels || "?";
+      streams.push({
+        type: "audio", stream: a.index, src_codec: a.codec,
+        src_bitrate: a.bitrate || 0,
+        src_bitrate_human: brH,
+        channels: a.channels || 0,
+        desc: `${a.codec || "?"} · ${ch}ch · ${brH}`,
+        language: a.language, title: a.title,
+      });
+    });
     (data.subtitles || []).forEach((s) => streams.push({
       type: "subtitle", stream: s.index, src_codec: s.codec,
-      desc: `UT #${s.index} · ${s.codec}`,
+      desc: `${s.codec || "?"}`,
       language: s.language, title: s.title,
     }));
     if (!streams.length) return 0;
     streams.forEach((st) => state.remuxExt.push({
       path: refPath, name: name, type: st.type, stream: st.stream, desc: st.desc,
       src_codec: st.src_codec || "",
+      src_bitrate: st.src_bitrate || 0,
+      src_bitrate_human: st.src_bitrate_human || "",
       language: (st.language && st.language !== "und") ? st.language : "",
       title: st.title || "", delay: 0, default: false, forced: false,
-      transcode: false, codec: "eac3", bitrate: 640, channels: 0,
+      transcode: false, codec: "eac3", bitrate: 640,
+      channels: st.channels || 0,
       duration: data.duration || 0,
     }));
     return streams.length;
