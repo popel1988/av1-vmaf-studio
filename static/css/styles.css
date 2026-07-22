@@ -352,12 +352,19 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .lib-dash-title { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
 .lib-dash-bars { display: flex; flex-direction: column; gap: 5px; }
-.lib-bar { display: grid; grid-template-columns: 74px 1fr 34px; align-items: center; gap: 8px; font-size: 12px; }
+.lib-bar { display: grid; grid-template-columns: 92px 1fr 34px; align-items: center; gap: 8px; font-size: 12px; }
+.lib-bar.nested {
+  grid-template-columns: 84px 1fr 34px;
+  margin-left: 14px;
+  opacity: 0.92;
+}
+.lib-bar.nested .lib-bar-lbl { color: var(--text-muted); font-size: 11.5px; }
 .lib-bar-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lib-bar-track { background: var(--surface-3); border-radius: 5px; height: 9px; overflow: hidden; }
 .lib-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
 .lib-bar-fill.warn { background: var(--warn, #e0a83a); }
 .lib-bar-fill.accent { background: var(--accent); }
+.lib-bar-fill.muted { background: color-mix(in srgb, var(--text-muted) 55%, transparent); }
 .lib-bar-val { text-align: right; color: var(--text-muted); }
 .lib-dash-hogs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .lib-dash-hogs li { display: flex; justify-content: space-between; gap: 8px; }
@@ -368,8 +375,10 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .lib-result-toolbar input[type="search"] { flex: 1; min-width: 180px; }
 .lib-pager {
   display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
-  gap: 6px; margin: 12px 0 4px;
+  gap: 6px; margin: 8px 0;
 }
+#lib-pager-top { margin-bottom: 10px; }
+#lib-pager { margin-top: 12px; }
 .lib-pager .lib-page-btn {
   min-width: 34px; padding: 5px 9px;
 }
@@ -608,7 +617,13 @@ input[type="range"]::-moz-range-thumb {
 .fmt-checks label:has(input:checked) {
   border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
+.fmt-checks label.fmt-zero { opacity: 0.55; }
 .fmt-checks input { accent-color: var(--accent); }
+.fmt-checks .fmt-count {
+  font-variant-numeric: tabular-nums; font-size: 11px; font-weight: 700;
+  color: var(--text-muted); min-width: 1.2em; text-align: right;
+}
+.fmt-checks label:has(input:checked) .fmt-count { color: var(--text); }
 .fmt-checks .empty { color: var(--text-muted); font-size: 12px; }
 
 .vmaf-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }

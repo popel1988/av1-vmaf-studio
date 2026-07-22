@@ -181,6 +181,8 @@
     "Quelle:": "Source:",
     "· Daten:": "· Data:",
     "Bereit": "Ready",
+    "Noch nicht gescannt – „Scannen“ starten.": "Not scanned yet — start “Scan”.",
+    "Noch nicht gescannt": "Not scanned yet",
 
     // --- Karte 1: Quellenauswahl ---
     "Quellenauswahl & Analyse": "Source Selection & Analysis",
@@ -925,6 +927,8 @@
     "Quelle:": "Origen:",
     "· Daten:": "· Datos:",
     "Bereit": "Listo",
+    "Noch nicht gescannt – „Scannen“ starten.": "Aún no escaneado — inicie “Escanear”.",
+    "Noch nicht gescannt": "Aún no escaneado",
     "Quellenauswahl & Analyse": "Selección de origen y análisis",
     "Nichts ausgewählt": "Nada seleccionado",
     "Lade Verzeichnis …": "Cargando directorio …",
@@ -1573,6 +1577,8 @@
     "Quelle:": "Source :",
     "· Daten:": "· Données :",
     "Bereit": "Prêt",
+    "Noch nicht gescannt – „Scannen“ starten.": "Pas encore scanné — lancez « Scanner ».",
+    "Noch nicht gescannt": "Pas encore scanné",
     "Quellenauswahl & Analyse": "Sélection de la source et analyse",
     "Nichts ausgewählt": "Rien de sélectionné",
     "Lade Verzeichnis …": "Chargement du dossier …",

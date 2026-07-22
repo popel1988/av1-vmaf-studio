@@ -987,25 +987,36 @@ async def library_scan_cancel():
 
 
 @app.post("/api/library/clear")
-async def library_clear():
-    """Treffer/Cache der Bibliothek leeren (nur wenn kein Scan läuft)."""
+async def library_clear(root: str | None = None):
+    """Cache leeren: optional nur einen Root, sonst alle (nur wenn kein Scan läuft)."""
     from core import library
-    return library.clear()
+    return library.clear(root)
 
 
 @app.get("/api/library/last")
-async def library_last():
-    """Zuletzt gecachten Scan laden (Anzeige beim Öffnen der Bibliothek)."""
+async def library_last(root: str | None = None):
+    """Gecachte Scans laden.
+
+    Ohne ``root``: alle Caches (`by_root`). Mit ``root``: Snapshot dieser Bibliothek
+    (leere Liste, falls noch nie gescannt).
+    """
     from core import library
-    return library.load_last()
+    return library.load_last(root)
+
+
+@app.get("/api/library/cached")
+async def library_cached(root: str = ""):
+    """Gescannten Stand einer Bibliothek (sofort, ohne Rescan)."""
+    from core import library
+    return library.get_cached(root)
 
 
 @app.get("/api/library/export.csv")
-async def library_export_csv():
-    """Aktuelle Treffer als CSV herunterladen."""
+async def library_export_csv(root: str | None = None):
+    """Treffer als CSV herunterladen (optional für einen Root)."""
     from fastapi.responses import Response
     from core import library
-    csv_text = library.export_csv()
+    csv_text = library.export_csv(root)
     return Response(
         content=csv_text, media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=library_scan.csv"})

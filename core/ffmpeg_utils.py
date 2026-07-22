@@ -193,6 +193,7 @@ def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int]:
     """Bestimmt HDR-Typ, ob Dolby Vision vorliegt und ggf. das DV-Profil."""
     dovi = False
     dv_profile = 0
+    hdr10_plus = False
     for sd in video.get("side_data_list", []) or []:
         t = str(sd.get("side_data_type", "")).lower()
         if "dolby vision" in t or "dovi" in t:
@@ -204,10 +205,14 @@ def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int]:
                     dv_profile = int(raw)
                 except (TypeError, ValueError):
                     pass
+        if "hdr10+" in t or "hdr10plus" in t or "dynamic hdr plus" in t:
+            hdr10_plus = True
     if transfer in ("smpte2084", "smptest2084"):
-        base = "HDR10 (PQ)"
+        base = "HDR10+" if hdr10_plus else "HDR10"
     elif transfer == "arib-std-b67":
         base = "HLG"
+    elif hdr10_plus:
+        base = "HDR10+"
     else:
         base = "SDR"
     if dovi:

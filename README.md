@@ -49,7 +49,7 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
-| **Library** | Recursive scan with filters, savings estimates, **sub-libraries**, codec/dynamic filters, CSV export. |
+| **Library** | Recursive scan with live filters, savings estimates, **sub-libraries** (each scan cached per root), codec/dynamic filters, CSV export. |
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
 | **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles, default output folder. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
@@ -310,7 +310,7 @@ survive rebuilds/restarts as long as the volume is kept:
 /data/watch*.json           Watch-folder state
 /data/scheduler.json        Schedule / time windows
 /data/capabilities.json     Cached encoder capability tests
-/data/library_scan.json     Last library scan cache
+/data/library_scan.json     Library scan cache (per root / sub-library)
 /data/previews/<session>/   VMAF screenshots + analysis.json
 /data/vmaf/                 optionally retained VMAF session artifacts
 /data/uploads/              User-uploaded external audio/subtitle files

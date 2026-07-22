@@ -26,6 +26,10 @@
     libSort: { key: "est_saved_bytes", dir: "desc" },
     libPage: 1,        // aktuelle Seite der Ergebnisliste
     libPageSize: 50,   // Einträge pro Seite
+    libByRoot: {},     // gecachte Scans pro Root ("" = gesamter Medienbaum)
+    libScanAll: [],    // aktueller Scan (Anzeige)
+    libScanRoot: "",   // Root des aktuell angezeigten Scans
+    libActiveScanRoot: "", // Root eines laufenden Scans (falls abweichend)
     remuxLoaded: false, // Remux-Seite initialisiert
     remuxSel: null,     // { path, name } der Remux-Quelle
     remuxInfo: null,    // ffprobe-Info der Remux-Quelle
@@ -3350,16 +3354,17 @@
         renderLibrary();
       });
     });
-    const pager = $("lib-pager");
-    if (pager) pager.addEventListener("click", (e) => {
-      const b = e.target.closest("[data-lib-page]");
-      if (!b) return;
-      const p = parseInt(b.dataset.libPage, 10);
-      if (!p || p === state.libPage) return;
-      state.libPage = p;
-      renderLibrary();
-      const wrap = document.querySelector(".lib-table");
-      if (wrap) wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    document.querySelectorAll(".lib-pager").forEach((pager) => {
+      pager.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-lib-page]");
+        if (!b) return;
+        const p = parseInt(b.dataset.libPage, 10);
+        if (!p || p === state.libPage) return;
+        state.libPage = p;
+        renderLibrary();
+        const wrap = document.querySelector(".lib-table");
+        if (wrap) wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
     });
     const body = $("lib-body");
     if (body) body.addEventListener("click", onLibAction);
@@ -3397,8 +3402,36 @@
     if (!cont) return;
     const exts = (window.APP_CONFIG && window.APP_CONFIG.videoExtensions) || [];
     cont.innerHTML = exts.map((e) =>
-      `<label><input type="checkbox" class="lib-fmt" value="${escapeHtml(e)}" /><span>${escapeHtml(e)}</span></label>`
+      `<label data-ext="${escapeHtml(e)}">`
+      + `<input type="checkbox" class="lib-fmt" value="${escapeHtml(e)}" />`
+      + `<span class="fmt-name">${escapeHtml(e)}</span>`
+      + `<span class="fmt-count" aria-hidden="true">–</span></label>`
     ).join("") || '<span class="empty">Keine Formate.</span>';
+    libUpdateFormatCounts();
+  }
+
+  /** Anzahlen je Container aus dem aktuellen Scan in die Format-Kästen schreiben. */
+  function libUpdateFormatCounts() {
+    const cont = $("lib-formats");
+    if (!cont) return;
+    const counts = {};
+    (state.libScanAll || []).forEach((m) => {
+      let e = (m.ext || "").toLowerCase().replace(/^\./, "");
+      if (!e && m.name) {
+        const i = String(m.name).lastIndexOf(".");
+        if (i >= 0) e = String(m.name).slice(i + 1).toLowerCase();
+      }
+      if (!e) return;
+      counts[e] = (counts[e] || 0) + 1;
+    });
+    const hasScan = (state.libScanAll || []).length > 0;
+    cont.querySelectorAll("label[data-ext]").forEach((lab) => {
+      const ext = lab.dataset.ext || "";
+      const n = counts[ext] || 0;
+      const badge = lab.querySelector(".fmt-count");
+      if (badge) badge.textContent = hasScan ? String(n) : "–";
+      lab.classList.toggle("fmt-zero", hasScan && n === 0);
+    });
   }
 
   function libSelectedRoot() {
@@ -3533,19 +3566,55 @@
     });
   }
 
+  /** HDR-Modus-Label für Statistik (ohne Dolby Vision). */
+  function libHdrModeKey(m) {
+    if (!m || m.dolby_vision || !m.is_hdr) return "";
+    const t = String(m.hdr_type || "").toLowerCase();
+    if (t.includes("hdr10+") || t.includes("hdr10plus")) return "HDR10+";
+    if (t.includes("hlg") || t.includes("arib")) return "HLG";
+    if (t.includes("hdr10") || t.includes("(pq)") || t.includes("pq")) return "HDR10";
+    if (t && t !== "sdr") {
+      // z. B. älterer Cache „HDR10 (PQ)“ / unbekannte Variante
+      const clean = String(m.hdr_type || "HDR").replace(/\s*\+.*$/, "").trim();
+      return clean || "HDR";
+    }
+    return "HDR";
+  }
+
   function libComputeStats(matched) {
     const byCodec = {};
+    const byHdrMode = {};
+    const byDvProfile = {};
     let hdr = 0, dv = 0, sdr = 0;
     (matched || []).forEach((m) => {
       const c = (m.codec || "?").toLowerCase();
       byCodec[c] = (byCodec[c] || 0) + 1;
-      if (m.dolby_vision) dv += 1;
-      else if (m.is_hdr) hdr += 1;
-      else sdr += 1;
+      if (m.dolby_vision) {
+        dv += 1;
+        const p = Number(m.dv_profile) || 0;
+        const key = p > 0 ? String(p) : "?";
+        byDvProfile[key] = (byDvProfile[key] || 0) + 1;
+      } else if (m.is_hdr) {
+        hdr += 1;
+        const mode = libHdrModeKey(m);
+        if (mode) byHdrMode[mode] = (byHdrMode[mode] || 0) + 1;
+      } else {
+        sdr += 1;
+      }
     });
     const codec_distribution = Object.keys(byCodec)
       .map((k) => ({ codec: k, count: byCodec[k] }))
       .sort((a, b) => b.count - a.count);
+    const hdr_modes = Object.keys(byHdrMode)
+      .map((k) => ({ mode: k, count: byHdrMode[k] }))
+      .sort((a, b) => b.count - a.count || a.mode.localeCompare(b.mode));
+    const dv_profiles = Object.keys(byDvProfile)
+      .map((k) => ({ profile: k, count: byDvProfile[k] }))
+      .sort((a, b) => {
+        const na = parseInt(a.profile, 10), nb = parseInt(b.profile, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a.profile).localeCompare(String(b.profile));
+      });
     const top_hogs = (matched || []).slice()
       .sort((a, b) => (b.est_saved_bytes || 0) - (a.est_saved_bytes || 0))
       .slice(0, 10)
@@ -3553,7 +3622,10 @@
         name: h.name, path: h.path, size_human: h.size_human,
         est_saved_human: h.est_saved_human, est_saved_bytes: h.est_saved_bytes || 0,
       }));
-    return { codec_distribution, hdr_count: hdr, dv_count: dv, sdr_count: sdr, top_hogs };
+    return {
+      codec_distribution, hdr_count: hdr, dv_count: dv, sdr_count: sdr,
+      hdr_modes, dv_profiles, top_hogs,
+    };
   }
 
   function libRefreshView() {
@@ -3572,6 +3644,7 @@
       total_saved_human: formatBytes(saved),
     });
     renderLibDashboard(state.libStats, state.libRows.length);
+    libUpdateFormatCounts();
     const has = state.libRows.length > 0;
     ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
       const b = $(id); if (b) b.disabled = !has;
@@ -3579,18 +3652,27 @@
     libUpdateScanBadge();
   }
 
+  function libNormRoot(root) {
+    return String(root || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  }
+
   function libUpdateScanBadge(running) {
     const badge = $("lib-scan-badge");
     if (!badge) return;
-    if (running) { badge.textContent = "Scan läuft …"; return; }
-    const all = (state.libScanAll || []).length;
-    const n = (state.libRows || []).length;
-    if (!all) { badge.textContent = "Bereit"; return; }
-    const rootNow = libSelectedRoot();
-    if ((state.libScanRoot || "") !== (rootNow || "")) {
-      badge.textContent = `${all} im Cache · anderer Ordner – neu scannen`;
+    const rootNow = libNormRoot(libSelectedRoot());
+    const active = libNormRoot(state.libActiveScanRoot || "");
+    if (running || (state.libActiveScanRoot && active === rootNow)) {
+      badge.textContent = "Scan läuft …";
       return;
     }
+    if (state.libActiveScanRoot && active !== rootNow) {
+      badge.textContent = "Scan läuft (andere Bibliothek)";
+      return;
+    }
+    const cached = state.libByRoot[rootNow];
+    if (!cached) { badge.textContent = "Noch nicht gescannt"; return; }
+    const all = (state.libScanAll || []).length;
+    const n = (state.libRows || []).length;
     badge.textContent = n === all ? `${n} Dateien` : `${n} / ${all} gefiltert`;
   }
 
@@ -3626,11 +3708,12 @@
       const saved = localStorage.getItem("libLibraryId") || "";
       if (saved && (state.libraries || []).some((l) => l.id === saved)) sel.value = saved;
       syncLibLibraryButtons();
+      // Cache-Anzeige übernimmt loadLastLibrary (nach init); hier nur Buttons.
     });
     sel.addEventListener("change", () => {
       localStorage.setItem("libLibraryId", sel.value || "");
       syncLibLibraryButtons();
-      libUpdateScanBadge();
+      showLibraryForSelection();
     });
     const add = $("btn-lib-add-library");
     const edit = $("btn-lib-edit-library");
@@ -3770,19 +3853,30 @@
     if (!box) return;
     if (!stats || !totalMatched) { box.style.display = "none"; return; }
     box.style.display = "";
-    const bar = (label, count, total, cls) => {
+    const bar = (label, count, total, cls, nested) => {
+      if (!count) return "";
       const pct = total ? Math.round((count / total) * 100) : 0;
-      return `<div class="lib-bar"><span class="lib-bar-lbl">${escapeHtml(label)}</span>`
+      return `<div class="lib-bar${nested ? " nested" : ""}"><span class="lib-bar-lbl">${escapeHtml(label)}</span>`
         + `<span class="lib-bar-track"><span class="lib-bar-fill ${cls || ""}" style="width:${pct}%"></span></span>`
         + `<span class="lib-bar-val">${count}</span></div>`;
     };
     const codecs = (stats.codec_distribution || []);
     $("lib-dash-codecs").innerHTML = codecs.map((c) =>
       bar((c.codec || "?").toUpperCase(), c.count, totalMatched)).join("") || "<span class='muted'>—</span>";
-    $("lib-dash-dynamic").innerHTML =
-      bar("SDR", stats.sdr_count || 0, totalMatched) +
-      bar("HDR", stats.hdr_count || 0, totalMatched, "warn") +
-      bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent");
+
+    let dyn = "";
+    dyn += bar("SDR", stats.sdr_count || 0, totalMatched, "muted");
+    dyn += bar("HDR", stats.hdr_count || 0, totalMatched, "warn");
+    (stats.hdr_modes || []).forEach((h) => {
+      dyn += bar(h.mode, h.count, totalMatched, "warn", true);
+    });
+    dyn += bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent");
+    (stats.dv_profiles || []).forEach((p) => {
+      const lab = p.profile === "?" ? "Profil ?" : `Profil ${p.profile}`;
+      dyn += bar(lab, p.count, totalMatched, "accent", true);
+    });
+    $("lib-dash-dynamic").innerHTML = dyn || "<span class='muted'>—</span>";
+
     const hogs = stats.top_hogs || [];
     $("lib-dash-hogs").innerHTML = hogs.map((h) =>
       `<li title="${escapeHtml(h.path || "")}"><span class="hog-name">${escapeHtml(h.name || "")}</span>`
@@ -3819,48 +3913,105 @@
 
   async function clearLibrary() {
     if (libPoll) return;
-    try { await fetch("/api/library/clear", { method: "POST" }); }
-    catch (e) { /* ignorieren */ }
-    state.libScanAll = [];
-    state.libScanRoot = "";
-    state.libRows = [];
-    state.libStats = null;
-    libRefreshView();
+    const root = libNormRoot(libSelectedRoot());
+    try {
+      await fetch(`/api/library/clear?root=${encodeURIComponent(root)}`, { method: "POST" });
+    } catch (e) { /* ignorieren */ }
+    delete state.libByRoot[root];
+    applyLibState({ matched: [], root, generated_at: 0 }, { persist: false });
     const prog = $("lib-progress");
-    if (prog) prog.textContent = "";
+    if (prog) prog.textContent = tt("Noch nicht gescannt – „Scannen“ starten.");
     libUpdateScanBadge();
   }
 
-  function applyLibState(st) {
-    state.libScanAll = st.matched || [];
-    state.libScanRoot = st.root || "";
+  function applyLibState(st, { persist = true } = {}) {
+    const root = libNormRoot(st.root);
+    const matched = st.matched || [];
+    state.libScanAll = matched;
+    state.libScanRoot = root;
     state.libScanAt = st.generated_at || 0;
+    // Fertige/laufende Scans pro Root merken (auch 0 Treffer nach Scan)
+    if (persist && (matched.length || st.generated_at || st.done || st.running)) {
+      state.libByRoot[root] = {
+        matched,
+        root,
+        generated_at: st.generated_at || 0,
+        total_size_bytes: st.total_size_bytes || 0,
+        total_saved_bytes: st.total_saved_bytes || 0,
+        done: !!st.done,
+      };
+    }
     libRefreshView();
+  }
+
+  /** Cache der aktuell gewählten Bibliothek anzeigen (oder leere Liste). */
+  function showLibraryForSelection() {
+    const root = libNormRoot(libSelectedRoot());
+    const cached = state.libByRoot[root];
+    const prog = $("lib-progress");
+    if (cached) {
+      applyLibState(cached, { persist: false });
+      const n = (cached.matched || []).length;
+      const when = cached.generated_at
+        ? new Date(cached.generated_at * 1000).toLocaleString() : "";
+      if (prog) {
+        prog.textContent = when
+          ? `Gespeichert: ${when} · ${n} Dateien`
+          : `${n} Dateien`;
+      }
+    } else {
+      applyLibState({ matched: [], root, generated_at: 0 }, { persist: false });
+      if (prog) prog.textContent = tt("Noch nicht gescannt – „Scannen“ starten.");
+    }
+    // Läuft ein Scan für genau diese Bibliothek → Live-Stand nachziehen
+    if (libNormRoot(state.libActiveScanRoot) === root && libPoll) {
+      pollLibrary();
+    } else {
+      libSetRunning(!!(state.libActiveScanRoot && libNormRoot(state.libActiveScanRoot) === root));
+      libUpdateScanBadge();
+    }
   }
 
   async function pollLibrary() {
     try {
       const r = await fetch("/api/library/scan");
       const st = await r.json();
+      const scanRoot = libNormRoot(st.root);
+      state.libActiveScanRoot = st.running ? scanRoot : "";
+      const viewing = libNormRoot(libSelectedRoot());
       const prog = $("lib-progress");
-      if (prog) {
+      if (viewing === scanRoot && prog) {
         prog.textContent = st.running
           ? `${st.scanned}/${st.total} geprüft · ${st.matched.length} Dateien im Scan`
           : `${st.matched.length} Dateien gescannt` +
             (st.generated_at ? ` · ${new Date(st.generated_at * 1000).toLocaleString()}` : "");
       }
-      applyLibState(st);
+      if (viewing === scanRoot) {
+        applyLibState(st);
+      } else if (!st.running && !st.error) {
+        // Fertig, aber andere Bibliothek ausgewählt → nur Cache füllen
+        state.libByRoot[scanRoot] = {
+          matched: st.matched || [],
+          root: scanRoot,
+          generated_at: st.generated_at || 0,
+          total_size_bytes: st.total_size_bytes || 0,
+          total_saved_bytes: st.total_saved_bytes || 0,
+          done: true,
+        };
+      }
       if (!st.running) {
         clearInterval(libPoll); libPoll = null;
+        state.libActiveScanRoot = "";
         libSetRunning(false);
-        if (st.error) {
+        if (st.error && viewing === scanRoot) {
           const badge = $("lib-scan-badge");
           if (badge) badge.textContent = "Fehler";
         } else {
           libUpdateScanBadge();
         }
       } else {
-        libUpdateScanBadge(true);
+        libSetRunning(viewing === scanRoot);
+        libUpdateScanBadge(viewing === scanRoot);
       }
     } catch (e) { /* ignorieren */ }
   }
@@ -3869,18 +4020,46 @@
     try {
       const r = await fetch("/api/library/last");
       const st = await r.json();
-      if (st && (st.matched || []).length) {
-        applyLibState(st);
-        const prog = $("lib-progress");
-        const when = st.generated_at ? new Date(st.generated_at * 1000).toLocaleString() : "";
-        if (prog && when) prog.textContent = `Letzter Scan: ${when} · ${(st.matched || []).length} Dateien`;
+      state.libByRoot = {};
+      const by = (st && st.by_root) || {};
+      Object.keys(by).forEach((k) => {
+        const snap = by[k] || {};
+        const root = libNormRoot(snap.root != null ? snap.root : k);
+        state.libByRoot[root] = {
+          matched: snap.matched || [],
+          root,
+          generated_at: snap.generated_at || 0,
+          total_size_bytes: snap.total_size_bytes || 0,
+          total_saved_bytes: snap.total_saved_bytes || 0,
+        };
+      });
+      // v1-Kompatibilität: einzelner matched-Block ohne by_root
+      if (!Object.keys(state.libByRoot).length && st && (st.matched || []).length) {
+        const root = libNormRoot(st.root);
+        state.libByRoot[root] = {
+          matched: st.matched,
+          root,
+          generated_at: st.generated_at || 0,
+          total_size_bytes: st.total_size_bytes || 0,
+          total_saved_bytes: st.total_saved_bytes || 0,
+        };
       }
-    } catch (e) { /* kein Cache */ }
+      if (st && st.running && st.active_root != null) {
+        state.libActiveScanRoot = libNormRoot(st.active_root);
+        if (!libPoll) {
+          libPoll = setInterval(pollLibrary, 1200);
+          pollLibrary();
+        }
+      }
+      showLibraryForSelection();
+    } catch (e) {
+      showLibraryForSelection();
+    }
   }
 
   function libDynamicLabel(m) {
     if (m.dolby_vision) return "DV" + (m.dv_profile ? " P" + m.dv_profile : "");
-    if (m.is_hdr) return (m.hdr_type || "HDR").replace(/ \(.*\)/, "");
+    if (m.is_hdr) return libHdrModeKey(m) || (m.hdr_type || "HDR");
     return "SDR";
   }
 
@@ -3928,18 +4107,16 @@
   }
 
   function libRenderPager(totalRows) {
-    const pager = $("lib-pager");
-    if (!pager) return;
+    const pagers = document.querySelectorAll(".lib-pager");
+    if (!pagers.length) return;
     const size = state.libPageSize || 50;
     const pages = Math.max(1, Math.ceil(totalRows / size));
     let page = Math.max(1, Math.min(state.libPage || 1, pages));
     state.libPage = page;
     if (totalRows <= size) {
-      pager.style.display = "none";
-      pager.innerHTML = "";
+      pagers.forEach((pager) => { pager.style.display = "none"; pager.innerHTML = ""; });
       return;
     }
-    pager.style.display = "";
     const btn = (p, label, { active = false, disabled = false } = {}) =>
       `<button type="button" class="btn btn-ghost btn-sm lib-page-btn${active ? " active" : ""}"`
       + ` data-lib-page="${p}"${disabled || active ? " disabled" : ""}>${label}</button>`;
@@ -3954,7 +4131,10 @@
     });
     html += `<span class="lib-page-info">${page} / ${pages}</span>`;
     html += btn(Math.min(pages, page + 1), "›", { disabled: page >= pages });
-    pager.innerHTML = html;
+    pagers.forEach((pager) => {
+      pager.style.display = "";
+      pager.innerHTML = html;
+    });
   }
 
   function renderLibrary() {
@@ -3984,15 +4164,14 @@
       }
     }
 
-    const pager = $("lib-pager");
     if (!allN) {
       body.innerHTML = '<tr class="empty-row"><td colspan="11">Noch kein Scan. Oben Bibliothek wählen und „Scan" starten.</td></tr>';
-      if (pager) { pager.style.display = "none"; pager.innerHTML = ""; }
+      libRenderPager(0);
       return;
     }
     if (!rows.length) {
       body.innerHTML = '<tr class="empty-row"><td colspan="11">Keine Treffer für die aktuellen Filter.</td></tr>';
-      if (pager) { pager.style.display = "none"; pager.innerHTML = ""; }
+      libRenderPager(0);
       return;
     }
 
@@ -6369,12 +6548,6 @@
       const v = $(id);
       if (v) { try { v.pause(); } catch (e) {} }
     });
-  }
-
-  function fmtClock(sec) {
-    sec = Math.max(0, Math.floor(sec || 0));
-    const m = Math.floor(sec / 60), s = sec % 60;
-    return `${m}:${String(s).padStart(2, "0")}`;
   }
 
   /* ------------------------------------------------------------- DIAGNOSE */

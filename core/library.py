@@ -5,8 +5,9 @@ Der Scan liefert die **volle** Bibliothek (alle Video-Endungen im gewählten
 Root). Filter (Name, Codec, Bitrate, …) werden in der UI live auf den letzten
 Scan angewendet – ein Rescan ist nur nötig, wenn neue Dateien hinzukommen.
 
-Läuft als Hintergrund-Thread mit Fortschritt. Ergebnisse werden im Speicher
-gehalten, per Endpoint abgefragt und nach Abschluss als JSON gecacht.
+Ergebnisse werden **pro Root** (Unterbibliothek / Medienbaum) im Speicher und
+als JSON gecacht. Beim Wechsel der Bibliothek kann die UI sofort den Cache
+zeigen oder eine leere Liste, falls noch nie gescannt.
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ _state: dict = {
     "generated_at": 0.0,
     "root": "",
 }
+# Abgeschlossene Scans pro Root ("" = gesamter Medienbaum).
+_by_root: dict[str, dict] = {}
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 
@@ -42,6 +45,10 @@ _CACHE_PATH = config.DATA_DIR / "library_scan.json"
 
 # Codecs, die bereits als effizient gelten (kein erneutes Transcoding nötig).
 _EFFICIENT_CODECS = {"av1", "libsvtav1", "av01"}
+
+
+def _norm_root(root: str) -> str:
+    return (root or "").replace("\\", "/").strip().strip("/")
 
 
 def _target_bitrate_kbps(height: int, is_hdr: bool, target_codec: str = "av1") -> int:
@@ -146,22 +153,82 @@ def _compute_stats(matched: list) -> dict:
     }
 
 
+def _empty_snapshot(root: str = "") -> dict:
+    root = _norm_root(root)
+    return {
+        "running": False,
+        "done": False,
+        "total": 0,
+        "scanned": 0,
+        "matched": [],
+        "total_size_bytes": 0,
+        "total_size_human": ff.human_size(0),
+        "total_saved_bytes": 0,
+        "total_saved_human": ff.human_size(0),
+        "error": "",
+        "generated_at": 0.0,
+        "root": root,
+        "stats": _compute_stats([]),
+    }
+
+
+def _entry_to_snapshot(entry: dict, *, running: bool = False) -> dict:
+    matched = list(entry.get("matched") or [])
+    size = int(entry.get("total_size_bytes") or 0)
+    saved = int(entry.get("total_saved_bytes") or 0)
+    root = _norm_root(str(entry.get("root") or ""))
+    return {
+        "running": running,
+        "done": bool(entry.get("done", True)),
+        "total": int(entry.get("total") or len(matched)),
+        "scanned": int(entry.get("scanned") or len(matched)),
+        "matched": matched,
+        "total_size_bytes": size,
+        "total_size_human": ff.human_size(size),
+        "total_saved_bytes": saved,
+        "total_saved_human": ff.human_size(saved),
+        "error": str(entry.get("error") or ""),
+        "generated_at": float(entry.get("generated_at") or 0.0),
+        "root": root,
+        "stats": _compute_stats(matched),
+    }
+
+
 def _snapshot_locked() -> dict:
+    """Aktiver Scan-State (laufend oder zuletzt im Worker)."""
     matched = list(_state["matched"])
+    size = _state["total_size_bytes"]
+    saved = _state["total_saved_bytes"]
     return {
         "running": _state["running"],
         "done": _state["done"],
         "total": _state["total"],
         "scanned": _state["scanned"],
         "matched": matched,
-        "total_size_bytes": _state["total_size_bytes"],
-        "total_size_human": ff.human_size(_state["total_size_bytes"]),
-        "total_saved_bytes": _state["total_saved_bytes"],
-        "total_saved_human": ff.human_size(_state["total_saved_bytes"]),
+        "total_size_bytes": size,
+        "total_size_human": ff.human_size(size),
+        "total_saved_bytes": saved,
+        "total_saved_human": ff.human_size(saved),
         "error": _state["error"],
         "generated_at": _state["generated_at"],
-        "root": _state["root"],
+        "root": _norm_root(_state["root"]),
         "stats": _compute_stats(matched),
+    }
+
+
+def _store_root_locked(snap: dict) -> None:
+    """Abgeschlossenen Scan unter seinem Root ablegen."""
+    root = _norm_root(snap.get("root") or "")
+    _by_root[root] = {
+        "matched": list(snap.get("matched") or []),
+        "total": int(snap.get("total") or 0),
+        "scanned": int(snap.get("scanned") or 0),
+        "total_size_bytes": int(snap.get("total_size_bytes") or 0),
+        "total_saved_bytes": int(snap.get("total_saved_bytes") or 0),
+        "generated_at": float(snap.get("generated_at") or 0.0),
+        "root": root,
+        "done": True,
+        "error": str(snap.get("error") or ""),
     }
 
 
@@ -170,11 +237,61 @@ def get_state() -> dict:
         return _snapshot_locked()
 
 
+def get_cached(root: str = "") -> dict:
+    """Gespeicherten Scan für einen Root laden (leer, falls nie gescannt).
+
+    Läuft gerade ein Scan für genau diesen Root, liefert den Live-Stand.
+    """
+    root = _norm_root(root)
+    with _lock:
+        if _state["running"] and _norm_root(_state["root"]) == root:
+            return _snapshot_locked()
+        entry = _by_root.get(root)
+        if entry:
+            return _entry_to_snapshot(entry)
+        return _empty_snapshot(root)
+
+
+def list_caches() -> dict:
+    """Alle gecachten Roots + aktueller Worker-State."""
+    with _lock:
+        by_root = {
+            k: _entry_to_snapshot(v)
+            for k, v in _by_root.items()
+        }
+        # Laufenden Scan einblenden (noch nicht final geschrieben).
+        if _state["running"]:
+            live = _snapshot_locked()
+            by_root[_norm_root(live["root"])] = live
+        return {
+            "by_root": by_root,
+            "running": _state["running"],
+            "active_root": _norm_root(_state["root"]) if _state["running"] else "",
+            "state": _snapshot_locked(),
+        }
+
+
 def _save_cache() -> None:
-    """Letzten (abgeschlossenen) Scan atomar nach DATA_DIR schreiben."""
+    """Alle Root-Caches atomar nach DATA_DIR schreiben."""
     try:
         with _lock:
-            data = _snapshot_locked()
+            data = {
+                "version": 2,
+                "by_root": {
+                    k: {
+                        "matched": list(v.get("matched") or []),
+                        "total": int(v.get("total") or 0),
+                        "scanned": int(v.get("scanned") or 0),
+                        "total_size_bytes": int(v.get("total_size_bytes") or 0),
+                        "total_saved_bytes": int(v.get("total_saved_bytes") or 0),
+                        "generated_at": float(v.get("generated_at") or 0.0),
+                        "root": _norm_root(k),
+                        "done": True,
+                        "error": str(v.get("error") or ""),
+                    }
+                    for k, v in _by_root.items()
+                },
+            }
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _CACHE_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -183,46 +300,83 @@ def _save_cache() -> None:
         logger.debug("Library-Cache schreiben fehlgeschlagen: %s", e)
 
 
-def load_last() -> dict:
-    """Zuletzt gecachten Scan laden (für Anzeige beim Öffnen der Seite).
-
-    Füllt den In-Memory-State nur, wenn gerade kein Scan läuft.
-    """
-    with _lock:
-        if _state["running"]:
-            return _snapshot_locked()
-        if _state["matched"]:
-            return _snapshot_locked()
+def _load_cache_file() -> None:
+    """Cache-Datei in ``_by_root`` laden (Aufrufer hält ``_lock``)."""
+    global _by_root
+    if not _CACHE_PATH.exists():
+        return
     try:
-        if not _CACHE_PATH.exists():
-            return get_state()
         data = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
-        with _lock:
-            _state.update(
-                running=False, done=True,
-                total=int(data.get("total") or 0),
-                scanned=int(data.get("scanned") or 0),
-                matched=list(data.get("matched") or []),
-                total_size_bytes=int(data.get("total_size_bytes") or 0),
-                total_saved_bytes=int(data.get("total_saved_bytes") or 0),
-                error="",
-                generated_at=float(data.get("generated_at") or 0.0),
-                root=str(data.get("root") or ""),
-            )
     except Exception as e:  # pragma: no cover
         logger.debug("Library-Cache lesen fehlgeschlagen: %s", e)
-    return get_state()
+        return
+
+    by_root: dict[str, dict] = {}
+    if isinstance(data, dict) and int(data.get("version") or 0) >= 2:
+        raw = data.get("by_root") or {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if not isinstance(v, dict):
+                    continue
+                root = _norm_root(str(v.get("root") if v.get("root") is not None else k))
+                by_root[root] = {
+                    "matched": list(v.get("matched") or []),
+                    "total": int(v.get("total") or 0),
+                    "scanned": int(v.get("scanned") or 0),
+                    "total_size_bytes": int(v.get("total_size_bytes") or 0),
+                    "total_saved_bytes": int(v.get("total_saved_bytes") or 0),
+                    "generated_at": float(v.get("generated_at") or 0.0),
+                    "root": root,
+                    "done": True,
+                    "error": str(v.get("error") or ""),
+                }
+    elif isinstance(data, dict) and (data.get("matched") is not None or data.get("root") is not None):
+        # v1: einzelner Scan
+        root = _norm_root(str(data.get("root") or ""))
+        by_root[root] = {
+            "matched": list(data.get("matched") or []),
+            "total": int(data.get("total") or 0),
+            "scanned": int(data.get("scanned") or 0),
+            "total_size_bytes": int(data.get("total_size_bytes") or 0),
+            "total_saved_bytes": int(data.get("total_saved_bytes") or 0),
+            "generated_at": float(data.get("generated_at") or 0.0),
+            "root": root,
+            "done": True,
+            "error": str(data.get("error") or ""),
+        }
+    _by_root = by_root
+
+
+def load_last(root: Optional[str] = None) -> dict:
+    """Caches laden; optional Snapshot für einen Root zurückgeben.
+
+    Ohne ``root``: ``by_root`` + aktiver State (für UI-Init).
+    Mit ``root``: Snapshot genau dieser Bibliothek (leer wenn unbekannt).
+    """
+    with _lock:
+        if not _by_root and not _state["running"] and not _state["matched"]:
+            _load_cache_file()
+        if _state["matched"] and not _state["running"]:
+            snap = _snapshot_locked()
+            key = _norm_root(snap["root"])
+            if key not in _by_root:
+                _store_root_locked(snap)
+
+    if root is not None:
+        return get_cached(root)
+    return list_caches()
 
 
 def start_scan(root_rel: str, filters: dict) -> bool:
     """Startet einen Scan, sofern nicht bereits einer läuft."""
     global _thread
+    root_rel = _norm_root(root_rel)
     with _lock:
         if _state["running"]:
             return False
         _state.update(running=True, done=False, total=0, scanned=0,
                       matched=[], total_size_bytes=0, total_saved_bytes=0,
-                      error="", generated_at=time.time(), root=root_rel or "")
+                      error="", generated_at=time.time(), root=root_rel)
     _stop.clear()
     _thread = threading.Thread(target=_run, args=(root_rel, filters or {}), daemon=True)
     _thread.start()
@@ -238,19 +392,35 @@ def cancel_scan() -> bool:
     return running
 
 
-def clear() -> dict:
-    """Aktuelle Treffer/Cache leeren (nur wenn kein Scan läuft)."""
+def clear(root: Optional[str] = None) -> dict:
+    """Cache leeren: einen Root oder alle (nur wenn kein Scan läuft)."""
     with _lock:
         if _state["running"]:
-            return get_state()
-        _state.update(done=False, total=0, scanned=0, matched=[],
-                      total_size_bytes=0, total_saved_bytes=0,
-                      error="", generated_at=0.0, root="")
+            return list_caches() if root is None else get_cached(root or "")
+        if root is None:
+            _by_root.clear()
+            _state.update(done=False, total=0, scanned=0, matched=[],
+                          total_size_bytes=0, total_saved_bytes=0,
+                          error="", generated_at=0.0, root="")
+        else:
+            key = _norm_root(root)
+            _by_root.pop(key, None)
+            if _norm_root(_state["root"]) == key:
+                _state.update(done=False, total=0, scanned=0, matched=[],
+                              total_size_bytes=0, total_saved_bytes=0,
+                              error="", generated_at=0.0, root=key)
     try:
-        _CACHE_PATH.unlink(missing_ok=True)
+        if root is None:
+            _CACHE_PATH.unlink(missing_ok=True)
+        else:
+            _save_cache()
+            if not _by_root and _CACHE_PATH.exists():
+                _CACHE_PATH.unlink(missing_ok=True)
     except OSError:
         pass
-    return get_state()
+    if root is None:
+        return list_caches()
+    return get_cached(root)
 
 
 def _dynamic_match_one(info, dynamic_filter: str) -> bool:
@@ -357,16 +527,22 @@ def _run(root_rel: str, filters: dict) -> None:
         with _lock:
             _state["running"] = False
             _state["done"] = True
-        if not _state["error"]:
+            snap = _snapshot_locked()
+            if not _state["error"]:
+                _store_root_locked(snap)
+        if not snap.get("error"):
             _save_cache()
 
 
-def export_csv() -> str:
-    """Aktuelle Treffer als CSV-Text (für Download)."""
+def export_csv(root: Optional[str] = None) -> str:
+    """Treffer eines Roots (oder aktiver State) als CSV-Text."""
     import csv
     import io
-    with _lock:
-        matched = list(_state["matched"])
+    if root is not None:
+        matched = list(get_cached(root).get("matched") or [])
+    else:
+        with _lock:
+            matched = list(_state["matched"])
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Pfad", "Ordner", "Codec", "Aufloesung", "Bitrate",
