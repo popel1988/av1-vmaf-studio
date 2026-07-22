@@ -1,14 +1,14 @@
 # =============================================================================
-#  Video Studio – Universelle Stack-Definition (Portainer)
+#  Video Studio – universal stack definition (Portainer)
 #
-#  Ein Medienbaum unter /media (lesen + schreiben). Standard-Ausgabe wird in
-#  den App-Einstellungen gesetzt (Default: /media/output). Alle GPU-Geräte
-#  werden durchgereicht (Intel/AMD via /dev/dri, Nvidia via Container-Runtime).
+#  One media tree under /media (read + write). Default output is set in the
+#  app settings (default: /media/output). All GPU devices are passed through
+#  (Intel/AMD via /dev/dri, Nvidia via the container runtime).
 # =============================================================================
 services:
   av1-vmaf-studio:
     build: .
-    # Alternativ direkt das GHCR-Image nutzen (ohne lokalen Build):
+    # Or use the GHCR image directly (no local build):
     # image: ghcr.io/popel1988/av1-vmaf-studio:latest
     container_name: av1-vmaf-studio
     restart: unless-stopped
@@ -16,38 +16,38 @@ services:
     ports:
       - "${WEB_PORT:-8080}:8080"
 
-    # Pfade bequem in Portainer unter "Environment variables" setzen
-    # (MEDIA_PATH) – kein Editieren der Datei nötig.
+    # Set paths conveniently in Portainer under "Environment variables"
+    # (MEDIA_PATH) – no need to edit this file.
     volumes:
-      # Gesamter Medienbaum (Quellen + Encodes)
+      # Full media tree (sources + encodes)
       - ${MEDIA_PATH:-/media}:/media
-      # Persistenter App-Datenordner (Settings, Queue, Screenshots, Cache)
+      # Persistent app data (settings, queue, screenshots, cache)
       - ${DATA_PATH:-./data}:/data
-      # --- Weitere Medien-Ordner (optional) ---------------------------------
-      # Wer getrennte Bäume einbinden will, mountet zusätzliche Verzeichnisse
-      # und listet sie unten unter MEDIA_DIRS auf (Name=/Pfad).
-      # Beispiel:
-      # - /mnt/nas/filme:/media/filme
-      # - /mnt/nas/serien:/media/serien
+      # --- Extra media folders (optional) ----------------------------------
+      # To mount separate trees, add more volume mounts and list them under
+      # MEDIA_DIRS below (Name=/path).
+      # Example:
+      # - /mnt/nas/movies:/media/movies
+      # - /mnt/nas/shows:/media/shows
 
-    # --- Hardware-Zugriff --------------------------------------------------
-    # privileged sorgt für vollen Zugriff auf sysfs/DRM (saubere GPU-Metriken).
+    # --- Hardware access ---------------------------------------------------
+    # privileged gives full access to sysfs/DRM (clean GPU metrics).
     privileged: true
 
-    # Intel/AMD GPU (VAAPI/QSV) – DRM-Render-Knoten durchreichen
+    # Intel/AMD GPU (VAAPI/QSV) – pass through DRM render nodes
     devices:
       - /dev/dri:/dev/dri
 
-    # Nvidia: Runtime + Capabilities (nvidia-container-toolkit erforderlich)
+    # Nvidia: runtime + capabilities (nvidia-container-toolkit required)
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-      # Das Image basiert auf CUDA 12.6 (Ubuntu 24.04). Ist der (z. B. auf QNAP
-      # gemountete) Nvidia-Treiber älter, verweigert das nvidia-container-toolkit
-      # evtl. den Start mit einer CUDA-Versionsmeldung. Dann folgende Zeile
-      # einkommentieren – überspringt die Prüfung (bei manuellem Treiber-Mount
-      # + privileged unbedenklich):
+      # This image is based on CUDA 12.6 (Ubuntu 24.04). If the host Nvidia
+      # driver is older (e.g. manually mounted on QNAP), the
+      # nvidia-container-toolkit may refuse to start with a CUDA version
+      # error. Uncomment the next line to skip that check (safe with a
+      # manual driver mount + privileged):
       # - NVIDIA_DISABLE_REQUIRE=true
       - PUID=0
       - PGID=0
@@ -55,43 +55,43 @@ services:
       - DATA_DIR=/data
       - MEDIA_DIR=/media
       - RETAIN_VMAF_SESSIONS=true
-      # --- Weitere Medien-Ordner (optional) --------------------------------
-      # Aktiviert die oben gemounteten Zusatz-Ordner als benannte Roots.
-      # Format: "Name=/pfad" getrennt durch ; (oder Zeilenumbruch).
-      # Ohne diese Variable gilt der einzelne /media-Mount.
-      # - MEDIA_DIRS=Filme=/media/filme;Serien=/media/serien
-      # --- Logging -----------------------------------------------------------
-      # Log-Ausführlichkeit: DEBUG | INFO | WARNING | ERROR (Standard INFO).
-      # Beim Start jedes Encodes werden alle Parameter geloggt.
+      # --- Extra media folders (optional) ---------------------------------
+      # Expose the extra mounts above as named roots.
+      # Format: "Name=/path" separated by ; (or newline).
+      # Without this variable, only the single /media mount is used.
+      # - MEDIA_DIRS=Movies=/media/movies;Shows=/media/shows
+      # --- Logging --------------------------------------------------------
+      # Log verbosity: DEBUG | INFO | WARNING | ERROR (default INFO).
+      # At the start of each encode, all parameters are logged.
       - LOG_LEVEL=INFO
-      # Vollständige FFmpeg-Kommandozeile jedes Encodes mitloggen (1/0).
+      # Log the full FFmpeg command line for every encode (1/0).
       - LOG_FFMPEG_CMD=1
-      # --- Intel iGPU (VAAPI) / AMD VAAPI ------------------------------------
-      # Intel-Media-Treiber erzwingen (nötig für Intel-iGPU wie UHD 730).
+      # --- Intel iGPU (VAAPI) / AMD VAAPI ---------------------------------
+      # Force the Intel media driver (needed for Intel iGPUs like UHD 730).
       - LIBVA_DRIVER_NAME=iHD
-      # DRM-Render-Knoten der zu nutzenden GPU. WICHTIG bei mehreren GPUs
-      # (Nvidia + Intel-iGPU): renderD128 ist evtl. NICHT die Intel-iGPU –
-      # dann auf renderD129 o. Ä. setzen. Im Container prüfen mit:
+      # DRM render node of the GPU to use. IMPORTANT with multiple GPUs
+      # (Nvidia + Intel iGPU): renderD128 may NOT be the Intel iGPU –
+      # set it to renderD129 or similar. Check inside the container with:
       #   vainfo --display drm --device /dev/dri/renderD128
       - VAAPI_DEVICE=/dev/dri/renderD128
-      # Intel-Encoder-Backend: "vaapi" (Standard) oder "qsv". Das Image (Ubuntu
-      # 24.04, libva 2.20 + oneVPL) unterstützt beide. QSV nur bei Bedarf setzen.
+      # Intel encoder backend: "vaapi" (default) or "qsv". The image
+      # (Ubuntu 24.04, libva + oneVPL) supports both. Set QSV only if needed.
       # - INTEL_ENCODER=qsv
 
-    # Moderne GPU-Reservierung (Compose v2.4+/Portainer). Bei reinen Intel/AMD-
-    # Systemen ohne Nvidia kann der gesamte deploy-Block entfernt werden.
+    # Modern GPU reservation (Compose v2.4+/Portainer). On Intel/AMD-only
+    # hosts without Nvidia, the entire deploy block can be removed.
     #
-    # Optional: CPU-/RAM-Limits (auskommentiert). Bei memory-Überschreitung wird
-    # der Container vom Kernel beendet (OOM) – Werte an den Host anpassen.
-    # GPU-VRAM wird hier nicht begrenzt. Parallel-Encodes in der App zusätzlich
-    # niedrig halten, wenn der Host knapp ist.
+    # Optional: CPU/RAM limits (commented out). Exceeding memory makes the
+    # kernel OOM-kill the container – tune values to your host.
+    # GPU VRAM is not limited here. Also keep parallel encodes in the app
+    # low if the host is tight on resources.
     deploy:
       resources:
         # limits:
-        #   cpus: "8.0"       # max. CPU-Kerne (Anteil)
-        #   memory: 24G       # hartes RAM-Limit
+        #   cpus: "8.0"       # max CPU cores (share)
+        #   memory: 24G       # hard RAM limit
         # reservations:
-        #   cpus: "2.0"       # optionale Mindestreserve
+        #   cpus: "2.0"       # optional minimum reserve
         #   memory: 4G
         reservations:
           devices:
@@ -99,8 +99,8 @@ services:
               count: all
               capabilities: [gpu, compute, utility, video]
 
-    # --- Feingranulare Alternative ZU 'privileged: true' -------------------
-    # (privileged auskommentieren und stattdessen folgendes nutzen)
+    # --- Finer alternative TO 'privileged: true' -------------------------
+    # (comment out privileged and use the following instead)
     # cap_add:
     #   - SYS_ADMIN
     # group_add:

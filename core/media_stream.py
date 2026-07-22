@@ -45,11 +45,18 @@ def build_play_cmd(
     """FFmpeg: Video copy, eine Tonspur → AAC (oder copy), fMP4 auf stdout.
 
     ``start_sec``: Sprung vor dem Demux (Keyframe-Seek) für Player-Suche.
+
+    Sync-Hinweise: Bei Video-copy + Audio-Encode und ``frag_keyframe`` puffert
+    der Muxer oft bis zum nächsten Keyframe – Ton läuft im Browser voraus.
+    Deshalb zeitbasierte Fragmente + Timestamp-Normalisierung.
     """
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
+        # Fehlende/kaputte Timestamps regenerieren (DTS/TrueHD → AAC).
+        "-fflags", "+genpts",
     ]
     if start_sec and start_sec > 0:
+        # Input-Seek: schnell. Fein-Sync über genpts / avoid_negative_ts.
         cmd += ["-ss", f"{float(start_sec):.3f}"]
     cmd += [
         "-i", str(path),
@@ -63,15 +70,22 @@ def build_play_cmd(
         if audio_can_copy(audio_codec):
             cmd += ["-c:a", "copy"]
         else:
+            # first_pts=0 + async: AAC-Priming / Drift gegen Video-copy ausgleichen
             cmd += [
                 "-c:a", "aac", "-ac", "2", "-b:a", "192k",
-                "-af", "aresample=async=1",
+                "-af", "aresample=async=1000:first_pts=0",
             ]
     cmd += [
         "-sn", "-dn",
-        # empty_moov → Dauer im Browser oft Infinity / nur Buffer-Länge.
-        # Die UI setzt die echte Dauer aus ffprobe und seekt per -ss-Neustart.
-        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-avoid_negative_ts", "make_zero",
+        # Eng interleaven – verhindert, dass der Browser Ton vor Video puffert.
+        "-max_interleave_delta", "0",
+        "-muxdelay", "0",
+        "-muxpreload", "0",
+        # Zeitbasierte Fragmente (0.5 s) statt nur an Keyframes – bei langen
+        # GOPs sonst oft A/V-Asynchronität im HTML5-Player.
+        "-movflags", "empty_moov+default_base_moof",
+        "-frag_duration", "500000",
         "-f", "mp4", "pipe:1",
     ]
     return cmd
