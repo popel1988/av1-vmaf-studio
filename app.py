@@ -1841,6 +1841,7 @@ class PlayerSessionRequest(BaseModel):
     height: int = 0                 # custom Höhe (bei profile=custom)
     v_bitrate: int = 0              # custom kbit/s
     client_codecs: list[str] = []   # was der Browser abspielen kann
+    lookahead_sec: float = 30       # Encode-Vorlauf; 0 = unbegrenzt
 
 
 @app.get("/api/player/options")
@@ -1861,6 +1862,7 @@ async def player_session_start(req: PlayerSessionRequest):
         client_direct_ok=req.client_direct_ok, platform=req.platform,
         codec=req.codec, height=req.height, v_bitrate=req.v_bitrate,
         client_codecs=req.client_codecs or None,
+        lookahead_sec=req.lookahead_sec,
     )
 
 
@@ -1871,6 +1873,20 @@ async def player_session_get(sid: str):
     if not sess:
         return JSONResponse({"error": "Session nicht gefunden"}, status_code=404)
     return {"session": sess.to_dict()}
+
+
+@app.post("/api/player/session/{sid}/pause")
+async def player_session_pause(sid: str):
+    """Encode bei Player-Pause anhalten (SIGSTOP) – senkt CPU/GPU-Last."""
+    from core import player_hls
+    return player_hls.pause_encode(sid)
+
+
+@app.post("/api/player/session/{sid}/resume")
+async def player_session_resume(sid: str):
+    """Encode nach Pause fortsetzen (SIGCONT)."""
+    from core import player_hls
+    return player_hls.resume_encode(sid)
 
 
 @app.delete("/api/player/session/{sid}")

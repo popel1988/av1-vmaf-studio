@@ -20,6 +20,10 @@
     options: null,
     dirty: false,
     audioMode: "",
+    windowEnd: 0,
+    lookahead: 30,
+    extending: false,
+    encodePaused: false,
   };
 
   const ENCODE_PROFILES = ["original", "1080p", "720p", "480p", "custom"];
@@ -196,6 +200,14 @@
       if ([...codec.options].some((o) => o.value === cur)) codec.value = cur;
     }
 
+    const la = $("fp-lookahead");
+    if (la && options && options.lookahead_choices) {
+      const cur = la.value || String(options.lookahead_default || 30);
+      la.innerHTML = options.lookahead_choices.map((c) =>
+        `<option value="${c.id}">${escapeHtml(c.label)}</option>`).join("");
+      if ([...la.options].some((o) => o.value === cur)) la.value = cur;
+    }
+
     const hw = $("fp-hw-info");
     if (hw && options) {
       const ready = options.capabilities_ready
@@ -210,6 +222,17 @@
         + (options.note ? ` · ${options.note}` : "");
     }
     syncEncodeUi({ presetBr: false });
+  }
+
+  async function setEncodePaused(paused) {
+    if (!fp.sid || fp.mode !== "hls") return;
+    const path = paused ? "pause" : "resume";
+    try {
+      const d = await (await fetch(`/api/player/session/${fp.sid}/${path}`, {
+        method: "POST",
+      })).json();
+      fp.encodePaused = !!d.encode_paused;
+    } catch (e) { /* ignore */ }
   }
 
   function fillProfiles(options) {
@@ -308,6 +331,32 @@
     if (ov) ov.style.display = "";
   }
 
+  async function unloadVideo() {
+    await stopSession();
+    fp.path = "";
+    fp.info = null;
+    fp.chapters = [];
+    fp.duration = 0;
+    fp.startOffset = 0;
+    fp.windowEnd = 0;
+    fp.encodePaused = false;
+    fp.mode = "hls";
+    if ($("fp-path")) $("fp-path").value = "";
+    const aSel = $("fp-audio");
+    const sSel = $("fp-sub");
+    if (aSel) aSel.innerHTML = `<option value="-1">—</option>`;
+    if (sSel) sSel.innerHTML = `<option value="-1">${tt("Keine Untertitel")}</option>`;
+    const burn = $("fp-burn");
+    if (burn) { burn.checked = false; burn.disabled = true; }
+    renderChapters([]);
+    setDirty(false);
+    setStatus(tt("Video entladen."));
+    updateTimeUi();
+    updateAudioModeHint(null);
+    const play = $("fp-play");
+    if (play) play.textContent = "▶";
+  }
+
   function attachSubtitles(path, subIdx) {
     const v = $("fp-video");
     if (!v || subIdx < 0) return;
@@ -345,11 +394,13 @@
     if (!v) return;
     destroyPlayback();
     fp.mode = "hls";
+    const buf = Math.max(10, Math.min(60, fp.lookahead || 30));
     if (window.Hls && window.Hls.isSupported()) {
       fp.hls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        maxBufferLength: 30,
+        maxBufferLength: buf,
+        maxMaxBufferLength: buf + 15,
         liveDurationInfinity: true,
       });
       fp.hls.loadSource(url);
@@ -358,7 +409,16 @@
         v.play().catch(() => {});
       });
       fp.hls.on(window.Hls.Events.ERROR, (_, data) => {
+        // Vorlauf-Fenster zu Ende → nahtlos weiterencoden
+        if (data && data.details === "bufferStalledError" && fp.windowEnd > 0) {
+          maybeExtendWindow(true);
+          return;
+        }
         if (data.fatal) {
+          if (fp.windowEnd > 0 && absoluteTime() + 1 < (fp.duration || 0)) {
+            maybeExtendWindow(true);
+            return;
+          }
           setStatus(tt("Wiedergabefehler – Session neu starten."), true);
           setBadge(tt("Fehler"));
         }
@@ -369,6 +429,18 @@
     } else {
       setStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
     }
+  }
+
+  function maybeExtendWindow(force) {
+    if (fp.mode !== "hls" || !fp.path || fp.extending) return;
+    if (!(fp.windowEnd > 0)) return;
+    const t = absoluteTime();
+    const dur = fp.duration || 0;
+    if (dur > 0 && t >= dur - 0.5) return;
+    // Neu starten, wenn wir nah am Fensterende sind (oder Buffer leer)
+    if (!force && t < fp.windowEnd - 8) return;
+    fp.extending = true;
+    startSession(t, true).finally(() => { fp.extending = false; });
   }
 
   async function startSession(startSec, autoplay) {
@@ -385,6 +457,9 @@
     const codec = (($("fp-codec") || {}).value) || "h264";
     const height = parseInt(($("fp-height") || {}).value, 10) || 0;
     const vBitrate = parseInt(($("fp-vbr") || {}).value, 10) || 0;
+    const lookahead = parseInt(($("fp-lookahead") || {}).value, 10);
+    fp.lookahead = Number.isFinite(lookahead) ? lookahead : 30;
+    try { localStorage.setItem("fpLookahead", String(fp.lookahead)); } catch (e) { /* ignore */ }
     const burn = !!($("fp-burn") && $("fp-burn").checked);
     setBadge(tt("Lädt …"));
     setStatus(tt("Starte Session …"));
@@ -409,6 +484,7 @@
           // Bitrate bei allen Transcode-Profilen mitschicken (überschreibt Preset-Default)
           v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
           client_codecs: detectClientCodecs(),
+          lookahead_sec: fp.lookahead,
         }),
       });
       const d = await r.json();
@@ -423,6 +499,8 @@
       fp.startOffset = sess.mode === "direct" ? 0 : (sess.start || 0);
       fp.duration = sess.duration || fp.duration || 0;
       fp.mode = sess.mode || "hls";
+      fp.windowEnd = sess.window_end || 0;
+      fp.encodePaused = false;
       if (d.info) {
         fp.info = d.info;
         fillTracks(d.info);
@@ -468,11 +546,14 @@
             + (sess.v_bitrate ? ` @ ${sess.v_bitrate}k` : "")
             + ` · ${sess.platform}/${sess.codec || ""}/${sess.encoder}`
           : "";
+        const laNote = sess.lookahead_sec > 0
+          ? ` · ${tt("Vorlauf")} ${Math.round(sess.lookahead_sec)}s`
+          : ` · ${tt("Vorlauf unbegrenzt")}`;
         const warn = sess.warning ? ` · ⚠ ${sess.warning}` : "";
         setBadge(sess.profile || tt("HLS"));
         setStatus(
-          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${warn}`
-          + ` · ${tt("Timeline aus Analyse")}`
+          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${laNote}${warn}`
+          + ` · ${tt("Pause hält Encode an")}`
           + (fp.duration ? ` · ${fmtClock(fp.duration)}` : ""),
         );
         if (!isNaN(sub) && sub >= 0 && !sess.burn_subs) attachSubtitles(path, sub);
@@ -540,9 +621,20 @@
     const vol = $("fp-vol");
 
     if (v) {
-      v.addEventListener("timeupdate", updateTimeUi);
-      v.addEventListener("play", () => { if (play) play.textContent = "⏸"; });
-      v.addEventListener("pause", () => { if (play) play.textContent = "▶"; });
+      v.addEventListener("timeupdate", () => {
+        updateTimeUi();
+        if (!v.paused) maybeExtendWindow(false);
+      });
+      v.addEventListener("play", () => {
+        if (play) play.textContent = "⏸";
+        setEncodePaused(false);
+      });
+      v.addEventListener("pause", () => {
+        if (play) play.textContent = "▶";
+        // Seek-Scrubben nicht als Pause werten
+        if (!fp.seeking) setEncodePaused(true);
+      });
+      v.addEventListener("ended", () => { maybeExtendWindow(true); });
       v.addEventListener("click", () => {
         if (v.paused) v.play().catch(() => {});
         else v.pause();
@@ -590,7 +682,7 @@
     // Einstellungen nur markieren – Session startet erst mit „Übernehmen“
     // (oder initialem Laden / Seek / Kapitel).
     ["fp-audio", "fp-sub", "fp-profile", "fp-platform", "fp-codec", "fp-burn",
-      "fp-height", "fp-vbr"].forEach((id) => {
+      "fp-height", "fp-vbr", "fp-lookahead"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       const onChange = () => {
@@ -604,6 +696,11 @@
       el.addEventListener("change", onChange);
       if (id === "fp-height" || id === "fp-vbr") el.addEventListener("input", onChange);
     });
+
+    try {
+      const savedLa = localStorage.getItem("fpLookahead");
+      if (savedLa && $("fp-lookahead")) $("fp-lookahead").value = savedLa;
+    } catch (e) { /* ignore */ }
 
     const apply = $("fp-apply");
     if (apply) apply.addEventListener("click", () => {
@@ -622,6 +719,9 @@
 
     const load = $("fp-load");
     if (load) load.addEventListener("click", loadFile);
+
+    const unload = $("fp-unload");
+    if (unload) unload.addEventListener("click", unloadVideo);
 
     const browse = $("fp-browse");
     if (browse) browse.addEventListener("click", () => {

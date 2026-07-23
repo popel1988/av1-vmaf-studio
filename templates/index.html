@@ -1894,10 +1894,10 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Direct-Play wenn möglich, sonst HLS. Transcode: NVENC / Intel QSV|VAAPI /
-              AMD VAAPI / CPU – wählbar. Für die Browser-Vorschau ist <strong>H.264</strong> am
-              sichersten; HEVC/AV1 nur, wenn der Browser sie kann (sonst automatischer Fallback).
-              So siehst du live, wie ein Encode mit gewählter HW/Qualität wirkt, ohne Inkompatibilitäten.</p>
+            <p class="hint">Direct-Play wenn möglich, sonst HLS. NVENC/QSV/VAAPI/CPU wählbar.
+              <strong>Encode-Vorlauf</strong> begrenzt, wie weit voraus encodiert wird (Standard 30&nbsp;s);
+              bei Pause wird FFmpeg angehalten. GPU-Encode entlastet nur den Video-Encoder –
+              Decode und Ton→AAC können weiter CPU nutzen. H.264 ist im Browser am sichersten.</p>
             <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
               <div class="field" style="flex:2;min-width:220px">
                 <label>Datei</label>
@@ -1905,6 +1905,7 @@
                   <input type="text" id="fp-path" placeholder="Medienpfad, z. B. Filme/film.mkv" style="flex:1" />
                   <button class="btn btn-ghost btn-sm" id="fp-browse" type="button">Durchsuchen …</button>
                   <button class="btn btn-primary btn-sm" id="fp-load" type="button">Laden</button>
+                  <button class="btn btn-ghost btn-sm" id="fp-unload" type="button" title="Video und Session entladen">Entladen</button>
                 </div>
               </div>
             </div>
@@ -1929,6 +1930,16 @@
                 <label>Bitrate (kbit/s)</label>
                 <input type="number" id="fp-vbr" value="3500" min="300" max="50000" step="100" style="width:110px"
                        title="Videobitrate für den Live-Transcode" />
+              </div>
+              <div class="field" style="min-width:150px">
+                <label>Encode-Vorlauf</label>
+                <select id="fp-lookahead" title="Nur so weit voraus encoden; bei Pause wird FFmpeg angehalten">
+                  <option value="15">15 s</option>
+                  <option value="30" selected>30 s</option>
+                  <option value="60">60 s</option>
+                  <option value="120">120 s</option>
+                  <option value="0">Unbegrenzt</option>
+                </select>
               </div>
               <div class="field" style="min-width:auto">
                 <label>&nbsp;</label>
@@ -1964,7 +1975,7 @@
                     <input type="checkbox" id="fp-burn" />
                     <span>Bild-UT einbrennen</span>
                   </label>
-                  <button type="button" class="btn btn-ghost btn-sm" id="fp-stop">Stoppen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-stop" title="Wiedergabe stoppen (Datei bleibt geladen)">Stoppen</button>
                 </div>
               </div>
               <aside class="fp-chapters" id="fp-chapters-wrap" style="display:none">

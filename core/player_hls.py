@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -31,6 +34,9 @@ _SESSIONS: dict[str, "PlayerSession"] = {}
 _LOCK = threading.RLock()
 _ROOT = config.DATA_DIR / "player_sessions"
 _MAX_IDLE_SEC = 3600
+# Wie weit FFmpeg vor der Abspielposition encoden darf (0 = unbegrenzt).
+_DEFAULT_LOOKAHEAD_SEC = 30.0
+_LOOKAHEAD_CHOICES = (0, 15, 30, 60, 120)
 
 _QUALITY = {
     "1080p": {"height": 1080, "v_bitrate": 6000},
@@ -67,9 +73,12 @@ class PlayerSession:
     mode: str = "hls"
     height: int = 0
     v_bitrate: int = 0
+    lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC
+    window_end: float = 0.0          # start + lookahead (0 = bis Dateiende)
     warning: str = ""
     work_dir: Path = field(default_factory=Path)
     proc: Optional[subprocess.Popen] = None
+    encode_paused: bool = False
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
     error: str = ""
@@ -87,6 +96,7 @@ class PlayerSession:
         if self.mode == "hls":
             ready = self.playlist.is_file() and self.playlist.stat().st_size > 0
             playlist_url = f"/api/player/session/{self.id}/index.m3u8"
+        running = bool(self.proc and self.proc.poll() is None)
         return {
             "id": self.id,
             "path": self.rel,
@@ -99,6 +109,8 @@ class PlayerSession:
             "burn_subs": self.burn_subs,
             "height": self.height,
             "v_bitrate": self.v_bitrate,
+            "lookahead_sec": self.lookahead_sec,
+            "window_end": round(self.window_end, 3) if self.window_end else 0,
             "warning": self.warning,
             "audio": self.audio_index,
             "subtitle": self.subtitle_index,
@@ -108,7 +120,8 @@ class PlayerSession:
             "playlist_url": playlist_url,
             "media_url": f"/api/media?path={self.rel}",
             "ready": ready,
-            "running": bool(self.proc and self.proc.poll() is None),
+            "running": running,
+            "encode_paused": bool(self.encode_paused and running),
             "error": self.error,
             "audio_codec": self.audio_codec,
             "audio_mode": self.audio_play_mode(),
@@ -302,10 +315,20 @@ def player_options() -> dict:
             ff.encoder_name(auto_p, "h264") if auto_p != "cpu" else "libx264"
         ),
         "capabilities_ready": bool(results),
+        "lookahead_choices": [
+            {"id": 15, "label": "15 s Vorlauf"},
+            {"id": 30, "label": "30 s Vorlauf (empfohlen)"},
+            {"id": 60, "label": "60 s Vorlauf"},
+            {"id": 120, "label": "120 s Vorlauf"},
+            {"id": 0, "label": "Unbegrenzt (ganz encode)"},
+        ],
+        "lookahead_default": int(_DEFAULT_LOOKAHEAD_SEC),
         "note": (
             "Für Live-Vorschau im Browser ist H.264 am sichersten. "
             "HEVC/AV1 werden nur genutzt, wenn der Browser sie meldet – "
-            "sonst automatischer Fallback auf H.264."
+            "sonst automatischer Fallback auf H.264. "
+            "NVENC entlastet den Encode, Decode+AAC laufen weiter auf der CPU; "
+            "Vorlauf begrenzt, wie weit voraus encodiert wird."
         ),
     }
 
@@ -434,6 +457,19 @@ def _encoder_rate_args(encoder: str, codec: str, v_bitrate: int) -> list[str]:
             "-maxrate", f"{br}k", "-bufsize", f"{int(br * 2)}k"]
 
 
+def _normalize_lookahead(sec) -> float:
+    try:
+        v = float(sec)
+    except (TypeError, ValueError):
+        v = _DEFAULT_LOOKAHEAD_SEC
+    if v <= 0:
+        return 0.0
+    # Auf bekannte Stufen snappen, sonst clampen
+    if int(v) in _LOOKAHEAD_CHOICES:
+        return float(int(v))
+    return max(10.0, min(600.0, v))
+
+
 def _build_hls_cmd(
     path: Path,
     out_dir: Path,
@@ -448,12 +484,18 @@ def _build_hls_cmd(
     v_bitrate: int,
     burn_sub_index: int = -1,
     video_copy: bool = False,
+    lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
 ) -> list[str]:
     playlist = out_dir / "index.m3u8"
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
         "-fflags", "+genpts",
     ]
+
+    # NVENC: Decode auf der GPU (weniger CPU); Frames werden für Filter/Scale
+    # bei Bedarf automatisch in den Systemspeicher geholt.
+    if not video_copy and "nvenc" in (encoder or ""):
+        cmd += ["-hwaccel", "cuda"]
 
     if video_copy:
         if start_sec and start_sec > 0:
@@ -472,15 +514,29 @@ def _build_hls_cmd(
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
 
+    # Nur X Sekunden voraus encoden (nicht den ganzen Film durchlaufen).
+    la = _normalize_lookahead(lookahead_sec)
+    if la > 0:
+        cmd += ["-t", f"{la:.3f}"]
+
     cmd += _audio_args(audio_index, audio_codec)
+
+    hls_time = 3
+    if la > 0:
+        list_size = max(4, int(math.ceil(la / hls_time)) + 2)
+        hls_flags = "independent_segments+omit_endlist+delete_segments"
+    else:
+        list_size = 0
+        hls_flags = "independent_segments+omit_endlist"
+
     cmd += [
         "-sn", "-dn",
         "-avoid_negative_ts", "make_zero",
         "-max_interleave_delta", "0",
         "-f", "hls",
-        "-hls_time", "3",
-        "-hls_list_size", "0",
-        "-hls_flags", "independent_segments+omit_endlist",
+        "-hls_time", str(hls_time),
+        "-hls_list_size", str(list_size),
+        "-hls_flags", hls_flags,
         "-hls_segment_type", "fmp4",
         "-hls_fmp4_init_filename", "init.mp4",
         "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
@@ -538,6 +594,7 @@ def start_session(
     height: int = 0,
     v_bitrate: int = 0,
     client_codecs: Optional[list[str]] = None,
+    lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
 ) -> dict:
     """Session starten (Direct-Play oder HLS)."""
     target = config.resolve_input(rel)
@@ -588,6 +645,19 @@ def start_session(
     work = _ensure_root() / sid
     work.mkdir(parents=True, exist_ok=True)
 
+    la = _normalize_lookahead(lookahead_sec)
+    start0 = max(0.0, float(start_sec or 0))
+    if la > 0 and duration > 0:
+        window_end = min(duration, start0 + la)
+        # Rest der Datei kürzer als Vorlauf → nur noch Rest encoden
+        la_eff = max(0.5, window_end - start0)
+    elif la > 0:
+        window_end = start0 + la
+        la_eff = la
+    else:
+        window_end = 0.0
+        la_eff = 0.0
+
     warn = "; ".join(enc_info.get("warnings") or [])
     sess = PlayerSession(
         id=sid,
@@ -595,7 +665,7 @@ def start_session(
         rel=rel,
         audio_index=int(audio_index),
         subtitle_index=int(subtitle_index),
-        start_sec=max(0.0, float(start_sec or 0)),
+        start_sec=start0,
         duration=duration,
         title=target.name,
         profile=resolved,
@@ -607,6 +677,8 @@ def start_session(
         mode="direct" if resolved == "direct" else "hls",
         height=h,
         v_bitrate=br,
+        lookahead_sec=la,
+        window_end=window_end,
         warning=warn,
         work_dir=work,
     )
@@ -629,6 +701,7 @@ def start_session(
             audio_codec=audio_codec,
             platform="cpu", encoder="copy", codec="h264",
             height=0, v_bitrate=0, burn_sub_index=-1, video_copy=True,
+            lookahead_sec=la_eff,
         )
         sess.encoder = "copy"
         sess.platform = "cpu"
@@ -646,6 +719,7 @@ def start_session(
             v_bitrate=br,
             burn_sub_index=subtitle_index if want_burn else -1,
             video_copy=False,
+            lookahead_sec=la_eff,
         )
 
     try:
@@ -696,6 +770,7 @@ def start_session(
                     platform="cpu", encoder="libx264", codec="h264",
                     height=h, v_bitrate=br or 3500,
                     burn_sub_index=subtitle_index if want_burn else -1,
+                    lookahead_sec=la_eff,
                 )
                 try:
                     sess.proc = subprocess.Popen(
@@ -735,9 +810,54 @@ def stop_session(sid: str) -> bool:
     return True
 
 
+def pause_encode(sid: str) -> dict:
+    """FFmpeg per SIGSTOP anhalten (bei Pause im Player) – stoppt CPU/GPU-Last."""
+    sess = get_session(sid)
+    if not sess:
+        return {"ok": False, "error": "Session nicht gefunden"}
+    if sess.mode != "hls":
+        return {"ok": True, "encode_paused": False, "skipped": True}
+    if not sess.proc or sess.proc.poll() is not None:
+        return {"ok": True, "encode_paused": False, "running": False}
+    if sess.encode_paused:
+        return {"ok": True, "encode_paused": True}
+    try:
+        os.kill(sess.proc.pid, signal.SIGSTOP)
+        sess.encode_paused = True
+        return {"ok": True, "encode_paused": True}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def resume_encode(sid: str) -> dict:
+    """FFmpeg nach Pause fortsetzen (SIGCONT)."""
+    sess = get_session(sid)
+    if not sess:
+        return {"ok": False, "error": "Session nicht gefunden"}
+    if sess.mode != "hls":
+        return {"ok": True, "encode_paused": False, "skipped": True}
+    if not sess.proc or sess.proc.poll() is not None:
+        return {"ok": True, "encode_paused": False, "running": False}
+    if not sess.encode_paused:
+        return {"ok": True, "encode_paused": False}
+    try:
+        os.kill(sess.proc.pid, signal.SIGCONT)
+        sess.encode_paused = False
+        return {"ok": True, "encode_paused": False}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _kill(sess: PlayerSession) -> None:
     if sess.proc and sess.proc.poll() is None:
         try:
+            # Falls per SIGSTOP eingefroren: erst fortsetzen, dann beenden
+            if sess.encode_paused:
+                try:
+                    os.kill(sess.proc.pid, signal.SIGCONT)
+                except OSError:
+                    pass
+                sess.encode_paused = False
             sess.proc.kill()
             sess.proc.wait(timeout=5)
         except Exception:
