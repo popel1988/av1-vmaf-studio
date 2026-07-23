@@ -1841,7 +1841,8 @@ class PlayerSessionRequest(BaseModel):
     height: int = 0                 # custom Höhe (bei profile=custom)
     v_bitrate: int = 0              # custom kbit/s
     client_codecs: list[str] = []   # was der Browser abspielen kann
-    lookahead_sec: float = 30       # Encode-Vorlauf; 0 = unbegrenzt
+    lookahead_sec: float = 30       # Zielpuffer; 0 = Encode nicht drosseln
+    audio_copy: bool = False        # Ton nicht umcodieren (Stream-Copy)
 
 
 @app.get("/api/player/options")
@@ -1863,6 +1864,7 @@ async def player_session_start(req: PlayerSessionRequest):
         codec=req.codec, height=req.height, v_bitrate=req.v_bitrate,
         client_codecs=req.client_codecs or None,
         lookahead_sec=req.lookahead_sec,
+        audio_copy=bool(req.audio_copy),
     )
 
 

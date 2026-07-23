@@ -146,6 +146,7 @@
     const tracks = (fp.info && fp.info.audio) || [];
     const ac = String((tracks[idx] && tracks[idx].codec) || "").toLowerCase();
     const acUp = (ac || "?").toUpperCase();
+    const forceCopy = !!($("fp-audio-copy") && $("fp-audio-copy").checked);
     const prof = (($("fp-profile") || {}).value) || "auto";
     if (prof === "direct" || (prof === "auto" && clientDirectOk(fp.info))) {
       el.textContent = `${tt("Direct-Play")} (${acUp})`;
@@ -153,14 +154,47 @@
       el.classList.remove("fp-audio-xcode");
       return;
     }
-    if (/^(aac|mp3|mp4a)/.test(ac)) {
-      el.textContent = `${tt("Stream-Copy")} (${acUp})`;
+    if (forceCopy || /^(aac|mp3|mp4a)/.test(ac)) {
+      el.textContent = forceCopy && !/^(aac|mp3|mp4a)/.test(ac)
+        ? `${tt("Stream-Copy erzwungen")} (${acUp})`
+        : `${tt("Stream-Copy")} (${acUp})`;
       el.classList.add("fp-audio-copy");
       el.classList.remove("fp-audio-xcode");
     } else {
       el.textContent = `${tt("Transcode → AAC")} (${acUp})`;
       el.classList.add("fp-audio-xcode");
       el.classList.remove("fp-audio-copy");
+    }
+  }
+
+  function bufferedAhead() {
+    const v = $("fp-video");
+    if (!v) return 0;
+    const t = v.currentTime || 0;
+    let end = t;
+    try {
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= t + 0.75) {
+          end = Math.max(end, v.buffered.end(i));
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return Math.max(0, end - t);
+  }
+
+  /** Encode drosseln wenn Zielpuffer voll – ohne Session-Neustart. */
+  function throttleEncodeByBuffer() {
+    if (fp.mode !== "hls" || !fp.sid) return;
+    if (!(fp.lookahead > 0)) return;
+    const v = $("fp-video");
+    if (!v || v.paused || fp.seeking) return;
+    if ((v.currentTime || 0) < 1.5) return;
+    const ahead = bufferedAhead();
+    const target = fp.lookahead;
+    if (ahead >= target - 0.5 && !fp.encodePaused) {
+      setEncodePaused(true);
+    } else if (ahead < target * 0.4 && fp.encodePaused) {
+      setEncodePaused(false);
     }
   }
 
@@ -394,13 +428,17 @@
     if (!v) return;
     destroyPlayback();
     fp.mode = "hls";
-    const buf = Math.max(10, Math.min(60, fp.lookahead || 30));
+    const buf = fp.lookahead > 0
+      ? Math.max(12, Math.min(90, fp.lookahead + 8))
+      : 60;
     if (window.Hls && window.Hls.isSupported()) {
       fp.hls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
         maxBufferLength: buf,
-        maxMaxBufferLength: buf + 15,
+        maxMaxBufferLength: buf + 20,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 10,
         liveDurationInfinity: true,
       });
       fp.hls.loadSource(url);
@@ -409,16 +447,13 @@
         v.play().catch(() => {});
       });
       fp.hls.on(window.Hls.Events.ERROR, (_, data) => {
-        // Vorlauf-Fenster zu Ende → nahtlos weiterencoden
-        if (data && data.details === "bufferStalledError" && fp.windowEnd > 0) {
-          maybeExtendWindow(true);
+        // Bei Puffer-Unterlauf Encode wieder anwerfen (falls gedrosselt)
+        if (data && (data.details === "bufferStalledError"
+            || data.details === "bufferNudgeOnStall")) {
+          if (fp.encodePaused) setEncodePaused(false);
           return;
         }
         if (data.fatal) {
-          if (fp.windowEnd > 0 && absoluteTime() + 1 < (fp.duration || 0)) {
-            maybeExtendWindow(true);
-            return;
-          }
           setStatus(tt("Wiedergabefehler – Session neu starten."), true);
           setBadge(tt("Fehler"));
         }
@@ -429,18 +464,6 @@
     } else {
       setStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
     }
-  }
-
-  function maybeExtendWindow(force) {
-    if (fp.mode !== "hls" || !fp.path || fp.extending) return;
-    if (!(fp.windowEnd > 0)) return;
-    const t = absoluteTime();
-    const dur = fp.duration || 0;
-    if (dur > 0 && t >= dur - 0.5) return;
-    // Neu starten, wenn wir nah am Fensterende sind (oder Buffer leer)
-    if (!force && t < fp.windowEnd - 8) return;
-    fp.extending = true;
-    startSession(t, true).finally(() => { fp.extending = false; });
   }
 
   async function startSession(startSec, autoplay) {
@@ -461,6 +484,7 @@
     fp.lookahead = Number.isFinite(lookahead) ? lookahead : 30;
     try { localStorage.setItem("fpLookahead", String(fp.lookahead)); } catch (e) { /* ignore */ }
     const burn = !!($("fp-burn") && $("fp-burn").checked);
+    const audioCopy = !!($("fp-audio-copy") && $("fp-audio-copy").checked);
     setBadge(tt("Lädt …"));
     setStatus(tt("Starte Session …"));
     await stopSession();
@@ -485,6 +509,7 @@
           v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
           client_codecs: detectClientCodecs(),
           lookahead_sec: fp.lookahead,
+          audio_copy: audioCopy,
         }),
       });
       const d = await r.json();
@@ -499,8 +524,11 @@
       fp.startOffset = sess.mode === "direct" ? 0 : (sess.start || 0);
       fp.duration = sess.duration || fp.duration || 0;
       fp.mode = sess.mode || "hls";
-      fp.windowEnd = sess.window_end || 0;
+      fp.windowEnd = 0;
       fp.encodePaused = false;
+      if ($("fp-audio-copy") && sess.audio_copy != null) {
+        $("fp-audio-copy").checked = !!sess.audio_copy;
+      }
       if (d.info) {
         fp.info = d.info;
         fillTracks(d.info);
@@ -547,12 +575,13 @@
             + ` · ${sess.platform}/${sess.codec || ""}/${sess.encoder}`
           : "";
         const laNote = sess.lookahead_sec > 0
-          ? ` · ${tt("Vorlauf")} ${Math.round(sess.lookahead_sec)}s`
-          : ` · ${tt("Vorlauf unbegrenzt")}`;
+          ? ` · ${tt("Puffer")} ${Math.round(sess.lookahead_sec)}s`
+          : ` · ${tt("Puffer unbegrenzt")}`;
+        const aNote = sess.audio_copy ? ` · ${tt("Ton-Copy")}` : "";
         const warn = sess.warning ? ` · ⚠ ${sess.warning}` : "";
         setBadge(sess.profile || tt("HLS"));
         setStatus(
-          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${laNote}${warn}`
+          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${laNote}${aNote}${warn}`
           + ` · ${tt("Pause hält Encode an")}`
           + (fp.duration ? ` · ${fmtClock(fp.duration)}` : ""),
         );
@@ -623,10 +652,11 @@
     if (v) {
       v.addEventListener("timeupdate", () => {
         updateTimeUi();
-        if (!v.paused) maybeExtendWindow(false);
+        if (!v.paused) throttleEncodeByBuffer();
       });
       v.addEventListener("play", () => {
         if (play) play.textContent = "⏸";
+        // Nach User-Pause: Encode wieder an, Puffer-Drossel übernimmt danach
         setEncodePaused(false);
       });
       v.addEventListener("pause", () => {
@@ -634,7 +664,6 @@
         // Seek-Scrubben nicht als Pause werten
         if (!fp.seeking) setEncodePaused(true);
       });
-      v.addEventListener("ended", () => { maybeExtendWindow(true); });
       v.addEventListener("click", () => {
         if (v.paused) v.play().catch(() => {});
         else v.pause();
@@ -682,13 +711,15 @@
     // Einstellungen nur markieren – Session startet erst mit „Übernehmen“
     // (oder initialem Laden / Seek / Kapitel).
     ["fp-audio", "fp-sub", "fp-profile", "fp-platform", "fp-codec", "fp-burn",
-      "fp-height", "fp-vbr", "fp-lookahead"].forEach((id) => {
+      "fp-audio-copy", "fp-height", "fp-vbr", "fp-lookahead"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       const onChange = () => {
         if (id === "fp-sub") syncBurnHint();
         if (id === "fp-profile") syncEncodeUi({ presetBr: true });
-        if (id === "fp-audio" || id === "fp-profile") updateAudioModeHint(null);
+        if (id === "fp-audio" || id === "fp-profile" || id === "fp-audio-copy") {
+          updateAudioModeHint(null);
+        }
         if (!fp.path) return;
         setDirty(true);
         setStatus(tt("Änderungen noch nicht übernommen – „Übernehmen“ klicken."));

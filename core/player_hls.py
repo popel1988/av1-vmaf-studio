@@ -74,7 +74,8 @@ class PlayerSession:
     height: int = 0
     v_bitrate: int = 0
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC
-    window_end: float = 0.0          # start + lookahead (0 = bis Dateiende)
+    window_end: float = 0.0          # ungenutzt (Kompat.); Puffer steuert der Client
+    audio_copy: bool = False         # Ton nicht umcodieren (−c:a copy)
     warning: str = ""
     work_dir: Path = field(default_factory=Path)
     proc: Optional[subprocess.Popen] = None
@@ -111,6 +112,7 @@ class PlayerSession:
             "v_bitrate": self.v_bitrate,
             "lookahead_sec": self.lookahead_sec,
             "window_end": round(self.window_end, 3) if self.window_end else 0,
+            "audio_copy": bool(self.audio_copy),
             "warning": self.warning,
             "audio": self.audio_index,
             "subtitle": self.subtitle_index,
@@ -135,7 +137,7 @@ class PlayerSession:
         if self.mode == "direct":
             return "direct"
         ac = (self.audio_codec or "").lower()
-        if ac.startswith(("aac", "mp4a", "mp3")):
+        if self.audio_copy or ac.startswith(("aac", "mp4a", "mp3")):
             return "copy"
         return "transcode"
 
@@ -147,6 +149,8 @@ class PlayerSession:
         if mode == "direct":
             return f"Direct-Play ({ac})"
         if mode == "copy":
+            if self.audio_copy and not ac.lower().startswith(("aac", "mp4a", "mp3")):
+                return f"Stream-Copy erzwungen ({ac})"
             return f"Stream-Copy ({ac})"
         return f"Transcode → AAC ({ac})"
 
@@ -316,19 +320,19 @@ def player_options() -> dict:
         ),
         "capabilities_ready": bool(results),
         "lookahead_choices": [
-            {"id": 15, "label": "15 s Vorlauf"},
-            {"id": 30, "label": "30 s Vorlauf (empfohlen)"},
-            {"id": 60, "label": "60 s Vorlauf"},
-            {"id": 120, "label": "120 s Vorlauf"},
-            {"id": 0, "label": "Unbegrenzt (ganz encode)"},
+            {"id": 15, "label": "15 s Puffer"},
+            {"id": 30, "label": "30 s Puffer (empfohlen)"},
+            {"id": 60, "label": "60 s Puffer"},
+            {"id": 120, "label": "120 s Puffer"},
+            {"id": 0, "label": "Unbegrenzt (kein Drosseln)"},
         ],
         "lookahead_default": int(_DEFAULT_LOOKAHEAD_SEC),
         "note": (
             "Für Live-Vorschau im Browser ist H.264 am sichersten. "
-            "HEVC/AV1 werden nur genutzt, wenn der Browser sie meldet – "
-            "sonst automatischer Fallback auf H.264. "
-            "NVENC entlastet den Encode, Decode+AAC laufen weiter auf der CPU; "
-            "Vorlauf begrenzt, wie weit voraus encodiert wird."
+            "HEVC/AV1 nur, wenn der Browser sie meldet – sonst Fallback H.264. "
+            "Encode-Vorlauf = Zielpuffer: FFmpeg läuft durchgehend und wird "
+            "gedrosselt (Pause), sobald genug voraus liegt – ohne Neu-Start. "
+            "Ton→AAC kostet CPU; optional Stream-Copy (kann im Browser haken)."
         ),
     }
 
@@ -353,16 +357,22 @@ def can_direct_play(info) -> bool:
     return True
 
 
-def _audio_args(audio_index: int, audio_codec: str) -> list[str]:
+def _audio_args(audio_index: int, audio_codec: str,
+                force_copy: bool = False) -> list[str]:
+    """Ton-Args. Bei Re-Encode: Timeline auf 0 (asetpts) wie beim Video."""
     if audio_index < 0:
         return ["-an"]
     args = ["-map", f"0:a:{int(audio_index)}?"]
-    if (audio_codec or "").lower().startswith(("aac", "mp4a", "mp3")):
+    ac = (audio_codec or "").lower()
+    if force_copy or ac.startswith(("aac", "mp4a", "mp3")):
+        # Copy: keine PTS-Filter möglich ohne Decode – Mux-Flags gleichen grob aus.
         args += ["-c:a", "copy"]
     else:
+        # Stereo-AAC + gemeinsame Null-Timeline mit Video (setpts/asetpts).
         args += [
-            "-c:a", "aac", "-ac", "2", "-b:a", "192k",
-            "-af", "aresample=async=1000:first_pts=0",
+            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
+            "-profile:a", "aac_low",
+            "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
         ]
     return args
 
@@ -378,25 +388,27 @@ def _build_video_filter(
     platform: str,
     encoder: str,
 ) -> tuple[list[str], list[str]]:
-    """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args)."""
+    """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args).
+
+    ``setpts=PTS-STARTPTS`` setzt die Video-Timeline nach Seek auf 0 – analog
+    zu ``asetpts`` beim Ton. Seek bleibt vor ``-i`` (schnell); kein langsames
+    Decode-from-start.
+    """
     pre: list[str] = []
     backend = ff.encoder_backend(platform) if platform != "cpu" else "cpu"
     need_hwupload = "vaapi" in encoder or "qsv" in encoder
 
     scale = f"scale=-2:{int(height)}" if height and height > 0 else ""
+    # setpts immer vor hwupload (nur Systemspeicher-Frames)
+    pts = "setpts=PTS-STARTPTS"
 
     if burn_sub_index >= 0:
-        # Overlay immer auf CPU
-        chain = "[0:v:0]"
-        if scale:
-            chain += f"{scale}[vs];[vs]"
-        else:
-            chain += ""
+        # Overlay immer auf CPU, danach gemeinsame Timeline, ggf. hwupload
         if scale:
             fc = (f"[0:v:0]{scale}[vs];"
-                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto")
+                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto,{pts}")
         else:
-            fc = f"[0:v:0][0:s:{int(burn_sub_index)}]overlay=format=auto"
+            fc = f"[0:v:0][0:s:{int(burn_sub_index)}]overlay=format=auto,{pts}"
         if need_hwupload:
             fc += ",format=nv12,hwupload"
             if "qsv" in encoder:
@@ -416,6 +428,7 @@ def _build_video_filter(
         parts = []
         if scale:
             parts.append(scale)
+        parts.append(pts)
         parts.append("format=nv12")
         if "qsv" in encoder:
             parts.append("hwupload=extra_hw_frames=64")
@@ -429,10 +442,12 @@ def _build_video_filter(
                    "-filter_hw_device", "hw"]
         return pre, ["-vf", vf, "-map", "0:v:0?"]
 
-    # NVENC / CPU: software scale
+    # NVENC / CPU: scale (optional) + einheitliche Timeline
+    parts = []
     if scale:
-        return pre, ["-vf", scale, "-map", "0:v:0?"]
-    return pre, ["-map", "0:v:0?"]
+        parts.append(scale)
+    parts.append(pts)
+    return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"]
 
 
 def _encoder_rate_args(encoder: str, codec: str, v_bitrate: int) -> list[str]:
@@ -485,53 +500,61 @@ def _build_hls_cmd(
     burn_sub_index: int = -1,
     video_copy: bool = False,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
+    audio_copy: bool = False,
 ) -> list[str]:
+    """HLS-Command. Läuft durchgehend; Vorlauf drosselt der Client per Pause.
+
+    Timestamps: bei Video-Re-Encode ``setpts`` + bei Ton-Re-Encode ``asetpts``
+    (beide auf 0). Seek bleibt vor ``-i`` (schnell). Video-Copy kann PTS nicht
+    filtern – dort nur Mux-Normalisierung.
+    """
     playlist = out_dir / "index.m3u8"
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
         "-fflags", "+genpts",
     ]
 
-    # NVENC: Decode auf der GPU (weniger CPU); Frames werden für Filter/Scale
-    # bei Bedarf automatisch in den Systemspeicher geholt.
-    if not video_copy and "nvenc" in (encoder or ""):
-        cmd += ["-hwaccel", "cuda"]
-
-    if video_copy:
-        if start_sec and start_sec > 0:
-            cmd += ["-ss", f"{float(start_sec):.3f}"]
-        cmd += ["-i", str(path), "-map", "0:v:0?", "-c:v", "copy"]
-    else:
+    pre: list[str] = []
+    vmap: list[str] = []
+    if not video_copy:
+        # NVENC: Decode auf GPU; Frames für Filter ggf. zurück in System-RAM.
+        if "nvenc" in (encoder or ""):
+            cmd += ["-hwaccel", "cuda"]
         pre, vmap = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
             platform=platform, encoder=encoder,
         )
         cmd += pre
-        if start_sec and start_sec > 0:
-            cmd += ["-ss", f"{float(start_sec):.3f}"]
-        cmd += ["-i", str(path)]
+
+    # Seek vor -i: schnell (Keyframe). A/V danach über setpts/asetpts bzw.
+    # start_at_zero auf eine gemeinsame Ausgabe-Timeline.
+    if start_sec and start_sec > 0:
+        cmd += ["-ss", f"{float(start_sec):.3f}"]
+    cmd += ["-i", str(path)]
+
+    if video_copy:
+        cmd += ["-map", "0:v:0?", "-c:v", "copy"]
+    else:
         cmd += vmap
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
 
-    # Nur X Sekunden voraus encoden (nicht den ganzen Film durchlaufen).
+    cmd += _audio_args(audio_index, audio_codec, force_copy=bool(audio_copy))
+
     la = _normalize_lookahead(lookahead_sec)
+    hls_time = 2
     if la > 0:
-        cmd += ["-t", f"{la:.3f}"]
-
-    cmd += _audio_args(audio_index, audio_codec)
-
-    hls_time = 3
-    if la > 0:
-        list_size = max(4, int(math.ceil(la / hls_time)) + 2)
-        hls_flags = "independent_segments+omit_endlist+delete_segments"
+        list_size = max(6, int(math.ceil(la / hls_time)) + 4)
     else:
-        list_size = 0
-        hls_flags = "independent_segments+omit_endlist"
+        list_size = 30
+    hls_flags = "independent_segments+omit_endlist+delete_segments+temp_file"
 
     cmd += [
         "-sn", "-dn",
         "-avoid_negative_ts", "make_zero",
+        "-start_at_zero",
+        "-muxdelay", "0",
+        "-muxpreload", "0",
         "-max_interleave_delta", "0",
         "-f", "hls",
         "-hls_time", str(hls_time),
@@ -595,6 +618,7 @@ def start_session(
     v_bitrate: int = 0,
     client_codecs: Optional[list[str]] = None,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
+    audio_copy: bool = False,
 ) -> dict:
     """Session starten (Direct-Play oder HLS)."""
     target = config.resolve_input(rel)
@@ -615,9 +639,11 @@ def start_session(
     if info and info.subtitles and 0 <= subtitle_index < len(info.subtitles):
         sub_codec = str(info.subtitles[subtitle_index].get("codec") or "")
 
+    want_audio_copy = bool(audio_copy)
     want_burn = bool(burn_subs) and subtitle_index >= 0 and _is_image_sub(sub_codec)
+    # Ohne Ton-Transcode zählt inkompatibler Ton nicht als HLS-Zwang für auto
     force_hls = bool(start_sec and start_sec > 0) or (
-        audio_index >= 0 and audio_codec
+        (not want_audio_copy) and audio_index >= 0 and audio_codec
         and not (audio_codec or "").lower().startswith(("aac", "mp3", "mp4a", "opus"))
     )
     resolved = _resolve_profile(
@@ -647,18 +673,14 @@ def start_session(
 
     la = _normalize_lookahead(lookahead_sec)
     start0 = max(0.0, float(start_sec or 0))
-    if la > 0 and duration > 0:
-        window_end = min(duration, start0 + la)
-        # Rest der Datei kürzer als Vorlauf → nur noch Rest encoden
-        la_eff = max(0.5, window_end - start0)
-    elif la > 0:
-        window_end = start0 + la
-        la_eff = la
-    else:
-        window_end = 0.0
-        la_eff = 0.0
 
-    warn = "; ".join(enc_info.get("warnings") or [])
+    warn_parts = list(enc_info.get("warnings") or [])
+    if want_audio_copy and audio_codec and not (audio_codec or "").lower().startswith(
+            ("aac", "mp4a", "mp3")):
+        warn_parts.append(
+            f"Ton-Copy ({audio_codec}): Browser kann die Spur ggf. nicht abspielen."
+        )
+    warn = "; ".join(warn_parts)
     sess = PlayerSession(
         id=sid,
         path=target,
@@ -678,7 +700,8 @@ def start_session(
         height=h,
         v_bitrate=br,
         lookahead_sec=la,
-        window_end=window_end,
+        window_end=0.0,
+        audio_copy=want_audio_copy,
         warning=warn,
         work_dir=work,
     )
@@ -701,7 +724,8 @@ def start_session(
             audio_codec=audio_codec,
             platform="cpu", encoder="copy", codec="h264",
             height=0, v_bitrate=0, burn_sub_index=-1, video_copy=True,
-            lookahead_sec=la_eff,
+            lookahead_sec=la,
+            audio_copy=want_audio_copy,
         )
         sess.encoder = "copy"
         sess.platform = "cpu"
@@ -719,7 +743,8 @@ def start_session(
             v_bitrate=br,
             burn_sub_index=subtitle_index if want_burn else -1,
             video_copy=False,
-            lookahead_sec=la_eff,
+            lookahead_sec=la,
+            audio_copy=want_audio_copy,
         )
 
     try:
@@ -770,7 +795,8 @@ def start_session(
                     platform="cpu", encoder="libx264", codec="h264",
                     height=h, v_bitrate=br or 3500,
                     burn_sub_index=subtitle_index if want_burn else -1,
-                    lookahead_sec=la_eff,
+                    lookahead_sec=la,
+                    audio_copy=want_audio_copy,
                 )
                 try:
                     sess.proc = subprocess.Popen(

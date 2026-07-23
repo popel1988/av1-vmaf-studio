@@ -1895,9 +1895,10 @@
           </div>
           <div class="card-body">
             <p class="hint">Direct-Play wenn möglich, sonst HLS. NVENC/QSV/VAAPI/CPU wählbar.
-              <strong>Encode-Vorlauf</strong> begrenzt, wie weit voraus encodiert wird (Standard 30&nbsp;s);
-              bei Pause wird FFmpeg angehalten. GPU-Encode entlastet nur den Video-Encoder –
-              Decode und Ton→AAC können weiter CPU nutzen. H.264 ist im Browser am sichersten.</p>
+              <strong>Encode-Vorlauf</strong> = Zielpuffer (FFmpeg läuft durch, wird bei vollem
+              Puffer gedrosselt – ohne Neustart). Bei Pause hält FFmpeg an.
+              Optional <strong>Ton nicht umcodieren</strong> (Stream-Copy; exotische Codecs
+              kann der Browser ggf. nicht). H.264 ist im Browser am sichersten.</p>
             <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
               <div class="field" style="flex:2;min-width:220px">
                 <label>Datei</label>
@@ -1933,7 +1934,7 @@
               </div>
               <div class="field" style="min-width:150px">
                 <label>Encode-Vorlauf</label>
-                <select id="fp-lookahead" title="Nur so weit voraus encoden; bei Pause wird FFmpeg angehalten">
+                <select id="fp-lookahead" title="Zielpuffer voraus; Encode wird gedrosselt, nicht neu gestartet">
                   <option value="15">15 s</option>
                   <option value="30" selected>30 s</option>
                   <option value="60">60 s</option>
@@ -1966,6 +1967,10 @@
                     <label>Tonspur</label>
                     <select id="fp-audio"><option value="-1">—</option></select>
                     <p class="muted" id="fp-audio-mode" style="font-size:11.5px;margin:4px 0 0">—</p>
+                    <label class="check" style="margin:6px 0 0" title="Ton nicht nach AAC umcodieren – Originalspur kopieren">
+                      <input type="checkbox" id="fp-audio-copy" />
+                      <span>Ton nicht umcodieren</span>
+                    </label>
                   </div>
                   <div class="field" style="flex:1;min-width:140px">
                     <label>Untertitel</label>
