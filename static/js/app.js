@@ -87,6 +87,10 @@
     // Beim Verlassen der A/B-Seite die Wiedergabe stoppen, damit im Hintergrund
     // kein Ton/Video weiterläuft.
     if (state.currentPage === "abcompare" && page !== "abcompare") pauseAbVideos();
+    if (state.currentPage === "player" && page !== "player"
+        && typeof window.stopFullPlayer === "function") {
+      window.stopFullPlayer();
+    }
     state.currentPage = page;
     localStorage.setItem("page", page);
     const nav = $("nav");
@@ -97,8 +101,10 @@
     if (page === "supertool") pollSuperStatus();
     if (page === "audio" && !state.audioLoaded) { state.audioLoaded = true; auLoadDir(""); }
     if (page === "remux" && !state.remuxLoaded) { state.remuxLoaded = true; remuxInit(); }
+    if (page === "editor" && typeof window.editorInit === "function") window.editorInit();
     if (page === "diag" && !state.diagLoaded) loadDiagnostics();
   }
+  window.navTo = navTo;
 
   function initNav() {
     const nav = $("nav");
@@ -338,11 +344,11 @@
     if (playRel) {
       const play = document.createElement("button");
       play.className = "row-play";
-      play.title = "Im Browser abspielen";
+      play.title = "Im Player öffnen";
       play.textContent = "▶";
       play.addEventListener("click", (e) => {
         e.stopPropagation();
-        openPlayer(playRoot || "media", playRel, name);
+        playMedia(playRoot || "media", playRel, name);
       });
       row.appendChild(play);
     }
@@ -389,10 +395,10 @@
   function openFilePickerModal(opts) {
     opts = opts || {};
     openModal(opts.title || "Datei wählen",
-      '<div class="breadcrumb" id="fp-crumb"></div>' +
-      '<div class="browser browser-sm" id="fp-browser"><div class="browser-loading">Lade …</div></div>');
+      '<div class="breadcrumb" id="fpick-crumb"></div>' +
+      '<div class="browser browser-sm" id="fpick-browser"><div class="browser-loading">Lade …</div></div>');
     const picker = makeFolderBrowser({
-      listId: "fp-browser", crumbId: "fp-crumb",
+      listId: "fpick-browser", crumbId: "fpick-crumb",
       kind: "video", showFiles: true,
       rootLabel: opts.rootLabel || "Medien",
       playRoot: "media",
@@ -401,6 +407,7 @@
     });
     if (picker) picker.go("");
   }
+  window.openFilePickerModal = openFilePickerModal;
 
   // Platzhalter-<div> in ein Mehrfach-Auswahl-Dropdown umwandeln.
   // options: [{value,label}] · returns { getValues, setValues }.
@@ -1030,7 +1037,7 @@
   }
 
   function initOutTargets() {
-    ["opt", "remux", "merge", "split", "st"].forEach((prefix) => {
+    ["opt", "remux", "merge", "split", "st", "ed"].forEach((prefix) => {
       const modeEl = $(prefix + "-out-mode");
       if (modeEl) {
         modeEl.addEventListener("change", () => syncOutModeUI(prefix));
@@ -2775,6 +2782,15 @@
     return u;
   }
 
+  /** Bibliothek/Browser → Vollplayer; Fallback: Modal-Schnellplayer. */
+  function playMedia(root, rel, name) {
+    if (typeof window.openFullPlayer === "function") {
+      window.openFullPlayer(rel, name);
+      return;
+    }
+    openPlayer(root, rel, name);
+  }
+
   async function openPlayer(root, rel, name) {
     openModal(name || "Wiedergabe", `<p class="muted">${tt("Lade Spuren …")}</p>`);
     let info = null;
@@ -4202,7 +4218,7 @@
     const path = btn.dataset.path;
     const name = btn.dataset.name;
     const act = btn.dataset.act;
-    if (act === "play") { openPlayer("media", path, name); return; }
+    if (act === "play") { playMedia("media", path, name); return; }
     const row = (state.libRows || []).find((m) => m.path === path);
     libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
   }
@@ -4678,7 +4694,7 @@
     const path = btn.dataset.path;
     const name = btn.dataset.name;
     const act = btn.dataset.act;
-    if (act === "play") { openPlayer("media", path, name); return; }
+    if (act === "play") { playMedia("media", path, name); return; }
     if (act === "remux" || (act === "encode" && $("st-remux-only") && $("st-remux-only").checked)) {
       navTo("remux");
       await remuxSelectFile({ rel: path, name });
@@ -6893,7 +6909,7 @@
         b.addEventListener("click", async () => {
           const act = b.dataset.act, path = b.dataset.path, name = b.dataset.name;
           closeModal();
-          if (act === "play") { openPlayer("media", path, name); return; }
+          if (act === "play") { playMedia("media", path, name); return; }
           if (act === "remux") {
             navTo("remux");
             await remuxSelectFile({ rel: path, name });

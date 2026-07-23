@@ -46,6 +46,8 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
 | **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
+| **Editor** | Simple timeline editor: In/Out cuts, reorder clips, multi-file concat, **direct upload**, remux (keyframe copy) or encode export to the queue. |
+| **Player** | Full media player: Direct-Play when possible, else HLS; quality profiles (NVENC/CPU from diagnostics), chapters, text subs + optional PGS burn-in. |
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
@@ -63,8 +65,12 @@ Other highlights:
 - **Multiple named input roots** via `MEDIA_DIRS` (optional extra mounts).
 - **Per-job output mode**: standard output · next to source · custom folder
   (browser in the media tree).
-- **In-browser media player** with audio/subtitle track selection
-  (`/api/media/stream`, WebVTT for text subs).
+- **In-browser media player** (sidebar **Player**): HLS sessions with probe
+  duration / seek-restart, audio remux to AAC, WebVTT text subs; plus a lighter
+  modal preview (`/api/media/stream`).
+- **Video editor** (sidebar **Editor**): visual timeline with segment list,
+  library sources or uploads under `/data/uploads` (`upload:…`), export via
+  concat demuxer (copy) or filter_complex encode into the queue.
 - **Functional encoder detection**: mini test encodes verify what the hardware
   can actually do; unavailable options are hidden in the UI.
 - **Dynamic GPU capacity**: configurable number of concurrent encodes per GPU.
@@ -417,7 +423,9 @@ core/
   job_plan.py           Naming templates, dry-run, duplicate / requeue paths
   audio_opt.py          Audio-only remux/optimization
   remux.py              Lossless remux/edit: tracks, attachments, chapters, trim, concat/split
-  media_stream.py       Browser player: stream + VTT subtitles
+  editor.py             Timeline editor: segment remux/encode export
+  media_stream.py       Light modal player: fMP4 stream + VTT
+  player_hls.py         Full Player: HLS sessions (audio remux, seek)
   queue_manager.py      Async queue, guardrail, post-processing, persistence
   supertool.py          Guided batch processing (target/representative VMAF)
   library.py            Library scan + savings estimate
@@ -432,6 +440,8 @@ core/
 templates/index.html    Dashboard markup
 static/css/styles.css   Theme system
 static/js/app.js        Dashboard logic (WebSocket, charts, browser)
+static/js/editor.js     Timeline video editor UI
+static/js/player.js     Full Player UI (HLS)
 static/js/i18n.js       DE / EN / ES / FR translations
 Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n8.1 + dovi_tool + models)
 docker-compose.yml      Portainer stack

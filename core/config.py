@@ -125,8 +125,18 @@ def resolve_input(rel: str) -> Optional[Path]:
 
     Einzel-Root: `rel` ist relativ zum Root (optionaler Root-Prefix erlaubt).
     Multi-Root: erstes Segment = Root-Name, Rest = Unterpfad.
+    ``upload:<filename>`` verweist auf eine Datei im Upload-Ordner.
     """
-    rel = (rel or "").strip().strip("/")
+    raw = (rel or "").strip()
+    if raw.startswith("upload:"):
+        name = raw[len("upload:"):].strip().replace("\\", "/")
+        if "/" in name or name in ("", ".", ".."):
+            return None
+        base = UPLOAD_DIR.resolve()
+        target = (base / name).resolve()
+        return target if _within(target, base) and target.is_file() else None
+
+    rel = raw.strip("/")
     if len(MEDIA_ROOTS) == 1:
         name, base = MEDIA_ROOTS[0]
         base = base.resolve()

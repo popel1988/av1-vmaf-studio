@@ -161,6 +161,11 @@ async def _shutdown() -> None:
     queue.shutdown()
     from core.watcher import watcher
     watcher.stop()
+    try:
+        from core import player_hls
+        player_hls.cleanup_all()
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------- Views
@@ -754,6 +759,158 @@ def remux_cut(req: RemuxCutRequest):
     return FileResponse(
         out, filename=dl_name, media_type="application/octet-stream",
         background=BackgroundTask(lambda: out.unlink(missing_ok=True)))
+
+
+# ---------------------------------------------------------------- Video-Editor
+class EditorEnqueueRequest(BaseModel):
+    segments: list[dict] = []
+    mode: str = "remux"              # remux | encode
+    container: str = "mkv"
+    suffix: str = "_edit"
+    chapters_from_cuts: bool = True
+    force_remux: bool = False        # Kompatibilitätswarnung ignorieren
+    platform: str = "cpu"
+    codec: str = "av1"
+    cq: int = 30
+    audio_codec: str = "aac"
+    audio_bitrate: int = 192
+    burn_subs: bool = False
+    sub_index: int = -1
+    out_mode: str = "default"
+    out_subdir: str = ""
+    post_processing: str = "keep"
+
+
+class EditorCheckRequest(BaseModel):
+    segments: list[dict] = []
+
+
+@app.post("/api/editor/upload")
+async def editor_upload(file: UploadFile = File(...)):
+    """Video (oder Mediencontainer) für den Editor hochladen."""
+    import uuid as _uuid
+
+    orig = Path(file.filename or "upload").name
+    suffix = Path(orig).suffix.lower()
+    if suffix not in config.VIDEO_EXTENSIONS:
+        return JSONResponse(
+            {"error": f"Kein unterstütztes Video-Format ({suffix or 'ohne Endung'})."},
+            status_code=400)
+    stem = Path(orig).stem[:60] or "video"
+    safe_stem = "".join(c if (c.isalnum() or c in "-_") else "_" for c in stem)
+    stored = f"{safe_stem}_{_uuid.uuid4().hex[:8]}{suffix}"
+    config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = config.UPLOAD_DIR / stored
+    try:
+        with dest.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+    except OSError as e:
+        return JSONResponse({"error": f"Upload fehlgeschlagen: {e}"}, status_code=500)
+    finally:
+        await file.close()
+
+    from core import editor
+    data, err = editor.probe_source(f"upload:{stored}")
+    if data is None:
+        dest.unlink(missing_ok=True)
+        return JSONResponse({"error": err or "Analyse fehlgeschlagen"}, status_code=400)
+    if not data.get("has_video"):
+        dest.unlink(missing_ok=True)
+        return JSONResponse({"error": f"{orig}: keine Videospur gefunden."}, status_code=400)
+    data["name"] = orig
+    data["path"] = f"upload:{stored}"
+    return data
+
+
+@app.get("/api/editor/probe")
+async def editor_probe(path: str):
+    """Quelle für den Editor analysieren (Medienpfad oder upload:…)."""
+    from core import editor
+    data, err = editor.probe_source(path)
+    if data is None:
+        return JSONResponse({"error": err or "Nicht gefunden"}, status_code=404)
+    return data
+
+
+@app.post("/api/editor/check")
+async def editor_check(req: EditorCheckRequest):
+    """Kompatibilität der Segmente für Remux-Export prüfen."""
+    from core import editor
+    segs, err = editor.normalize_segments(req.segments or [])
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    compat = editor.check_remux_compat(segs)
+    compat["duration"] = editor.total_duration(segs)
+    compat["chapters"] = editor.chapters_from_segments(segs)
+    return compat
+
+
+@app.post("/api/editor/enqueue")
+async def editor_enqueue(req: EditorEnqueueRequest):
+    """Editor-Projekt in die Warteschlange legen (Remux oder Encode)."""
+    from core import editor
+    from core.queue_manager import build_job_settings
+
+    segs, err = editor.normalize_segments(req.segments or [])
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    mode = (req.mode or "remux").lower()
+    if mode not in ("remux", "encode"):
+        mode = "remux"
+    container = req.container if req.container in ("mkv", "mp4") else "mkv"
+    first = segs[0]["abs"]
+    # Persistierte Segmente ohne abs-Pfad (Queue-JSON).
+    clean_segs = [{
+        "path": s["path"], "start": s["start"], "end": s["end"],
+        "title": s["title"], "audio_index": s["audio_index"], "mute": s["mute"],
+    } for s in segs]
+    d = {
+        "video_mode": "editor",
+        "vmaf_check": False,
+        "workflow": "auto",
+        "container": container,
+        "post_processing": req.post_processing or "keep",
+        "suffix": req.suffix or "_edit",
+        "integrity_check": True,
+        "platform": req.platform or "cpu",
+        "codec": req.codec or "av1",
+        "quality": int(req.cq or 30),
+        "rate_mode": "cq",
+        "audio_mode": "encode" if mode == "encode" else "copy",
+        "audio_codec": req.audio_codec or "aac",
+        "audio_bitrate": int(req.audio_bitrate or 192),
+        "edit_spec": {
+            "segments": clean_segs,
+            "mode": mode,
+            "container": container,
+            "chapters_from_cuts": bool(req.chapters_from_cuts),
+            "force_remux": bool(req.force_remux),
+            "platform": req.platform or "cpu",
+            "codec": req.codec or "av1",
+            "cq": int(req.cq or 30),
+            "audio_codec": req.audio_codec or "aac",
+            "audio_bitrate": int(req.audio_bitrate or 192),
+            "burn_subs": bool(req.burn_subs),
+            "sub_index": int(req.sub_index if req.sub_index is not None else -1),
+        },
+        "out_mode": req.out_mode,
+        "out_subdir": req.out_subdir,
+    }
+    item = queue.add_file(str(first), build_job_settings(d))
+    if item is None:
+        return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)
+    # Titel aussagekräftiger machen
+    item.title = f"Editor · {len(segs)} Clip(s) · {first.name}"
+    queue._persist()
+    return {
+        "added": 1, "id": item.id,
+        "duration": editor.total_duration(segs),
+        "mode": mode,
+    }
 
 
 @app.post("/api/remux/enqueue")
@@ -1631,6 +1788,74 @@ async def media_stream(
         ms.stream_bytes(cmd),
         media_type="video/mp4",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+# ---------------------------------------------------------------- Full Player (HLS)
+class PlayerSessionRequest(BaseModel):
+    path: str
+    audio: int = 0
+    subtitle: int = -1
+    start: float = 0.0
+    profile: str = "auto"
+    burn_subs: bool = False
+    client_direct_ok: bool = False
+    platform: str = "auto"          # auto|nvidia|intel|amd|cpu
+    codec: str = "h264"             # h264|hevc|av1 (Browser muss können)
+    height: int = 0                 # custom Höhe (bei profile=custom)
+    v_bitrate: int = 0              # custom kbit/s
+    client_codecs: list[str] = []   # was der Browser abspielen kann
+
+
+@app.get("/api/player/options")
+async def player_options():
+    """Verfügbare Player-Profile, Plattformen, Codecs (Capabilities)."""
+    from core import player_hls
+    return player_hls.player_options()
+
+
+@app.post("/api/player/session")
+async def player_session_start(req: PlayerSessionRequest):
+    """Direct-Play oder HLS-Session (HW/SW-Transcode, Qualitätsstufen)."""
+    from core import player_hls
+    player_hls.cleanup_idle()
+    return player_hls.start_session(
+        req.path, audio_index=req.audio, subtitle_index=req.subtitle,
+        start_sec=req.start, profile=req.profile, burn_subs=req.burn_subs,
+        client_direct_ok=req.client_direct_ok, platform=req.platform,
+        codec=req.codec, height=req.height, v_bitrate=req.v_bitrate,
+        client_codecs=req.client_codecs or None,
+    )
+
+
+@app.get("/api/player/session/{sid}")
+async def player_session_get(sid: str):
+    from core import player_hls
+    sess = player_hls.get_session(sid)
+    if not sess:
+        return JSONResponse({"error": "Session nicht gefunden"}, status_code=404)
+    return {"session": sess.to_dict()}
+
+
+@app.delete("/api/player/session/{sid}")
+async def player_session_stop(sid: str):
+    from core import player_hls
+    return {"ok": player_hls.stop_session(sid)}
+
+
+@app.get("/api/player/session/{sid}/{name}")
+async def player_session_file(sid: str, name: str):
+    """Playlist oder Segment einer HLS-Session ausliefern."""
+    from core import player_hls
+    target = player_hls.resolve_session_file(sid, name)
+    if target is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    media = "application/vnd.apple.mpegurl" if name.endswith(".m3u8") else (
+        "video/mp4" if name.endswith((".mp4", ".m4s")) else "application/octet-stream"
+    )
+    return FileResponse(
+        target, media_type=media,
+        headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
     )
 
 

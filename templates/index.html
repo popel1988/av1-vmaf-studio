@@ -25,6 +25,8 @@
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
         <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
         <button class="nav-item" data-nav="remux"><span>✂</span> Remux &amp; Bearbeiten</button>
+        <button class="nav-item" data-nav="editor"><span>🎬</span> Editor</button>
+        <button class="nav-item" data-nav="player"><span>▶</span> Player</button>
         <button class="nav-item" data-nav="abcompare"><span>🎞</span> A/B-Vergleich</button>
         <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
         <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
@@ -1700,6 +1702,252 @@
           </div>
         </section>
 
+        <!-- PAGE: Einfacher Video-Editor -->
+        <section class="card span-3" data-page="editor">
+          <div class="card-head">
+            <h3><span class="card-idx">🎬</span> Video-Editor</h3>
+            <span class="badge" id="ed-badge">Keine Clips</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Schnitte auf einer Timeline setzen, Clips sortieren und als Remux
+              (Stream-Copy, Keyframe-genau) oder Encode exportieren. Quellen vom Server
+              <strong>oder per Upload</strong>.</p>
+
+            <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+              <div class="field" style="flex:2;min-width:220px">
+                <label>Quelle hinzufügen</label>
+                <div class="field-row">
+                  <input type="text" id="ed-path" placeholder="Medienpfad oder Upload" style="flex:1" readonly />
+                  <button class="btn btn-ghost btn-sm" id="ed-browse" type="button">Bibliothek …</button>
+                  <label class="btn btn-ghost btn-sm" style="margin:0;cursor:pointer">
+                    Upload
+                    <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
+                  </label>
+                  <button class="btn btn-primary btn-sm" id="ed-add-src" type="button">Zur Timeline</button>
+                </div>
+              </div>
+            </div>
+            <p class="muted" id="ed-upload-status" style="font-size:12px;margin:0 0 10px"></p>
+
+            <div class="ed-layout">
+              <div class="ed-preview">
+                <div class="ed-stage">
+                  <video id="ed-video" playsinline></video>
+                </div>
+                <div class="ed-transport">
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause">▶</button>
+                  <input type="range" id="ed-seek" min="0" max="1000" value="0" step="1" />
+                  <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt">I</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt">O</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-add-seg">Clip hinzufügen</button>
+                </div>
+                <div class="field-row" style="margin-top:8px;flex-wrap:wrap;gap:8px;align-items:flex-end">
+                  <div class="field" style="min-width:100px">
+                    <label>In (s)</label>
+                    <input type="number" id="ed-in" min="0" step="0.01" value="0" />
+                  </div>
+                  <div class="field" style="min-width:100px">
+                    <label>Out (s)</label>
+                    <input type="number" id="ed-out" min="0" step="0.01" value="0" />
+                  </div>
+                  <div class="field" style="min-width:140px;flex:1">
+                    <label>Tonspur</label>
+                    <select id="ed-audio"><option value="0">#0</option></select>
+                  </div>
+                  <label class="check" style="margin:0 0 2px">
+                    <input type="checkbox" id="ed-mute" />
+                    <span>Stumm</span>
+                  </label>
+                </div>
+                <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:8px"></p>
+              </div>
+
+              <div class="ed-side">
+                <div class="ed-side-head">
+                  <strong>Timeline-Clips</strong>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Leeren</button>
+                </div>
+                <ul class="ed-seg-list" id="ed-seg-list"></ul>
+                <div class="ed-timeline" id="ed-timeline" title="Gesamt-Timeline">
+                  <div class="ed-timeline-track" id="ed-timeline-track"></div>
+                </div>
+                <p class="muted" id="ed-total" style="font-size:12px;margin-top:6px">0 Clips · 0:00</p>
+                <div class="field-row" style="margin-top:8px">
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled>Vorschau Timeline</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="divider" style="margin:16px 0"></div>
+
+            <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;gap:10px">
+              <div class="field" style="min-width:140px">
+                <label>Export-Modus</label>
+                <select id="ed-mode">
+                  <option value="remux">Remux (Copy, Keyframe)</option>
+                  <option value="encode">Encode (framegenau)</option>
+                </select>
+              </div>
+              <div class="field" style="min-width:120px">
+                <label>Container</label>
+                <select id="ed-container">
+                  <option value="mkv">MKV</option>
+                  <option value="mp4">MP4</option>
+                </select>
+              </div>
+              <div class="field" style="min-width:120px">
+                <label>Suffix</label>
+                <input type="text" id="ed-suffix" value="_edit" />
+              </div>
+              <div class="field" data-out-target>
+                <label>Ausgabe</label>
+                <select id="ed-out-mode">
+                  <option value="default">Standard-Ausgabe</option>
+                  <option value="beside">Neben der Quelle</option>
+                  <option value="custom">Anderen Ordner…</option>
+                </select>
+                <div class="subdir-row" data-out-custom style="display:none;margin-top:8px">
+                  <input type="text" id="ed-out-subdir" placeholder="Medienpfad" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-out-browse">Durchsuchen</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="ed-encode-opts" style="display:none;margin-top:10px">
+              <div class="field-row" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
+                <div class="field" style="min-width:140px">
+                  <label>Plattform</label>
+                  <select id="ed-platform">
+                    {% for p in platform_options %}
+                    <option value="{{ p.value }}">{{ p.label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="field" style="min-width:120px">
+                  <label>Codec</label>
+                  <select id="ed-codec">
+                    <option value="av1">AV1</option>
+                    <option value="hevc">HEVC</option>
+                    <option value="h264">H.264</option>
+                  </select>
+                </div>
+                <div class="field" style="min-width:100px">
+                  <label>CQ / QP</label>
+                  <input type="number" id="ed-cq" value="30" min="0" max="63" step="1" />
+                </div>
+                <div class="field" style="min-width:120px">
+                  <label>Audio</label>
+                  <select id="ed-acodec">
+                    <option value="aac">AAC</option>
+                    <option value="opus">Opus</option>
+                    <option value="ac3">AC-3</option>
+                  </select>
+                </div>
+                <div class="field" style="min-width:100px">
+                  <label>Audio kbit/s</label>
+                  <input type="number" id="ed-abr" value="192" min="64" max="1536" step="32" />
+                </div>
+              </div>
+            </div>
+
+            <div class="field-row" style="margin-top:12px;flex-wrap:wrap;gap:12px;align-items:center">
+              <label class="check"><input type="checkbox" id="ed-chapters" checked /><span>Kapitel aus Clips</span></label>
+              <label class="check" id="ed-force-wrap" style="display:none">
+                <input type="checkbox" id="ed-force" /><span>Remux trotz Warnung erzwingen</span>
+              </label>
+              <button type="button" class="btn btn-primary" id="ed-enqueue" disabled>In Warteschlange</button>
+              <span class="muted" id="ed-status" style="font-size:12px"></span>
+            </div>
+            <p class="hint" id="ed-mode-hint" style="margin-top:8px">Remux kopiert Streams ohne Neucodierung.
+              Schnitte liegen am nächsten Keyframe.</p>
+          </div>
+        </section>
+
+        <!-- PAGE: Vollwertiger Media-Player (HLS) -->
+        <section class="card span-3" data-page="player">
+          <div class="card-head">
+            <h3><span class="card-idx">▶</span> Media-Player</h3>
+            <span class="badge" id="fp-badge">Bereit</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Direct-Play wenn möglich, sonst HLS. Transcode: NVENC / Intel QSV|VAAPI /
+              AMD VAAPI / CPU – wählbar. Für die Browser-Vorschau ist <strong>H.264</strong> am
+              sichersten; HEVC/AV1 nur, wenn der Browser sie kann (sonst automatischer Fallback).
+              So siehst du live, wie ein Encode mit gewählter HW/Qualität wirkt, ohne Inkompatibilitäten.</p>
+            <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
+              <div class="field" style="flex:2;min-width:220px">
+                <label>Datei</label>
+                <div class="field-row">
+                  <input type="text" id="fp-path" placeholder="Medienpfad, z. B. Filme/film.mkv" style="flex:1" />
+                  <button class="btn btn-ghost btn-sm" id="fp-browse" type="button">Durchsuchen …</button>
+                  <button class="btn btn-primary btn-sm" id="fp-load" type="button">Laden</button>
+                </div>
+              </div>
+            </div>
+            <div class="field-row fp-encode-opts" style="align-items:flex-end;margin-bottom:8px;flex-wrap:wrap;gap:10px">
+              <div class="field" style="min-width:150px;flex:1">
+                <label>Modus</label>
+                <select id="fp-profile"></select>
+              </div>
+              <div class="field" style="min-width:140px;flex:1">
+                <label>Hardware</label>
+                <select id="fp-platform"></select>
+              </div>
+              <div class="field" style="min-width:140px;flex:1">
+                <label>Zielcodec</label>
+                <select id="fp-codec"></select>
+              </div>
+              <div class="field" id="fp-height-wrap" style="display:none;min-width:100px">
+                <label>Höhe (px)</label>
+                <input type="number" id="fp-height" value="720" min="144" max="2160" step="2" style="width:90px" />
+              </div>
+              <div class="field" id="fp-vbr-wrap" style="display:none;min-width:120px">
+                <label>Bitrate (kbit/s)</label>
+                <input type="number" id="fp-vbr" value="3500" min="300" max="50000" step="100" style="width:110px"
+                       title="Videobitrate für den Live-Transcode" />
+              </div>
+            </div>
+            <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
+            <div class="fp-layout">
+              <div class="fp-main">
+                <div class="fp-stage">
+                  <video id="fp-video" playsinline></video>
+                  <div class="fp-overlay" id="fp-overlay">
+                    <button type="button" class="fp-big-play" id="fp-big-play" title="Abspielen">▶</button>
+                  </div>
+                </div>
+                <div class="fp-controls">
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-play" title="Play/Pause">▶</button>
+                  <input type="range" id="fp-seek" min="0" max="1000" value="0" step="1" />
+                  <span class="muted fp-time" id="fp-time">0:00:00 / 0:00:00</span>
+                  <input type="range" id="fp-vol" min="0" max="100" value="90" title="Lautstärke" style="width:90px" />
+                </div>
+                <div class="field-row fp-tracks" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
+                  <div class="field" style="flex:1;min-width:140px">
+                    <label>Tonspur</label>
+                    <select id="fp-audio"><option value="-1">—</option></select>
+                  </div>
+                  <div class="field" style="flex:1;min-width:140px">
+                    <label>Untertitel</label>
+                    <select id="fp-sub"><option value="-1">Keine</option></select>
+                  </div>
+                  <label class="check" style="margin:0 0 2px" title="PGS/DVD-Untertitel ins Bild brennen (Transcode)">
+                    <input type="checkbox" id="fp-burn" />
+                    <span>Bild-UT einbrennen</span>
+                  </label>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-stop">Stoppen</button>
+                </div>
+              </div>
+              <aside class="fp-chapters" id="fp-chapters-wrap" style="display:none">
+                <div class="fp-chapters-title">Kapitel</div>
+                <ul id="fp-chapters" class="fp-chapters-list"></ul>
+              </aside>
+            </div>
+            <p class="muted" id="fp-status" style="margin-top:8px;font-size:12px"></p>
+          </div>
+        </section>
+
         <!-- PAGE: A/B-Vergleichsplayer -->
         <section class="card span-3" data-page="abcompare">
           <div class="card-head">
@@ -1784,7 +2032,10 @@
       defaultOutput: {{ default_output|tojson }},
     };
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
   <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/player.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/editor.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

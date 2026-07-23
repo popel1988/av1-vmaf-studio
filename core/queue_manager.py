@@ -723,6 +723,9 @@ class QueueManager:
         if s.video_mode == "split":
             self._process_split(item, info)
             return
+        if s.video_mode == "editor":
+            self._process_editor(item, info)
+            return
 
         # --- Audio-Optimierung: nur Remux (Video 1:1 kopieren) ----------------
         if s.video_mode == "copy":
@@ -1176,6 +1179,53 @@ class QueueManager:
             item.status = STATUS_FAILED
             item.error = err
             return
+        self._run_copy_job(item, info, cmd, out_path, label)
+
+    def _process_editor(self, item: "QueueItem", info) -> None:
+        """Video-Editor: geordnete Segmente (Remux-Copy oder Re-Encode)."""
+        from . import editor
+        s = item.settings
+        spec = s.edit_spec or {}
+        segs, err = editor.normalize_segments(spec.get("segments") or [])
+        if err:
+            item.status = STATUS_FAILED
+            item.error = err
+            return
+        out_path = _output_path(item)
+        mode = (spec.get("mode") or "remux").lower()
+        if mode == "encode":
+            cmd, err = editor.build_editor_encode_cmd(
+                segs, out_path,
+                platform=spec.get("platform") or s.platform or "cpu",
+                codec=spec.get("codec") or s.codec or "av1",
+                cq=int(spec.get("cq", s.quality if s.rate_mode == "cq" else 30) or 30),
+                audio_codec=spec.get("audio_codec") or s.audio_codec or "aac",
+                audio_bitrate=int(spec.get("audio_bitrate", s.audio_bitrate) or 192),
+                burn_subs=bool(spec.get("burn_subs")),
+                sub_index=int(spec.get("sub_index", -1) if spec.get("sub_index") is not None else -1),
+            )
+            label = "Editor-Export (Re-Encode)"
+        else:
+            if not bool(spec.get("force_remux")):
+                compat = editor.check_remux_compat(segs)
+                if not compat.get("compatible"):
+                    item.status = STATUS_FAILED
+                    item.error = (
+                        "Segmente nicht kompatibel für verlustfreien Export. "
+                        "Encode-Modus wählen oder Quellen angleichen. "
+                        + "; ".join(compat.get("warnings") or [])
+                    )
+                    return
+            cmd, err = editor.build_editor_remux_cmd(
+                segs, out_path, config.WORK_DIR,
+                add_chapters=bool(spec.get("chapters_from_cuts", True)))
+            label = "Editor-Export (Remux/Copy)"
+        if err:
+            item.status = STATUS_FAILED
+            item.error = err
+            return
+        # Dauer = Summe der Segmente (für Fortschritt).
+        info.duration = editor.total_duration(segs) or getattr(info, "duration", 0.0)
         self._run_copy_job(item, info, cmd, out_path, label)
 
     def _process_split(self, item: "QueueItem", info) -> None:
