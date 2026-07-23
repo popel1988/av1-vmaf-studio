@@ -408,6 +408,7 @@
     if (picker) picker.go("");
   }
   window.openFilePickerModal = openFilePickerModal;
+  window.openFolderPickerModal = openFolderPickerModal;
 
   // Platzhalter-<div> in ein Mehrfach-Auswahl-Dropdown umwandeln.
   // options: [{value,label}] · returns { getValues, setValues }.

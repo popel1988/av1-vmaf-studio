@@ -37,6 +37,27 @@
     "Quellen nicht kompatibel für Remux.": "Sources not compatible for remux.",
     "Encode wählen oder Remux erzwingen.": "Choose encode or force remux.",
     "Video für Editor wählen": "Choose video for editor",
+    "Upload-Zielordner": "Upload destination",
+    "Upload-Zielordner wählen": "Choose upload folder",
+    "Standard-Upload (/data/uploads)": "Default upload (/data/uploads)",
+    "Standard-Ausgabe": "Default output",
+    "Unterbibliothek": "Sub-library",
+    "Ordner": "Folder",
+    "Bereich behalten": "Keep range",
+    "Bereich entfernen": "Remove range",
+    "Ganze Datei": "Entire file",
+    "Bereich behalten – du kannst weitere Bereiche markieren.":
+      "Range kept – you can mark further ranges.",
+    "Bereich entfernt.": "Range removed.",
+    "Clip(s) verbleiben – weitere Bereiche kannst du erneut entfernen.":
+      "clip(s) remain – you can remove further ranges.",
+    "Ganze Datei als Clip übernommen.": "Entire file taken as a clip.",
+    "Nach dem Entfernen bleibt nichts übrig.": "Nothing left after removal.",
+    "Upload bereit – Bereiche behalten oder entfernen.":
+      "Upload ready – keep or remove ranges.",
+    "Noch keine Clips – ganze Datei oder Bereiche behalten/entfernen":
+      "No clips yet – keep entire file or keep/remove ranges",
+    "Ordnerauswahl nicht verfügbar.": "Folder picker unavailable.",
     "Remux kopiert Streams ohne Neucodierung. Schnitte liegen am nächsten Keyframe.":
       "Remux copies streams without re-encoding. Cuts snap to the nearest keyframe.",
     "Encode schneidet framegenau und vereinheitlicht inkompatible Quellen.":
@@ -213,6 +234,14 @@
     "HLS wird von diesem Browser nicht unterstützt.": "HLS is not supported in this browser.",
     "Wiedergabefehler – Session neu starten.": "Playback error — restart the session.",
     "Video für Player wählen": "Choose video for player",
+    "Übernehmen": "Apply",
+    "Original-Auflösung": "Original resolution",
+    "Original-Auflösung (Transcode + Bitrate)": "Original resolution (transcode + bitrate)",
+    "Änderungen noch nicht übernommen – „Übernehmen“ klicken.":
+      "Changes not applied yet – click “Apply”.",
+    "Stream-Copy": "Stream copy",
+    "Transcode → AAC": "Transcode → AAC",
+    "Direct-Play": "Direct Play",
     "Spielt": "Playing",
     "Lädt …": "Loading …",
     "Lade": "Loading",

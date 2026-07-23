@@ -386,6 +386,9 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   display: block; font-size: 11px; color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+#fp-audio-mode.fp-audio-copy { color: var(--good); }
+#fp-audio-mode.fp-audio-xcode { color: var(--warn); }
+#fp-apply:disabled { opacity: .45; }
 
 /* Video-Editor */
 .ed-layout {
@@ -443,6 +446,37 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   font-size: 11px; font-weight: 700; color: #0b1220; min-width: 18px;
   border-right: 1px solid rgba(0,0,0,.25);
 }
+.ed-src-ruler {
+  position: relative;
+  height: 28px;
+  margin: 10px 0 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ed-src-ruler-bg { position: absolute; inset: 0; background: var(--surface-3); opacity: .55; }
+.ed-src-keeps { position: absolute; inset: 0; pointer-events: none; }
+.ed-src-keep {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--good) 45%, transparent);
+}
+.ed-src-keep-empty {
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+.ed-src-sel {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  pointer-events: none;
+}
+.ed-src-playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--warn); pointer-events: none; margin-left: -1px;
+}
+.ed-cut-actions .btn { min-width: 0; }
 
 /* A/B-Vergleichsplayer */
 .ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }

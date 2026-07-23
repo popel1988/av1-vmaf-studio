@@ -1709,13 +1709,13 @@
             <span class="badge" id="ed-badge">Keine Clips</span>
           </div>
           <div class="card-body">
-            <p class="hint">Schnitte auf einer Timeline setzen, Clips sortieren und als Remux
-              (Stream-Copy, Keyframe-genau) oder Encode exportieren. Quellen vom Server
-              <strong>oder per Upload</strong>.</p>
+            <p class="hint">Mehrere Bereiche einer Quelle <strong>behalten</strong> oder gezielt
+              <strong>entfernen</strong> (auch mitten im Film). Quellen aus der Bibliothek oder
+              per Upload in den Standard-Upload-Ordner <em>oder</em> einen Medienordner.</p>
 
             <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:12px">
               <div class="field" style="flex:2;min-width:220px">
-                <label>Quelle hinzufügen</label>
+                <label>Quelle</label>
                 <div class="field-row">
                   <input type="text" id="ed-path" placeholder="Medienpfad oder Upload" style="flex:1" readonly />
                   <button class="btn btn-ghost btn-sm" id="ed-browse" type="button">Bibliothek …</button>
@@ -1723,7 +1723,15 @@
                     Upload
                     <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
                   </label>
-                  <button class="btn btn-primary btn-sm" id="ed-add-src" type="button">Zur Timeline</button>
+                </div>
+              </div>
+              <div class="field" style="min-width:220px;flex:1">
+                <label>Upload-Zielordner</label>
+                <div class="field-row">
+                  <select id="ed-upload-dest" style="flex:1">
+                    <option value="upload">Standard-Upload (/data/uploads)</option>
+                  </select>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-upload-dest-browse" title="Medienordner wählen">…</button>
                 </div>
               </div>
             </div>
@@ -1734,13 +1742,18 @@
                 <div class="ed-stage">
                   <video id="ed-video" playsinline></video>
                 </div>
+                <div class="ed-src-ruler" id="ed-src-ruler" title="Quellen-Timeline – Klick = Seek">
+                  <div class="ed-src-ruler-bg"></div>
+                  <div class="ed-src-keeps" id="ed-src-keeps"></div>
+                  <div class="ed-src-sel" id="ed-src-sel"></div>
+                  <div class="ed-src-playhead" id="ed-src-playhead"></div>
+                </div>
                 <div class="ed-transport">
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause">▶</button>
                   <input type="range" id="ed-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt">I</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt">O</button>
-                  <button type="button" class="btn btn-primary btn-sm" id="ed-add-seg">Clip hinzufügen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt setzen">In</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt setzen">Out</button>
                 </div>
                 <div class="field-row" style="margin-top:8px;flex-wrap:wrap;gap:8px;align-items:flex-end">
                   <div class="field" style="min-width:100px">
@@ -1760,7 +1773,17 @@
                     <span>Stumm</span>
                   </label>
                 </div>
+                <div class="ed-cut-actions field-row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range" title="Markierten Bereich als Clip behalten (mehrfach möglich)">Bereich behalten</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range" title="Markierten Bereich entfernen – Rest der Quelle bleibt (mehrere Löcher möglich)">Bereich entfernen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all" title="Gesamte Quelle als einen Clip">Ganze Datei</button>
+                </div>
                 <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:8px"></p>
+                <p class="hint" style="margin-top:6px;font-size:12px">
+                  <strong>Bereich behalten</strong> = Ausschnitt hinzufügen (beliebig oft).
+                  <strong>Bereich entfernen</strong> = Markierung rausschneiden; der Rest wird
+                  automatisch in Clips aufgeteilt – auch mehrfach mitten im Film.
+                </p>
               </div>
 
               <div class="ed-side">
@@ -1907,6 +1930,10 @@
                 <input type="number" id="fp-vbr" value="3500" min="300" max="50000" step="100" style="width:110px"
                        title="Videobitrate für den Live-Transcode" />
               </div>
+              <div class="field" style="min-width:auto">
+                <label>&nbsp;</label>
+                <button type="button" class="btn btn-primary btn-sm" id="fp-apply" disabled title="Einstellungen übernehmen und Session neu starten">Übernehmen</button>
+              </div>
             </div>
             <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
             <div class="fp-layout">
@@ -1927,6 +1954,7 @@
                   <div class="field" style="flex:1;min-width:140px">
                     <label>Tonspur</label>
                     <select id="fp-audio"><option value="-1">—</option></select>
+                    <p class="muted" id="fp-audio-mode" style="font-size:11.5px;margin:4px 0 0">—</p>
                   </div>
                   <div class="field" style="flex:1;min-width:140px">
                     <label>Untertitel</label>

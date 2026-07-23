@@ -37,6 +37,8 @@ _QUALITY = {
     "720p": {"height": 720, "v_bitrate": 3500},
     "480p": {"height": 480, "v_bitrate": 1500},
 }
+# Encode ohne Skalierung (Originalhöhe); Bitrate kommt aus der UI / Default.
+_ENCODE_PROFILES = set(_QUALITY) | {"custom", "original"}
 
 _IMAGE_SUB = {
     "hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvdsub",
@@ -109,7 +111,31 @@ class PlayerSession:
             "running": bool(self.proc and self.proc.poll() is None),
             "error": self.error,
             "audio_codec": self.audio_codec,
+            "audio_mode": self.audio_play_mode(),
+            "audio_mode_label": self.audio_play_label(),
         }
+
+    def audio_play_mode(self) -> str:
+        """Wie die Tonspur ausgeliefert wird: direct | copy | transcode | none."""
+        if self.audio_index < 0:
+            return "none"
+        if self.mode == "direct":
+            return "direct"
+        ac = (self.audio_codec or "").lower()
+        if ac.startswith(("aac", "mp4a", "mp3")):
+            return "copy"
+        return "transcode"
+
+    def audio_play_label(self) -> str:
+        mode = self.audio_play_mode()
+        ac = (self.audio_codec or "").upper() or "?"
+        if mode == "none":
+            return "Kein Ton"
+        if mode == "direct":
+            return f"Direct-Play ({ac})"
+        if mode == "copy":
+            return f"Stream-Copy ({ac})"
+        return f"Transcode → AAC ({ac})"
 
 
 def _ensure_root() -> Path:
@@ -256,9 +282,10 @@ def player_options() -> dict:
     auto_p = pick_auto_platform("h264")
     return {
         "profiles": [
-            {"id": "auto", "label": "Automatisch (Direct-Play wenn moglich)"},
+            {"id": "auto", "label": "Automatisch (Direct-Play wenn möglich)"},
             {"id": "direct", "label": "Direct-Play (ohne Remux)"},
-            {"id": "copy", "label": "Original-Video + Ton->AAC (HLS)"},
+            {"id": "copy", "label": "Original-Video + Ton→AAC (HLS)"},
+            {"id": "original", "label": "Original-Auflösung (Transcode + Bitrate)"},
             {"id": "1080p", "label": "1080p (Transcode)"},
             {"id": "720p", "label": "720p (Transcode)"},
             {"id": "480p", "label": "480p (Transcode)"},
@@ -476,18 +503,24 @@ def _resolve_profile(profile: str, info, *, force_hls: bool, burn: bool) -> str:
 
 
 def _quality_params(profile: str, height: int, v_bitrate: int) -> tuple[int, int]:
-    """Höhe/Bitrate aus Preset oder Custom.
+    """Höhe/Bitrate aus Preset, Original oder Custom.
 
     ``v_bitrate`` > 0 überschreibt den Preset-Default (UI-Eingabe).
+    ``height == 0`` bei Profil ``original`` = keine Skalierung.
     """
-    if profile in _QUALITY:
-        q = _QUALITY[profile]
+    p = (profile or "").lower()
+    if p == "original":
+        h = 0
+        br = int(v_bitrate) if v_bitrate and int(v_bitrate) > 0 else 8000
+    elif p in _QUALITY:
+        q = _QUALITY[p]
         h = int(q["height"])
         br = int(v_bitrate) if v_bitrate and int(v_bitrate) > 0 else int(q["v_bitrate"])
+        h = max(144, min(2160, h))
     else:
         h = int(height or 720)
         br = int(v_bitrate or 3500)
-    h = max(144, min(2160, h))
+        h = max(144, min(2160, h))
     br = max(300, min(50000, br))
     return h, br
 
@@ -539,20 +572,17 @@ def start_session(
         if can_direct_play(info):
             resolved = "direct"
 
-    need_encode = resolved in _QUALITY or resolved == "custom" or want_burn
+    need_encode = resolved in _ENCODE_PROFILES or want_burn
     enc_info = {"platform": "cpu", "codec": "h264", "encoder": "copy", "warnings": []}
     h, br = 0, 0
     if need_encode:
         enc_info = resolve_encode(
             platform, codec, client_codecs=client_codecs or ["h264"],
         )
-        h, br = _quality_params(
-            resolved if resolved in _QUALITY else "custom",
-            height, v_bitrate,
-        )
-        if resolved not in _QUALITY and resolved != "custom":
-            resolved = "720p"
-            h, br = _quality_params("720p", 0, 0)
+        if resolved not in _ENCODE_PROFILES:
+            # z. B. copy/direct + Burn-in → Encode in Originalauflösung
+            resolved = "original" if want_burn else "720p"
+        h, br = _quality_params(resolved, height, v_bitrate)
 
     sid = uuid.uuid4().hex[:12]
     work = _ensure_root() / sid
@@ -664,7 +694,7 @@ def start_session(
                     start_sec=sess.start_sec,
                     audio_codec=audio_codec,
                     platform="cpu", encoder="libx264", codec="h264",
-                    height=h or 720, v_bitrate=br or 3500,
+                    height=h, v_bitrate=br or 3500,
                     burn_sub_index=subtitle_index if want_burn else -1,
                 )
                 try:

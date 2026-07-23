@@ -20,7 +20,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -786,8 +786,15 @@ class EditorCheckRequest(BaseModel):
 
 
 @app.post("/api/editor/upload")
-async def editor_upload(file: UploadFile = File(...)):
-    """Video (oder Mediencontainer) für den Editor hochladen."""
+async def editor_upload(
+    file: UploadFile = File(...),
+    dest: str = Form(""),
+):
+    """Video für den Editor hochladen.
+
+    ``dest`` leer / ``upload`` → Standard-Upload-Ordner (``upload:<name>``).
+    Sonst media-relativer Ordner (Datei landet im Medienbaum).
+    """
     import uuid as _uuid
 
     orig = Path(file.filename or "upload").name
@@ -799,30 +806,59 @@ async def editor_upload(file: UploadFile = File(...)):
     stem = Path(orig).stem[:60] or "video"
     safe_stem = "".join(c if (c.isalnum() or c in "-_") else "_" for c in stem)
     stored = f"{safe_stem}_{_uuid.uuid4().hex[:8]}{suffix}"
-    config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    dest = config.UPLOAD_DIR / stored
+
+    dest_key = (dest or "").strip()
+    use_upload = not dest_key or dest_key.lower() in ("upload", "uploads", ".")
+    api_path = ""
+    if use_upload:
+        config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = config.UPLOAD_DIR / stored
+        api_path = f"upload:{stored}"
+    else:
+        folder = config.resolve_input(dest_key)
+        if folder is None:
+            return JSONResponse({"error": f"Zielordner ungültig: {dest_key}"},
+                                status_code=400)
+        if folder.is_file():
+            folder = folder.parent
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return JSONResponse({"error": f"Zielordner nicht beschreibbar: {e}"},
+                                status_code=400)
+        if not folder.is_dir():
+            return JSONResponse({"error": "Ziel ist kein Ordner"}, status_code=400)
+        out_path = folder / stored
+        rel = config.rel_input(out_path)
+        if not rel:
+            return JSONResponse({"error": "Ziel außerhalb des Medienbaums"},
+                                status_code=400)
+        api_path = rel
+
     try:
-        with dest.open("wb") as out:
+        with out_path.open("wb") as out:
             while True:
                 chunk = await file.read(1024 * 1024)
                 if not chunk:
                     break
                 out.write(chunk)
     except OSError as e:
+        out_path.unlink(missing_ok=True)
         return JSONResponse({"error": f"Upload fehlgeschlagen: {e}"}, status_code=500)
     finally:
         await file.close()
 
     from core import editor
-    data, err = editor.probe_source(f"upload:{stored}")
+    data, err = editor.probe_source(api_path)
     if data is None:
-        dest.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
         return JSONResponse({"error": err or "Analyse fehlgeschlagen"}, status_code=400)
     if not data.get("has_video"):
-        dest.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
         return JSONResponse({"error": f"{orig}: keine Videospur gefunden."}, status_code=400)
     data["name"] = orig
-    data["path"] = f"upload:{stored}"
+    data["path"] = api_path
+    data["dest"] = "upload" if use_upload else dest_key
     return data
 
 

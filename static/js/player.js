@@ -18,7 +18,12 @@
     seeking: false,
     mode: "hls",
     options: null,
+    dirty: false,
+    audioMode: "",
   };
+
+  const ENCODE_PROFILES = ["original", "1080p", "720p", "480p", "custom"];
+  const PRESET_BR = { original: 8000, "1080p": 6000, "720p": 3500, "480p": 1500 };
 
   function fmtClock(s) {
     s = Math.max(0, Math.floor(s || 0));
@@ -89,11 +94,19 @@
     return out;
   }
 
-  const PRESET_BR = { "1080p": 6000, "720p": 3500, "480p": 1500 };
+  function setDirty(on) {
+    fp.dirty = !!on;
+    const btn = $("fp-apply");
+    if (btn) {
+      btn.disabled = !fp.dirty || !fp.path;
+      btn.classList.toggle("btn-primary", fp.dirty);
+      btn.classList.toggle("btn-ghost", !fp.dirty);
+    }
+  }
 
   function syncEncodeUi(opts) {
     const prof = (($("fp-profile") || {}).value) || "auto";
-    const encode = ["1080p", "720p", "480p", "custom"].includes(prof);
+    const encode = ENCODE_PROFILES.includes(prof);
     ["fp-platform", "fp-codec"].forEach((id) => {
       const el = $(id);
       if (el) el.disabled = !encode;
@@ -105,6 +118,45 @@
     // Preset gewechselt → Default-Bitrate vorschlagen (nur wenn gewünscht)
     if (opts && opts.presetBr && PRESET_BR[prof] && $("fp-vbr")) {
       $("fp-vbr").value = String(PRESET_BR[prof]);
+    }
+  }
+
+  function updateAudioModeHint(sess) {
+    const el = $("fp-audio-mode");
+    if (!el) return;
+    if (sess && sess.audio_mode_label) {
+      fp.audioMode = sess.audio_mode || "";
+      el.textContent = sess.audio_mode_label;
+      el.classList.toggle("fp-audio-copy", sess.audio_mode === "copy" || sess.audio_mode === "direct");
+      el.classList.toggle("fp-audio-xcode", sess.audio_mode === "transcode");
+      return;
+    }
+    // Vorschau anhand gewählter Spur + Modus (noch nicht übernommen)
+    const aSel = $("fp-audio");
+    const idx = aSel ? parseInt(aSel.value, 10) : -1;
+    if (isNaN(idx) || idx < 0) {
+      el.textContent = tt("Kein Ton");
+      el.classList.remove("fp-audio-copy", "fp-audio-xcode");
+      return;
+    }
+    const tracks = (fp.info && fp.info.audio) || [];
+    const ac = String((tracks[idx] && tracks[idx].codec) || "").toLowerCase();
+    const acUp = (ac || "?").toUpperCase();
+    const prof = (($("fp-profile") || {}).value) || "auto";
+    if (prof === "direct" || (prof === "auto" && clientDirectOk(fp.info))) {
+      el.textContent = `${tt("Direct-Play")} (${acUp})`;
+      el.classList.add("fp-audio-copy");
+      el.classList.remove("fp-audio-xcode");
+      return;
+    }
+    if (/^(aac|mp3|mp4a)/.test(ac)) {
+      el.textContent = `${tt("Stream-Copy")} (${acUp})`;
+      el.classList.add("fp-audio-copy");
+      el.classList.remove("fp-audio-xcode");
+    } else {
+      el.textContent = `${tt("Transcode → AAC")} (${acUp})`;
+      el.classList.add("fp-audio-xcode");
+      el.classList.remove("fp-audio-copy");
     }
   }
 
@@ -194,6 +246,7 @@
         return `<option value="${idx}" data-image="${img ? "1" : "0"}">${escapeHtml(lab)}</option>`;
       }).join("");
     syncBurnHint();
+    updateAudioModeHint(null);
   }
 
   function syncBurnHint() {
@@ -354,7 +407,7 @@
           codec,
           height: profile === "custom" ? height : 0,
           // Bitrate bei allen Transcode-Profilen mitschicken (überschreibt Preset-Default)
-          v_bitrate: ["1080p", "720p", "480p", "custom"].includes(profile) ? vBitrate : 0,
+          v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
           client_codecs: detectClientCodecs(),
         }),
       });
@@ -377,6 +430,8 @@
         if ($("fp-sub") && sess.subtitle != null) $("fp-sub").value = String(sess.subtitle);
       }
       renderChapters(d.chapters || []);
+      updateAudioModeHint(sess);
+      setDirty(false);
       if (sess.error && !sess.ready && sess.mode === "hls") {
         setStatus(sess.error, true);
         setBadge(tt("Fehler"));
@@ -406,15 +461,17 @@
         await waitReady();
         playHls(url);
         const burnNote = sess.burn_subs ? ` · ${tt("Bild-UT eingebrannt")}` : "";
-        const encNote = sess.encoder && sess.encoder !== "copy"
-          ? ` · ${sess.platform}/${sess.codec || ""}/${sess.encoder}`
-            + (sess.height ? ` · ${sess.height}p` : "")
+        const resNote = sess.encoder && sess.encoder !== "copy"
+          ? (sess.height
+            ? ` · ${sess.height}p`
+            : ` · ${tt("Original-Auflösung")}`)
             + (sess.v_bitrate ? ` @ ${sess.v_bitrate}k` : "")
+            + ` · ${sess.platform}/${sess.codec || ""}/${sess.encoder}`
           : "";
         const warn = sess.warning ? ` · ⚠ ${sess.warning}` : "";
         setBadge(sess.profile || tt("HLS"));
         setStatus(
-          `${tt("HLS")} · ${sess.profile || "copy"}${encNote}${burnNote}${warn}`
+          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${warn}`
           + ` · ${tt("Timeline aus Analyse")}`
           + (fp.duration ? ` · ${fmtClock(fp.duration)}` : ""),
         );
@@ -530,34 +587,37 @@
       });
     }
 
-    ["fp-audio", "fp-sub", "fp-profile", "fp-platform", "fp-codec", "fp-burn"].forEach((id) => {
+    // Einstellungen nur markieren – Session startet erst mit „Übernehmen“
+    // (oder initialem Laden / Seek / Kapitel).
+    ["fp-audio", "fp-sub", "fp-profile", "fp-platform", "fp-codec", "fp-burn",
+      "fp-height", "fp-vbr"].forEach((id) => {
       const el = $(id);
       if (!el) return;
-      el.addEventListener("change", () => {
+      const onChange = () => {
         if (id === "fp-sub") syncBurnHint();
         if (id === "fp-profile") syncEncodeUi({ presetBr: true });
+        if (id === "fp-audio" || id === "fp-profile") updateAudioModeHint(null);
         if (!fp.path) return;
-        if (id === "fp-profile" || id === "fp-platform" || id === "fp-codec"
-            || id === "fp-audio" || id === "fp-sub" || id === "fp-burn") {
-          startSession(absoluteTime(), true);
-        }
-      });
+        setDirty(true);
+        setStatus(tt("Änderungen noch nicht übernommen – „Übernehmen“ klicken."));
+      };
+      el.addEventListener("change", onChange);
+      if (id === "fp-height" || id === "fp-vbr") el.addEventListener("input", onChange);
     });
-    ["fp-height", "fp-vbr"].forEach((id) => {
-      const el = $(id);
-      if (!el) return;
-      el.addEventListener("change", () => {
-        const prof = (($("fp-profile") || {}).value) || "";
-        if (!fp.path || !["1080p", "720p", "480p", "custom"].includes(prof)) return;
-        startSession(absoluteTime(), true);
-      });
+
+    const apply = $("fp-apply");
+    if (apply) apply.addEventListener("click", () => {
+      if (!fp.path) return;
+      startSession(absoluteTime(), true);
     });
 
     const stop = $("fp-stop");
     if (stop) stop.addEventListener("click", async () => {
       await stopSession();
+      setDirty(false);
       setStatus("");
       updateTimeUi();
+      updateAudioModeHint(null);
     });
 
     const load = $("fp-load");
