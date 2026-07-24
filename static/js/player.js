@@ -204,6 +204,40 @@
     }
   }
 
+  function platformCodecIds(platformId) {
+    const platforms = (fp.options && fp.options.platforms) || [];
+    const p = platforms.find((x) => x.id === platformId);
+    if (platformId === "auto" || !p) return ["h264", "hevc", "av1"];
+    const list = Array.isArray(p.codecs) ? p.codecs.slice() : [];
+    return list.length ? list : (platformId === "cpu" ? ["h264"] : []);
+  }
+
+  function syncCodecOptionsForPlatform() {
+    const codec = $("fp-codec");
+    if (!codec || !fp.options) return;
+    const client = detectClientCodecs();
+    const platId = (($("fp-platform") || {}).value) || "auto";
+    const allowed = new Set(platformCodecIds(platId));
+    const cur = codec.value || "h264";
+    const all = (fp.options.codecs) || [];
+    codec.innerHTML = all.map((c) => {
+      const hwOk = allowed.has(c.id);
+      const brOk = client.includes(c.id);
+      let lab = c.label;
+      if (!hwOk) lab += ` (${tt("auf dieser HW nicht verfügbar")})`;
+      else if (!brOk) lab += ` (${tt("Browser: Fallback H.264")})`;
+      const dis = hwOk ? "" : " disabled";
+      return `<option value="${c.id}"${dis}>${escapeHtml(lab)}</option>`;
+    }).join("");
+    if ([...codec.options].some((o) => o.value === cur && !o.disabled)) {
+      codec.value = cur;
+    } else {
+      const fallback = ["h264", "hevc", "av1"].find((id) =>
+        [...codec.options].some((o) => o.value === id && !o.disabled));
+      if (fallback) codec.value = fallback;
+    }
+  }
+
   function fillEncodeOptions(options) {
     fp.options = options;
     const client = detectClientCodecs();
@@ -223,22 +257,15 @@
       const platforms = (options && options.platforms) || [];
       plat.innerHTML = platforms.map((p) => {
         const dis = p.available === false ? " disabled" : "";
-        return `<option value="${p.id}"${dis}>${escapeHtml(p.label)}</option>`;
+        const note = (p.id !== "auto" && p.codecs && p.codecs.length)
+          ? ` (${p.codecs.map((c) => c.toUpperCase()).join(", ")})`
+          : "";
+        return `<option value="${p.id}"${dis}>${escapeHtml(p.label + note)}</option>`;
       }).join("");
       if ([...plat.options].some((o) => o.value === cur && !o.disabled)) plat.value = cur;
     }
 
-    const codec = $("fp-codec");
-    if (codec) {
-      const cur = codec.value || "h264";
-      const codecs = (options && options.codecs) || [];
-      codec.innerHTML = codecs.map((c) => {
-        const ok = client.includes(c.id);
-        const lab = ok ? c.label : `${c.label} (${tt("Browser: Fallback H.264")})`;
-        return `<option value="${c.id}">${escapeHtml(lab)}</option>`;
-      }).join("");
-      if ([...codec.options].some((o) => o.value === cur)) codec.value = cur;
-    }
+    syncCodecOptionsForPlatform();
 
     const la = $("fp-lookahead");
     if (la && options && options.lookahead_choices) {
@@ -255,7 +282,7 @@
         : tt("Encoder-Liste (Diagnose noch nicht gelaufen)");
       const plats = (options.platforms || [])
         .filter((p) => p.id !== "auto" && p.available)
-        .map((p) => p.id)
+        .map((p) => `${p.id}[${(p.codecs || []).join("/")}]`)
         .join(", ");
       hw.textContent = `${ready} · ${tt("Browser kann")}: ${client.join(", ").toUpperCase()}`
         + (plats ? ` · ${tt("Server")}: ${plats}` : "")
@@ -438,17 +465,23 @@
     if (!v) return;
     destroyPlayback();
     fp.mode = "hls";
-    const buf = fp.lookahead > 0
-      ? Math.max(12, Math.min(90, fp.lookahead + 8))
-      : 60;
+    // Zielpuffer (Encode-Vorlauf) darf die Live-Latenz-Grenze nicht sprengen –
+    // sonst springt hls.js alle paar Sekunden um ~liveMaxLatency*Segmentlänge vor
+    // (früher: 10×2s = 20s).
+    const segGuess = 2;
+    const la = fp.lookahead > 0 ? fp.lookahead : 60;
+    const buf = Math.max(12, Math.min(120, la + 8));
+    const maxLatCount = Math.max(30, Math.ceil((la + 40) / segGuess));
     if (window.Hls && window.Hls.isSupported()) {
       fp.hls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
         maxBufferLength: buf,
-        maxMaxBufferLength: buf + 20,
+        maxMaxBufferLength: buf + 30,
+        backBufferLength: 30,
         liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 10,
+        liveMaxLatencyDurationCount: maxLatCount,
+        maxLiveSyncPlaybackRate: 1,
         liveDurationInfinity: true,
       });
       fp.hls.loadSource(url);
@@ -735,6 +768,7 @@
       const onChange = () => {
         if (id === "fp-sub") syncBurnHint();
         if (id === "fp-profile") syncEncodeUi({ presetBr: true });
+        if (id === "fp-platform") syncCodecOptionsForPlatform();
         if (id === "fp-audio" || id === "fp-profile" || id === "fp-audio-copy") {
           updateAudioModeHint(null);
         }

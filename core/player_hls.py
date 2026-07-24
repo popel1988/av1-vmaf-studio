@@ -267,6 +267,10 @@ def resolve_encode(
 ) -> dict:
     """Plattform/Codec gegen Capabilities + Browser-Fähigkeit auflösen.
 
+    Explizit gewählte Hardware wird nicht still auf eine andere GPU umgebogen
+    (z. B. Intel+AV1 → NVIDIA). Stattdessen Codec-Fallback auf derselben
+    Plattform, sonst CPU.
+
     Rückgabe: platform, codec, encoder, warnings[].
     """
     warnings: list[str] = []
@@ -284,27 +288,44 @@ def resolve_encode(
         )
         codec = "h264"
 
-    plat = (platform or "auto").lower()
-    if plat == "auto":
-        plat = pick_auto_platform(codec)
+    want_auto = (platform or "auto").lower() == "auto"
+    plat = pick_auto_platform(codec) if want_auto else (platform or "cpu").lower()
     if plat not in ("nvidia", "intel", "amd", "cpu"):
         plat = "cpu"
         warnings.append("Unbekannte Plattform – Fallback CPU.")
 
     if plat != "cpu" and not _cap_ok(plat, codec):
-        # Codec auf dieser HW nicht verfügbar → andere HW oder CPU
-        alt = pick_auto_platform(codec)
-        warnings.append(
-            f"{plat}/{codec} laut Capabilities nicht verfuegbar - nutze {alt}."
-        )
-        plat = alt
+        if want_auto:
+            alt = pick_auto_platform(codec)
+            warnings.append(
+                f"{plat}/{codec} laut Capabilities nicht verfügbar – nutze {alt}."
+            )
+            plat = alt
+        else:
+            # Gewählte HW beibehalten: Codec auf derselben Plattform senken.
+            fb = next(
+                (c for c in ("h264", "hevc", "av1")
+                 if c in allowed and _cap_ok(plat, c)),
+                None,
+            )
+            if fb:
+                warnings.append(
+                    f"{plat}/{codec} laut Capabilities nicht verfügbar – "
+                    f"bleibe bei {plat}, nutze {fb}."
+                )
+                codec = fb
+            else:
+                warnings.append(
+                    f"{plat} hat keinen nutzbaren Encoder – Fallback CPU/H.264."
+                )
+                plat, codec = "cpu", "h264"
 
     if plat == "cpu":
         enc = _CPU_ENC.get(codec, "libx264")
     else:
         enc = ff.encoder_name(plat, codec) or ""
         if not enc:
-            warnings.append(f"Kein Encoder fuer {plat}/{codec} - Fallback CPU/H.264.")
+            warnings.append(f"Kein Encoder für {plat}/{codec} – Fallback CPU/H.264.")
             plat, codec, enc = "cpu", "h264", "libx264"
 
     return {
