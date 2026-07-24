@@ -332,7 +332,8 @@ def player_options() -> dict:
             "HEVC/AV1 nur, wenn der Browser sie meldet – sonst Fallback H.264. "
             "Encode-Vorlauf = Zielpuffer: FFmpeg läuft durchgehend und wird "
             "gedrosselt (Pause), sobald genug voraus liegt – ohne Neu-Start. "
-            "Ton→AAC kostet CPU; optional Stream-Copy (kann im Browser haken)."
+            "Video-Decode+Encode: CUDA/NVENC, QSV oder VAAPI (je nach Plattform); "
+            "Ton→AAC bleibt oft CPU. Optional Ton Stream-Copy."
         ),
     }
 
@@ -379,6 +380,24 @@ def _audio_args(audio_index: int, audio_codec: str,
 
 def _vaapi_device() -> str:
     return getattr(config, "VAAPI_DEVICE", "/dev/dri/renderD128") or "/dev/dri/renderD128"
+
+
+def _hwaccel_decode_args(encoder: str) -> list[str]:
+    """HW-Decode passend zum Encoder (ohne GPU-Output-Format).
+
+    Frames landen für Scale/setpts im System-RAM und werden danach wieder
+    per hwupload zum Encoder gereicht – analog zu NVENC+CUDA.
+    """
+    enc = (encoder or "").lower()
+    if "nvenc" in enc:
+        return ["-hwaccel", "cuda"]
+    if "qsv" in enc:
+        # Device kommt oft schon über -init_hw_device im Filter-Pre; Decode
+        # nutzt dasselbe QSV-Backend.
+        return ["-hwaccel", "qsv"]
+    if "vaapi" in enc:
+        return ["-hwaccel", "vaapi", "-hwaccel_device", _vaapi_device()]
+    return []
 
 
 def _build_video_filter(
@@ -517,9 +536,10 @@ def _build_hls_cmd(
     pre: list[str] = []
     vmap: list[str] = []
     if not video_copy:
-        # NVENC: Decode auf GPU; Frames für Filter ggf. zurück in System-RAM.
-        if "nvenc" in (encoder or ""):
-            cmd += ["-hwaccel", "cuda"]
+        # HW-Decode: NVIDIA (CUDA), Intel QSV, Intel/AMD VAAPI – nicht nur NVENC.
+        # Ohne -hwaccel_output_format*: Filter (setpts/scale) bleiben auf CPU,
+        # danach hwupload zum jeweiligen Encoder.
+        cmd += _hwaccel_decode_args(encoder)
         pre, vmap = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
             platform=platform, encoder=encoder,

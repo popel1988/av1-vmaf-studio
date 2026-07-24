@@ -166,15 +166,27 @@ def _encoder_section(monitor, deep: bool = False) -> dict:
                              "FFmpeg -encoders nicht lesbar – Prüfung übersprungen"))
         return _section("Encoder", checks)
 
-    # Im Funktionstest die echten Ergebnisse ermitteln UND den Cache aktualisieren,
-    # damit VMAF-Tool/Encoding danach nur noch lauffähige Encoder anbieten.
+    # Funktionstest: echte Mini-Encodes + Cache aktualisieren.
+    # Normaler Selbsttest: gecachte Capabilities anzeigen (sonst wirkt nach
+    # Neustart alles „✓“, obwohl z. B. iGPU-AV1 schon als unfähig bekannt ist).
     deep_results: dict = {}
-    if deep:
-        try:
-            from . import capabilities as caps
-            deep_results = caps.compute(monitor).get("results", {})
-        except Exception:  # pragma: no cover
-            deep_results = {}
+    cached_results: dict = {}
+    cache_age = ""
+    try:
+        from . import capabilities as caps
+        if deep:
+            deep_results = caps.compute(monitor).get("results", {}) or {}
+        else:
+            cached = caps.get_cached() or {}
+            cached_results = dict(cached.get("results") or {})
+            ts = float(cached.get("generated_at") or 0)
+            if ts > 0:
+                import time as _time
+                age_h = max(0, int((_time.time() - ts) / 3600))
+                cache_age = (f"Cache {age_h}h alt" if age_h
+                             else "Cache frisch")
+    except Exception:  # pragma: no cover
+        deep_results, cached_results = {}, {}
 
     for p in platforms:
         codec_states = []
@@ -186,35 +198,51 @@ def _encoder_section(monitor, deep: bool = False) -> dict:
                 codec_states.append(f"{c.upper()}=✗ ({enc}, nicht im Build)")
                 codec_status.append("skip")
                 continue
-            if not deep:
-                codec_states.append(f"{c.upper()}=✓ ({enc})")
-                codec_status.append("ok")
-                continue
-            # Echter Mini-Encode: prüft die tatsächliche HW-Fähigkeit.
             key = f"{p}:{c}"
-            if key in deep_results:
-                ok, err = bool(deep_results[key]), "HW unterstützt diesen Encoder nicht"
+            if deep:
+                if key in deep_results:
+                    ok = bool(deep_results[key])
+                else:
+                    ok, _ = _test_encode(p, c)
+                if ok:
+                    codec_states.append(f"{c.upper()}=✓ ({enc})")
+                    codec_status.append("ok")
+                else:
+                    codec_states.append(
+                        f"{c.upper()}=✗ ({enc}: HW unterstützt diesen Encoder nicht)")
+                    codec_status.append("warn")
+                continue
+
+            # Flacher Selbsttest: Build-Präsenz + bekannte Capabilities
+            if cached_results and key in cached_results:
+                if cached_results[key]:
+                    codec_states.append(f"{c.upper()}=✓ ({enc}, getestet)")
+                    codec_status.append("ok")
+                else:
+                    codec_states.append(
+                        f"{c.upper()}=✗ ({enc}: laut Funktionstest nicht nutzbar)")
+                    codec_status.append("warn")
             else:
-                ok, err = _test_encode(p, c)
-            if ok:
-                codec_states.append(f"{c.upper()}=✓ ({enc})")
-                codec_status.append("ok")
-            else:
-                codec_states.append(f"{c.upper()}=✗ ({enc}: {err})")
+                codec_states.append(
+                    f"{c.upper()}=? ({enc}, nur im Build – Funktionstest ausstehend)")
                 codec_status.append("warn")
 
         present_any = any(s != "skip" for s in codec_status)
         if not present_any:
             status = "warn"
-        elif deep and any(s == "warn" for s in codec_status):
+        elif any(s == "warn" for s in codec_status):
             status = "warn"
         else:
             status = "ok"
         checks.append(_check(_PLATFORM_LABELS.get(p, p), status,
                              " · ".join(codec_states)))
 
-    title = ("Encoder-Funktionstest (echte Mini-Encodes)"
-             if deep else "Encoder-Verfügbarkeit")
+    if deep:
+        title = "Encoder-Funktionstest (echte Mini-Encodes)"
+    elif cached_results:
+        title = f"Encoder-Verfügbarkeit ({cache_age or 'aus Cache'})"
+    else:
+        title = "Encoder-Verfügbarkeit (noch kein Funktionstest)"
     return _section(title, checks)
 
 
