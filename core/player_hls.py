@@ -128,7 +128,29 @@ class PlayerSession:
             "audio_codec": self.audio_codec,
             "audio_mode": self.audio_play_mode(),
             "audio_mode_label": self.audio_play_label(),
+            "playback_label": self.playback_label(),
         }
+
+    def playback_label(self) -> str:
+        """Kurzer Text für die UI: tatsächlich laufender Modus (nicht nur Auswahl)."""
+        if self.mode == "direct":
+            return "Direct-Play"
+        if self.encoder in ("", "copy", "direct") and self.profile == "copy":
+            return "HLS · Original-Video + Ton→AAC"
+        if self.encoder in ("", "copy") and not self.codec:
+            return "HLS · Stream-Copy"
+        bits = ["HLS"]
+        if self.profile:
+            bits.append(self.profile)
+        if self.height:
+            bits.append(f"{self.height}p")
+        elif self.encoder and self.encoder not in ("copy", "direct"):
+            bits.append("Original-Auflösung")
+        if self.platform and self.encoder and self.encoder not in ("copy", "direct"):
+            bits.append(f"{self.platform}/{self.codec or '?'}/{self.encoder}")
+        if self.burn_subs:
+            bits.append("UT eingebrannt")
+        return " · ".join(bits)
 
     def audio_play_mode(self) -> str:
         """Wie die Tonspur ausgeliefert wird: direct | copy | transcode | none."""
@@ -296,6 +318,7 @@ def resolve_encode(
 def player_options() -> dict:
     from . import capabilities as caps
     results = caps.results_map()
+    decode = caps.decode_results_map()
     auto_p = pick_auto_platform("h264")
     return {
         "profiles": [
@@ -318,7 +341,7 @@ def player_options() -> dict:
         "transcode_encoder": (
             ff.encoder_name(auto_p, "h264") if auto_p != "cpu" else "libx264"
         ),
-        "capabilities_ready": bool(results),
+        "capabilities_ready": bool(results) and bool(decode),
         "lookahead_choices": [
             {"id": 15, "label": "15 s Puffer"},
             {"id": 30, "label": "30 s Puffer (empfohlen)"},
@@ -332,7 +355,8 @@ def player_options() -> dict:
             "HEVC/AV1 nur, wenn der Browser sie meldet – sonst Fallback H.264. "
             "Encode-Vorlauf = Zielpuffer: FFmpeg läuft durchgehend und wird "
             "gedrosselt (Pause), sobald genug voraus liegt – ohne Neu-Start. "
-            "Video-Decode+Encode: CUDA/NVENC, QSV oder VAAPI (je nach Plattform); "
+            "Video: HW-Decode (CUDA/QSV/VAAPI) nur wenn der Funktionstest den "
+            "Quellcodec freigibt, danach HW-Encode; sonst Software-Decode. "
             "Ton→AAC bleibt oft CPU. Optional Ton Stream-Copy."
         ),
     }
@@ -359,8 +383,13 @@ def can_direct_play(info) -> bool:
 
 
 def _audio_args(audio_index: int, audio_codec: str,
-                force_copy: bool = False) -> list[str]:
-    """Ton-Args. Bei Re-Encode: Timeline auf 0 (asetpts) wie beim Video."""
+                force_copy: bool = False,
+                reset_pts: bool = True) -> list[str]:
+    """Ton-Args.
+
+    ``reset_pts`` nur zusammen mit Video-Re-Encode (``setpts``) – sonst läuft
+    der Ton bei Video-Copy (Auto→HLS) asynchron vor/nach dem Bild.
+    """
     if audio_index < 0:
         return ["-an"]
     args = ["-map", f"0:a:{int(audio_index)}?"]
@@ -368,12 +397,19 @@ def _audio_args(audio_index: int, audio_codec: str,
     if force_copy or ac.startswith(("aac", "mp4a", "mp3")):
         # Copy: keine PTS-Filter möglich ohne Decode – Mux-Flags gleichen grob aus.
         args += ["-c:a", "copy"]
-    else:
+    elif reset_pts:
         # Stereo-AAC + gemeinsame Null-Timeline mit Video (setpts/asetpts).
         args += [
             "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
             "-profile:a", "aac_low",
             "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
+        ]
+    else:
+        # Video bleibt Copy → Original-PTS behalten, nur leicht syncen.
+        args += [
+            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
+            "-profile:a", "aac_low",
+            "-af", "aresample=async=1",
         ]
     return args
 
@@ -382,20 +418,29 @@ def _vaapi_device() -> str:
     return getattr(config, "VAAPI_DEVICE", "/dev/dri/renderD128") or "/dev/dri/renderD128"
 
 
-def _hwaccel_decode_args(encoder: str) -> list[str]:
-    """HW-Decode passend zum Encoder (ohne GPU-Output-Format).
+def _hwaccel_decode_args(platform: str, source_codec: str = "") -> list[str]:
+    """HW-Decode passend zur Encode-Plattform (ohne GPU-Output-Format).
 
-    Frames landen für Scale/setpts im System-RAM und werden danach wieder
-    per hwupload zum Encoder gereicht – analog zu NVENC+CUDA.
+    Nur bei explizit positivem Decode-Funktionstest für den Quellcodec
+    (kein Build-Optimistic-Fallback – der erzeugt oft A/V-Sprünge).
+    Frames landen für Scale/setpts im System-RAM, danach hwupload zum Encoder.
     """
-    enc = (encoder or "").lower()
-    if "nvenc" in enc:
+    plat = (platform or "").lower()
+    if plat not in ("nvidia", "intel", "amd"):
+        return []
+    src = ff.normalize_video_codec(source_codec)
+    if not src:
+        return []
+    from . import capabilities as caps
+    decode_map = caps.decode_results_map()
+    if not decode_map or not decode_map.get(f"{plat}:{src}"):
+        return []
+    backend = ff.encoder_backend(plat)
+    if backend == "nvenc":
         return ["-hwaccel", "cuda"]
-    if "qsv" in enc:
-        # Device kommt oft schon über -init_hw_device im Filter-Pre; Decode
-        # nutzt dasselbe QSV-Backend.
+    if backend == "qsv":
         return ["-hwaccel", "qsv"]
-    if "vaapi" in enc:
+    if backend == "vaapi":
         return ["-hwaccel", "vaapi", "-hwaccel_device", _vaapi_device()]
     return []
 
@@ -520,6 +565,7 @@ def _build_hls_cmd(
     video_copy: bool = False,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
+    source_codec: str = "",
 ) -> list[str]:
     """HLS-Command. Läuft durchgehend; Vorlauf drosselt der Client per Pause.
 
@@ -536,10 +582,10 @@ def _build_hls_cmd(
     pre: list[str] = []
     vmap: list[str] = []
     if not video_copy:
-        # HW-Decode: NVIDIA (CUDA), Intel QSV, Intel/AMD VAAPI – nicht nur NVENC.
+        # HW-Decode nur wenn Capabilities den Quellcodec freigeben.
         # Ohne -hwaccel_output_format*: Filter (setpts/scale) bleiben auf CPU,
         # danach hwupload zum jeweiligen Encoder.
-        cmd += _hwaccel_decode_args(encoder)
+        cmd += _hwaccel_decode_args(platform, source_codec)
         pre, vmap = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
             platform=platform, encoder=encoder,
@@ -559,7 +605,11 @@ def _build_hls_cmd(
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
 
-    cmd += _audio_args(audio_index, audio_codec, force_copy=bool(audio_copy))
+    cmd += _audio_args(
+        audio_index, audio_codec,
+        force_copy=bool(audio_copy),
+        reset_pts=not bool(video_copy),
+    )
 
     la = _normalize_lookahead(lookahead_sec)
     hls_time = 2
@@ -736,6 +786,10 @@ def start_session(
             "options": player_options(),
         }
 
+    source_vcodec = ff.normalize_video_codec(
+        getattr(info, "codec", "") if info else ""
+    )
+
     if resolved == "copy" and not want_burn:
         cmd = _build_hls_cmd(
             target, work,
@@ -746,6 +800,7 @@ def start_session(
             height=0, v_bitrate=0, burn_sub_index=-1, video_copy=True,
             lookahead_sec=la,
             audio_copy=want_audio_copy,
+            source_codec=source_vcodec,
         )
         sess.encoder = "copy"
         sess.platform = "cpu"
@@ -765,6 +820,7 @@ def start_session(
             video_copy=False,
             lookahead_sec=la,
             audio_copy=want_audio_copy,
+            source_codec=source_vcodec,
         )
 
     try:
@@ -817,6 +873,7 @@ def start_session(
                     burn_sub_index=subtitle_index if want_burn else -1,
                     lookahead_sec=la,
                     audio_copy=want_audio_copy,
+                    source_codec=source_vcodec,
                 )
                 try:
                     sess.proc = subprocess.Popen(

@@ -400,6 +400,16 @@ ENCODERS = {
     "cpu": {"av1": "libsvtav1", "hevc": "libx265", "h264": "libx264"},
 }
 
+# HW-Decoder-Namen (für Build-Check / explizites -c:v). VAAPI nutzt oft den
+# generischen Decoder + ``-hwaccel vaapi`` – dann ist der Name nur ein Label.
+DECODERS = {
+    "nvidia": {"av1": "av1_cuvid", "hevc": "hevc_cuvid", "h264": "h264_cuvid"},
+    "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
+    "intel_vaapi": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
+    "amd": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
+    "cpu": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
+}
+
 
 def intel_uses_vaapi() -> bool:
     """True, wenn die Intel-Plattform über VAAPI (statt QSV) encodieren soll."""
@@ -417,6 +427,17 @@ def encoder_name(platform: str, codec: str) -> str:
     return _encoder_map(platform).get(codec, "libsvtav1")
 
 
+def _decoder_map(platform: str) -> dict:
+    if platform == "intel" and intel_uses_vaapi():
+        return DECODERS["intel_vaapi"]
+    return DECODERS.get(platform, DECODERS["cpu"])
+
+
+def decoder_name(platform: str, codec: str) -> str:
+    """FFmpeg-Decoder-Name für Plattform/Codec (Build-Check / Diagnose-Label)."""
+    return _decoder_map(platform).get(codec, codec)
+
+
 def encoder_backend(platform: str) -> str:
     """Konkretes HW-Backend: 'nvenc' | 'qsv' | 'vaapi' | 'cpu'."""
     if platform == "nvidia":
@@ -426,6 +447,18 @@ def encoder_backend(platform: str) -> str:
     if platform == "intel":
         return "vaapi" if intel_uses_vaapi() else "qsv"
     return "cpu"
+
+
+def normalize_video_codec(codec: str) -> str:
+    """ffprobe-/Container-Codec → h264|hevc|av1 (sonst leer)."""
+    c = (codec or "").lower().strip()
+    if c.startswith(("h264", "avc")):
+        return "h264"
+    if c.startswith(("hevc", "h265")):
+        return "hevc"
+    if c.startswith(("av1", "av01")):
+        return "av1"
+    return ""
 
 
 @functools.lru_cache(maxsize=1)
@@ -469,6 +502,38 @@ def encoder_available(platform: str, codec: str) -> bool:
     avail = available_encoders()
     # Wenn die Liste leer ist (ffmpeg nicht abfragbar), nicht fälschlich blocken.
     return not avail or enc in avail
+
+
+@functools.lru_cache(maxsize=1)
+def available_decoders() -> frozenset:
+    """Liest die im FFmpeg-Build kompilierten Decoder (`ffmpeg -decoders`)."""
+    from . import config
+    try:
+        out = subprocess.run(
+            [config.FFMPEG, "-hide_banner", "-decoders"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    names = set()
+    for line in out.stdout.splitlines():
+        m = _ENCODER_LINE.match(line)
+        if m:
+            names.add(m.group(1))
+    return frozenset(names)
+
+
+def decoder_available(platform: str, codec: str) -> bool:
+    """True, wenn der Decoder im Build steckt (VAAPI: generischer Codec reicht)."""
+    backend = encoder_backend(platform)
+    avail = available_decoders()
+    if not avail:
+        return True
+    if backend == "vaapi" or platform == "cpu":
+        # Generische Decoder (h264/hevc/av1) + hwaccel
+        return codec in avail or decoder_name(platform, codec) in avail
+    return decoder_name(platform, codec) in avail
 
 
 def quality_args(platform: str, value: int) -> list[str]:

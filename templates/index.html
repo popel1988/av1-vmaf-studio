@@ -1950,6 +1950,7 @@
             <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
             <div class="fp-layout">
               <div class="fp-main">
+                <p class="muted fp-active-mode" id="fp-active-mode">Kein Video geladen</p>
                 <div class="fp-stage">
                   <video id="fp-video" playsinline></video>
                   <div class="fp-overlay" id="fp-overlay">
@@ -2048,14 +2049,14 @@
             <span class="badge" id="diag-badge">—</span>
           </div>
           <div class="card-body">
-            <p class="hint">Prüft, ob alle Bausteine vorhanden und nutzbar sind: FFmpeg &amp;
-              Encoder, VMAF-Modelle, dovi_tool, GPU/VAAPI und die Datenordner. Hilfreich nach
-              einem Update oder bei Encode-Fehlern. Der <strong>Funktionstest</strong> führt
-              zusätzlich echte Mini-Encodes aus und erkennt so, was die Hardware wirklich kann
-              (z. B. iGPU ohne AV1) – dauert einige Sekunden länger.</p>
+            <p class="hint">Prüft, ob alle Bausteine vorhanden und nutzbar sind: FFmpeg,
+              Encoder/Decoder, VMAF-Modelle, dovi_tool, GPU/VAAPI und die Datenordner. Hilfreich nach
+              einem Update oder bei Encode-/Player-Fehlern. Der <strong>Funktionstest</strong> führt
+              echte Mini-Encode- und HW-Decode-Tests aus und erkennt so, was die Hardware wirklich kann
+              (z. B. iGPU ohne AV1-Encode oder ohne AV1-Decode) – wird vom Player für HW-Decode genutzt.</p>
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-diag-run">Selbsttest ausführen</button>
-              <button class="btn btn-ghost btn-sm" id="btn-diag-deep">Encoder wirklich testen</button>
+              <button class="btn btn-ghost btn-sm" id="btn-diag-deep">Encode/Decode wirklich testen</button>
               <span id="diag-progress" class="muted"></span>
             </div>
             <div id="diag-report"></div>

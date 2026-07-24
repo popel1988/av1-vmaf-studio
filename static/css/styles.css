@@ -326,6 +326,11 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
     grid-template-columns: 1fr 220px;
   }
 }
+.fp-active-mode {
+  font-size: 11.5px;
+  margin: 0 0 6px;
+  letter-spacing: 0.01em;
+}
 .fp-stage {
   position: relative;
   background: #0a0a0c;

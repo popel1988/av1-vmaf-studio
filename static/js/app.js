@@ -6597,8 +6597,8 @@
     const report = $("diag-report");
     const badge = $("diag-badge");
     const prog = $("diag-progress");
-    if (prog) prog.textContent = deep ? "Encoder-Funktionstest läuft (kann etwas dauern) …" : "Prüfe …";
-    if (report) report.innerHTML = `<div class="browser-loading">${deep ? "Encoder werden real getestet …" : "Selbsttest läuft …"}</div>`;
+    if (prog) prog.textContent = deep ? "Encode-/Decode-Funktionstest läuft (kann etwas dauern) …" : "Prüfe …";
+    if (report) report.innerHTML = `<div class="browser-loading">${deep ? "Encoder und Decoder werden real getestet …" : "Selbsttest läuft …"}</div>`;
     try {
       const d = await (await fetch("/api/diagnostics" + (deep ? "?deep=1" : ""))).json();
       state.diagLoaded = true;

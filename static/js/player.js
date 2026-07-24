@@ -49,6 +49,12 @@
     if (b) b.textContent = text;
   }
 
+  function setActiveMode(label) {
+    const el = $("fp-active-mode");
+    if (!el) return;
+    el.textContent = label || tt("Kein Video geladen");
+  }
+
   function absoluteTime() {
     const v = $("fp-video");
     return fp.startOffset + (v ? (v.currentTime || 0) : 0);
@@ -361,6 +367,9 @@
       fp.sid = null;
     }
     setBadge(tt("Bereit"));
+    setActiveMode(fp.path
+      ? tt("Gestoppt – erneut „Laden“ oder „Übernehmen“")
+      : tt("Kein Video geladen"));
     const ov = $("fp-overlay");
     if (ov) ov.style.display = "";
   }
@@ -385,6 +394,7 @@
     renderChapters([]);
     setDirty(false);
     setStatus(tt("Video entladen."));
+    setActiveMode(tt("Kein Video geladen"));
     updateTimeUi();
     updateAudioModeHint(null);
     const play = $("fp-play");
@@ -543,6 +553,14 @@
         setBadge(tt("Fehler"));
         return;
       }
+
+      const chosen = (($("fp-profile") || {}).value) || "auto";
+      const active = sess.playback_label
+        || (sess.mode === "direct" ? tt("Direct-Play") : `${tt("HLS")} · ${sess.profile || "copy"}`);
+      const modeLine = chosen === "auto" && sess.profile && sess.profile !== "auto"
+        ? `${tt("Aktiv")}: ${active} (${tt("Auswahl")}: ${tt("Automatisch")} → ${sess.profile})`
+        : `${tt("Aktiv")}: ${active}`;
+      setActiveMode(modeLine);
 
       if (sess.mode === "direct") {
         playDirect(sess.media_url || sess.playlist_url);
@@ -764,7 +782,10 @@
         title: tt("Video für Player wählen"),
         onPick: (f) => {
           if ($("fp-path")) $("fp-path").value = f.rel;
-          loadFile();
+          fp.path = f.rel || "";
+          setDirty(false);
+          setStatus(tt("Datei gewählt – zum Starten „Laden“ klicken."));
+          setActiveMode(tt("Datei gewählt – Laden ausstehend"));
         },
       });
     });

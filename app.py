@@ -2083,20 +2083,21 @@ async def diagnostics(deep: bool = False):
 
 @app.get("/api/capabilities")
 async def capabilities():
-    """Echte Encoder-Fähigkeiten (per Mini-Encode getestet). Leeres results =
+    """Echte Encode-/Decode-Fähigkeiten (per Mini-Test). Leeres results/decode =
     noch nicht getestet -> UI fällt auf die Build-Verfügbarkeit zurück."""
     from core import capabilities as caps
     data = caps.get_cached()
-    if data is None:
-        # Test evtl. noch nicht durch -> im Hintergrund anstoßen.
+    if data is None or "decode" not in (data or {}):
+        # Test evtl. noch nicht durch / alter Cache ohne Decode -> anstoßen.
         caps.compute_async(monitor)
-        return {"results": {}, "generated_at": 0, "pending": True}
+        if data is None:
+            return {"results": {}, "decode": {}, "generated_at": 0, "pending": True}
     return data
 
 
 @app.post("/api/capabilities/refresh")
 async def capabilities_refresh():
-    """Encoder-Fähigkeiten neu ermitteln (echte Mini-Encodes)."""
+    """Encode-/Decode-Fähigkeiten neu ermitteln (echte Mini-Tests)."""
     from core import capabilities as caps
     return await asyncio.to_thread(caps.compute, monitor, None)
 

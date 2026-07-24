@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 from . import config
@@ -151,6 +153,153 @@ def _test_encode(platform: str, codec: str, timeout: int = 40) -> tuple[bool, st
         return False, str(e)
 
 
+def _soft_sample_encoder(codec: str) -> tuple[str, list[str]]:
+    """Software-Encoder + Extra-Args für eine kurze Testclip-Datei."""
+    if codec == "hevc":
+        return "libx265", ["-preset", "ultrafast", "-x265-params", "log-level=error"]
+    if codec == "av1":
+        return "libsvtav1", ["-preset", "12"]
+    return "libx264", ["-preset", "ultrafast"]
+
+
+def _test_decode(platform: str, codec: str, timeout: int = 45) -> tuple[bool, str]:
+    """Kurzer Clip software-encoden, dann mit HW-Decode lesen.
+
+    Entspricht dem Player-Pfad (``-hwaccel cuda|qsv|vaapi``). CPU gilt immer
+    als ok, sofern der generische Decoder im Build steckt.
+    """
+    if platform == "cpu":
+        return True, ""
+
+    soft, soft_extra = _soft_sample_encoder(codec)
+    avail_enc = ff.available_encoders()
+    if avail_enc and soft not in avail_enc:
+        return False, f"kein Software-Encoder ({soft}) für Testclip"
+
+    backend = ff.encoder_backend(platform)
+    sample = None
+    try:
+        fd, sample = tempfile.mkstemp(suffix=".mkv")
+        os.close(fd)
+        gen = [
+            config.FFMPEG, "-hide_banner", "-y",
+            "-f", "lavfi", "-i", "color=c=black:s=320x240:r=25",
+            "-frames:v", "8", "-c:v", soft, *soft_extra,
+            "-an", sample,
+        ]
+        r = subprocess.run(gen, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=timeout, check=False)
+        if r.returncode != 0 or not Path(sample).is_file():
+            return False, f"Testclip fehlgeschlagen: {_last_error_line(r.stderr)}"
+
+        cmd = [config.FFMPEG, "-hide_banner", "-y"]
+        if backend == "nvenc":
+            # Wie Player: generisches CUDA-hwaccel (Decoder je nach Stream).
+            dec = ff.decoder_name(platform, codec)
+            cmd += ["-hwaccel", "cuda"]
+            if dec and (not ff.available_decoders() or dec in ff.available_decoders()):
+                cmd += ["-c:v", dec]
+        elif backend == "qsv":
+            dec = ff.decoder_name(platform, codec)
+            cmd += ["-hwaccel", "qsv", "-c:v", dec]
+        elif backend == "vaapi":
+            cmd += ["-hwaccel", "vaapi", "-hwaccel_device", config.VAAPI_DEVICE]
+        else:
+            return True, ""
+
+        cmd += ["-i", sample, "-frames:v", "5", "-f", "null", "-"]
+        r2 = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace",
+                            timeout=timeout, check=False)
+        if r2.returncode == 0:
+            return True, ""
+        return False, _last_error_line(r2.stderr)
+    except subprocess.TimeoutExpired:
+        return False, "Zeitüberschreitung beim Test-Decode"
+    except OSError as e:
+        return False, str(e)
+    finally:
+        if sample:
+            try:
+                Path(sample).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _caps_cache_meta() -> tuple[dict, dict, str]:
+    """(encode_map, decode_map, cache_age_label) aus Capabilities-Cache."""
+    try:
+        from . import capabilities as caps
+        cached = caps.get_cached() or {}
+        enc = dict(cached.get("results") or {})
+        dec = dict(cached.get("decode") or {})
+        ts = float(cached.get("generated_at") or 0)
+        age = ""
+        if ts > 0:
+            age_h = max(0, int((time.time() - ts) / 3600))
+            age = f"Cache {age_h}h alt" if age_h else "Cache frisch"
+        return enc, dec, age
+    except Exception:  # pragma: no cover
+        return {}, {}, ""
+
+
+def _platform_codec_checks(
+    platforms: list[str],
+    *,
+    kind: str,
+    name_fn,
+    present_fn,
+    results: dict,
+    deep: bool,
+) -> list[dict]:
+    """Gemeinsame Diagnose-Zeilen für Encode oder Decode."""
+    checks: list[dict] = []
+    for p in platforms:
+        codec_states = []
+        codec_status = []
+        for c in _CODECS:
+            name = name_fn(p, c)
+            if not present_fn(p, c):
+                codec_states.append(f"{c.upper()}=✗ ({name}, nicht im Build)")
+                codec_status.append("skip")
+                continue
+            key = f"{p}:{c}"
+            if deep or (results and key in results):
+                ok = bool(results.get(key)) if results else False
+                if deep and key not in results:
+                    # Fallback falls Cache unvollständig
+                    if kind == "encode":
+                        ok, _ = _test_encode(p, c)
+                    else:
+                        ok, _ = _test_decode(p, c)
+                if ok:
+                    tag = "getestet" if not deep else ""
+                    suffix = f", {tag}" if tag else ""
+                    codec_states.append(f"{c.upper()}=✓ ({name}{suffix})")
+                    codec_status.append("ok")
+                else:
+                    what = "Encoder" if kind == "encode" else "Decoder"
+                    codec_states.append(
+                        f"{c.upper()}=✗ ({name}: HW unterstützt diesen {what} nicht)")
+                    codec_status.append("warn")
+            else:
+                codec_states.append(
+                    f"{c.upper()}=? ({name}, nur im Build – Funktionstest ausstehend)")
+                codec_status.append("warn")
+
+        present_any = any(s != "skip" for s in codec_status)
+        if not present_any:
+            status = "warn"
+        elif any(s == "warn" for s in codec_status):
+            status = "warn"
+        else:
+            status = "ok"
+        checks.append(_check(_PLATFORM_LABELS.get(p, p), status,
+                             " · ".join(codec_states)))
+    return checks
+
+
 def _encoder_section(monitor, deep: bool = False) -> dict:
     checks: list[dict] = []
     try:
@@ -166,83 +315,58 @@ def _encoder_section(monitor, deep: bool = False) -> dict:
                              "FFmpeg -encoders nicht lesbar – Prüfung übersprungen"))
         return _section("Encoder", checks)
 
-    # Funktionstest: echte Mini-Encodes + Cache aktualisieren.
-    # Normaler Selbsttest: gecachte Capabilities anzeigen (sonst wirkt nach
-    # Neustart alles „✓“, obwohl z. B. iGPU-AV1 schon als unfähig bekannt ist).
-    deep_results: dict = {}
-    cached_results: dict = {}
-    cache_age = ""
-    try:
-        from . import capabilities as caps
-        if deep:
-            deep_results = caps.compute(monitor).get("results", {}) or {}
-        else:
-            cached = caps.get_cached() or {}
-            cached_results = dict(cached.get("results") or {})
-            ts = float(cached.get("generated_at") or 0)
-            if ts > 0:
-                import time as _time
-                age_h = max(0, int((_time.time() - ts) / 3600))
-                cache_age = (f"Cache {age_h}h alt" if age_h
-                             else "Cache frisch")
-    except Exception:  # pragma: no cover
-        deep_results, cached_results = {}, {}
-
-    for p in platforms:
-        codec_states = []
-        codec_status = []  # pro Codec: "ok" | "warn" | "skip"
-        for c in _CODECS:
-            enc = ff.encoder_name(p, c)
-            present = enc in avail
-            if not present:
-                codec_states.append(f"{c.upper()}=✗ ({enc}, nicht im Build)")
-                codec_status.append("skip")
-                continue
-            key = f"{p}:{c}"
-            if deep:
-                if key in deep_results:
-                    ok = bool(deep_results[key])
-                else:
-                    ok, _ = _test_encode(p, c)
-                if ok:
-                    codec_states.append(f"{c.upper()}=✓ ({enc})")
-                    codec_status.append("ok")
-                else:
-                    codec_states.append(
-                        f"{c.upper()}=✗ ({enc}: HW unterstützt diesen Encoder nicht)")
-                    codec_status.append("warn")
-                continue
-
-            # Flacher Selbsttest: Build-Präsenz + bekannte Capabilities
-            if cached_results and key in cached_results:
-                if cached_results[key]:
-                    codec_states.append(f"{c.upper()}=✓ ({enc}, getestet)")
-                    codec_status.append("ok")
-                else:
-                    codec_states.append(
-                        f"{c.upper()}=✗ ({enc}: laut Funktionstest nicht nutzbar)")
-                    codec_status.append("warn")
-            else:
-                codec_states.append(
-                    f"{c.upper()}=? ({enc}, nur im Build – Funktionstest ausstehend)")
-                codec_status.append("warn")
-
-        present_any = any(s != "skip" for s in codec_status)
-        if not present_any:
-            status = "warn"
-        elif any(s == "warn" for s in codec_status):
-            status = "warn"
-        else:
-            status = "ok"
-        checks.append(_check(_PLATFORM_LABELS.get(p, p), status,
-                             " · ".join(codec_states)))
+    enc_map, _, cache_age = _caps_cache_meta()
+    checks = _platform_codec_checks(
+        platforms,
+        kind="encode",
+        name_fn=ff.encoder_name,
+        present_fn=lambda p, c: ff.encoder_name(p, c) in avail,
+        results=enc_map,
+        deep=deep,
+    )
 
     if deep:
         title = "Encoder-Funktionstest (echte Mini-Encodes)"
-    elif cached_results:
+    elif enc_map:
         title = f"Encoder-Verfügbarkeit ({cache_age or 'aus Cache'})"
     else:
         title = "Encoder-Verfügbarkeit (noch kein Funktionstest)"
+    return _section(title, checks)
+
+
+def _decoder_section(monitor, deep: bool = False) -> dict:
+    """HW-Decode-Fähigkeit – relevant für Player-Transcode (CUDA/QSV/VAAPI)."""
+    try:
+        platforms = monitor.available_platforms()
+    except Exception:  # pragma: no cover
+        platforms = ["cpu"]
+    if "cpu" not in platforms:
+        platforms = list(platforms) + ["cpu"]
+
+    avail = ff.available_decoders()
+    if not avail:
+        return _section(
+            "Decoder",
+            [_check("Decoder-Liste", "warn",
+                    "FFmpeg -decoders nicht lesbar – Prüfung übersprungen")],
+        )
+
+    _, dec_map, cache_age = _caps_cache_meta()
+    checks = _platform_codec_checks(
+        platforms,
+        kind="decode",
+        name_fn=ff.decoder_name,
+        present_fn=ff.decoder_available,
+        results=dec_map,
+        deep=deep,
+    )
+
+    if deep:
+        title = "Decoder-Funktionstest (HW-Decode der Quellcodecs)"
+    elif dec_map:
+        title = f"Decoder-Verfügbarkeit ({cache_age or 'aus Cache'})"
+    else:
+        title = "Decoder-Verfügbarkeit (noch kein Funktionstest)"
     return _section(title, checks)
 
 
@@ -307,12 +431,19 @@ def _storage_section() -> dict:
 def run_diagnostics(monitor, deep: bool = False) -> dict:
     """Führt alle Prüfungen aus und liefert den Gesamtreport.
 
-    deep=True führt zusätzlich echte Mini-Encodes je Plattform/Codec aus, um die
-    tatsächliche Hardware-Fähigkeit zu prüfen (dauert einige Sekunden länger)."""
+    deep=True führt zusätzlich echte Mini-Encode- und Decode-Tests je
+    Plattform/Codec aus (aktualisiert den Capabilities-Cache)."""
+    if deep:
+        try:
+            from . import capabilities as caps
+            caps.compute(monitor)
+        except Exception:  # pragma: no cover
+            pass
     sections = [
         _tools_section(),
         _models_section(),
         _encoder_section(monitor, deep=deep),
+        _decoder_section(monitor, deep=deep),
         _hardware_section(monitor),
         _storage_section(),
     ]
