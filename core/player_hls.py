@@ -136,7 +136,11 @@ class PlayerSession:
         if self.mode == "direct":
             return "Direct-Play"
         if self.encoder in ("", "copy", "direct") and self.profile == "copy":
-            return "HLS · Original-Video + Ton→AAC"
+            if self.audio_index < 0:
+                return "HLS · Remux (ohne Ton)"
+            if self.audio_play_mode() == "transcode":
+                return "HLS · Video-Copy + Ton→AAC"
+            return "HLS · Remux (Stream-Copy)"
         if self.encoder in ("", "copy") and not self.codec:
             return "HLS · Stream-Copy"
         bits = ["HLS"]
@@ -345,7 +349,7 @@ def player_options() -> dict:
         "profiles": [
             {"id": "auto", "label": "Automatisch (Direct-Play wenn möglich)"},
             {"id": "direct", "label": "Direct-Play (ohne Remux)"},
-            {"id": "copy", "label": "Original-Video + Ton→AAC (HLS)"},
+            {"id": "copy", "label": "Remux HLS (Video-Copy; Ton weglassen wenn nötig)"},
             {"id": "original", "label": "Original-Auflösung (Transcode + Bitrate)"},
             {"id": "1080p", "label": "1080p (Transcode)"},
             {"id": "720p", "label": "720p (Transcode)"},
@@ -383,6 +387,18 @@ def player_options() -> dict:
     }
 
 
+def _audio_hls_copy_ok(codec: str) -> bool:
+    """Ton-Codec, der in HLS-fMP4 per Stream-Copy browserfähig ist."""
+    return (codec or "").lower().startswith(("aac", "mp3", "mp4a"))
+
+
+def _audio_will_transcode(codec: str, audio_copy: bool) -> bool:
+    """True, wenn die Spur für HLS nach AAC umcodiert würde."""
+    if audio_copy or not codec:
+        return False
+    return not _audio_hls_copy_ok(codec)
+
+
 def can_direct_play(info) -> bool:
     if not info:
         return False
@@ -406,31 +422,25 @@ def can_direct_play(info) -> bool:
 def _audio_args(audio_index: int, audio_codec: str,
                 force_copy: bool = False,
                 reset_pts: bool = True) -> list[str]:
-    """Ton-Args.
+    """Ton-Args. Bei Re-Encode: Timeline auf 0 (asetpts) wie beim Video.
 
-    ``reset_pts`` nur zusammen mit Video-Re-Encode (``setpts``) – sonst läuft
-    der Ton bei Video-Copy (Auto→HLS) asynchron vor/nach dem Bild.
+    Video-Copy + Ton-Transcode wird in ``start_session`` vermieden; ``reset_pts``
+    ist dann praktisch immer True, wenn umcodiert wird.
     """
     if audio_index < 0:
         return ["-an"]
     args = ["-map", f"0:a:{int(audio_index)}?"]
     ac = (audio_codec or "").lower()
-    if force_copy or ac.startswith(("aac", "mp4a", "mp3")):
-        # Copy: keine PTS-Filter möglich ohne Decode – Mux-Flags gleichen grob aus.
+    if force_copy or _audio_hls_copy_ok(ac):
+        # Unsichere Codecs bei force_copy werden vorher auf audio_index=-1 gelegt.
         args += ["-c:a", "copy"]
-    elif reset_pts:
-        # Stereo-AAC + gemeinsame Null-Timeline mit Video (setpts/asetpts).
-        args += [
-            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
-            "-profile:a", "aac_low",
-            "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
-        ]
     else:
-        # Video bleibt Copy → Original-PTS behalten, nur leicht syncen.
+        af = ("aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
+              if reset_pts else "aresample=async=1")
         args += [
             "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
             "-profile:a", "aac_low",
-            "-af", "aresample=async=1",
+            "-af", af,
         ]
     return args
 
@@ -590,15 +600,14 @@ def _build_hls_cmd(
 ) -> list[str]:
     """HLS-Command. Läuft durchgehend; Vorlauf drosselt der Client per Pause.
 
-    Timestamps: bei Video-Re-Encode ``setpts`` + bei Ton-Re-Encode ``asetpts``
-    (beide auf 0). Seek bleibt vor ``-i`` (schnell). Video-Copy kann PTS nicht
-    filtern – dort nur Mux-Normalisierung.
+    Video-Copy (+ optional Ton→AAC) wie Jellyfin: MPEG-TS-Segmente – fMP4
+    mischt Copy/Xcode oft unsauber. Bei vollem Video-Encode: fMP4 + setpts.
     """
     playlist = out_dir / "index.m3u8"
-    cmd = [
-        config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-fflags", "+genpts",
-    ]
+    # genpts bei Video-Copy oft schädlich (PTS-Sprünge); bei Encode hilfreich
+    cmd = [config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error"]
+    if not video_copy:
+        cmd += ["-fflags", "+genpts"]
 
     pre: list[str] = []
     vmap: list[str] = []
@@ -613,8 +622,7 @@ def _build_hls_cmd(
         )
         cmd += pre
 
-    # Seek vor -i: schnell (Keyframe). A/V danach über setpts/asetpts bzw.
-    # start_at_zero auf eine gemeinsame Ausgabe-Timeline.
+    # Seek vor -i: schnell (Keyframe).
     if start_sec and start_sec > 0:
         cmd += ["-ss", f"{float(start_sec):.3f}"]
     cmd += ["-i", str(path)]
@@ -626,6 +634,8 @@ def _build_hls_cmd(
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
 
+    # Video-Copy: Ton-PTS nicht auf 0 setzen (bleibt an Video-Timeline).
+    # Encode: asetpts wie setpts.
     cmd += _audio_args(
         audio_index, audio_codec,
         force_copy=bool(audio_copy),
@@ -643,19 +653,28 @@ def _build_hls_cmd(
     cmd += [
         "-sn", "-dn",
         "-avoid_negative_ts", "make_zero",
-        "-start_at_zero",
-        "-muxdelay", "0",
-        "-muxpreload", "0",
         "-max_interleave_delta", "0",
         "-f", "hls",
         "-hls_time", str(hls_time),
         "-hls_list_size", str(list_size),
         "-hls_flags", hls_flags,
-        "-hls_segment_type", "fmp4",
-        "-hls_fmp4_init_filename", "init.mp4",
-        "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
-        str(playlist),
     ]
+    if video_copy:
+        # Jellyfin-üblich: TS für Remux / Video-Copy+Audio-Xcode
+        cmd += [
+            "-hls_segment_type", "mpegts",
+            "-hls_segment_filename", str(out_dir / "seg_%05d.ts"),
+        ]
+    else:
+        cmd += [
+            "-start_at_zero",
+            "-muxdelay", "0",
+            "-muxpreload", "0",
+            "-hls_segment_type", "fmp4",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
+        ]
+    cmd.append(str(playlist))
     return cmd
 
 
@@ -665,6 +684,7 @@ def _resolve_profile(profile: str, info, *, force_hls: bool, burn: bool) -> str:
         if burn:
             return "720p"
         if force_hls:
+            # Nur Ton→AAC nötig → Remux-Pfad (Video-Copy), kein Video-Encode
             return "copy"
         if can_direct_play(info):
             return "direct"
@@ -732,19 +752,38 @@ def start_session(
 
     want_audio_copy = bool(audio_copy)
     want_burn = bool(burn_subs) and subtitle_index >= 0 and _is_image_sub(sub_codec)
-    # Ohne Ton-Transcode zählt inkompatibler Ton nicht als HLS-Zwang für auto
-    force_hls = bool(start_sec and start_sec > 0) or (
-        (not want_audio_copy) and audio_index >= 0 and audio_codec
-        and not (audio_codec or "").lower().startswith(("aac", "mp3", "mp4a", "opus"))
+    requested = (profile or "auto").lower()
+    # Remux-Modus: Ton nur kopieren oder weglassen – nie Ton-Xcode.
+    # Automatisch: bei Bedarf Ton→AAC bei Video-Copy (Jellyfin-Stil, MPEG-TS).
+    explicit_remux = requested == "copy"
+    will_xcode_audio = (
+        not explicit_remux
+        and audio_index >= 0
+        and _audio_will_transcode(audio_codec, want_audio_copy)
     )
+    force_hls = bool(start_sec and start_sec > 0) or will_xcode_audio
     resolved = _resolve_profile(
         profile, info,
-        force_hls=force_hls if (profile or "auto").lower() == "auto" else False,
+        force_hls=force_hls if requested == "auto" else False,
         burn=want_burn,
     )
-    if (profile or "auto").lower() == "auto" and client_direct_ok and not want_burn and not force_hls:
+    if requested == "auto" and client_direct_ok and not want_burn and not force_hls:
         if can_direct_play(info):
             resolved = "direct"
+
+    # Remux / Ton-nicht-umcodieren + inkompatibler Codec → Spur stumm, Bild läuft
+    effective_audio = int(audio_index)
+    drop_audio = False
+    if (
+        resolved != "direct"
+        and effective_audio >= 0
+        and audio_codec
+        and not _audio_hls_copy_ok(audio_codec)
+        and (explicit_remux or want_audio_copy)
+    ):
+        drop_audio = True
+        effective_audio = -1
+        will_xcode_audio = False
 
     need_encode = resolved in _ENCODE_PROFILES or want_burn
     enc_info = {"platform": "cpu", "codec": "h264", "encoder": "copy", "warnings": []}
@@ -758,6 +797,9 @@ def start_session(
             resolved = "original" if want_burn else "720p"
         h, br = _quality_params(resolved, height, v_bitrate)
 
+    # Remux / Auto-Ton→AAC: immer Video-Copy (kein unnötiges Video-Encode)
+    use_video_copy = resolved == "copy" and not want_burn
+
     sid = uuid.uuid4().hex[:12]
     work = _ensure_root() / sid
     work.mkdir(parents=True, exist_ok=True)
@@ -766,17 +808,22 @@ def start_session(
     start0 = max(0.0, float(start_sec or 0))
 
     warn_parts = list(enc_info.get("warnings") or [])
-    if want_audio_copy and audio_codec and not (audio_codec or "").lower().startswith(
-            ("aac", "mp4a", "mp3")):
+    if drop_audio:
+        why = ("Remux" if explicit_remux
+               else "Haken „Ton nicht umcodieren“")
         warn_parts.append(
-            f"Ton-Copy ({audio_codec}): Browser kann die Spur ggf. nicht abspielen."
+            f"Ton ({audio_codec}) nicht browserfähig – Spur weggelassen ({why})."
+        )
+    elif will_xcode_audio and use_video_copy:
+        warn_parts.append(
+            f"Ton→AAC bei Original-Video (MPEG-TS), Codec war {audio_codec or '?'}."
         )
     warn = "; ".join(warn_parts)
     sess = PlayerSession(
         id=sid,
         path=target,
         rel=rel,
-        audio_index=int(audio_index),
+        audio_index=effective_audio,
         subtitle_index=int(subtitle_index),
         start_sec=start0,
         duration=duration,
@@ -786,13 +833,13 @@ def start_session(
         codec=enc_info["codec"] if need_encode else "",
         encoder=enc_info["encoder"] if need_encode else ("direct" if resolved == "direct" else "copy"),
         burn_subs=want_burn,
-        audio_codec=audio_codec,
+        audio_codec=audio_codec if not drop_audio else "",
         mode="direct" if resolved == "direct" else "hls",
         height=h,
         v_bitrate=br,
         lookahead_sec=la,
         window_end=0.0,
-        audio_copy=want_audio_copy,
+        audio_copy=want_audio_copy and not drop_audio,
         warning=warn,
         work_dir=work,
     )
@@ -811,7 +858,7 @@ def start_session(
         getattr(info, "codec", "") if info else ""
     )
 
-    if resolved == "copy" and not want_burn:
+    if use_video_copy:
         cmd = _build_hls_cmd(
             target, work,
             audio_index=sess.audio_index,
@@ -820,7 +867,7 @@ def start_session(
             platform="cpu", encoder="copy", codec="h264",
             height=0, v_bitrate=0, burn_sub_index=-1, video_copy=True,
             lookahead_sec=la,
-            audio_copy=want_audio_copy,
+            audio_copy=want_audio_copy and not drop_audio,
             source_codec=source_vcodec,
         )
         sess.encoder = "copy"
@@ -831,7 +878,7 @@ def start_session(
             target, work,
             audio_index=sess.audio_index,
             start_sec=sess.start_sec,
-            audio_codec=audio_codec,
+            audio_codec=audio_codec if not drop_audio else "",
             platform=sess.platform,
             encoder=sess.encoder,
             codec=sess.codec or "h264",
@@ -840,7 +887,7 @@ def start_session(
             burn_sub_index=subtitle_index if want_burn else -1,
             video_copy=False,
             lookahead_sec=la,
-            audio_copy=want_audio_copy,
+            audio_copy=want_audio_copy and not drop_audio,
             source_codec=source_vcodec,
         )
 
@@ -888,12 +935,12 @@ def start_session(
                     target, work,
                     audio_index=sess.audio_index,
                     start_sec=sess.start_sec,
-                    audio_codec=audio_codec,
+                    audio_codec=audio_codec if not drop_audio else "",
                     platform="cpu", encoder="libx264", codec="h264",
                     height=h, v_bitrate=br or 3500,
                     burn_sub_index=subtitle_index if want_burn else -1,
                     lookahead_sec=la,
-                    audio_copy=want_audio_copy,
+                    audio_copy=want_audio_copy and not drop_audio,
                     source_codec=source_vcodec,
                 )
                 try:

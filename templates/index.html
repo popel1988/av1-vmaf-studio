@@ -1894,11 +1894,12 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Direct-Play wenn möglich, sonst HLS. NVENC/QSV/VAAPI/CPU wählbar.
-              <strong>Encode-Vorlauf</strong> = Zielpuffer (FFmpeg läuft durch, wird bei vollem
-              Puffer gedrosselt – ohne Neustart). Bei Pause hält FFmpeg an.
-              Optional <strong>Ton nicht umcodieren</strong> (Stream-Copy; exotische Codecs
-              kann der Browser ggf. nicht). H.264 ist im Browser am sichersten.</p>
+            <p class="hint">Direct-Play wenn möglich, sonst HLS.
+              <strong>Automatisch</strong> bei DTS/TrueHD: Original-Video (Copy) + Ton→AAC
+              in MPEG-TS (wie Jellyfin) – ohne Video neu zu encodieren.
+              <strong>Remux</strong>: Video-Copy; inkompatibler Ton wird weggelassen.
+              <strong>Ton nicht umcodieren</strong>: ebenfalls Ton weglassen statt Xcode.
+              H.264 ist im Browser am sichersten.</p>
             <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
               <div class="field" style="flex:2;min-width:220px">
                 <label>Datei</label>
@@ -1962,6 +1963,7 @@
                   <input type="range" id="fp-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted fp-time" id="fp-time">0:00:00 / 0:00:00</span>
                   <input type="range" id="fp-vol" min="0" max="100" value="90" title="Lautstärke" style="width:90px" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-fs" title="Vollbild (Esc zum Beenden)">⛶</button>
                 </div>
                 <div class="field-row fp-tracks" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
                   <div class="field" style="flex:1;min-width:140px">

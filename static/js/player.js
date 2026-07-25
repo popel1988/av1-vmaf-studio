@@ -727,6 +727,50 @@
         else v.pause();
       });
     }
+
+    function fsElement() {
+      return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+    function syncFsButton() {
+      const btn = $("fp-fs");
+      if (!btn) return;
+      const on = !!fsElement();
+      btn.textContent = on ? "✕" : "⛶";
+      btn.title = on ? tt("Vollbild beenden (Esc)") : tt("Vollbild (Esc zum Beenden)");
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    async function toggleFullscreen() {
+      const stage = document.querySelector(".fp-stage");
+      const target = stage || v;
+      if (!target) return;
+      try {
+        if (fsElement()) {
+          if (document.exitFullscreen) await document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        } else if (target.requestFullscreen) {
+          await target.requestFullscreen();
+        } else if (target.webkitRequestFullscreen) {
+          target.webkitRequestFullscreen();
+        } else if (v && v.webkitEnterFullscreen) {
+          // iOS Safari: nur Video-Element
+          v.webkitEnterFullscreen();
+        }
+      } catch (e) {
+        setStatus(tt("Vollbild nicht verfügbar."), true);
+      }
+      syncFsButton();
+    }
+    const fsBtn = $("fp-fs");
+    if (fsBtn) fsBtn.addEventListener("click", () => toggleFullscreen());
+    document.addEventListener("fullscreenchange", syncFsButton);
+    document.addEventListener("webkitfullscreenchange", syncFsButton);
+    if (v) {
+      v.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        toggleFullscreen();
+      });
+    }
+
     const big = $("fp-big-play");
     if (big) big.addEventListener("click", () => loadFile());
 

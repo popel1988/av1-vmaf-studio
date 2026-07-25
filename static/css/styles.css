@@ -339,6 +339,20 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   aspect-ratio: 16 / 9;
   max-height: min(70vh, 720px);
 }
+.fp-stage:fullscreen,
+.fp-stage:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+  background: #000;
+}
+.fp-stage:fullscreen video,
+.fp-stage:-webkit-full-screen video {
+  width: 100%;
+  height: 100%;
+}
 .fp-stage video {
   width: 100%; height: 100%;
   display: block; object-fit: contain;
