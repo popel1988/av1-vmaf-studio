@@ -45,19 +45,32 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,format=short
 
-      # Basis-Images kommen von Docker Hub (nvidia/cuda …). Kurze Netz-Timeouts
-      # dort sind häufig – Build bei Registry-Fehlern bis zu 3× wiederholen.
+      # Shell-Retry statt wretry.action: mehrzeilige tags/labels von metadata
+      # zerlegen sonst die YAML-Übergabe („multiline key may not be an implicit key“).
       - name: Build & Push
-        uses: Wandalen/wretry.action@v3.8.0
+        uses: nick-fields/retry@v3
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
+          META_LABELS: ${{ steps.meta.outputs.labels }}
         with:
-          attempt_limit: 3
-          attempt_delay: 45000
-          action: docker/build-push-action@v6
-          with: |
-            context: .
-            platforms: linux/amd64
-            push: true
-            tags: ${{ steps.meta.outputs.tags }}
-            labels: ${{ steps.meta.outputs.labels }}
-            cache-from: type=gha
-            cache-to: type=gha,mode=max
+          timeout_minutes: 120
+          max_attempts: 3
+          retry_wait_seconds: 45
+          command: |
+            set -euo pipefail
+            TAG_ARGS=()
+            while IFS= read -r t; do
+              [ -n "$t" ] && TAG_ARGS+=(--tag "$t")
+            done <<< "$META_TAGS"
+            LABEL_ARGS=()
+            while IFS= read -r l; do
+              [ -n "$l" ] && LABEL_ARGS+=(--label "$l")
+            done <<< "$META_LABELS"
+            docker buildx build \
+              --platform linux/amd64 \
+              --push \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              "${TAG_ARGS[@]}" \
+              "${LABEL_ARGS[@]}" \
+              .
