@@ -50,10 +50,10 @@ def _hls_video_copy_ok(
     source_codec: str,
     client_codecs: Optional[list[str]] = None,
 ) -> bool:
-    """Ob Video per HLS-Copy (MPEG-TS) im Browser laufen kann.
+    """Ob Video per HLS-Copy (fMP4) im Browser laufen kann.
 
-    H.264 immer; HEVC/AV1 nur wenn der Client sie meldet (wie zuvor nativ
-    ohne Ton möglich – kein erzwungener H.264-Transcode).
+    H.264 immer; HEVC/AV1 nur wenn der Client sie meldet – Auslieferung dann
+    als fMP4 mit ``hvc1``/``av01`` (nicht MPEG-TS).
     """
     src = ff.normalize_video_codec(source_codec)
     if src == "h264":
@@ -558,19 +558,20 @@ def plan_playback(
             return _result(
                 strategy="remux_audio_xcode", profile="copy", mode="hls",
                 use_video_copy=True, will_xcode_audio=True,
-                summary="Video-Copy + Ton→AAC",
+                summary="Video-Copy + Ton→AAC (fMP4)",
                 extra_reasons=[
-                    f"Browser kann {(src_v or '?').upper()} → Video bleibt Copy",
-                    f"Ton {ac.upper()} nicht HLS-fähig → AAC (Server-CPU)",
+                    f"Browser kann {(src_v or '?').upper()} → Video-Copy als fMP4"
+                    + ("/hvc1" if src_v == "hevc" else ""),
+                    f"Ton {ac.upper()} → AAC (leicht sync, ohne asetpts)",
                 ],
             )
         # Video+Ton kopierbar, aber kein Direct (z. B. MKV) → Remux
         return _result(
             strategy="remux_copy", profile="copy", mode="hls",
             use_video_copy=True,
-            summary="Remux Stream-Copy",
+            summary="Remux Stream-Copy (fMP4)",
             extra_reasons=[
-                "Video/Ton für HLS kopierbar",
+                "Video/Ton für HLS-fMP4 kopierbar",
                 "Kein Direct-Play (Container/Seek) → Remux",
             ],
         )
@@ -804,26 +805,30 @@ def can_direct_play(info) -> bool:
 
 def _audio_args(audio_index: int, audio_codec: str,
                 force_copy: bool = False,
-                reset_pts: bool = True) -> list[str]:
-    """Ton-Args. Bei Re-Encode: Timeline auf 0 (asetpts) wie beim Video.
+                with_video_reencode: bool = False) -> list[str]:
+    """Ton-Args für HLS.
 
-    Video-Copy + Ton-Transcode wird in ``start_session`` vermieden; ``reset_pts``
-    ist dann praktisch immer True, wenn umcodiert wird.
+    Bei Video-Re-Encode: ``asetpts`` auf 0 (wie Video-``setpts``).
+    Bei Video-Copy + Ton→AAC: nur leichtes ``aresample=async`` – kein
+    ``asetpts`` (sonst A/V asynchron).
     """
     if audio_index < 0:
         return ["-an"]
     args = ["-map", f"0:a:{int(audio_index)}?"]
     ac = (audio_codec or "").lower()
     if force_copy or _audio_hls_copy_ok(ac):
-        # Unsichere Codecs bei force_copy werden vorher auf audio_index=-1 gelegt.
         args += ["-c:a", "copy"]
-    else:
-        af = ("aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS"
-              if reset_pts else "aresample=async=1")
+    elif with_video_reencode:
         args += [
             "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
             "-profile:a", "aac_low",
-            "-af", af,
+            "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
+        ]
+    else:
+        args += [
+            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
+            "-profile:a", "aac_low",
+            "-af", "aresample=async=1",
         ]
     return args
 
@@ -1001,14 +1006,13 @@ def _build_hls_cmd(
     source_codec: str = "",
     is_hdr: bool = False,
 ) -> list[str]:
-    """HLS-Command. Läuft durchgehend; Vorlauf drosselt der Client per Pause.
+    """HLS immer als fMP4 (hls.js-tauglich).
 
-    Video-Copy (+ optional Ton→AAC) wie Jellyfin: MPEG-TS-Segmente – fMP4
-    mischt Copy/Xcode oft unsauber. Bei vollem Video-Encode: fMP4 + setpts
-    (+ Tonemap/yuv420p bei HDR/10-bit → H.264).
+    Video-Copy + Ton→AAC: HEVC braucht ``-tag:v hvc1`` (nicht MPEG-TS –
+    hls.js: „Unsupported HEVC in M2TS“). Encode-Pfad: setpts + Tonemap bei HDR.
     """
     playlist = out_dir / "index.m3u8"
-    # genpts bei Video-Copy oft schädlich (PTS-Sprünge); bei Encode hilfreich
+    src = ff.normalize_video_codec(source_codec) or (codec or "").lower()
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin",
         "-loglevel", _PLAYER_FF_LOGLEVEL or "warning",
@@ -1019,9 +1023,6 @@ def _build_hls_cmd(
     pre: list[str] = []
     vmap: list[str] = []
     if not video_copy:
-        # HW-Decode nur wenn Capabilities den Quellcodec freigeben.
-        # Ohne -hwaccel_output_format*: Filter (setpts/scale) bleiben auf CPU,
-        # danach hwupload zum jeweiligen Encoder.
         cmd += _hwaccel_decode_args(platform, source_codec)
         pre, vmap = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
@@ -1031,24 +1032,26 @@ def _build_hls_cmd(
         )
         cmd += pre
 
-    # Seek vor -i: schnell (Keyframe).
     if start_sec and start_sec > 0:
         cmd += ["-ss", f"{float(start_sec):.3f}"]
     cmd += ["-i", str(path)]
 
     if video_copy:
         cmd += ["-map", "0:v:0?", "-c:v", "copy"]
+        # Browser/hls.js erwarten hvc1/av01 in fMP4, nicht „hevc“/Annex-B-TS
+        if src == "hevc":
+            cmd += ["-tag:v", "hvc1"]
+        elif src == "av1":
+            cmd += ["-tag:v", "av01"]
     else:
         cmd += vmap
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
 
-    # Video-Copy: Ton-PTS nicht auf 0 setzen (bleibt an Video-Timeline).
-    # Encode: asetpts wie setpts.
     cmd += _audio_args(
         audio_index, audio_codec,
         force_copy=bool(audio_copy),
-        reset_pts=not bool(video_copy),
+        with_video_reencode=not bool(video_copy),
     )
 
     la = _normalize_lookahead(lookahead_sec)
@@ -1057,52 +1060,29 @@ def _build_hls_cmd(
         list_size = max(6, int(math.ceil(la / hls_time)) + 4)
     else:
         list_size = 30
-    # independent_segments bei Video-Copy oft problematisch (nicht jeder Cut = IDR)
-    if video_copy:
-        hls_flags = "omit_endlist+delete_segments+temp_file"
-    else:
-        hls_flags = "independent_segments+omit_endlist+delete_segments+temp_file"
+    # Copy: keine independent_segments (Schnitt fällt nicht immer auf IDR)
+    hls_flags = (
+        "omit_endlist+delete_segments+temp_file"
+        if video_copy else
+        "independent_segments+omit_endlist+delete_segments+temp_file"
+    )
 
     cmd += [
         "-sn", "-dn",
         "-avoid_negative_ts", "make_zero",
+        "-start_at_zero",
+        "-muxdelay", "0",
+        "-muxpreload", "0",
         "-f", "hls",
         "-hls_time", str(hls_time),
         "-hls_list_size", str(list_size),
         "-hls_flags", hls_flags,
+        "-hls_segment_type", "fmp4",
+        "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
+        str(playlist),
     ]
-    if video_copy:
-        # Jellyfin-üblich: TS für Remux / Video-Copy+Audio-Xcode
-        cmd += [
-            "-hls_segment_type", "mpegts",
-            "-hls_segment_filename", str(out_dir / "seg_%05d.ts"),
-        ]
-    else:
-        cmd += [
-            "-start_at_zero",
-            "-muxdelay", "0",
-            "-muxpreload", "0",
-            "-max_interleave_delta", "0",
-            "-hls_segment_type", "fmp4",
-            "-hls_fmp4_init_filename", "init.mp4",
-            "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
-        ]
-    cmd.append(str(playlist))
     return cmd
-
-
-def _resolve_profile(profile: str, info, *, force_hls: bool, burn: bool) -> str:
-    p = (profile or "auto").lower()
-    if p == "auto":
-        if burn:
-            return "720p"
-        if force_hls:
-            # Nur Ton→AAC nötig → Remux-Pfad (Video-Copy), kein Video-Encode
-            return "copy"
-        if can_direct_play(info):
-            return "direct"
-        return "copy"
-    return p
 
 
 def _quality_params(profile: str, height: int, v_bitrate: int) -> tuple[int, int]:
