@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -45,13 +45,19 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,format=short
 
+      # Basis-Images kommen von Docker Hub (nvidia/cuda …). Kurze Netz-Timeouts
+      # dort sind häufig – Build bei Registry-Fehlern bis zu 3× wiederholen.
       - name: Build & Push
-        uses: docker/build-push-action@v6
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          attempt_limit: 3
+          attempt_delay: 45000
+          action: docker/build-push-action@v6
+          with: |
+            context: .
+            platforms: linux/amd64
+            push: true
+            tags: ${{ steps.meta.outputs.tags }}
+            labels: ${{ steps.meta.outputs.labels }}
+            cache-from: type=gha
+            cache-to: type=gha,mode=max
