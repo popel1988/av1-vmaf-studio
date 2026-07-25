@@ -37,6 +37,73 @@ _MAX_IDLE_SEC = 3600
 # Wie weit FFmpeg vor der Abspielposition encoden darf (0 = unbegrenzt).
 _DEFAULT_LOOKAHEAD_SEC = 30.0
 _LOOKAHEAD_CHOICES = (0, 15, 30, 60, 120)
+# Mehr FFmpeg-Ausgabe in Container-Logs (warning|info|debug|error)
+_PLAYER_FF_LOGLEVEL = (os.getenv("PLAYER_FF_LOGLEVEL") or "warning").strip().lower()
+
+
+def _plog(sid: str, msg: str, *args, level: int = logging.INFO) -> None:
+    logger.log(level, "Player[%s] " + msg, sid, *args)
+
+
+def _hls_video_copy_ok(source_codec: str) -> bool:
+    """MPEG-TS-HLS mit Video-Copy ist im Browser praktisch nur mit H.264 sicher."""
+    return ff.normalize_video_codec(source_codec) == "h264"
+
+
+def _cmd_preview(cmd: list[str], limit: int = 500) -> str:
+    s = " ".join(str(x) for x in cmd)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+def _spawn_ffmpeg(cmd: list[str], sid: str, work_dir: Path) -> subprocess.Popen:
+    """Startet FFmpeg; stderr → Datei + Container-Log (kein PIPE-Deadlock)."""
+    log_path = work_dir / "ffmpeg.log"
+    log_f = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        log_f.close()
+        raise
+
+    def _drain() -> None:
+        try:
+            assert proc.stderr is not None
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace")
+                try:
+                    log_f.write(line)
+                    log_f.flush()
+                except Exception:
+                    pass
+                text = line.rstrip()
+                if text:
+                    _plog(sid, "ffmpeg: %s", text)
+        except Exception as e:  # pragma: no cover
+            _plog(sid, "stderr-drain: %s", e, level=logging.DEBUG)
+        finally:
+            try:
+                log_f.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_drain, name=f"ff-log-{sid}", daemon=True).start()
+    return proc
+
+
+def _tail_ffmpeg_log(work_dir: Path, n: int = 40) -> str:
+    path = work_dir / "ffmpeg.log"
+    try:
+        if not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(lines[-n:])
+    except OSError:
+        return ""
 
 _QUALITY = {
     "1080p": {"height": 1080, "v_bitrate": 6000},
@@ -83,6 +150,8 @@ class PlayerSession:
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
     error: str = ""
+    debug_cmd: str = ""
+    last_client_error: str = ""
 
     @property
     def playlist(self) -> Path:
@@ -129,6 +198,9 @@ class PlayerSession:
             "audio_mode": self.audio_play_mode(),
             "audio_mode_label": self.audio_play_label(),
             "playback_label": self.playback_label(),
+            "debug_cmd": self.debug_cmd,
+            "ffmpeg_log_tail": _tail_ffmpeg_log(self.work_dir) if self.work_dir else "",
+            "last_client_error": self.last_client_error,
         }
 
     def playback_label(self) -> str:
@@ -605,7 +677,10 @@ def _build_hls_cmd(
     """
     playlist = out_dir / "index.m3u8"
     # genpts bei Video-Copy oft schädlich (PTS-Sprünge); bei Encode hilfreich
-    cmd = [config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error"]
+    cmd = [
+        config.FFMPEG, "-hide_banner", "-nostdin",
+        "-loglevel", _PLAYER_FF_LOGLEVEL or "warning",
+    ]
     if not video_copy:
         cmd += ["-fflags", "+genpts"]
 
@@ -648,12 +723,15 @@ def _build_hls_cmd(
         list_size = max(6, int(math.ceil(la / hls_time)) + 4)
     else:
         list_size = 30
-    hls_flags = "independent_segments+omit_endlist+delete_segments+temp_file"
+    # independent_segments bei Video-Copy oft problematisch (nicht jeder Cut = IDR)
+    if video_copy:
+        hls_flags = "omit_endlist+delete_segments+temp_file"
+    else:
+        hls_flags = "independent_segments+omit_endlist+delete_segments+temp_file"
 
     cmd += [
         "-sn", "-dn",
         "-avoid_negative_ts", "make_zero",
-        "-max_interleave_delta", "0",
         "-f", "hls",
         "-hls_time", str(hls_time),
         "-hls_list_size", str(list_size),
@@ -670,6 +748,7 @@ def _build_hls_cmd(
             "-start_at_zero",
             "-muxdelay", "0",
             "-muxpreload", "0",
+            "-max_interleave_delta", "0",
             "-hls_segment_type", "fmp4",
             "-hls_fmp4_init_filename", "init.mp4",
             "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
@@ -845,6 +924,14 @@ def start_session(
     )
 
     if sess.mode == "direct":
+        _plog(
+            sid,
+            "start profile=%s→direct src=%s/%s audio=%s",
+            requested,
+            getattr(info, "container", "") if info else "?",
+            getattr(info, "codec", "") if info else "?",
+            audio_codec or "-",
+        )
         with _LOCK:
             _SESSIONS[sid] = sess
         return {
@@ -857,6 +944,37 @@ def start_session(
     source_vcodec = ff.normalize_video_codec(
         getattr(info, "codec", "") if info else ""
     )
+
+    # Auto: HEVC/AV1-Copy in MPEG-TS-HLS scheitert im Browser → Encode H.264
+    if (
+        use_video_copy
+        and requested == "auto"
+        and not _hls_video_copy_ok(source_vcodec or getattr(info, "codec", ""))
+    ):
+        _plog(
+            sid,
+            "Video-Copy ungeeignet für Browser-HLS (Quelle=%s) → Encode original/H.264",
+            source_vcodec or getattr(info, "codec", "?"),
+        )
+        use_video_copy = False
+        resolved = "original"
+        need_encode = True
+        enc_info = resolve_encode(
+            platform, "h264", client_codecs=client_codecs or ["h264"],
+        )
+        h, br = _quality_params("original", height, v_bitrate)
+        sess.profile = resolved
+        sess.platform = enc_info["platform"]
+        sess.codec = enc_info["codec"]
+        sess.encoder = enc_info["encoder"]
+        sess.height = h
+        sess.v_bitrate = br
+        if enc_info.get("warnings"):
+            warn_parts.extend(enc_info["warnings"])
+            warn_parts.append(
+                f"Quelle {source_vcodec or '?'} nicht per HLS-Copy abspielbar – Transcode."
+            )
+            sess.warning = "; ".join(warn_parts)
 
     if use_video_copy:
         cmd = _build_hls_cmd(
@@ -891,40 +1009,50 @@ def start_session(
             source_codec=source_vcodec,
         )
 
+    sess.debug_cmd = _cmd_preview(cmd, 800)
+    _plog(
+        sid,
+        "start profile=%s→%s mode=hls video_copy=%s audio_xcode=%s drop_audio=%s "
+        "src=%s/%s audio=%s plat=%s enc=%s la=%s | %s",
+        requested, resolved, use_video_copy, will_xcode_audio, drop_audio,
+        getattr(info, "container", "") if info else "?",
+        source_vcodec or (getattr(info, "codec", "?") if info else "?"),
+        audio_codec or "-",
+        sess.platform, sess.encoder, la, sess.debug_cmd,
+    )
+
     try:
-        sess.proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-        )
+        sess.proc = _spawn_ffmpeg(cmd, sid, work)
     except OSError as e:
+        _plog(sid, "FFmpeg-Start fehlgeschlagen: %s", e, level=logging.ERROR)
         shutil.rmtree(work, ignore_errors=True)
         return {"error": f"FFmpeg-Start fehlgeschlagen: {e}"}
 
     with _LOCK:
         _SESSIONS[sid] = sess
 
-    deadline = time.time() + (10.0 if need_encode else 4.0)
+    deadline = time.time() + (10.0 if need_encode else 6.0)
     while time.time() < deadline:
         if sess.playlist.is_file() and sess.playlist.stat().st_size > 0:
+            _plog(sid, "Playlist bereit (%s bytes)", sess.playlist.stat().st_size)
             break
         if sess.proc.poll() is not None:
-            err_b = b""
-            try:
-                if sess.proc.stderr:
-                    err_b = sess.proc.stderr.read() or b""
-            except Exception:
-                pass
-            sess.error = (err_b.decode("utf-8", "replace") or "FFmpeg beendet")[-500:]
+            tail = _tail_ffmpeg_log(work)
+            sess.error = (tail or "FFmpeg beendet")[-800:]
+            _plog(
+                sid,
+                "FFmpeg exit=%s vor Playlist. Log:\n%s",
+                sess.proc.returncode, tail or "(leer)",
+                level=logging.ERROR,
+            )
             # Einmaliger Fallback CPU/H.264 bei HW-Fehler
             if need_encode and sess.platform != "cpu" and not sess.playlist.exists():
-                logger.warning("Player-HW fehlgeschlagen (%s), Fallback CPU: %s",
-                               sess.encoder, sess.error[-200:])
+                _plog(sid, "HW-Fallback → CPU/libx264", level=logging.WARNING)
                 _kill(sess)
                 for old in work.glob("*"):
                     try:
-                        old.unlink()
+                        if old.name != "ffmpeg.log":
+                            old.unlink()
                     except OSError:
                         pass
                 sess.platform, sess.codec, sess.encoder = "cpu", "h264", "libx264"
@@ -943,17 +1071,21 @@ def start_session(
                     audio_copy=want_audio_copy and not drop_audio,
                     source_codec=source_vcodec,
                 )
+                sess.debug_cmd = _cmd_preview(cmd, 800)
                 try:
-                    sess.proc = subprocess.Popen(
-                        cmd, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-                    )
+                    sess.proc = _spawn_ffmpeg(cmd, sid, work)
                     deadline = time.time() + 10.0
                     continue
                 except OSError as e2:
                     sess.error = str(e2)
+                    _plog(sid, "Fallback-Start fehlgeschlagen: %s", e2, level=logging.ERROR)
             break
         time.sleep(0.1)
+
+    if not sess.playlist.is_file() and not sess.error:
+        sess.error = "Timeout: keine HLS-Playlist erzeugt"
+        _plog(sid, "%s\n%s", sess.error, _tail_ffmpeg_log(work) or "(kein log)",
+              level=logging.ERROR)
 
     return {
         "session": sess.to_dict(),
@@ -961,6 +1093,40 @@ def start_session(
         "chapters": chapters,
         "options": player_options(),
     }
+
+
+def log_client_error(sid: str, payload: dict) -> dict:
+    """hls.js-/Browser-Fehler aus der UI in Container-Logs schreiben."""
+    sess = get_session(sid)
+    detail = {
+        "type": payload.get("type"),
+        "details": payload.get("details"),
+        "fatal": payload.get("fatal"),
+        "error": payload.get("error"),
+        "url": payload.get("url"),
+        "note": payload.get("note"),
+    }
+    msg = json.dumps(detail, ensure_ascii=False)[:1000]
+    if sess:
+        sess.last_client_error = msg
+        tail = _tail_ffmpeg_log(sess.work_dir)
+        _plog(
+            sid,
+            "CLIENT-ERROR %s | session mode=%s profile=%s enc=%s running=%s | ffmpeg-tail:\n%s",
+            msg,
+            sess.mode, sess.profile, sess.encoder,
+            bool(sess.proc and sess.proc.poll() is None),
+            tail or "(kein ffmpeg.log)",
+            level=logging.WARNING,
+        )
+        return {
+            "ok": True,
+            "ffmpeg_log_tail": tail,
+            "debug_cmd": sess.debug_cmd,
+            "session_error": sess.error,
+        }
+    logger.warning("Player[%s] CLIENT-ERROR (unbekannte Session): %s", sid, msg)
+    return {"ok": False, "error": "Session nicht gefunden"}
 
 
 def get_session(sid: str) -> Optional[PlayerSession]:

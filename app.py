@@ -1897,6 +1897,22 @@ async def player_session_stop(sid: str):
     return {"ok": player_hls.stop_session(sid)}
 
 
+class PlayerClientError(BaseModel):
+    type: str = ""
+    details: str = ""
+    fatal: bool = False
+    error: str = ""
+    url: str = ""
+    note: str = ""
+
+
+@app.post("/api/player/session/{sid}/client-error")
+async def player_session_client_error(sid: str, req: PlayerClientError):
+    """Browser-/hls.js-Fehler → Container-Log (Player-Debug)."""
+    from core import player_hls
+    return player_hls.log_client_error(sid, req.model_dump())
+
+
 @app.get("/api/player/session/{sid}/{name}")
 async def player_session_file(sid: str, name: str):
     """Playlist oder Segment einer HLS-Session ausliefern."""
@@ -1904,9 +1920,14 @@ async def player_session_file(sid: str, name: str):
     target = player_hls.resolve_session_file(sid, name)
     if target is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
-    media = "application/vnd.apple.mpegurl" if name.endswith(".m3u8") else (
-        "video/mp4" if name.endswith((".mp4", ".m4s")) else "application/octet-stream"
-    )
+    if name.endswith(".m3u8"):
+        media = "application/vnd.apple.mpegurl"
+    elif name.endswith((".mp4", ".m4s")):
+        media = "video/mp4"
+    elif name.endswith(".ts"):
+        media = "video/mp2t"
+    else:
+        media = "application/octet-stream"
     return FileResponse(
         target, media_type=media,
         headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},

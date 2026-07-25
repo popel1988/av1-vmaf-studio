@@ -445,6 +445,29 @@
     }, 200);
   }
 
+  async function reportClientError(payload) {
+    if (!fp.sid) return;
+    try {
+      const d = await (await fetch(`/api/player/session/${fp.sid}/client-error`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      })).json();
+      if (d && d.ffmpeg_log_tail) {
+        console.warn("[player] ffmpeg log:\n", d.ffmpeg_log_tail);
+      }
+      if (d && d.debug_cmd) {
+        console.warn("[player] ffmpeg cmd:", d.debug_cmd);
+      }
+      if (d && d.session_error) {
+        setStatus(
+          `${tt("Wiedergabefehler")} – ${String(d.session_error).slice(0, 220)}`,
+          true,
+        );
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function playDirect(url) {
     const v = $("fp-video");
     if (!v) return;
@@ -496,9 +519,18 @@
           if (fp.encodePaused) setEncodePaused(false);
           return;
         }
-        if (data.fatal) {
-          setStatus(tt("Wiedergabefehler – Session neu starten."), true);
+        if (data && data.fatal) {
+          const errMsg = (data.error && data.error.message) || data.details || "fatal";
+          setStatus(`${tt("Wiedergabefehler")} (${data.type || "?"}: ${errMsg})`, true);
           setBadge(tt("Fehler"));
+          reportClientError({
+            type: String(data.type || ""),
+            details: String(data.details || ""),
+            fatal: true,
+            error: String(errMsg),
+            url: url,
+            note: "hls.js fatal",
+          });
         }
       });
     } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
