@@ -1894,12 +1894,10 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Direct-Play wenn möglich, sonst HLS.
-              <strong>Automatisch</strong> bei DTS/TrueHD: Original-Video (Copy) + Ton→AAC
-              in MPEG-TS (wie Jellyfin) – ohne Video neu zu encodieren.
-              <strong>Remux</strong>: Video-Copy; inkompatibler Ton wird weggelassen.
-              <strong>Ton nicht umcodieren</strong>: ebenfalls Ton weglassen statt Xcode.
-              H.264 ist im Browser am sichersten.</p>
+            <p class="hint"><strong>Automatisch</strong> wählt den Pfad aus Datei × Browser ×
+              Server-Capabilities (Direct-Play → Video-Copy+Ton→AAC → Transcode).
+              Der Plan erscheint unter dem Modus bereits nach Dateiauswahl.
+              <strong>Remux</strong>: Video-Copy; inkompatibler Ton wird weggelassen.</p>
             <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
               <div class="field" style="flex:2;min-width:220px">
                 <label>Datei</label>
@@ -1952,6 +1950,7 @@
             <div class="fp-layout">
               <div class="fp-main">
                 <p class="muted fp-active-mode" id="fp-active-mode">Kein Video geladen</p>
+                <p class="muted fp-decision" id="fp-decision" style="font-size:11px;margin:0 0 8px;line-height:1.35"></p>
                 <div class="fp-stage">
                   <video id="fp-video" playsinline></video>
                   <div class="fp-overlay" id="fp-overlay">

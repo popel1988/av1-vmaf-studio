@@ -168,6 +168,9 @@ class PlayerSession:
     error: str = ""
     debug_cmd: str = ""
     last_client_error: str = ""
+    decision_summary: str = ""
+    decision_reasons: list = field(default_factory=list)
+    decision_strategy: str = ""
 
     @property
     def playlist(self) -> Path:
@@ -217,6 +220,9 @@ class PlayerSession:
             "debug_cmd": self.debug_cmd,
             "ffmpeg_log_tail": _tail_ffmpeg_log(self.work_dir) if self.work_dir else "",
             "last_client_error": self.last_client_error,
+            "decision_summary": self.decision_summary,
+            "decision_reasons": list(self.decision_reasons or []),
+            "decision_strategy": self.decision_strategy,
         }
 
     def playback_label(self) -> str:
@@ -349,6 +355,295 @@ def pick_auto_platform(codec: str = "h264") -> str:
         if _cap_ok(p, codec) or (p == "cpu" and codec in _CPU_ENC):
             return p
     return "cpu"
+
+
+def _browser_audio_direct_ok(codec: str) -> bool:
+    """Ton für HTML5-Direct-Play (nicht HLS)."""
+    return (codec or "").lower().startswith(
+        ("aac", "mp3", "mp4a", "opus", "vorbis", "flac")
+    )
+
+
+def _server_encode_targets(client_codecs: Optional[list[str]]) -> list[str]:
+    """Zielcodecs die Browser abspielen kann und Server encoden kann."""
+    allowed = {c.lower() for c in (client_codecs or [])} or {"h264"}
+    out = []
+    for c in ("h264", "hevc", "av1"):
+        if c not in allowed:
+            continue
+        if c == "h264" or any(_cap_ok(p, c) for p in ("nvidia", "intel", "amd", "cpu")):
+            out.append(c)
+    return out or ["h264"]
+
+
+def plan_playback(
+    info,
+    *,
+    profile: str = "auto",
+    audio_index: int = 0,
+    audio_codec: str = "",
+    subtitle_index: int = -1,
+    sub_codec: str = "",
+    start_sec: float = 0.0,
+    burn_subs: bool = False,
+    client_direct_ok: bool = False,
+    client_codecs: Optional[list[str]] = None,
+    platform: str = "auto",
+    codec: str = "h264",
+    height: int = 0,
+    v_bitrate: int = 0,
+    audio_copy: bool = False,
+) -> dict:
+    """Datei × Browser × Server → bester Wiedergabepfad.
+
+    Rückgabe u. a. strategy, profile, mode, use_video_copy, drop_audio,
+    will_xcode_audio, need_encode, encode{platform,codec,encoder},
+    height, v_bitrate, reasons[], summary, file{}, browser{}, server{}.
+    """
+    from . import capabilities as caps
+
+    requested = (profile or "auto").lower()
+    client = [c.lower() for c in (client_codecs or [])] or ["h264"]
+    want_audio_copy = bool(audio_copy)
+    want_burn = bool(burn_subs) and subtitle_index >= 0 and _is_image_sub(sub_codec)
+    src_v = ff.normalize_video_codec(getattr(info, "codec", "") if info else "")
+    src_h = int(getattr(info, "height", 0) or 0) if info else 0
+    is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
+    container = (getattr(info, "container", "") or "") if info else ""
+    ac = (audio_codec or "").lower()
+
+    enc_map = caps.results_map()
+    dec_map = caps.decode_results_map()
+    server_h264 = [p for p in ("nvidia", "intel", "amd", "cpu") if _cap_ok(p, "h264") or p == "cpu"]
+
+    file_info = {
+        "container": container,
+        "video": src_v or (getattr(info, "codec", "") if info else ""),
+        "audio": ac or "-",
+        "height": src_h,
+        "hdr": is_hdr,
+    }
+    browser_info = {
+        "codecs": client,
+        "direct_ok_flag": bool(client_direct_ok),
+        "video_ok": _hls_video_copy_ok(src_v or "", client),
+        "audio_hls_ok": _audio_hls_copy_ok(ac) if ac else True,
+        "audio_direct_ok": _browser_audio_direct_ok(ac) if ac else True,
+    }
+    server_info = {
+        "capabilities_ready": bool(enc_map) and bool(dec_map),
+        "encode_h264_platforms": server_h264,
+        "best_h264": pick_auto_platform("h264"),
+    }
+
+    reasons: list[str] = [
+        f"Datei: {(src_v or '?').upper()}"
+        + (f" {src_h}p" if src_h else "")
+        + (" HDR" if is_hdr else "")
+        + (f" · Ton {(ac or '–').upper()}"),
+        f"Browser: {', '.join(c.upper() for c in client)}"
+        + (f" · Video={'ok' if browser_info['video_ok'] else 'nein'}"
+           f" · Ton-HLS={'ok' if browser_info['audio_hls_ok'] else 'nein'}"),
+        f"Server: Encode-H.264 → {server_info['best_h264']}"
+        + (" · Capabilities bereit" if server_info["capabilities_ready"]
+           else " · Capabilities unvollständig"),
+    ]
+
+    def _result(**kw) -> dict:
+        base = {
+            "requested": requested,
+            "strategy": kw.get("strategy", "transcode"),
+            "profile": kw.get("profile", "720p"),
+            "mode": kw.get("mode", "hls"),
+            "use_video_copy": bool(kw.get("use_video_copy", False)),
+            "drop_audio": bool(kw.get("drop_audio", False)),
+            "will_xcode_audio": bool(kw.get("will_xcode_audio", False)),
+            "need_encode": bool(kw.get("need_encode", False)),
+            "encode": kw.get("encode") or {
+                "platform": "cpu", "codec": "h264", "encoder": "copy", "warnings": [],
+            },
+            "height": int(kw.get("height", 0) or 0),
+            "v_bitrate": int(kw.get("v_bitrate", 0) or 0),
+            "effective_audio_index": kw.get("effective_audio_index", audio_index),
+            "reasons": reasons + list(kw.get("extra_reasons") or []),
+            "summary": kw.get("summary", ""),
+            "file": file_info,
+            "browser": browser_info,
+            "server": server_info,
+        }
+        if not base["summary"]:
+            base["summary"] = base["strategy"]
+        return base
+
+    # --- Explizite Modi (kein Auto-Baum) ---------------------------------
+    if requested != "auto":
+        if requested == "direct":
+            return _result(
+                strategy="direct", profile="direct", mode="direct",
+                summary="Direct-Play (manuell)",
+                extra_reasons=["Auswahl: Direct-Play erzwungen"],
+                effective_audio_index=audio_index,
+            )
+        if requested == "copy":
+            drop = bool(ac and not _audio_hls_copy_ok(ac))
+            return _result(
+                strategy="remux_silent" if drop else "remux_copy",
+                profile="copy", mode="hls", use_video_copy=True,
+                drop_audio=drop,
+                effective_audio_index=(-1 if drop else audio_index),
+                summary=("Remux ohne Ton" if drop else "Remux Stream-Copy"),
+                extra_reasons=[
+                    "Auswahl: Remux",
+                    (f"Ton {ac.upper()} nicht HLS-fähig → weglassen" if drop
+                     else "Ton kopierbar"),
+                ],
+            )
+        # Encode-Profile
+        enc = resolve_encode(platform, codec, client_codecs=client)
+        prof = requested if requested in _ENCODE_PROFILES else "custom"
+        h, br = _quality_params(prof, height, v_bitrate)
+        return _result(
+            strategy="transcode", profile=prof, mode="hls",
+            need_encode=True, encode=enc, height=h, v_bitrate=br,
+            will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
+            summary=f"Transcode {prof} → {enc['platform']}/{enc['codec']}",
+            extra_reasons=[f"Auswahl: Profil {requested}"],
+        )
+
+    # --- Automatik -------------------------------------------------------
+    if want_burn:
+        enc = resolve_encode(platform, "h264", client_codecs=client)
+        h, br = _quality_params("720p", 0, v_bitrate)
+        return _result(
+            strategy="transcode", profile="720p", mode="hls",
+            need_encode=True, encode=enc, height=h, v_bitrate=br,
+            will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
+            summary="Burn-in → Transcode 720p",
+            extra_reasons=["Bild-Untertitel → Video muss encodiert werden"],
+        )
+
+    # Direct-Play: Container+Codec Server-seitig + Browser-Flag + Ton/Video ok
+    can_dp = bool(info) and can_direct_play(info)
+    video_ok = browser_info["video_ok"]
+    audio_direct = browser_info["audio_direct_ok"] or audio_index < 0 or not ac
+    seek_blocks = bool(start_sec and start_sec > 0)
+    if (
+        can_dp and client_direct_ok and video_ok and audio_direct
+        and not seek_blocks and not want_audio_copy
+    ):
+        # want_audio_copy mit exotischem Ton: Direct oft ohne Ton nutzlos → HLS
+        return _result(
+            strategy="direct", profile="direct", mode="direct",
+            summary="Direct-Play",
+            extra_reasons=[
+                "Container/Codecs browserfähig",
+                "Kein Ton-Transcode nötig → günstigster Pfad",
+            ],
+        )
+
+    # Video-Copy möglich?
+    if video_ok:
+        if want_audio_copy and ac and not _audio_hls_copy_ok(ac):
+            return _result(
+                strategy="remux_silent", profile="copy", mode="hls",
+                use_video_copy=True, drop_audio=True,
+                effective_audio_index=-1,
+                summary="Video-Copy, Ton weggelassen",
+                extra_reasons=[
+                    f"Browser kann {(src_v or '?').upper()} → kein Video-Encode",
+                    f"Ton {ac.upper()} + „nicht umcodieren“ → Spur stumm",
+                ],
+            )
+        if _audio_will_transcode(ac, want_audio_copy):
+            return _result(
+                strategy="remux_audio_xcode", profile="copy", mode="hls",
+                use_video_copy=True, will_xcode_audio=True,
+                summary="Video-Copy + Ton→AAC",
+                extra_reasons=[
+                    f"Browser kann {(src_v or '?').upper()} → Video bleibt Copy",
+                    f"Ton {ac.upper()} nicht HLS-fähig → AAC (Server-CPU)",
+                ],
+            )
+        # Video+Ton kopierbar, aber kein Direct (z. B. MKV) → Remux
+        return _result(
+            strategy="remux_copy", profile="copy", mode="hls",
+            use_video_copy=True,
+            summary="Remux Stream-Copy",
+            extra_reasons=[
+                "Video/Ton für HLS kopierbar",
+                "Kein Direct-Play (Container/Seek) → Remux",
+            ],
+        )
+
+    # Video nicht browserfähig → Transcode; Server wählt Encode-HW
+    targets = _server_encode_targets(client)
+    enc = resolve_encode(platform, targets[0], client_codecs=client)
+    # 4K-Live-Vorschau: 1080p reicht meist
+    prof = "1080p" if src_h >= 1440 else "original"
+    h, br = _quality_params(prof, height, v_bitrate)
+    return _result(
+        strategy="transcode", profile=prof, mode="hls",
+        need_encode=True, encode=enc, height=h, v_bitrate=br,
+        will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
+        summary=f"Transcode {prof} → {enc['platform']}/{enc['encoder']}",
+        extra_reasons=[
+            f"Browser kann {(src_v or '?').upper()} nicht → Encode nötig",
+            f"Server: {enc['platform']}/{enc['codec']}/{enc['encoder']}"
+            + (" · HDR→SDR" if is_hdr else ""),
+        ],
+    )
+
+
+def plan_for_path(
+    rel: str,
+    *,
+    audio_index: int = 0,
+    subtitle_index: int = -1,
+    profile: str = "auto",
+    burn_subs: bool = False,
+    client_direct_ok: bool = False,
+    client_codecs: Optional[list[str]] = None,
+    platform: str = "auto",
+    codec: str = "h264",
+    height: int = 0,
+    v_bitrate: int = 0,
+    audio_copy: bool = False,
+    start_sec: float = 0.0,
+) -> dict:
+    """Probe + plan_playback für die UI (ohne Session zu starten)."""
+    target = config.resolve_input(rel)
+    if target is None or not target.is_file():
+        return {"error": "Datei nicht gefunden"}
+    info, err = ff.probe_with_error(target)
+    if err and not info:
+        return {"error": f"Analyse fehlgeschlagen: {err}"}
+    audio_codec = ""
+    if info and info.audio and 0 <= audio_index < len(info.audio):
+        audio_codec = str(info.audio[audio_index].get("codec") or "")
+    sub_codec = ""
+    if info and info.subtitles and 0 <= subtitle_index < len(info.subtitles):
+        sub_codec = str(info.subtitles[subtitle_index].get("codec") or "")
+    plan = plan_playback(
+        info,
+        profile=profile,
+        audio_index=audio_index,
+        audio_codec=audio_codec,
+        subtitle_index=subtitle_index,
+        sub_codec=sub_codec,
+        start_sec=start_sec,
+        burn_subs=burn_subs,
+        client_direct_ok=client_direct_ok,
+        client_codecs=client_codecs,
+        platform=platform,
+        codec=codec,
+        height=height,
+        v_bitrate=v_bitrate,
+        audio_copy=audio_copy,
+    )
+    return {
+        "plan": plan,
+        "info": info.to_dict() if info else None,
+    }
 
 
 def resolve_encode(
@@ -871,52 +1166,46 @@ def start_session(
     want_audio_copy = bool(audio_copy)
     want_burn = bool(burn_subs) and subtitle_index >= 0 and _is_image_sub(sub_codec)
     requested = (profile or "auto").lower()
-    # Remux-Modus: Ton nur kopieren oder weglassen – nie Ton-Xcode.
-    # Automatisch: bei Bedarf Ton→AAC bei Video-Copy (Jellyfin-Stil, MPEG-TS).
-    explicit_remux = requested == "copy"
-    will_xcode_audio = (
-        not explicit_remux
-        and audio_index >= 0
-        and _audio_will_transcode(audio_codec, want_audio_copy)
-    )
-    force_hls = bool(start_sec and start_sec > 0) or will_xcode_audio
-    resolved = _resolve_profile(
-        profile, info,
-        force_hls=force_hls if requested == "auto" else False,
-        burn=want_burn,
-    )
-    if requested == "auto" and client_direct_ok and not want_burn and not force_hls:
-        if can_direct_play(info):
-            resolved = "direct"
 
-    # Remux / Ton-nicht-umcodieren + inkompatibler Codec → Spur stumm, Bild läuft
-    effective_audio = int(audio_index)
-    drop_audio = False
-    if (
-        resolved != "direct"
-        and effective_audio >= 0
-        and audio_codec
-        and not _audio_hls_copy_ok(audio_codec)
-        and (explicit_remux or want_audio_copy)
-    ):
-        drop_audio = True
+    plan = plan_playback(
+        info,
+        profile=requested,
+        audio_index=audio_index,
+        audio_codec=audio_codec,
+        subtitle_index=subtitle_index,
+        sub_codec=sub_codec,
+        start_sec=start_sec,
+        burn_subs=want_burn,
+        client_direct_ok=client_direct_ok,
+        client_codecs=client_codecs,
+        platform=platform,
+        codec=codec,
+        height=height,
+        v_bitrate=v_bitrate,
+        audio_copy=want_audio_copy,
+    )
+
+    resolved = plan["profile"]
+    use_video_copy = bool(plan["use_video_copy"]) and not want_burn
+    drop_audio = bool(plan["drop_audio"])
+    will_xcode_audio = bool(plan["will_xcode_audio"]) and not drop_audio
+    need_encode = bool(plan["need_encode"]) or want_burn
+    enc_info = dict(plan.get("encode") or {})
+    h = int(plan.get("height") or 0)
+    br = int(plan.get("v_bitrate") or 0)
+    effective_audio = int(plan.get("effective_audio_index", audio_index))
+    if drop_audio:
         effective_audio = -1
-        will_xcode_audio = False
 
-    need_encode = resolved in _ENCODE_PROFILES or want_burn
-    enc_info = {"platform": "cpu", "codec": "h264", "encoder": "copy", "warnings": []}
-    h, br = 0, 0
-    if need_encode:
+    if want_burn and not need_encode:
+        need_encode = True
+        resolved = "original" if resolved in ("direct", "copy") else resolved
         enc_info = resolve_encode(
             platform, codec, client_codecs=client_codecs or ["h264"],
         )
-        if resolved not in _ENCODE_PROFILES:
-            # z. B. copy/direct + Burn-in → Encode in Originalauflösung
-            resolved = "original" if want_burn else "720p"
-        h, br = _quality_params(resolved, height, v_bitrate)
-
-    # Remux / Auto-Ton→AAC: immer Video-Copy (kein unnötiges Video-Encode)
-    use_video_copy = resolved == "copy" and not want_burn
+        h, br = _quality_params(resolved if resolved in _ENCODE_PROFILES else "720p",
+                                height, v_bitrate)
+        use_video_copy = False
 
     sid = uuid.uuid4().hex[:12]
     work = _ensure_root() / sid
@@ -925,9 +1214,11 @@ def start_session(
     la = _normalize_lookahead(lookahead_sec)
     start0 = max(0.0, float(start_sec or 0))
 
-    # Warnungen erst nach finalem Pfad (unten) setzen – sonst veraltete Hinweise.
     warn_parts = list(enc_info.get("warnings") or [])
+    if plan.get("summary"):
+        warn_parts.append(str(plan["summary"]))
     warn = "; ".join(warn_parts)
+
     sess = PlayerSession(
         id=sid,
         path=target,
@@ -943,7 +1234,7 @@ def start_session(
         encoder=enc_info["encoder"] if need_encode else ("direct" if resolved == "direct" else "copy"),
         burn_subs=want_burn,
         audio_codec=audio_codec if not drop_audio else "",
-        mode="direct" if resolved == "direct" else "hls",
+        mode="direct" if plan["mode"] == "direct" else "hls",
         height=h,
         v_bitrate=br,
         lookahead_sec=la,
@@ -951,17 +1242,24 @@ def start_session(
         audio_copy=want_audio_copy and not drop_audio,
         warning=warn,
         work_dir=work,
+        decision_summary=str(plan.get("summary") or ""),
+        decision_reasons=list(plan.get("reasons") or []),
+        decision_strategy=str(plan.get("strategy") or ""),
+    )
+
+    source_vcodec = ff.normalize_video_codec(
+        getattr(info, "codec", "") if info else ""
+    )
+    is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
+
+    _plog(
+        sid,
+        "PLAN strategy=%s profile=%s summary=%s | %s",
+        plan.get("strategy"), resolved, plan.get("summary"),
+        " · ".join(plan.get("reasons") or []),
     )
 
     if sess.mode == "direct":
-        _plog(
-            sid,
-            "start profile=%s→direct src=%s/%s audio=%s",
-            requested,
-            getattr(info, "container", "") if info else "?",
-            getattr(info, "codec", "") if info else "?",
-            audio_codec or "-",
-        )
         with _LOCK:
             _SESSIONS[sid] = sess
         return {
@@ -969,71 +1267,8 @@ def start_session(
             "info": info.to_dict() if info else None,
             "chapters": chapters,
             "options": player_options(),
+            "plan": plan,
         }
-
-    source_vcodec = ff.normalize_video_codec(
-        getattr(info, "codec", "") if info else ""
-    )
-    src_h = int(getattr(info, "height", 0) or 0) if info else 0
-    is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
-
-    # Auto: Video-Copy nur verwerfen, wenn der Browser den Quellcodec nicht kann.
-    # Kann er HEVC (wie bei dir nativ ohne Ton), bleibt Copy + ggf. Ton→AAC.
-    if (
-        use_video_copy
-        and requested == "auto"
-        and not _hls_video_copy_ok(
-            source_vcodec or getattr(info, "codec", ""),
-            client_codecs,
-        )
-    ):
-        # Live-Vorschau: ab 1440p eher 1080p (4K-HDR→H.264 ist schwer/teuer)
-        resolved = "1080p" if src_h >= 1440 else "original"
-        _plog(
-            sid,
-            "Video-Copy ungeeignet (Quelle=%s, Client=%s) → Encode %s/H.264",
-            source_vcodec or getattr(info, "codec", "?"),
-            ",".join(client_codecs or []) or "h264",
-            resolved,
-        )
-        use_video_copy = False
-        need_encode = True
-        enc_info = resolve_encode(
-            platform, "h264", client_codecs=client_codecs or ["h264"],
-        )
-        h, br = _quality_params(resolved, height, v_bitrate)
-        sess.profile = resolved
-        sess.platform = enc_info["platform"]
-        sess.codec = enc_info["codec"]
-        sess.encoder = enc_info["encoder"]
-        sess.height = h
-        sess.v_bitrate = br
-    elif use_video_copy and requested == "auto":
-        _plog(
-            sid,
-            "Video-Copy OK für Client (Quelle=%s, Client=%s) – kein Video-Transcode",
-            source_vcodec or "?",
-            ",".join(client_codecs or []) or "?",
-        )
-
-    # Finale Status-Hinweise
-    warn_parts = list(enc_info.get("warnings") or [])
-    if drop_audio:
-        why = ("Remux" if explicit_remux
-               else "Haken „Ton nicht umcodieren“")
-        warn_parts.append(
-            f"Ton ({audio_codec}) nicht browserfähig – Spur weggelassen ({why})."
-        )
-    elif will_xcode_audio and use_video_copy:
-        warn_parts.append(
-            f"Ton→AAC bei Video-Copy (MPEG-TS), Codec war {audio_codec or '?'}."
-        )
-    elif will_xcode_audio and not use_video_copy:
-        warn_parts.append(
-            f"Ton→AAC + Video→{sess.codec or 'h264'} "
-            f"({source_vcodec or '?'}{'/HDR' if is_hdr else ''} nicht direct-playable)."
-        )
-    sess.warning = "; ".join(warn_parts)
 
     if use_video_copy:
         cmd = _build_hls_cmd(
@@ -1154,6 +1389,7 @@ def start_session(
         "info": info.to_dict() if info else None,
         "chapters": chapters,
         "options": player_options(),
+        "plan": plan,
     }
 
 

@@ -55,6 +55,66 @@
     el.textContent = label || tt("Kein Video geladen");
   }
 
+  function setDecision(plan) {
+    const el = $("fp-decision");
+    if (!el) return;
+    if (!plan) {
+      el.textContent = "";
+      return;
+    }
+    const reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
+    const head = plan.summary
+      ? `${tt("Plan")}: ${plan.summary}`
+      : "";
+    el.textContent = [head, ...reasons].filter(Boolean).join(" · ");
+  }
+
+  async function refreshPlan() {
+    const path = ($("fp-path") || {}).value || fp.path;
+    if (!path) {
+      setDecision(null);
+      return null;
+    }
+    const audio = parseInt(($("fp-audio") || {}).value, 10);
+    const sub = parseInt(($("fp-sub") || {}).value, 10);
+    const profile = (($("fp-profile") || {}).value) || "auto";
+    const platform = (($("fp-platform") || {}).value) || "auto";
+    const codec = (($("fp-codec") || {}).value) || "h264";
+    const height = parseInt(($("fp-height") || {}).value, 10) || 0;
+    const vBitrate = parseInt(($("fp-vbr") || {}).value, 10) || 0;
+    const burn = !!($("fp-burn") && $("fp-burn").checked);
+    const audioCopy = !!($("fp-audio-copy") && $("fp-audio-copy").checked);
+    try {
+      const d = await (await fetch("/api/player/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path,
+          audio: isNaN(audio) ? 0 : audio,
+          subtitle: isNaN(sub) ? -1 : sub,
+          profile,
+          burn_subs: burn,
+          client_direct_ok: clientDirectOk(fp.info),
+          platform,
+          codec,
+          height: profile === "custom" ? height : 0,
+          v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
+          client_codecs: detectClientCodecs(),
+          audio_copy: audioCopy,
+        }),
+      })).json();
+      if (d.error) {
+        setDecision({ summary: d.error, reasons: [] });
+        return null;
+      }
+      setDecision(d.plan || null);
+      return d.plan || null;
+    } catch (e) {
+      setDecision(null);
+      return null;
+    }
+  }
+
   function absoluteTime() {
     const v = $("fp-video");
     return fp.startOffset + (v ? (v.currentTime || 0) : 0);
@@ -422,6 +482,7 @@
     setDirty(false);
     setStatus(tt("Video entladen."));
     setActiveMode(tt("Kein Video geladen"));
+    setDecision(null);
     updateTimeUi();
     updateAudioModeHint(null);
     const play = $("fp-play");
@@ -622,10 +683,19 @@
       const chosen = (($("fp-profile") || {}).value) || "auto";
       const active = sess.playback_label
         || (sess.mode === "direct" ? tt("Direct-Play") : `${tt("HLS")} · ${sess.profile || "copy"}`);
-      const modeLine = chosen === "auto" && sess.profile && sess.profile !== "auto"
-        ? `${tt("Aktiv")}: ${active} (${tt("Auswahl")}: ${tt("Automatisch")} → ${sess.profile})`
-        : `${tt("Aktiv")}: ${active}`;
+      const modeLine = chosen === "auto" && sess.decision_summary
+        ? `${tt("Aktiv")}: ${active} · ${sess.decision_summary}`
+        : chosen === "auto" && sess.profile && sess.profile !== "auto"
+          ? `${tt("Aktiv")}: ${active} (${tt("Auswahl")}: ${tt("Automatisch")} → ${sess.profile})`
+          : `${tt("Aktiv")}: ${active}`;
       setActiveMode(modeLine);
+      if (d.plan) setDecision(d.plan);
+      else if (sess.decision_summary) {
+        setDecision({
+          summary: sess.decision_summary,
+          reasons: sess.decision_reasons || [],
+        });
+      }
 
       if (sess.mode === "direct") {
         playDirect(sess.media_url || sess.playlist_url);
@@ -711,6 +781,7 @@
       fp.path = path;
       fillTracks(info);
       updateTimeUi();
+      await refreshPlan();
       await startSession(0, true);
     } catch (e) {
       setStatus(String(e), true);
@@ -851,6 +922,7 @@
         if (!fp.path) return;
         setDirty(true);
         setStatus(tt("Änderungen noch nicht übernommen – „Übernehmen“ klicken."));
+        refreshPlan();
       };
       el.addEventListener("change", onChange);
       if (id === "fp-height" || id === "fp-vbr") el.addEventListener("input", onChange);
@@ -890,12 +962,29 @@
       }
       window.openFilePickerModal({
         title: tt("Video für Player wählen"),
-        onPick: (f) => {
+        onPick: async (f) => {
           if ($("fp-path")) $("fp-path").value = f.rel;
           fp.path = f.rel || "";
           setDirty(false);
-          setStatus(tt("Datei gewählt – zum Starten „Laden“ klicken."));
+          setStatus(tt("Datei gewählt – Plane Wiedergabe …"));
           setActiveMode(tt("Datei gewählt – Laden ausstehend"));
+          try {
+            const info = await (await fetch(
+              `/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
+            if (!info.error) {
+              fp.info = info;
+              fp.duration = info.duration || 0;
+              fillTracks(info);
+              updateTimeUi();
+              updateAudioModeHint(null);
+              await refreshPlan();
+              setStatus(tt("Datei gewählt – zum Starten „Laden“ klicken."));
+            } else {
+              setStatus(info.error, true);
+            }
+          } catch (e) {
+            setStatus(tt("Datei gewählt – zum Starten „Laden“ klicken."));
+          }
         },
       });
     });

@@ -1852,6 +1852,44 @@ async def player_options():
     return player_hls.player_options()
 
 
+class PlayerPlanRequest(BaseModel):
+    path: str
+    audio: int = 0
+    subtitle: int = -1
+    start: float = 0.0
+    profile: str = "auto"
+    burn_subs: bool = False
+    client_direct_ok: bool = False
+    platform: str = "auto"
+    codec: str = "h264"
+    height: int = 0
+    v_bitrate: int = 0
+    client_codecs: list[str] = []
+    audio_copy: bool = False
+
+
+@app.post("/api/player/plan")
+async def player_plan(req: PlayerPlanRequest):
+    """Datei × Browser × Server → empfohlener Wiedergabepfad (ohne Session)."""
+    from core import player_hls
+    return await asyncio.to_thread(
+        player_hls.plan_for_path,
+        req.path,
+        audio_index=req.audio,
+        subtitle_index=req.subtitle,
+        profile=req.profile,
+        burn_subs=req.burn_subs,
+        client_direct_ok=req.client_direct_ok,
+        client_codecs=req.client_codecs or None,
+        platform=req.platform,
+        codec=req.codec,
+        height=req.height,
+        v_bitrate=req.v_bitrate,
+        audio_copy=bool(req.audio_copy),
+        start_sec=req.start,
+    )
+
+
 @app.post("/api/player/session")
 async def player_session_start(req: PlayerSessionRequest):
     """Direct-Play oder HLS-Session (HW/SW-Transcode, Qualitätsstufen)."""
