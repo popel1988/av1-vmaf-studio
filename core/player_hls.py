@@ -27,6 +27,7 @@ from typing import Optional
 
 from . import config, ffmpeg_utils as ff
 from . import media_stream as ms
+from .encoder import _TONEMAP_CHAIN
 
 logger = logging.getLogger("vcompress.player_hls")
 
@@ -45,9 +46,24 @@ def _plog(sid: str, msg: str, *args, level: int = logging.INFO) -> None:
     logger.log(level, "Player[%s] " + msg, sid, *args)
 
 
-def _hls_video_copy_ok(source_codec: str) -> bool:
-    """MPEG-TS-HLS mit Video-Copy ist im Browser praktisch nur mit H.264 sicher."""
-    return ff.normalize_video_codec(source_codec) == "h264"
+def _hls_video_copy_ok(
+    source_codec: str,
+    client_codecs: Optional[list[str]] = None,
+) -> bool:
+    """Ob Video per HLS-Copy (MPEG-TS) im Browser laufen kann.
+
+    H.264 immer; HEVC/AV1 nur wenn der Client sie meldet (wie zuvor nativ
+    ohne Ton möglich – kein erzwungener H.264-Transcode).
+    """
+    src = ff.normalize_video_codec(source_codec)
+    if src == "h264":
+        return True
+    allowed = {c.lower() for c in (client_codecs or [])}
+    if src == "hevc" and "hevc" in allowed:
+        return True
+    if src == "av1" and "av1" in allowed:
+        return True
+    return False
 
 
 def _cmd_preview(cmd: list[str], limit: int = 500) -> str:
@@ -548,22 +564,39 @@ def _hwaccel_decode_args(platform: str, source_codec: str = "") -> list[str]:
     return []
 
 
+def _player_sdr_8bit_filters(*, is_hdr: bool, target_codec: str) -> list[str]:
+    """HDR/10-bit → 8-bit SDR für Browser-H.264 (NVENC kann kein 10-bit H.264)."""
+    out: list[str] = []
+    want_h264 = (target_codec or "h264").lower() == "h264"
+    if not want_h264:
+        return out
+    if is_hdr:
+        out.append(_TONEMAP_CHAIN)  # endet bereits mit format=yuv420p
+    else:
+        # Auch SDR-10-bit (yuv420p10le) muss vor h264_nvenc auf 8-bit
+        out.append("format=yuv420p")
+    return out
+
+
 def _build_video_filter(
     *,
     height: int,
     burn_sub_index: int,
     platform: str,
     encoder: str,
+    target_codec: str = "h264",
+    is_hdr: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args).
 
     ``setpts=PTS-STARTPTS`` setzt die Video-Timeline nach Seek auf 0 – analog
     zu ``asetpts`` beim Ton. Seek bleibt vor ``-i`` (schnell); kein langsames
-    Decode-from-start.
+    Decode-from-start. Bei H.264-Ziel: Tonemap/``yuv420p`` (10-bit-HDR-Quellen).
     """
     pre: list[str] = []
     backend = ff.encoder_backend(platform) if platform != "cpu" else "cpu"
     need_hwupload = "vaapi" in encoder or "qsv" in encoder
+    sdr = _player_sdr_8bit_filters(is_hdr=is_hdr, target_codec=target_codec)
 
     scale = f"scale=-2:{int(height)}" if height and height > 0 else ""
     # setpts immer vor hwupload (nur Systemspeicher-Frames)
@@ -571,11 +604,13 @@ def _build_video_filter(
 
     if burn_sub_index >= 0:
         # Overlay immer auf CPU, danach gemeinsame Timeline, ggf. hwupload
+        pix = (",".join(sdr) + ",") if sdr else ""
         if scale:
             fc = (f"[0:v:0]{scale}[vs];"
-                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto,{pts}")
+                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto,{pix}{pts}")
         else:
-            fc = f"[0:v:0][0:s:{int(burn_sub_index)}]overlay=format=auto,{pts}"
+            fc = (f"[0:v:0][0:s:{int(burn_sub_index)}]overlay=format=auto,"
+                  f"{pix}{pts}")
         if need_hwupload:
             fc += ",format=nv12,hwupload"
             if "qsv" in encoder:
@@ -591,11 +626,15 @@ def _build_video_filter(
         return pre, ["-filter_complex", fc, "-map", "[vout]"]
 
     # Ohne Burn-in
+    parts: list[str] = []
+    if scale:
+        parts.append(scale)
+    parts.extend(sdr)
+    parts.append(pts)
     if need_hwupload:
-        parts = []
-        if scale:
-            parts.append(scale)
-        parts.append(pts)
+        # Nach SDR-8-bit: nv12-Upload
+        if "format=yuv420p" not in ",".join(parts):
+            parts.append("format=yuv420p")
         parts.append("format=nv12")
         if "qsv" in encoder:
             parts.append("hwupload=extra_hw_frames=64")
@@ -609,11 +648,7 @@ def _build_video_filter(
                    "-filter_hw_device", "hw"]
         return pre, ["-vf", vf, "-map", "0:v:0?"]
 
-    # NVENC / CPU: scale (optional) + einheitliche Timeline
-    parts = []
-    if scale:
-        parts.append(scale)
-    parts.append(pts)
+    # NVENC / CPU
     return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"]
 
 
@@ -669,11 +704,13 @@ def _build_hls_cmd(
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
     source_codec: str = "",
+    is_hdr: bool = False,
 ) -> list[str]:
     """HLS-Command. Läuft durchgehend; Vorlauf drosselt der Client per Pause.
 
     Video-Copy (+ optional Ton→AAC) wie Jellyfin: MPEG-TS-Segmente – fMP4
-    mischt Copy/Xcode oft unsauber. Bei vollem Video-Encode: fMP4 + setpts.
+    mischt Copy/Xcode oft unsauber. Bei vollem Video-Encode: fMP4 + setpts
+    (+ Tonemap/yuv420p bei HDR/10-bit → H.264).
     """
     playlist = out_dir / "index.m3u8"
     # genpts bei Video-Copy oft schädlich (PTS-Sprünge); bei Encode hilfreich
@@ -694,6 +731,8 @@ def _build_hls_cmd(
         pre, vmap = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
             platform=platform, encoder=encoder,
+            target_codec=codec or "h264",
+            is_hdr=bool(is_hdr),
         )
         cmd += pre
 
@@ -886,17 +925,8 @@ def start_session(
     la = _normalize_lookahead(lookahead_sec)
     start0 = max(0.0, float(start_sec or 0))
 
+    # Warnungen erst nach finalem Pfad (unten) setzen – sonst veraltete Hinweise.
     warn_parts = list(enc_info.get("warnings") or [])
-    if drop_audio:
-        why = ("Remux" if explicit_remux
-               else "Haken „Ton nicht umcodieren“")
-        warn_parts.append(
-            f"Ton ({audio_codec}) nicht browserfähig – Spur weggelassen ({why})."
-        )
-    elif will_xcode_audio and use_video_copy:
-        warn_parts.append(
-            f"Ton→AAC bei Original-Video (MPEG-TS), Codec war {audio_codec or '?'}."
-        )
     warn = "; ".join(warn_parts)
     sess = PlayerSession(
         id=sid,
@@ -944,37 +974,66 @@ def start_session(
     source_vcodec = ff.normalize_video_codec(
         getattr(info, "codec", "") if info else ""
     )
+    src_h = int(getattr(info, "height", 0) or 0) if info else 0
+    is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
 
-    # Auto: HEVC/AV1-Copy in MPEG-TS-HLS scheitert im Browser → Encode H.264
+    # Auto: Video-Copy nur verwerfen, wenn der Browser den Quellcodec nicht kann.
+    # Kann er HEVC (wie bei dir nativ ohne Ton), bleibt Copy + ggf. Ton→AAC.
     if (
         use_video_copy
         and requested == "auto"
-        and not _hls_video_copy_ok(source_vcodec or getattr(info, "codec", ""))
+        and not _hls_video_copy_ok(
+            source_vcodec or getattr(info, "codec", ""),
+            client_codecs,
+        )
     ):
+        # Live-Vorschau: ab 1440p eher 1080p (4K-HDR→H.264 ist schwer/teuer)
+        resolved = "1080p" if src_h >= 1440 else "original"
         _plog(
             sid,
-            "Video-Copy ungeeignet für Browser-HLS (Quelle=%s) → Encode original/H.264",
+            "Video-Copy ungeeignet (Quelle=%s, Client=%s) → Encode %s/H.264",
             source_vcodec or getattr(info, "codec", "?"),
+            ",".join(client_codecs or []) or "h264",
+            resolved,
         )
         use_video_copy = False
-        resolved = "original"
         need_encode = True
         enc_info = resolve_encode(
             platform, "h264", client_codecs=client_codecs or ["h264"],
         )
-        h, br = _quality_params("original", height, v_bitrate)
+        h, br = _quality_params(resolved, height, v_bitrate)
         sess.profile = resolved
         sess.platform = enc_info["platform"]
         sess.codec = enc_info["codec"]
         sess.encoder = enc_info["encoder"]
         sess.height = h
         sess.v_bitrate = br
-        if enc_info.get("warnings"):
-            warn_parts.extend(enc_info["warnings"])
-            warn_parts.append(
-                f"Quelle {source_vcodec or '?'} nicht per HLS-Copy abspielbar – Transcode."
-            )
-            sess.warning = "; ".join(warn_parts)
+    elif use_video_copy and requested == "auto":
+        _plog(
+            sid,
+            "Video-Copy OK für Client (Quelle=%s, Client=%s) – kein Video-Transcode",
+            source_vcodec or "?",
+            ",".join(client_codecs or []) or "?",
+        )
+
+    # Finale Status-Hinweise
+    warn_parts = list(enc_info.get("warnings") or [])
+    if drop_audio:
+        why = ("Remux" if explicit_remux
+               else "Haken „Ton nicht umcodieren“")
+        warn_parts.append(
+            f"Ton ({audio_codec}) nicht browserfähig – Spur weggelassen ({why})."
+        )
+    elif will_xcode_audio and use_video_copy:
+        warn_parts.append(
+            f"Ton→AAC bei Video-Copy (MPEG-TS), Codec war {audio_codec or '?'}."
+        )
+    elif will_xcode_audio and not use_video_copy:
+        warn_parts.append(
+            f"Ton→AAC + Video→{sess.codec or 'h264'} "
+            f"({source_vcodec or '?'}{'/HDR' if is_hdr else ''} nicht direct-playable)."
+        )
+    sess.warning = "; ".join(warn_parts)
 
     if use_video_copy:
         cmd = _build_hls_cmd(
@@ -987,6 +1046,7 @@ def start_session(
             lookahead_sec=la,
             audio_copy=want_audio_copy and not drop_audio,
             source_codec=source_vcodec,
+            is_hdr=is_hdr,
         )
         sess.encoder = "copy"
         sess.platform = "cpu"
@@ -1007,6 +1067,7 @@ def start_session(
             lookahead_sec=la,
             audio_copy=want_audio_copy and not drop_audio,
             source_codec=source_vcodec,
+            is_hdr=is_hdr,
         )
 
     sess.debug_cmd = _cmd_preview(cmd, 800)
@@ -1070,6 +1131,7 @@ def start_session(
                     lookahead_sec=la,
                     audio_copy=want_audio_copy and not drop_audio,
                     source_codec=source_vcodec,
+                    is_hdr=is_hdr,
                 )
                 sess.debug_cmd = _cmd_preview(cmd, 800)
                 try:
