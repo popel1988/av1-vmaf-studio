@@ -864,12 +864,12 @@
     "Auto-Vorschlag": "Auto suggestion",
     "Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).":
       "Dolby Vision profile 5: IPTPQc2 with no HDR10 fallback – only correct on a DV player. Auto maps to SDR (safe).",
-    "Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.":
-      "Dolby Vision profile 7 (Blu-ray, dual layer). Auto converts to 8.1 (HEVC) or 10.1 (AV1/CPU) and keeps the RPU.",
-    "Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.":
-      "Dolby Vision single-layer with HDR10 fallback. Auto keeps the RPU, the film stays HDR.",
-    "Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.":
-      "Dolby Vision detected. Auto chooses keep or tone-map depending on the profile.",
+    "Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto: HEVC → 8.1 (auch GPU). AV1 → 10.1 nur mit CPU/SVT, nicht mit NVIDIA.":
+      "Dolby Vision profile 7 (Blu-ray, dual layer). Auto: HEVC → 8.1 (GPU ok). AV1 → 10.1 only with CPU/SVT, not NVIDIA.",
+    "Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU. AV1-DV nur per CPU/SVT – NVIDIA fällt auf HDR10 zurück.":
+      "Dolby Vision single-layer with HDR10 fallback. Auto keeps the RPU. AV1 DV only via CPU/SVT – NVIDIA falls back to HDR10.",
+    "Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil. AV1-DV nur CPU/SVT, nicht NVIDIA.":
+      "Dolby Vision detected. Auto chooses keep or tone-map depending on the profile. AV1 DV only CPU/SVT, not NVIDIA.",
     "HDR10+ (dynamische Metadaten). Der Plus-Layer geht beim Encode meist verloren; Auto behält HDR10 (10-bit).":
       "HDR10+ (dynamic metadata). The plus layer is usually lost on encode; auto keeps HDR10 (10-bit).",
     "HLG-HDR (Broadcast). Auto behält HDR, kein Tone-Mapping nach SDR.":
@@ -881,8 +881,8 @@
     "Kein Auto-Vorschlag (fehlende Analyse).": "No auto suggestion (analysis missing).",
     "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby Vision Profil 5 → SDR (Tone-Mapping), weil es keinen HDR10-Fallback gibt.":
       "Suggestion for “Add with auto settings”: target codec from the projection, Dolby Vision profile 5 → SDR (tone-map) because there is no HDR10 fallback.",
-    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen (kein Tone-Mapping).":
-      "Suggestion for “Add with auto settings”: target codec from the projection, keep the Dolby Vision RPU (no tone-map).",
+    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen. HEVC: auch GPU (8.1). AV1: nur CPU/SVT (10.1), NVIDIA kann DV nicht mitnehmen.":
+      "Suggestion for “Add with auto settings”: target codec from the projection, keep the Dolby Vision RPU. HEVC: GPU ok (8.1). AV1: CPU/SVT only (10.1), NVIDIA cannot carry DV.",
     "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, HDR10/HLG als 10-bit behalten.":
       "Suggestion for “Add with auto settings”: target codec from the projection, keep HDR10/HLG as 10-bit.",
     "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Quelle ist SDR – keine HDR-Behandlung nötig.":
@@ -897,8 +897,8 @@
       "Standard dynamic range – classic SDR without HDR metadata.",
     "HDR ohne Dolby Vision (HDR10, HDR10+ oder HLG).":
       "HDR without Dolby Vision (HDR10, HDR10+ or HLG).",
-    "Dolby Vision (RPU). Profil 5 hat keinen HDR10-Fallback, 7/8/10 schon.":
-      "Dolby Vision (RPU). Profile 5 has no HDR10 fallback; 7/8/10 do.",
+    "Dolby Vision (RPU). HEVC-Mitnahme auch per GPU (8.1). AV1-DV nur CPU/SVT, nicht NVIDIA.":
+      "Dolby Vision (RPU). HEVC can keep it on GPU (8.1). AV1 DV only CPU/SVT, not NVIDIA.",
     "HDR10+ – dynamische Metadaten, Plus-Layer überlebt einen Re-Encode selten.":
       "HDR10+ – dynamic metadata; the plus layer rarely survives a re-encode.",
     "HLG – Broadcast-HDR, kompatibel mit SDR-Displays, Auto behält HDR.":
@@ -908,12 +908,12 @@
     "HDR-Variante ohne Dolby Vision.": "HDR variant without Dolby Vision.",
     "Profil 5: kein HDR10-Fallback. Ohne DV-fähigen Player falsch – Auto: Tone-Mapping.":
       "Profile 5: no HDR10 fallback. Wrong without a DV player – auto: tone-map.",
-    "Profil 7: Blu-ray dual-layer. Auto wandelt nach 8.1 (HEVC) oder 10.1 (AV1/CPU).":
-      "Profile 7: Blu-ray dual-layer. Auto converts to 8.1 (HEVC) or 10.1 (AV1/CPU).",
-    "Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU.":
-      "Profile 8: single-layer + HDR10 fallback. Auto keeps the RPU.",
-    "Profil 10: DV in AV1. Auto übernimmt die RPU (meist CPU/SVT).":
-      "Profile 10: DV in AV1. Auto keeps the RPU (usually CPU/SVT).",
+    "Profil 7: Blu-ray dual-layer. Auto: HEVC 8.1 (GPU möglich), AV1 10.1 nur CPU/SVT – nicht NVIDIA.":
+      "Profile 7: Blu-ray dual-layer. Auto: HEVC 8.1 (GPU ok), AV1 10.1 CPU/SVT only – not NVIDIA.",
+    "Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.":
+      "Profile 8: single-layer + HDR10 fallback. Auto keeps the RPU. AV1 only CPU/SVT, not NVIDIA.",
+    "Profil 10: DV in AV1. Übernehmen nur mit CPU/SVT – NVIDIA/NVENC kann die RPU nicht einbetten.":
+      "Profile 10: DV in AV1. Keep only with CPU/SVT – NVIDIA/NVENC cannot embed the RPU.",
     "Dolby-Vision-Profil laut Datei-Metadaten.": "Dolby Vision profile from file metadata.",
     "Datei geht unverändert in den Browser – kein Remux, kein Encode. Nur bei MP4/WebM mit passendem Codec.":
       "File plays in the browser unchanged – no remux, no encode. Only for MP4/WebM with a matching codec.",
@@ -933,14 +933,14 @@
       "AV1 · CQ 26, anime mode (VMAF-NEG + 10-bit against banding).",
     "Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.":
       "No video encode: container/tracks only (remux). Fast, picture stays identical.",
-    "Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.":
-      "Where FFmpeg encodes: NVIDIA/Intel/AMD (GPU) or CPU. AV1+Dolby Vision often CPU/SVT only.",
+    "Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).":
+      "Where FFmpeg encodes: NVIDIA/Intel/AMD (GPU) or CPU. AV1+Dolby Vision only with CPU/SVT – NVIDIA cannot embed the RPU (then HDR10 fallback).",
     "AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.":
       "AV1: smallest files, slow. HEVC: good compromise. H.264: max compatibility, larger files.",
     "Nur bei HDR-Quellen. Beibehalten = 10-bit HDR10/HLG. Tone-Mapping = SDR für jedes Display, etwas größerer Qualitätsverlust.":
       "HDR sources only. Keep = 10-bit HDR10/HLG. Tone-map = SDR for any display, slightly more quality loss.",
-    "Profil 7 wird zu 8.1/10.1. Profil 5 hat keinen HDR10-Fallback – ohne DV-Player lieber Tone-Mapping. Übernehmen braucht dovi_tool bzw. libsvtav1.":
-      "Profile 7 becomes 8.1/10.1. Profile 5 has no HDR10 fallback – without a DV player prefer tone-map. Keep needs dovi_tool or libsvtav1.",
+    "Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.":
+      "Profile 7 → HEVC 8.1 (dovi_tool, GPU ok) or AV1 10.1 CPU/SVT only. NVIDIA AV1 cannot carry DV (HDR10 fallback). Profile 5 has no HDR10 fallback – without a DV player prefer tone-map.",
     "CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.":
       "CQ/CRF: a quality number (lower = better/larger). CBR: fixed bitrate. ABR: target bitrate, may vary.",
     "Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.":
@@ -976,8 +976,8 @@
       "Copies original audio into HLS. DTS/TrueHD/Atmos often won’t play in the browser – the track may stay silent.",
     "PGS/DVD/DVB-Untertitel sind Bilder, kein Text. Einbrennen erzwingt Video-Transcode.":
       "PGS/DVD/DVB subs are images, not text. Burning them in forces a video transcode.",
-    "Automatisch: pro Datei DV übernehmen oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.":
-      "Auto: keep DV per file, or SDR for profile 5. Fixed options apply to the whole batch.",
+    "Automatisch: pro Datei DV übernehmen (HEVC auch GPU; AV1 nur CPU/SVT, nicht NVIDIA) oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.":
+      "Auto: keep DV per file (HEVC also GPU; AV1 only CPU/SVT, not NVIDIA), or SDR for profile 5. Fixed options apply to the whole batch.",
     "SDR, HDR oder Dolby Vision. Hover auf das Badge erklärt das Profil und den Auto-Pfad.":
       "SDR, HDR or Dolby Vision. Hover the badge for the profile and the auto path.",
     "Encode-Codec/Qualität, Remux, Audio-Opt oder Schnitt – je nach Job.":

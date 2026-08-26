@@ -414,11 +414,15 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .fp-stage {
   position: relative;
+  width: 100%;
   background: #0a0a0c;
   border-radius: var(--radius-sm);
   overflow: hidden;
   aspect-ratio: 16 / 9;
-  max-height: min(70vh, 720px);
+}
+.fp-playback {
+  width: min(100%, calc(min(70vh, 720px) * 16 / 9));
+  max-width: 100%;
 }
 .fp-stage:fullscreen,
 .fp-stage:-webkit-full-screen {
@@ -454,9 +458,11 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .fp-controls {
   display: flex; align-items: center; gap: 10px;
-  margin-top: 10px; flex-wrap: wrap;
+  margin-top: 10px; flex-wrap: nowrap;
+  width: 100%;
+  box-sizing: border-box;
 }
-.fp-controls #fp-seek { flex: 1; min-width: 160px; }
+.fp-controls #fp-seek { flex: 1; min-width: 0; }
 .fp-time { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
 .fp-tracks select { width: 100%; }
 .fp-chapters {

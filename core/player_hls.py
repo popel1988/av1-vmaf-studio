@@ -1047,6 +1047,11 @@ def _build_hls_cmd(
 
     if start_sec and start_sec > 0:
         cmd += ["-ss", f"{float(start_sec):.3f}"]
+        # Video-Copy sucht den vorherigen Keyframe; Standard ``accurate_seek``
+        # dekodiert den Ton aber bis zur exakten -ss-Zeit. Beide Streams werden
+        # danach auf PTS 0 gesetzt → Ton eilt dem Bild voraus.
+        if video_copy:
+            cmd += ["-noaccurate_seek", "-seek_timestamp", "1"]
     cmd += ["-i", str(path)]
 
     if video_copy:

@@ -177,7 +177,7 @@
 
             <div class="field-row">
               <div class="field">
-                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.">GPU / Plattform</label>
+                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).">GPU / Plattform</label>
                 <select id="opt-platform">
                   {% for p in platform_options %}
                   <option value="{{ p.value }}">{{ p.label }}</option>
@@ -216,7 +216,7 @@
                 <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
               </div>
               <div id="dv-mode-wrap" style="display:none">
-                <label data-tip="Profil 7 wird zu 8.1/10.1. Profil 5 hat keinen HDR10-Fallback – ohne DV-Player lieber Tone-Mapping. Übernehmen braucht dovi_tool bzw. libsvtav1.">Dolby-Vision-Behandlung</label>
+                <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
                 <select id="opt-dv-mode">
                   <option value="preserve">Dolby Vision übernehmen (RPU)</option>
                   <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
@@ -915,7 +915,7 @@
             <div id="st-encode-only">
             <div class="field-row">
               <div class="field">
-                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.">GPU / Plattform</label>
+                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).">GPU / Plattform</label>
                 <select id="st-platform">
                   {% for p in platform_options %}
                   <option value="{{ p.value }}">{{ p.label }}</option>
@@ -993,7 +993,7 @@
             </label>
 
             <div class="field">
-              <label data-tip="Automatisch: pro Datei DV übernehmen oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.">Dynamik (HDR / Dolby Vision)</label>
+              <label data-tip="Automatisch: pro Datei DV übernehmen (HEVC auch GPU; AV1 nur CPU/SVT, nicht NVIDIA) oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.">Dynamik (HDR / Dolby Vision)</label>
               <select id="st-dynamik">
                 <option value="auto">Automatisch je Datei (empfohlen)</option>
                 <option value="preserve">HDR / Dolby Vision beibehalten</option>
@@ -1946,6 +1946,7 @@
             <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
             <div class="fp-layout">
               <div class="fp-main">
+                <div class="fp-playback">
                 <div class="fp-stage">
                   <video id="fp-video" playsinline></video>
                   <div class="fp-overlay" id="fp-overlay">
@@ -1958,6 +1959,7 @@
                   <span class="muted fp-time" id="fp-time">0:00:00 / 0:00:00</span>
                   <input type="range" id="fp-vol" min="0" max="100" value="90" title="Lautstärke" style="width:90px" />
                   <button type="button" class="btn btn-ghost btn-sm" id="fp-fs" title="Vollbild (Esc zum Beenden)">⛶</button>
+                </div>
                 </div>
                 <div class="field-row fp-tracks" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
                   <div class="field" style="flex:1;min-width:140px">

@@ -3955,7 +3955,7 @@
       dyn += bar(h.mode, h.count, totalMatched, "warn", true, libHdrModeTip(h.mode));
     });
     dyn += bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent", false,
-      tt("Dolby Vision (RPU). Profil 5 hat keinen HDR10-Fallback, 7/8/10 schon."));
+      tt("Dolby Vision (RPU). HEVC-Mitnahme auch per GPU (8.1). AV1-DV nur CPU/SVT, nicht NVIDIA."));
     (stats.dv_profiles || []).forEach((p) => {
       const lab = p.profile === "?" ? "Profil ?" : `Profil ${p.profile}`;
       dyn += bar(lab, p.count, totalMatched, "accent", true, libDvProfileTip(p.profile));
@@ -4162,12 +4162,12 @@
         return tt("Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).") + auto;
       }
       if (p === 7) {
-        return tt("Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.") + auto;
+        return tt("Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto: HEVC → 8.1 (auch GPU). AV1 → 10.1 nur mit CPU/SVT, nicht mit NVIDIA.") + auto;
       }
       if (p === 8 || p === 10) {
-        return tt("Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.") + auto;
+        return tt("Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU. AV1-DV nur per CPU/SVT – NVIDIA fällt auf HDR10 zurück.") + auto;
       }
-      return tt("Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.") + auto;
+      return tt("Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil. AV1-DV nur CPU/SVT, nicht NVIDIA.") + auto;
     }
     if (m.is_hdr) {
       const k = libHdrModeKey(m);
@@ -4189,7 +4189,7 @@
       return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby Vision Profil 5 → SDR (Tone-Mapping), weil es keinen HDR10-Fallback gibt.");
     }
     if (s.dv_mode === "preserve") {
-      return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen (kein Tone-Mapping).");
+      return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen. HEVC: auch GPU (8.1). AV1: nur CPU/SVT (10.1), NVIDIA kann DV nicht mitnehmen.");
     }
     if (s.hdr_mode === "preserve") {
       return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, HDR10/HLG als 10-bit behalten.");
@@ -4218,9 +4218,9 @@
   function libDvProfileTip(profile) {
     const p = String(profile || "");
     if (p === "5") return tt("Profil 5: kein HDR10-Fallback. Ohne DV-fähigen Player falsch – Auto: Tone-Mapping.");
-    if (p === "7") return tt("Profil 7: Blu-ray dual-layer. Auto wandelt nach 8.1 (HEVC) oder 10.1 (AV1/CPU).");
-    if (p === "8") return tt("Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU.");
-    if (p === "10") return tt("Profil 10: DV in AV1. Auto übernimmt die RPU (meist CPU/SVT).");
+    if (p === "7") return tt("Profil 7: Blu-ray dual-layer. Auto: HEVC 8.1 (GPU möglich), AV1 10.1 nur CPU/SVT – nicht NVIDIA.");
+    if (p === "8") return tt("Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.");
+    if (p === "10") return tt("Profil 10: DV in AV1. Übernehmen nur mit CPU/SVT – NVIDIA/NVENC kann die RPU nicht einbetten.");
     return tt("Dolby-Vision-Profil laut Datei-Metadaten.");
   }
 
