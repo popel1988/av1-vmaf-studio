@@ -320,16 +320,97 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   display: grid;
   grid-template-columns: 1fr;
   gap: 14px;
+  align-items: start;
 }
 @media (min-width: 960px) {
-  .fp-layout:has(.fp-chapters:not([style*="display: none"])) {
-    grid-template-columns: 1fr 220px;
+  .fp-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 }
-.fp-active-mode {
+.fp-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.fp-plan {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+.fp-plan-badge {
+  display: inline-flex;
+  align-items: center;
   font-size: 11.5px;
-  margin: 0 0 6px;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 999px;
+  margin-bottom: 10px;
+  border: 1px solid transparent;
+}
+.fp-kind-idle {
+  background: var(--surface-3);
+  color: var(--text-muted);
+}
+.fp-kind-direct {
+  background: color-mix(in srgb, var(--good) 22%, transparent);
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+}
+.fp-kind-copy {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.fp-kind-audio {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.fp-kind-silent {
+  background: var(--surface-3);
+  color: var(--text-muted);
+}
+.fp-kind-xcode {
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 45%, transparent);
+}
+.fp-plan-facts {
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  gap: 5px 10px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.fp-plan-facts dt {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  padding-top: 1px;
+}
+.fp-plan-facts dd { margin: 0; min-width: 0; word-break: break-word; }
+.fp-plan-more {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.fp-plan-more summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+.fp-plan-more summary::-webkit-details-marker { display: none; }
+.fp-plan-more ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  line-height: 1.4;
 }
 .fp-stage {
   position: relative;
@@ -383,7 +464,7 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px;
-  max-height: min(70vh, 720px);
+  max-height: min(40vh, 380px);
   overflow: auto;
 }
 .fp-chapters-title {
@@ -575,6 +656,29 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .dyn-badge { display: inline-block; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 700; background: var(--surface-3); color: var(--text-muted); }
 .dyn-badge.warn { background: color-mix(in srgb, var(--warn, #e0a83a) 25%, transparent); color: var(--text); }
 .dyn-badge.accent { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
+
+/* Schwebende Tooltips (data-tip) – nicht vom Tabellen-Overflow abgeschnitten */
+.ui-tip {
+  position: fixed;
+  z-index: 9000;
+  max-width: min(340px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+[data-tip] { cursor: help; }
+button[data-tip], .btn[data-tip] { cursor: pointer; }
+label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
+  border-bottom: 1px dotted color-mix(in srgb, var(--text-muted) 55%, transparent);
+  text-decoration: none;
+}
 .lib-suggest { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .lib-row-actions { white-space: nowrap; }
 .lib-act {

@@ -854,6 +854,140 @@
     "Tonspur": "Audio track",
     "Keine Untertitel": "No subtitles",
     "Kein Ton": "No audio",
+    "Kein Video": "No video",
+    "Remux · Ton→AAC": "Remux · audio→AAC",
+    "Remux · ohne Ton": "Remux · no audio",
+    "weggelassen": "dropped",
+    "unbegrenzt": "unlimited",
+    "Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.":
+      "Auto chooses Direct Play, video copy (audio→AAC if needed) or transcode. The plan is beside the picture.",
+    "Auto-Vorschlag": "Auto suggestion",
+    "Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).":
+      "Dolby Vision profile 5: IPTPQc2 with no HDR10 fallback – only correct on a DV player. Auto maps to SDR (safe).",
+    "Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.":
+      "Dolby Vision profile 7 (Blu-ray, dual layer). Auto converts to 8.1 (HEVC) or 10.1 (AV1/CPU) and keeps the RPU.",
+    "Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.":
+      "Dolby Vision single-layer with HDR10 fallback. Auto keeps the RPU, the film stays HDR.",
+    "Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.":
+      "Dolby Vision detected. Auto chooses keep or tone-map depending on the profile.",
+    "HDR10+ (dynamische Metadaten). Der Plus-Layer geht beim Encode meist verloren; Auto behält HDR10 (10-bit).":
+      "HDR10+ (dynamic metadata). The plus layer is usually lost on encode; auto keeps HDR10 (10-bit).",
+    "HLG-HDR (Broadcast). Auto behält HDR, kein Tone-Mapping nach SDR.":
+      "HLG HDR (broadcast). Auto keeps HDR, no tone-map to SDR.",
+    "HDR10/PQ (statische Metadaten). Auto behält 10-bit HDR, sofern der Encoder das kann.":
+      "HDR10/PQ (static metadata). Auto keeps 10-bit HDR if the encoder can.",
+    "SDR – Standard Dynamic Range, typisch 8-bit. Kein HDR. Auto encodiert als SDR.":
+      "SDR – standard dynamic range, typically 8-bit. No HDR. Auto encodes as SDR.",
+    "Kein Auto-Vorschlag (fehlende Analyse).": "No auto suggestion (analysis missing).",
+    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby Vision Profil 5 → SDR (Tone-Mapping), weil es keinen HDR10-Fallback gibt.":
+      "Suggestion for “Add with auto settings”: target codec from the projection, Dolby Vision profile 5 → SDR (tone-map) because there is no HDR10 fallback.",
+    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen (kein Tone-Mapping).":
+      "Suggestion for “Add with auto settings”: target codec from the projection, keep the Dolby Vision RPU (no tone-map).",
+    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, HDR10/HLG als 10-bit behalten.":
+      "Suggestion for “Add with auto settings”: target codec from the projection, keep HDR10/HLG as 10-bit.",
+    "Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Quelle ist SDR – keine HDR-Behandlung nötig.":
+      "Suggestion for “Add with auto settings”: target codec from the projection, source is SDR – no HDR handling needed.",
+    "Schon effizient: bereits AV1 oder Videobitrate nahe am Ziel für diese Auflösung/HDR. Eine Neuencodierung spart kaum Platz.":
+      "Already efficient: already AV1 or video bitrate close to the target for this resolution/HDR. Re-encoding barely saves space.",
+    "Grobe Schätzung aus Dauer, aktueller Videobitrate und Ziel-Codec":
+      "Rough estimate from duration, current video bitrate and target codec",
+    "Kein echter Probe-Encode – CQ, Film und Ton ändern die reale Größe.":
+      "Not a real test encode – CQ, film and audio change the real size.",
+    "Standard Dynamic Range – klassisches SDR ohne HDR-Metadaten.":
+      "Standard dynamic range – classic SDR without HDR metadata.",
+    "HDR ohne Dolby Vision (HDR10, HDR10+ oder HLG).":
+      "HDR without Dolby Vision (HDR10, HDR10+ or HLG).",
+    "Dolby Vision (RPU). Profil 5 hat keinen HDR10-Fallback, 7/8/10 schon.":
+      "Dolby Vision (RPU). Profile 5 has no HDR10 fallback; 7/8/10 do.",
+    "HDR10+ – dynamische Metadaten, Plus-Layer überlebt einen Re-Encode selten.":
+      "HDR10+ – dynamic metadata; the plus layer rarely survives a re-encode.",
+    "HLG – Broadcast-HDR, kompatibel mit SDR-Displays, Auto behält HDR.":
+      "HLG – broadcast HDR, compatible with SDR displays; auto keeps HDR.",
+    "HDR10 – statische MaxCLL/MaxFALL-Metadaten, Auto behält 10-bit.":
+      "HDR10 – static MaxCLL/MaxFALL metadata; auto keeps 10-bit.",
+    "HDR-Variante ohne Dolby Vision.": "HDR variant without Dolby Vision.",
+    "Profil 5: kein HDR10-Fallback. Ohne DV-fähigen Player falsch – Auto: Tone-Mapping.":
+      "Profile 5: no HDR10 fallback. Wrong without a DV player – auto: tone-map.",
+    "Profil 7: Blu-ray dual-layer. Auto wandelt nach 8.1 (HEVC) oder 10.1 (AV1/CPU).":
+      "Profile 7: Blu-ray dual-layer. Auto converts to 8.1 (HEVC) or 10.1 (AV1/CPU).",
+    "Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU.":
+      "Profile 8: single-layer + HDR10 fallback. Auto keeps the RPU.",
+    "Profil 10: DV in AV1. Auto übernimmt die RPU (meist CPU/SVT).":
+      "Profile 10: DV in AV1. Auto keeps the RPU (usually CPU/SVT).",
+    "Dolby-Vision-Profil laut Datei-Metadaten.": "Dolby Vision profile from file metadata.",
+    "Datei geht unverändert in den Browser – kein Remux, kein Encode. Nur bei MP4/WebM mit passendem Codec.":
+      "File plays in the browser unchanged – no remux, no encode. Only for MP4/WebM with a matching codec.",
+    "Video und Ton werden nur nach fMP4/HLS umgepackt, nicht neu encodiert. Günstig bei MKV, wenn der Browser den Codec kann.":
+      "Video and audio are only remuxed to fMP4/HLS, not re-encoded. Cheap for MKV when the browser can play the codec.",
+    "Video bleibt Copy (z. B. HEVC als hvc1). Nur der Ton wird nach Stereo-AAC gewandelt, damit HLS im Browser Ton hat.":
+      "Video stays copy (e.g. HEVC as hvc1). Only audio is converted to stereo AAC so HLS has sound in the browser.",
+    "Video-Copy ohne Tonspur: der Audiocodec ist für HLS ungeeignet und „Ton nicht umcodieren“ ist aktiv.":
+      "Video copy without audio: the audio codec is not HLS-safe and “don’t transcode audio” is on.",
+    "Video wird neu encodiert (Auflösung, Codec, ggf. HDR→SDR), weil der Browser die Quelle so nicht abspielen kann.":
+      "Video is re-encoded (resolution, codec, HDR→SDR if needed) because the browser cannot play the source as-is.",
+    "AV1 · CQ 28, Ton kopieren – Ausgangspunkt für Spielfilme.":
+      "AV1 · CQ 28, copy audio – starting point for movies.",
+    "Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.":
+      "Like Movie, a bit smaller (CQ 30) and de/en language whitelist for audio and subs.",
+    "AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).":
+      "AV1 · CQ 26, anime mode (VMAF-NEG + 10-bit against banding).",
+    "Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.":
+      "No video encode: container/tracks only (remux). Fast, picture stays identical.",
+    "Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.":
+      "Where FFmpeg encodes: NVIDIA/Intel/AMD (GPU) or CPU. AV1+Dolby Vision often CPU/SVT only.",
+    "AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.":
+      "AV1: smallest files, slow. HEVC: good compromise. H.264: max compatibility, larger files.",
+    "Nur bei HDR-Quellen. Beibehalten = 10-bit HDR10/HLG. Tone-Mapping = SDR für jedes Display, etwas größerer Qualitätsverlust.":
+      "HDR sources only. Keep = 10-bit HDR10/HLG. Tone-map = SDR for any display, slightly more quality loss.",
+    "Profil 7 wird zu 8.1/10.1. Profil 5 hat keinen HDR10-Fallback – ohne DV-Player lieber Tone-Mapping. Übernehmen braucht dovi_tool bzw. libsvtav1.":
+      "Profile 7 becomes 8.1/10.1. Profile 5 has no HDR10 fallback – without a DV player prefer tone-map. Keep needs dovi_tool or libsvtav1.",
+    "CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.":
+      "CQ/CRF: a quality number (lower = better/larger). CBR: fixed bitrate. ABR: target bitrate, may vary.",
+    "Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.":
+      "Encoder quality number. Lower = sharper and larger. 24–30 is typical for film, anime often a bit lower.",
+    "Misst nach dem Encode Stichproben-VMAF gegen die Quelle. Liegt der Wert unter dem Ziel, Warnung oder automatischer Re-Encode.":
+      "After encode, samples VMAF against the source. Below target: warning or automatic re-encode.",
+    "Video-Codec der Quelle (nicht das Encode-Ziel).": "Source video codec (not the encode target).",
+    "SDR, HDR10/HLG/HDR10+ oder Dolby Vision (Profil). Hover auf das Badge erklärt, was Auto daraus machen würde.":
+      "SDR, HDR10/HLG/HDR10+ or Dolby Vision (profile). Hover the badge to see what Auto would do.",
+    "Videobitrate der Quelle. Hohe Werte bei H.264/HEVC sind oft Einsparpotenzial.":
+      "Source video bitrate. High H.264/HEVC values are often savings potential.",
+    "Schätzung, kein Probe-Encode. Hängt vom Ziel-Codec oben und von Auflösung/HDR ab.":
+      "Estimate, not a test encode. Depends on the target codec above and on resolution/HDR.",
+    "Was „Auswahl mit Auto-Einstellungen“ je Datei setzen würde: Ziel-Codec plus HDR/DV-Behandlung.":
+      "What “Add with auto settings” would set per file: target codec plus HDR/DV handling.",
+    "Nur für die Einspar-Spalte und den Auto-Vorschlag. Encoded wird später mit den Einstellungen der Encoding-Seite bzw. Auto.":
+      "Only for the savings column and the auto suggestion. Encoding later uses Encoding-page settings or Auto.",
+    "Blendet Dateien aus, die schon AV1 sind oder deren Videobitrate nah am Ziel liegt.":
+      "Hides files that are already AV1 or whose video bitrate is close to the target.",
+    "Blendet Dateien aus, die in der Historie schon erfolgreich encodiert wurden.":
+      "Hides files that already completed successfully in history.",
+    "Anteil SDR / HDR / Dolby Vision im aktuellen Filter. Hover auf die Balken für Profil-Infos.":
+      "Share of SDR / HDR / Dolby Vision in the current filter. Hover the bars for profile info.",
+    "Wie weit FFmpeg vor der Abspielposition arbeiten darf. Ist der Puffer voll, wird der Prozess pausiert (kein Neustart).":
+      "How far FFmpeg may work ahead of playback. When the buffer is full the process is paused (no restart).",
+    "Automatisch: Direct-Play wenn möglich, sonst Video-Copy (Ton ggf. AAC), sonst Transcode. Die anderen Einträge erzwingen den Pfad.":
+      "Auto: Direct Play if possible, else video copy (audio→AAC if needed), else transcode. Other entries force the path.",
+    "Nur relevant beim Transcode. Automatisch wählt die beste verfügbare GPU laut Diagnose.":
+      "Only for transcode. Auto picks the best available GPU from diagnostics.",
+    "Zielcodec nur beim Transcode. HEVC/AV1 nur, wenn der Browser sie kann – sonst Fallback H.264.":
+      "Target codec only for transcode. HEVC/AV1 only if the browser can play them – otherwise H.264 fallback.",
+    "Kopiert den Originalton in HLS. DTS/TrueHD/Atmos spielen im Browser dann oft nicht – Spur kann stumm bleiben.":
+      "Copies original audio into HLS. DTS/TrueHD/Atmos often won’t play in the browser – the track may stay silent.",
+    "PGS/DVD/DVB-Untertitel sind Bilder, kein Text. Einbrennen erzwingt Video-Transcode.":
+      "PGS/DVD/DVB subs are images, not text. Burning them in forces a video transcode.",
+    "Automatisch: pro Datei DV übernehmen oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.":
+      "Auto: keep DV per file, or SDR for profile 5. Fixed options apply to the whole batch.",
+    "SDR, HDR oder Dolby Vision. Hover auf das Badge erklärt das Profil und den Auto-Pfad.":
+      "SDR, HDR or Dolby Vision. Hover the badge for the profile and the auto path.",
+    "Encode-Codec/Qualität, Remux, Audio-Opt oder Schnitt – je nach Job.":
+      "Encode codec/quality, remux, audio-opt or cut – depending on the job.",
+    "Echte Ersparnis nach dem Job (Original minus Ergebnis). Leer, solange der Job läuft.":
+      "Real savings after the job (original minus output). Empty while the job is running.",
+    "Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.":
+      "AV1 on CPU (SVT) only. Synthetic grain so the encoder spends fewer bits on real noise. 0 = off.",
+    "keep: Original bleibt. Archiv: Original nach .archiv/. Inplace: Original wird nur gelöscht, wenn Integritätscheck ok (Safe-Replace).":
+      "keep: original stays. archive: original goes to .archiv/. inplace: original is deleted only if the integrity check is ok (safe-replace).",
     "Neu laden": "Reload",
     "Bild-Untertitel (PGS o. Ä.) können im Browser nicht eingeblendet werden.": "Image subtitles (PGS etc.) cannot be shown in the browser.",
     "Ton wird für die Wiedergabe als AAC umgewandelt. Der Video-Codec hängt vom Browser ab (AV1/HEVC).": "Audio is converted to AAC for playback. Video codec depends on the browser (AV1/HEVC).",
@@ -1517,6 +1651,36 @@
     "Tonspur": "Pista de audio",
     "Keine Untertitel": "Sin subtítulos",
     "Kein Ton": "Sin audio",
+    "Kein Video": "Sin vídeo",
+    "Remux · Ton→AAC": "Remux · audio→AAC",
+    "Remux · ohne Ton": "Remux · sin audio",
+    "weggelassen": "omitido",
+    "unbegrenzt": "ilimitado",
+    "Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.":
+      "Automático elige Direct Play, copia de vídeo (audio→AAC si hace falta) o transcodificación. El plan está junto a la imagen.",
+    "Auto-Vorschlag": "Sugerencia automática",
+    "Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).":
+      "Dolby Vision perfil 5: IPTPQc2 sin fallback HDR10 – correcto solo con reproductor DV. Auto mapea a SDR (seguro).",
+    "Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.":
+      "Dolby Vision perfil 7 (Blu-ray, dos capas). Auto convierte a 8.1 (HEVC) o 10.1 (AV1/CPU) y conserva la RPU.",
+    "Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.":
+      "Dolby Vision de una capa con fallback HDR10. Auto conserva la RPU, la película sigue en HDR.",
+    "Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.":
+      "Dolby Vision detectado. Auto elige conservar o tone-map según el perfil.",
+    "HDR10+ (dynamische Metadaten). Der Plus-Layer geht beim Encode meist verloren; Auto behält HDR10 (10-bit).":
+      "HDR10+ (metadatos dinámicos). La capa Plus suele perderse al recodificar; auto conserva HDR10 (10 bit).",
+    "HLG-HDR (Broadcast). Auto behält HDR, kein Tone-Mapping nach SDR.":
+      "HDR HLG (broadcast). Auto conserva HDR, sin tone-map a SDR.",
+    "HDR10/PQ (statische Metadaten). Auto behält 10-bit HDR, sofern der Encoder das kann.":
+      "HDR10/PQ (metadatos estáticos). Auto conserva HDR de 10 bit si el encoder puede.",
+    "SDR – Standard Dynamic Range, typisch 8-bit. Kein HDR. Auto encodiert als SDR.":
+      "SDR – rango dinámico estándar, normalmente 8 bit. Sin HDR. Auto recodifica como SDR.",
+    "Schon effizient: bereits AV1 oder Videobitrate nahe am Ziel für diese Auflösung/HDR. Eine Neuencodierung spart kaum Platz.":
+      "Ya eficiente: ya es AV1 o el bitrate de vídeo está cerca del objetivo. Recodificar apenas ahorra espacio.",
+    "Grobe Schätzung aus Dauer, aktueller Videobitrate und Ziel-Codec":
+      "Estimación aproximada a partir de duración, bitrate de vídeo actual y códec destino",
+    "Kein echter Probe-Encode – CQ, Film und Ton ändern die reale Größe.":
+      "No es un encode de prueba real: CQ, película y audio cambian el tamaño real.",
     "Neu laden": "Recargar",
     "Bild-Untertitel (PGS o. Ä.) können im Browser nicht eingeblendet werden.": "Los subtítulos de imagen (PGS etc.) no se pueden mostrar en el navegador.",
     "Ton wird für die Wiedergabe als AAC umgewandelt. Der Video-Codec hängt vom Browser ab (AV1/HEVC).": "El audio se convierte a AAC para la reproducción. El códec de vídeo depende del navegador (AV1/HEVC).",
@@ -2172,6 +2336,39 @@
     "Tonspur": "Piste audio",
     "Keine Untertitel": "Pas de sous-titres",
     "Kein Ton": "Pas d'audio",
+    "Kein Video": "Pas de vidéo",
+    "Remux · Ton→AAC": "Remux · audio→AAC",
+    "Remux · ohne Ton": "Remux · sans audio",
+    "wegelassen": "omis",
+    "Copy": "Copy",
+    "Encode": "Encode",
+    "Original": "Original",
+    "unbegrenzt": "illimité",
+    "Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.":
+      "L'auto choisit Direct Play, copie vidéo (audio→AAC si besoin) ou transcodage. Le plan est à côté de l'image.",
+    "Auto-Vorschlag": "Suggestion auto",
+    "Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).":
+      "Dolby Vision profil 5 : IPTPQc2 sans repli HDR10 – correct seulement avec un lecteur DV. L'auto mappe vers SDR (sûr).",
+    "Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.":
+      "Dolby Vision profil 7 (Blu-ray, deux couches). L'auto convertit en 8.1 (HEVC) ou 10.1 (AV1/CPU) et conserve la RPU.",
+    "Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.":
+      "Dolby Vision une couche avec repli HDR10. L'auto conserve la RPU, le film reste en HDR.",
+    "Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.":
+      "Dolby Vision détecté. L'auto choisit conserver ou tone-map selon le profil.",
+    "HDR10+ (dynamische Metadaten). Der Plus-Layer geht beim Encode meist verloren; Auto behält HDR10 (10-bit).":
+      "HDR10+ (métadonnées dynamiques). La couche Plus est souvent perdue à l'encodage ; l'auto garde HDR10 (10 bit).",
+    "HLG-HDR (Broadcast). Auto behält HDR, kein Tone-Mapping nach SDR.":
+      "HDR HLG (broadcast). L'auto conserve le HDR, pas de tone-map vers SDR.",
+    "HDR10/PQ (statische Metadaten). Auto behält 10-bit HDR, sofern der Encoder das kann.":
+      "HDR10/PQ (métadonnées statiques). L'auto conserve le HDR 10 bit si l'encodeur le peut.",
+    "SDR – Standard Dynamic Range, typisch 8-bit. Kein HDR. Auto encodiert als SDR.":
+      "SDR – plage dynamique standard, souvent 8 bit. Pas de HDR. L'auto encode en SDR.",
+    "Schon effizient: bereits AV1 oder Videobitrate nahe am Ziel für diese Auflösung/HDR. Eine Neuencodierung spart kaum Platz.":
+      "Déjà efficace : déjà de l'AV1 ou un débit vidéo proche de la cible. Réencoder ne gagne presque rien.",
+    "Grobe Schätzung aus Dauer, aktueller Videobitrate und Ziel-Codec":
+      "Estimation approximative à partir de la durée, du débit vidéo actuel et du codec cible",
+    "Kein echter Probe-Encode – CQ, Film und Ton ändern die reale Größe.":
+      "Pas un vrai encode de test – CQ, film et audio changent la taille réelle.",
     "Neu laden": "Recharger",
     "Bild-Untertitel (PGS o. Ä.) können im Browser nicht eingeblendet werden.": "Les sous-titres image (PGS etc.) ne peuvent pas s'afficher dans le navigateur.",
     "Ton wird für die Wiedergabe als AAC umgewandelt. Der Video-Codec hängt vom Browser ab (AV1/HEVC).": "L'audio est converti en AAC pour la lecture. Le codec vidéo dépend du navigateur (AV1/HEVC).",
@@ -2280,7 +2477,7 @@
   ];
 
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, CODE: 1, NOSCRIPT: 1 };
-  var ATTRS = ["placeholder", "title"];
+  var ATTRS = ["placeholder", "title", "data-tip"];
 
   // Typografische Anführungszeichen/Bindestriche vereinheitlichen, damit der
   // Abgleich unabhängig von den konkreten Unicode-Zeichen funktioniert.

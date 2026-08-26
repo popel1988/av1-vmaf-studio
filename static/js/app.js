@@ -536,8 +536,9 @@
     }
   }
 
-  function chip(label, value, cls) {
-    return `<div class="chip ${cls || ""}"><span class="chip-k">${label}</span><span class="chip-v">${value}</span></div>`;
+  function chip(label, value, cls, tip) {
+    const t = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
+    return `<div class="chip ${cls || ""}"${t}><span class="chip-k">${label}</span><span class="chip-v">${value}</span></div>`;
   }
 
   // Dolby Vision: Bei einer neuen Datei die DV-Auswahl neu bewerten (Defaults
@@ -611,9 +612,10 @@
     chips.push(chip("Codec", info.codec.toUpperCase() + (info.profile ? " · " + info.profile : "")));
     chips.push(chip("Bit-Tiefe", info.bit_depth + " bit"));
     if (info.fps) chips.push(chip("FPS", info.fps));
-    chips.push(chip("Dynamik", info.hdr_type, info.is_hdr ? "warn" : ""));
+    chips.push(chip("Dynamik", info.hdr_type, info.is_hdr ? "warn" : "", hdrChipTip(info)));
     if (info.dolby_vision) {
-      chips.push(chip("Dolby Vision", info.dv_profile ? "Profil " + info.dv_profile : "ja", "accent"));
+      chips.push(chip("Dolby Vision", info.dv_profile ? "Profil " + info.dv_profile : "ja", "accent",
+        hdrChipTip(info)));
     }
     chips.push(chip("Größe", info.size_human));
     chips.push(chip("Dauer", info.duration_human));
@@ -1232,6 +1234,68 @@
   /* ------------------------------------ Dry-Run / Duplikat-Vorschau */
   function tt(s) {
     return window.I18N ? I18N.t(s) : s;
+  }
+
+  function initTooltips() {
+    let tip = document.getElementById("ui-tip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.id = "ui-tip";
+      tip.className = "ui-tip";
+      tip.setAttribute("role", "tooltip");
+      tip.hidden = true;
+      document.body.appendChild(tip);
+    }
+    let showTimer = 0;
+    let current = null;
+
+    const hide = () => {
+      clearTimeout(showTimer);
+      showTimer = 0;
+      tip.hidden = true;
+      tip.textContent = "";
+      current = null;
+    };
+    const place = (el) => {
+      const r = el.getBoundingClientRect();
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+      let x = r.left + (r.width / 2) - (tw / 2);
+      let y = r.bottom + 8;
+      if (y + th > window.innerHeight - 8) y = r.top - th - 8;
+      x = Math.max(8, Math.min(x, window.innerWidth - tw - 8));
+      y = Math.max(8, y);
+      tip.style.left = `${Math.round(x)}px`;
+      tip.style.top = `${Math.round(y)}px`;
+    };
+    const show = (el) => {
+      const raw = (el.getAttribute("data-tip") || "").trim();
+      if (!raw) return;
+      current = el;
+      tip.textContent = tt(raw);
+      tip.hidden = false;
+      place(el);
+    };
+
+    document.addEventListener("pointerover", (e) => {
+      const el = e.target.closest && e.target.closest("[data-tip]");
+      if (!el || el === current) return;
+      clearTimeout(showTimer);
+      showTimer = setTimeout(() => show(el), 260);
+    });
+    document.addEventListener("pointerout", (e) => {
+      const el = e.target.closest && e.target.closest("[data-tip]");
+      if (!el) return;
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+      if (el === current || showTimer) hide();
+    });
+    document.addEventListener("focusin", (e) => {
+      const el = e.target.closest && e.target.closest("[data-tip]");
+      if (el) { clearTimeout(showTimer); show(el); }
+    });
+    document.addEventListener("focusout", hide);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
   }
 
   async function fetchPreview(paths, settings, estimates) {
@@ -3870,10 +3934,11 @@
     if (!box) return;
     if (!stats || !totalMatched) { box.style.display = "none"; return; }
     box.style.display = "";
-    const bar = (label, count, total, cls, nested) => {
+    const bar = (label, count, total, cls, nested, tip) => {
       if (!count) return "";
       const pct = total ? Math.round((count / total) * 100) : 0;
-      return `<div class="lib-bar${nested ? " nested" : ""}"><span class="lib-bar-lbl">${escapeHtml(label)}</span>`
+      const t = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
+      return `<div class="lib-bar${nested ? " nested" : ""}"${t}><span class="lib-bar-lbl">${escapeHtml(label)}</span>`
         + `<span class="lib-bar-track"><span class="lib-bar-fill ${cls || ""}" style="width:${pct}%"></span></span>`
         + `<span class="lib-bar-val">${count}</span></div>`;
     };
@@ -3882,15 +3947,18 @@
       bar((c.codec || "?").toUpperCase(), c.count, totalMatched)).join("") || "<span class='muted'>—</span>";
 
     let dyn = "";
-    dyn += bar("SDR", stats.sdr_count || 0, totalMatched, "muted");
-    dyn += bar("HDR", stats.hdr_count || 0, totalMatched, "warn");
+    dyn += bar("SDR", stats.sdr_count || 0, totalMatched, "muted", false,
+      tt("Standard Dynamic Range – klassisches SDR ohne HDR-Metadaten."));
+    dyn += bar("HDR", stats.hdr_count || 0, totalMatched, "warn", false,
+      tt("HDR ohne Dolby Vision (HDR10, HDR10+ oder HLG)."));
     (stats.hdr_modes || []).forEach((h) => {
-      dyn += bar(h.mode, h.count, totalMatched, "warn", true);
+      dyn += bar(h.mode, h.count, totalMatched, "warn", true, libHdrModeTip(h.mode));
     });
-    dyn += bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent");
+    dyn += bar("Dolby Vision", stats.dv_count || 0, totalMatched, "accent", false,
+      tt("Dolby Vision (RPU). Profil 5 hat keinen HDR10-Fallback, 7/8/10 schon."));
     (stats.dv_profiles || []).forEach((p) => {
       const lab = p.profile === "?" ? "Profil ?" : `Profil ${p.profile}`;
-      dyn += bar(lab, p.count, totalMatched, "accent", true);
+      dyn += bar(lab, p.count, totalMatched, "accent", true, libDvProfileTip(p.profile));
     });
     $("lib-dash-dynamic").innerHTML = dyn || "<span class='muted'>—</span>";
 
@@ -4080,6 +4148,82 @@
     return "SDR";
   }
 
+  function hdrChipTip(m) {
+    return libDynamicTip(m);
+  }
+
+  function libDynamicTip(m) {
+    if (!m) return "";
+    const sug = (m.suggest && m.suggest.label) ? m.suggest.label : "";
+    const auto = sug ? ` ${tt("Auto-Vorschlag")}: ${sug}.` : "";
+    if (m.dolby_vision) {
+      const p = Number(m.dv_profile) || 0;
+      if (p === 5) {
+        return tt("Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).") + auto;
+      }
+      if (p === 7) {
+        return tt("Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto konvertiert auf 8.1 (HEVC) bzw. 10.1 (AV1/CPU) und übernimmt die RPU.") + auto;
+      }
+      if (p === 8 || p === 10) {
+        return tt("Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU, der Film bleibt HDR.") + auto;
+      }
+      return tt("Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil.") + auto;
+    }
+    if (m.is_hdr) {
+      const k = libHdrModeKey(m);
+      if (k === "HDR10+") {
+        return tt("HDR10+ (dynamische Metadaten). Der Plus-Layer geht beim Encode meist verloren; Auto behält HDR10 (10-bit).") + auto;
+      }
+      if (k === "HLG") {
+        return tt("HLG-HDR (Broadcast). Auto behält HDR, kein Tone-Mapping nach SDR.") + auto;
+      }
+      return tt("HDR10/PQ (statische Metadaten). Auto behält 10-bit HDR, sofern der Encoder das kann.") + auto;
+    }
+    return tt("SDR – Standard Dynamic Range, typisch 8-bit. Kein HDR. Auto encodiert als SDR.") + auto;
+  }
+
+  function libSuggestTip(m) {
+    const s = m && m.suggest;
+    if (!s || !s.label) return tt("Kein Auto-Vorschlag (fehlende Analyse).");
+    if (s.dv_mode === "tonemap") {
+      return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby Vision Profil 5 → SDR (Tone-Mapping), weil es keinen HDR10-Fallback gibt.");
+    }
+    if (s.dv_mode === "preserve") {
+      return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Dolby-Vision-RPU übernehmen (kein Tone-Mapping).");
+    }
+    if (s.hdr_mode === "preserve") {
+      return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, HDR10/HLG als 10-bit behalten.");
+    }
+    return tt("Vorschlag für „Auswahl mit Auto-Einstellungen“: Ziel-Codec laut Projektion, Quelle ist SDR – keine HDR-Behandlung nötig.");
+  }
+
+  function libSavingsTip(m) {
+    if (m.already_optimized) {
+      return tt("Schon effizient: bereits AV1 oder Videobitrate nahe am Ziel für diese Auflösung/HDR. Eine Neuencodierung spart kaum Platz.");
+    }
+    const codec = (($("lib-target-codec") || {}).value || "av1").toUpperCase();
+    return tt("Grobe Schätzung aus Dauer, aktueller Videobitrate und Ziel-Codec")
+      + ` (${codec}). `
+      + tt("Kein echter Probe-Encode – CQ, Film und Ton ändern die reale Größe.");
+  }
+
+  function libHdrModeTip(mode) {
+    const k = String(mode || "");
+    if (k === "HDR10+") return tt("HDR10+ – dynamische Metadaten, Plus-Layer überlebt einen Re-Encode selten.");
+    if (k === "HLG") return tt("HLG – Broadcast-HDR, kompatibel mit SDR-Displays, Auto behält HDR.");
+    if (k === "HDR10") return tt("HDR10 – statische MaxCLL/MaxFALL-Metadaten, Auto behält 10-bit.");
+    return tt("HDR-Variante ohne Dolby Vision.");
+  }
+
+  function libDvProfileTip(profile) {
+    const p = String(profile || "");
+    if (p === "5") return tt("Profil 5: kein HDR10-Fallback. Ohne DV-fähigen Player falsch – Auto: Tone-Mapping.");
+    if (p === "7") return tt("Profil 7: Blu-ray dual-layer. Auto wandelt nach 8.1 (HEVC) oder 10.1 (AV1/CPU).");
+    if (p === "8") return tt("Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU.");
+    if (p === "10") return tt("Profil 10: DV in AV1. Auto übernimmt die RPU (meist CPU/SVT).");
+    return tt("Dolby-Vision-Profil laut Datei-Metadaten.");
+  }
+
   function libViewRows() {
     const q = ($("lib-result-search") ? $("lib-result-search").value : "").trim().toLowerCase();
     let rows = (state.libRows || []).slice();
@@ -4100,21 +4244,22 @@
     const dyn = libDynamicLabel(m);
     const dynCls = m.dolby_vision ? "accent" : (m.is_hdr ? "warn" : "");
     const opt = m.already_optimized
-      ? '<span class="lib-opt-badge">schon optimiert</span>'
-      : `<span class="good">${escapeHtml(m.est_saved_human || "—")}</span>`;
+      ? `<span class="lib-opt-badge" data-tip="${escapeHtml(libSavingsTip(m))}">schon optimiert</span>`
+      : `<span class="good" data-tip="${escapeHtml(libSavingsTip(m))}">${escapeHtml(m.est_saved_human || "—")}</span>`;
     const sug = (m.suggest && m.suggest.label) ? escapeHtml(m.suggest.label) : "—";
+    const sugTip = escapeHtml(libSuggestTip(m));
     return `
       <tr>
         <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
         <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
-        <td><span class="dyn-badge ${dynCls}">${escapeHtml(dyn)}</span></td>
+        <td><span class="dyn-badge ${dynCls}" data-tip="${escapeHtml(libDynamicTip(m))}">${escapeHtml(dyn)}</span></td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
         <td>${escapeHtml(m.duration_human || "—")}</td>
         <td>${escapeHtml(m.size_human)}</td>
         <td>${opt}</td>
-        <td class="lib-suggest">${sug}</td>
+        <td class="lib-suggest" data-tip="${sugTip}">${sug}</td>
         <td class="lib-row-actions">
           <button class="lib-act" data-act="play" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Abspielen">▶</button>
           <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
@@ -4629,7 +4774,7 @@
         <td>${escapeHtml((m.container || "—").toUpperCase())}</td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
-        <td><span class="dyn-badge ${dynCls}">${escapeHtml(dyn)}</span></td>
+        <td><span class="dyn-badge ${dynCls}" data-tip="${escapeHtml(libDynamicTip(m))}">${escapeHtml(dyn)}</span></td>
         <td>${escapeHtml(m.video_bitrate_human)}</td>
         <td>${escapeHtml(m.size_human)}</td>
         ${stTrackCell("audio", m, m.audio)}
@@ -6925,6 +7070,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    initTooltips();
     initTheme();
     initSettings();
     initVmafTool();

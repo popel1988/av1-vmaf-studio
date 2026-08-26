@@ -167,17 +167,17 @@
               </div>
               <div class="preset-chips" id="opt-preset-chips" style="margin-top:8px">
                 <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Film">Film</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie">Serie</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime">Anime</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only">Remux-only</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Film" data-tip="AV1 · CQ 28, Ton kopieren – Ausgangspunkt für Spielfilme.">Film</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie" data-tip="Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.">Serie</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime" data-tip="AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).">Anime</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only" data-tip="Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.">Remux-only</button>
               </div>
             </div>
             <div class="divider"></div>
 
             <div class="field-row">
               <div class="field">
-                <label>GPU / Plattform</label>
+                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.">GPU / Plattform</label>
                 <select id="opt-platform">
                   {% for p in platform_options %}
                   <option value="{{ p.value }}">{{ p.label }}</option>
@@ -185,7 +185,7 @@
                 </select>
               </div>
               <div class="field">
-                <label>Codec</label>
+                <label data-tip="AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.">Codec</label>
                 <select id="opt-codec">
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC / H.265</option>
@@ -208,7 +208,7 @@
 
             <div class="field" id="hdr-field" style="display:none">
               <div id="hdr-mode-wrap">
-                <label>HDR-Behandlung</label>
+                <label data-tip="Nur bei HDR-Quellen. Beibehalten = 10-bit HDR10/HLG. Tone-Mapping = SDR für jedes Display, etwas größerer Qualitätsverlust.">HDR-Behandlung</label>
                 <select id="opt-hdr-mode">
                   <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
                   <option value="preserve">HDR beibehalten (10-bit)</option>
@@ -216,7 +216,7 @@
                 <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
               </div>
               <div id="dv-mode-wrap" style="display:none">
-                <label>Dolby-Vision-Behandlung</label>
+                <label data-tip="Profil 7 wird zu 8.1/10.1. Profil 5 hat keinen HDR10-Fallback – ohne DV-Player lieber Tone-Mapping. Übernehmen braucht dovi_tool bzw. libsvtav1.">Dolby-Vision-Behandlung</label>
                 <select id="opt-dv-mode">
                   <option value="preserve">Dolby Vision übernehmen (RPU)</option>
                   <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
@@ -253,7 +253,7 @@
                 </select>
               </div>
               <div class="field">
-                <label>Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
+                <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
                 <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
                 <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
               </div>
@@ -298,7 +298,7 @@
 
             <label class="check">
               <input type="checkbox" id="opt-verify-vmaf" />
-              <span>Qualitäts-Guardrail: echten VMAF nach dem Encode messen</span>
+              <span data-tip="Misst nach dem Encode Stichproben-VMAF gegen die Quelle. Liegt der Wert unter dem Ziel, Warnung oder automatischer Re-Encode.">Qualitäts-Guardrail: echten VMAF nach dem Encode messen</span>
             </label>
             <div id="verify-config" style="display:none">
               <div class="field-row">
@@ -323,7 +323,7 @@
             <h4 class="subsection">Qualität</h4>
 
             <div class="field">
-              <label>Steuerungsmodus</label>
+              <label data-tip="CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.">Steuerungsmodus</label>
               <select id="opt-rate-mode">
                 <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
                 <option value="bitrate">Festbitrate (CBR)</option>
@@ -332,7 +332,7 @@
             </div>
 
             <div class="field" id="enc-cq-field">
-              <label>Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
+              <label data-tip="Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.">Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
               <input type="range" id="opt-quality" min="10" max="51" value="28" />
               <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
             </div>
@@ -406,7 +406,7 @@
             </div>
 
             <div class="field">
-              <label>Nach erfolgreichem Encode</label>
+              <label data-tip="keep: Original bleibt. Archiv: Original nach .archiv/. Inplace: Original wird nur gelöscht, wenn Integritätscheck ok (Safe-Replace).">Nach erfolgreichem Encode</label>
               <select id="opt-post">
                 <option value="keep">Original behalten + Suffix</option>
                 <option value="inplace">Inplace ersetzen (Original löschen)</option>
@@ -643,7 +643,7 @@
           <div class="card-body">
             <table class="data-table queue-table">
               <thead>
-                <tr><th>Titel</th><th>Auflösung</th><th>Status</th><th>Modus</th><th>Dauer</th><th>Ersparnis</th><th></th></tr>
+                <tr><th>Titel</th><th>Auflösung</th><th>Status</th><th data-tip="Encode-Codec/Qualität, Remux, Audio-Opt oder Schnitt – je nach Job.">Modus</th><th>Dauer</th><th data-tip="Echte Ersparnis nach dem Job (Original minus Ergebnis). Leer, solange der Job läuft.">Ersparnis</th><th></th></tr>
               </thead>
               <tbody id="queue-body">
                 <tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>
@@ -752,7 +752,7 @@
                 <div id="lib-dash-codecs" class="lib-dash-bars"></div>
               </div>
               <div class="lib-dash-col">
-                <div class="lib-dash-title">Dynamik</div>
+              <div class="lib-dash-title" data-tip="Anteil SDR / HDR / Dolby Vision im aktuellen Filter. Hover auf die Balken für Profil-Infos.">Dynamik</div>
                 <div id="lib-dash-dynamic" class="lib-dash-bars"></div>
               </div>
               <div class="lib-dash-col">
@@ -779,7 +779,7 @@
                 </div>
                 <p class="hint">„alle außer diese" + AV1 = alles außer bereits AV1 (typischer Fall).</p>
               </div>
-              <div class="field"><label>Projektion für Ziel-Codec</label>
+              <div class="field"><label data-tip="Nur für die Einspar-Spalte und den Auto-Vorschlag. Encoded wird später mit den Einstellungen der Encoding-Seite bzw. Auto.">Projektion für Ziel-Codec</label>
                 <select id="lib-target-codec">
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC/H.265</option>
@@ -795,8 +795,8 @@
               <p class="hint">Nichts auswählen = alle Formate aus dem Scan anzeigen.</p>
             </div>
             <div class="lib-checks">
-              <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span>Bereits effiziente Dateien ausblenden</span></label>
-              <label class="check"><input type="checkbox" id="lib-skip-processed" /><span>Bereits verarbeitete Dateien ausblenden</span></label>
+              <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span data-tip="Blendet Dateien aus, die schon AV1 sind oder deren Videobitrate nah am Ziel liegt.">Bereits effiziente Dateien ausblenden</span></label>
+              <label class="check"><input type="checkbox" id="lib-skip-processed" /><span data-tip="Blendet Dateien aus, die in der Historie schon erfolgreich encodiert wurden.">Bereits verarbeitete Dateien ausblenden</span></label>
             </div>
 
             <!-- 4) Liste + Aktionen -->
@@ -819,14 +819,14 @@
                   <tr>
                     <th><input type="checkbox" id="lib-check-all" /></th>
                     <th class="sortable" data-sort="name">Datei</th>
-                    <th class="sortable" data-sort="codec">Codec</th>
+                    <th class="sortable" data-sort="codec" data-tip="Video-Codec der Quelle (nicht das Encode-Ziel).">Codec</th>
                     <th class="sortable" data-sort="height">Auflösung</th>
-                    <th>Dynamik</th>
-                    <th class="sortable" data-sort="video_bitrate">Bitrate</th>
+                    <th data-tip="SDR, HDR10/HLG/HDR10+ oder Dolby Vision (Profil). Hover auf das Badge erklärt, was Auto daraus machen würde.">Dynamik</th>
+                    <th class="sortable" data-sort="video_bitrate" data-tip="Videobitrate der Quelle. Hohe Werte bei H.264/HEVC sind oft Einsparpotenzial.">Bitrate</th>
                     <th class="sortable" data-sort="duration">Dauer</th>
                     <th class="sortable" data-sort="size_bytes">Größe</th>
-                    <th class="sortable" data-sort="est_saved_bytes">Einsparung (ca.)</th>
-                    <th>Vorschlag</th>
+                    <th class="sortable" data-sort="est_saved_bytes" data-tip="Schätzung, kein Probe-Encode. Hängt vom Ziel-Codec oben und von Auflösung/HDR ab.">Einsparung (ca.)</th>
+                    <th data-tip="Was „Auswahl mit Auto-Einstellungen“ je Datei setzen würde: Ziel-Codec plus HDR/DV-Behandlung.">Vorschlag</th>
                     <th>Aktionen</th>
                   </tr>
                 </thead>
@@ -915,7 +915,7 @@
             <div id="st-encode-only">
             <div class="field-row">
               <div class="field">
-                <label>GPU / Plattform</label>
+                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision oft nur CPU/SVT.">GPU / Plattform</label>
                 <select id="st-platform">
                   {% for p in platform_options %}
                   <option value="{{ p.value }}">{{ p.label }}</option>
@@ -923,7 +923,7 @@
                 </select>
               </div>
               <div class="field">
-                <label>Codec</label>
+                <label data-tip="AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.">Codec</label>
                 <select id="st-codec">
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC / H.265</option>
@@ -993,7 +993,7 @@
             </label>
 
             <div class="field">
-              <label>Dynamik (HDR / Dolby Vision)</label>
+              <label data-tip="Automatisch: pro Datei DV übernehmen oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.">Dynamik (HDR / Dolby Vision)</label>
               <select id="st-dynamik">
                 <option value="auto">Automatisch je Datei (empfohlen)</option>
                 <option value="preserve">HDR / Dolby Vision beibehalten</option>
@@ -1126,7 +1126,7 @@
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
-                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Container</th><th>Codec</th><th>Auflösung</th><th>Dynamik</th><th>Bitrate</th><th>Größe</th><th>Ton</th><th>Untertitel</th><th>Aktionen</th></tr>
+                  <tr><th><input type="checkbox" id="st-check-all" /></th><th>Datei</th><th>Container</th><th>Codec</th><th>Auflösung</th><th data-tip="SDR, HDR oder Dolby Vision. Hover auf das Badge erklärt das Profil und den Auto-Pfad.">Dynamik</th><th>Bitrate</th><th>Größe</th><th>Ton</th><th>Untertitel</th><th>Aktionen</th></tr>
                 </thead>
                 <tbody id="st-body">
                   <tr class="empty-row"><td colspan="11">Noch kein Scan.</td></tr>
@@ -1894,10 +1894,7 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint"><strong>Automatisch</strong>: Datei × Browser × Server
-              (Direct-Play → Video-Copy+Ton→AAC als fMP4/hvc1 → sonst Transcode).
-              Plan unter dem Modus nach Dateiauswahl.
-              <strong>Remux</strong>: Video-Copy; inkompatibler Ton wird weggelassen.</p>
+            <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.</p>
             <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
               <div class="field" style="flex:2;min-width:220px">
                 <label>Datei</label>
@@ -1911,15 +1908,15 @@
             </div>
             <div class="field-row fp-encode-opts" style="align-items:flex-end;margin-bottom:8px;flex-wrap:wrap;gap:10px">
               <div class="field" style="min-width:150px;flex:1">
-                <label>Modus</label>
+                <label data-tip="Automatisch: Direct-Play wenn möglich, sonst Video-Copy (Ton ggf. AAC), sonst Transcode. Die anderen Einträge erzwingen den Pfad.">Modus</label>
                 <select id="fp-profile"></select>
               </div>
               <div class="field" style="min-width:140px;flex:1">
-                <label>Hardware</label>
+                <label data-tip="Nur relevant beim Transcode. Automatisch wählt die beste verfügbare GPU laut Diagnose.">Hardware</label>
                 <select id="fp-platform"></select>
               </div>
               <div class="field" style="min-width:140px;flex:1">
-                <label>Zielcodec</label>
+                <label data-tip="Zielcodec nur beim Transcode. HEVC/AV1 nur, wenn der Browser sie kann – sonst Fallback H.264.">Zielcodec</label>
                 <select id="fp-codec"></select>
               </div>
               <div class="field" id="fp-height-wrap" style="display:none;min-width:100px">
@@ -1932,7 +1929,7 @@
                        title="Videobitrate für den Live-Transcode" />
               </div>
               <div class="field" style="min-width:150px">
-                <label>Encode-Vorlauf</label>
+                <label data-tip="Wie weit FFmpeg vor der Abspielposition arbeiten darf. Ist der Puffer voll, wird der Prozess pausiert (kein Neustart).">Encode-Vorlauf</label>
                 <select id="fp-lookahead" title="Zielpuffer voraus; Encode wird gedrosselt, nicht neu gestartet">
                   <option value="15">15 s</option>
                   <option value="30" selected>30 s</option>
@@ -1949,8 +1946,6 @@
             <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
             <div class="fp-layout">
               <div class="fp-main">
-                <p class="muted fp-active-mode" id="fp-active-mode">Kein Video geladen</p>
-                <p class="muted fp-decision" id="fp-decision" style="font-size:11px;margin:0 0 8px;line-height:1.35"></p>
                 <div class="fp-stage">
                   <video id="fp-video" playsinline></video>
                   <div class="fp-overlay" id="fp-overlay">
@@ -1971,7 +1966,7 @@
                     <p class="muted" id="fp-audio-mode" style="font-size:11.5px;margin:4px 0 0">—</p>
                     <label class="check" style="margin:6px 0 0" title="Ton nicht nach AAC umcodieren – Originalspur kopieren">
                       <input type="checkbox" id="fp-audio-copy" />
-                      <span>Ton nicht umcodieren</span>
+                      <span data-tip="Kopiert den Originalton in HLS. DTS/TrueHD/Atmos spielen im Browser dann oft nicht – Spur kann stumm bleiben.">Ton nicht umcodieren</span>
                     </label>
                   </div>
                   <div class="field" style="flex:1;min-width:140px">
@@ -1980,14 +1975,24 @@
                   </div>
                   <label class="check" style="margin:0 0 2px" title="PGS/DVD-Untertitel ins Bild brennen (Transcode)">
                     <input type="checkbox" id="fp-burn" />
-                    <span>Bild-UT einbrennen</span>
+                    <span data-tip="PGS/DVD/DVB-Untertitel sind Bilder, kein Text. Einbrennen erzwingt Video-Transcode.">Bild-UT einbrennen</span>
                   </label>
                   <button type="button" class="btn btn-ghost btn-sm" id="fp-stop" title="Wiedergabe stoppen (Datei bleibt geladen)">Stoppen</button>
                 </div>
               </div>
-              <aside class="fp-chapters" id="fp-chapters-wrap" style="display:none">
-                <div class="fp-chapters-title">Kapitel</div>
-                <ul id="fp-chapters" class="fp-chapters-list"></ul>
+              <aside class="fp-side">
+                <div class="fp-plan" id="fp-plan">
+                  <div class="fp-plan-badge fp-kind-idle" id="fp-plan-badge">Kein Video</div>
+                  <dl class="fp-plan-facts" id="fp-plan-facts"></dl>
+                  <details class="fp-plan-more" id="fp-plan-more" hidden>
+                    <summary>Details</summary>
+                    <ul id="fp-plan-reasons"></ul>
+                  </details>
+                </div>
+                <div class="fp-chapters" id="fp-chapters-wrap" style="display:none">
+                  <div class="fp-chapters-title">Kapitel</div>
+                  <ul id="fp-chapters" class="fp-chapters-list"></ul>
+                </div>
               </aside>
             </div>
             <p class="muted" id="fp-status" style="margin-top:8px;font-size:12px"></p>

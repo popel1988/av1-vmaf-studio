@@ -247,7 +247,7 @@ def _asset_version() -> str:
     import os
 
     latest = 0.0
-    for rel in ("static/js/app.js", "static/js/i18n.js", "static/css/styles.css"):
+    for rel in ("static/js/app.js", "static/js/player.js", "static/js/i18n.js", "static/css/styles.css"):
         try:
             latest = max(latest, os.path.getmtime(BASE_DIR / rel))
         except OSError:

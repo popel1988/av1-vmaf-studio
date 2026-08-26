@@ -562,7 +562,7 @@ def plan_playback(
                 extra_reasons=[
                     f"Browser kann {(src_v or '?').upper()} → Video-Copy als fMP4"
                     + ("/hvc1" if src_v == "hevc" else ""),
-                    f"Ton {ac.upper()} → AAC (leicht sync, ohne asetpts)",
+                    f"Ton {ac.upper()} → AAC (gemeinsame Timeline ab 0)",
                 ],
             )
         # Video+Ton kopierbar, aber kein Direct (z. B. MKV) → Remux
@@ -808,9 +808,10 @@ def _audio_args(audio_index: int, audio_codec: str,
                 with_video_reencode: bool = False) -> list[str]:
     """Ton-Args für HLS.
 
-    Bei Video-Re-Encode: ``asetpts`` auf 0 (wie Video-``setpts``).
-    Bei Video-Copy + Ton→AAC: nur leichtes ``aresample=async`` – kein
-    ``asetpts`` (sonst A/V asynchron).
+    AAC-Timeline startet bei 0 (``first_pts`` + ``asetpts``). Video-Copy
+    setzt PTS parallel per ``setts`` auf 0 – sonst läuft der kopierte
+    Video-PTS weiter, während AAC bei 0 beginnt (Desync / Lücken).
+    ``with_video_reencode`` bleibt für Aufrufer erhalten (Filter ist identisch).
     """
     if audio_index < 0:
         return ["-an"]
@@ -818,18 +819,18 @@ def _audio_args(audio_index: int, audio_codec: str,
     ac = (audio_codec or "").lower()
     if force_copy or _audio_hls_copy_ok(ac):
         args += ["-c:a", "copy"]
-    elif with_video_reencode:
-        args += [
-            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
-            "-profile:a", "aac_low",
-            "-af", "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
-        ]
-    else:
-        args += [
-            "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
-            "-profile:a", "aac_low",
-            "-af", "aresample=async=1",
-        ]
+        return args
+    # Stereo-Downmix vor aresample: DTS-X/TrueHD sonst mit Objektkanälen.
+    af = (
+        "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+        "aresample=async=1:first_pts=0:min_hard_comp=0.100,"
+        "asetpts=PTS-STARTPTS"
+    )
+    args += [
+        "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
+        "-profile:a", "aac_low",
+        "-af", af,
+    ]
     return args
 
 
@@ -1008,17 +1009,25 @@ def _build_hls_cmd(
 ) -> list[str]:
     """HLS immer als fMP4 (hls.js-tauglich).
 
-    Video-Copy + Ton→AAC: HEVC braucht ``-tag:v hvc1`` (nicht MPEG-TS –
-    hls.js: „Unsupported HEVC in M2TS“). Encode-Pfad: setpts + Tonemap bei HDR.
+    Video-Copy + Ton→AAC: HEVC braucht ``-tag:v hvc1`` (nicht MPEG-TS).
+    Copy ist instant, AAC nicht – ohne ``-readrate`` und große Mux-Queue
+    spült der Muxer Video ohne Ton (Desync/Lücken). Video-PTS per ``setts``
+    auf 0, analog zum AAC-``asetpts``.
     """
     playlist = out_dir / "index.m3u8"
     src = ff.normalize_video_codec(source_codec) or (codec or "").lower()
+    will_xcode_a = (
+        audio_index >= 0
+        and not bool(audio_copy)
+        and not _audio_hls_copy_ok(audio_codec)
+    )
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin",
         "-loglevel", _PLAYER_FF_LOGLEVEL or "warning",
+        "-fflags", "+genpts",
+        "-analyzeduration", "20000000",
+        "-probesize", "20000000",
     ]
-    if not video_copy:
-        cmd += ["-fflags", "+genpts"]
 
     pre: list[str] = []
     vmap: list[str] = []
@@ -1031,6 +1040,10 @@ def _build_hls_cmd(
             is_hdr=bool(is_hdr),
         )
         cmd += pre
+    else:
+        # Copy rast sonst in Echtzeit-Minuten voraus; AAC und hls.js kommen
+        # nicht hinterher, delete_segments löscht den Anfang.
+        cmd += ["-readrate", "1.5" if will_xcode_a else "3"]
 
     if start_sec and start_sec > 0:
         cmd += ["-ss", f"{float(start_sec):.3f}"]
@@ -1043,6 +1056,8 @@ def _build_hls_cmd(
             cmd += ["-tag:v", "hvc1"]
         elif src == "av1":
             cmd += ["-tag:v", "av01"]
+        # Gemeinsame Timeline mit AAC (DTS-Offset bleibt erhalten)
+        cmd += ["-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"]
     else:
         cmd += vmap
         cmd += ["-c:v", encoder]
@@ -1054,10 +1069,18 @@ def _build_hls_cmd(
         with_video_reencode=not bool(video_copy),
     )
 
+    if video_copy and will_xcode_a:
+        cmd += [
+            "-max_muxing_queue_size", "8192",
+            "-max_interleave_delta", "30000000",
+        ]
+
     la = _normalize_lookahead(lookahead_sec)
     hls_time = 2
     if la > 0:
-        list_size = max(6, int(math.ceil(la / hls_time)) + 4)
+        # Mehr Segmente behalten, damit delete_segments nicht den Start frisst
+        extra = 10 if video_copy else 4
+        list_size = max(8, int(math.ceil(la / hls_time)) + extra)
     else:
         list_size = 30
     # Copy: keine independent_segments (Schnitt fällt nicht immer auf IDR)

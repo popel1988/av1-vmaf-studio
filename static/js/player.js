@@ -24,6 +24,8 @@
     lookahead: 30,
     extending: false,
     encodePaused: false,
+    plan: null,
+    starting: false,
   };
 
   const ENCODE_PROFILES = ["original", "1080p", "720p", "480p", "custom"];
@@ -49,24 +51,142 @@
     if (b) b.textContent = text;
   }
 
+  const PLAN_KIND = {
+    direct: {
+      cls: "fp-kind-direct", label: "Direct-Play",
+      tip: "Datei geht unverändert in den Browser – kein Remux, kein Encode. Nur bei MP4/WebM mit passendem Codec.",
+    },
+    copy: {
+      cls: "fp-kind-copy", label: "Remux",
+      tip: "Video und Ton werden nur nach fMP4/HLS umgepackt, nicht neu encodiert. Günstig bei MKV, wenn der Browser den Codec kann.",
+    },
+    audio: {
+      cls: "fp-kind-audio", label: "Remux · Ton→AAC",
+      tip: "Video bleibt Copy (z. B. HEVC als hvc1). Nur der Ton wird nach Stereo-AAC gewandelt, damit HLS im Browser Ton hat.",
+    },
+    silent: {
+      cls: "fp-kind-silent", label: "Remux · ohne Ton",
+      tip: "Video-Copy ohne Tonspur: der Audiocodec ist für HLS ungeeignet und „Ton nicht umcodieren“ ist aktiv.",
+    },
+    transcode: {
+      cls: "fp-kind-xcode", label: "Transcode",
+      tip: "Video wird neu encodiert (Auflösung, Codec, ggf. HDR→SDR), weil der Browser die Quelle so nicht abspielen kann.",
+    },
+    idle: { cls: "fp-kind-idle", label: "Kein Video", tip: "" },
+  };
+
+  function planKind(plan, sess) {
+    const strat = (plan && plan.strategy) || (sess && sess.decision_strategy) || "";
+    if (strat === "direct" || (sess && sess.mode === "direct")) return "direct";
+    if (strat === "remux_audio_xcode") return "audio";
+    if (strat === "remux_silent") return "silent";
+    if (strat === "remux_copy") return "copy";
+    if (strat === "transcode") return "transcode";
+    if (sess) {
+      if (sess.mode === "direct") return "direct";
+      if (sess.encoder === "copy" || sess.profile === "copy") {
+        if (sess.audio_mode === "transcode") return "audio";
+        if (sess.audio_mode === "none") return "silent";
+        return "copy";
+      }
+      if (sess.encoder && sess.encoder !== "direct") return "transcode";
+    }
+    return "idle";
+  }
+
+  function renderPlan(plan, sess) {
+    fp.plan = plan || null;
+    const badge = $("fp-plan-badge");
+    const facts = $("fp-plan-facts");
+    const more = $("fp-plan-more");
+    const reasonsEl = $("fp-plan-reasons");
+    if (!badge || !facts) return;
+
+    const kind = plan || sess ? planKind(plan, sess) : "idle";
+    const meta = PLAN_KIND[kind] || PLAN_KIND.idle;
+    badge.className = `fp-plan-badge ${meta.cls}`;
+    badge.textContent = tt(meta.label);
+    if (meta.tip) badge.setAttribute("data-tip", tt(meta.tip));
+    else badge.removeAttribute("data-tip");
+
+    const rows = [];
+    const file = (plan && plan.file) || {};
+    const browser = (plan && plan.browser) || {};
+    const enc = (plan && plan.encode) || {};
+
+    const vBits = [
+      (file.video || "").toUpperCase(),
+      file.height ? `${file.height}p` : "",
+      file.hdr ? "HDR" : "",
+    ].filter(Boolean);
+    if (vBits.length) {
+      let how = "";
+      if (plan && plan.use_video_copy) how = ` · ${tt("Copy")}`;
+      else if (plan && plan.need_encode) how = ` · ${tt("Encode")}`;
+      rows.push([tt("Video"), vBits.join(" ") + how]);
+    }
+
+    const ac = (file.audio || "").toUpperCase();
+    if (ac && ac !== "-") {
+      let how = "";
+      if (plan && plan.drop_audio) how = ` · ${tt("weggelassen")}`;
+      else if (plan && plan.will_xcode_audio) how = " → AAC";
+      else if (ac) how = ` · ${tt("Copy")}`;
+      rows.push([tt("Ton"), ac + how]);
+    } else if (plan && plan.drop_audio) {
+      rows.push([tt("Ton"), tt("Kein Ton")]);
+    }
+
+    const codecs = (browser.codecs || []).map((c) => String(c).toUpperCase());
+    if (codecs.length) rows.push([tt("Browser"), codecs.join(", ")]);
+
+    if (kind === "transcode") {
+      const plat = (sess && sess.platform) || enc.platform || "";
+      const codec = (sess && sess.codec) || enc.codec || "";
+      const encoder = (sess && sess.encoder) || enc.encoder || "";
+      const hw = [plat, codec && codec.toUpperCase(), encoder].filter(Boolean).join(" / ");
+      if (hw) rows.push([tt("Hardware"), hw]);
+      const res = sess && sess.height
+        ? `${sess.height}p${sess.v_bitrate ? ` @ ${sess.v_bitrate}k` : ""}`
+        : (plan && plan.height ? `${plan.height}p` : tt("Original"));
+      if (res) rows.push([tt("Ziel"), res]);
+    }
+
+    const la = (sess && sess.lookahead_sec != null) ? sess.lookahead_sec : fp.lookahead;
+    if (kind !== "direct" && kind !== "idle" && la != null) {
+      rows.push([tt("Puffer"), Number(la) > 0 ? `${Math.round(la)} s` : tt("unbegrenzt")]);
+    }
+
+    const summary = (plan && plan.summary) || (sess && sess.decision_summary) || "";
+    if (summary && !rows.length) {
+      rows.push([tt("Modus"), summary]);
+    }
+
+    facts.innerHTML = rows.map(([k, v]) =>
+      `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
+
+    const reasons = (plan && Array.isArray(plan.reasons) ? plan.reasons : null)
+      || (sess && Array.isArray(sess.decision_reasons) ? sess.decision_reasons : []);
+    if (more && reasonsEl) {
+      if (reasons.length) {
+        more.hidden = false;
+        reasonsEl.innerHTML = reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+      } else {
+        more.hidden = true;
+        reasonsEl.innerHTML = "";
+      }
+    }
+  }
+
   function setActiveMode(label) {
-    const el = $("fp-active-mode");
-    if (!el) return;
-    el.textContent = label || tt("Kein Video geladen");
+    const badge = $("fp-plan-badge");
+    if (!badge || fp.plan || !label) return;
+    badge.className = "fp-plan-badge fp-kind-idle";
+    badge.textContent = label;
   }
 
   function setDecision(plan) {
-    const el = $("fp-decision");
-    if (!el) return;
-    if (!plan) {
-      el.textContent = "";
-      return;
-    }
-    const reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
-    const head = plan.summary
-      ? `${tt("Plan")}: ${plan.summary}`
-      : "";
-    el.textContent = [head, ...reasons].filter(Boolean).join(" · ");
+    renderPlan(plan, null);
   }
 
   async function refreshPlan() {
@@ -254,7 +374,6 @@
     if (!(fp.lookahead > 0)) return;
     const v = $("fp-video");
     if (!v || v.paused || fp.seeking) return;
-    if ((v.currentTime || 0) < 1.5) return;
     const ahead = bufferedAhead();
     const target = fp.lookahead;
     if (ahead >= target - 0.5 && !fp.encodePaused) {
@@ -345,8 +464,7 @@
         .map((p) => `${p.id}[${(p.codecs || []).join("/")}]`)
         .join(", ");
       hw.textContent = `${ready} · ${tt("Browser kann")}: ${client.join(", ").toUpperCase()}`
-        + (plats ? ` · ${tt("Server")}: ${plats}` : "")
-        + (options.note ? ` · ${options.note}` : "");
+        + (plats ? ` · ${tt("Server")}: ${plats}` : "");
     }
     syncEncodeUi({ presetBr: false });
   }
@@ -481,7 +599,6 @@
     renderChapters([]);
     setDirty(false);
     setStatus(tt("Video entladen."));
-    setActiveMode(tt("Kein Video geladen"));
     setDecision(null);
     updateTimeUi();
     updateAudioModeHint(null);
@@ -549,22 +666,21 @@
     if (!v) return;
     destroyPlayback();
     fp.mode = "hls";
-    // Zielpuffer (Encode-Vorlauf) darf die Live-Latenz-Grenze nicht sprengen –
-    // sonst springt hls.js alle paar Sekunden um ~liveMaxLatency*Segmentlänge vor
-    // (früher: 10×2s = 20s).
-    const segGuess = 2;
+    // Datei als wachsendes HLS, nicht als Live-Kante: bei Segment 0 starten
+    // und nicht nach vorn springen, wenn FFmpeg vorausliegt.
     const la = fp.lookahead > 0 ? fp.lookahead : 60;
     const buf = Math.max(12, Math.min(120, la + 8));
-    const maxLatCount = Math.max(30, Math.ceil((la + 40) / segGuess));
     if (window.Hls && window.Hls.isSupported()) {
       fp.hls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
         maxBufferLength: buf,
         maxMaxBufferLength: buf + 30,
-        backBufferLength: 30,
+        backBufferLength: 60,
+        maxBufferHole: 0.8,
+        startPosition: 0,
         liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: maxLatCount,
+        liveMaxLatencyDurationCount: 10000,
         maxLiveSyncPlaybackRate: 1,
         liveDurationInfinity: true,
       });
@@ -574,13 +690,21 @@
         v.play().catch(() => {});
       });
       fp.hls.on(window.Hls.Events.ERROR, (_, data) => {
-        // Bei Puffer-Unterlauf Encode wieder anwerfen (falls gedrosselt)
-        if (data && (data.details === "bufferStalledError"
-            || data.details === "bufferNudgeOnStall")) {
+        if (!data) return;
+        const details = String(data.details || "");
+        if (details === "bufferStalledError" || details === "bufferNudgeOnStall"
+            || details === "bufferSeekOverHole") {
           if (fp.encodePaused) setEncodePaused(false);
           return;
         }
-        if (data && data.fatal) {
+        if (details === "fragLoadError" || details === "fragLoadTimeOut") {
+          if (fp.encodePaused) setEncodePaused(false);
+          if (data.fatal && fp.hls) {
+            try { fp.hls.startLoad(); } catch (e) { /* ignore */ }
+          }
+          return;
+        }
+        if (data.fatal) {
           const errMsg = (data.error && data.error.message) || data.details || "fatal";
           setStatus(`${tt("Wiedergabefehler")} (${data.type || "?"}: ${errMsg})`, true);
           setBadge(tt("Fehler"));
@@ -603,11 +727,13 @@
   }
 
   async function startSession(startSec, autoplay) {
+    if (fp.starting) return;
     const path = ($("fp-path") || {}).value || fp.path;
     if (!path) {
       setStatus(tt("Bitte eine Datei wählen."), true);
       return;
     }
+    fp.starting = true;
     fp.path = path;
     const audio = parseInt(($("fp-audio") || {}).value, 10);
     const sub = parseInt(($("fp-sub") || {}).value, 10);
@@ -623,10 +749,10 @@
     const audioCopy = !!($("fp-audio-copy") && $("fp-audio-copy").checked);
     setBadge(tt("Lädt …"));
     setStatus(tt("Starte Session …"));
-    await stopSession();
 
     const directOk = clientDirectOk(fp.info);
     try {
+      await stopSession();
       const r = await fetch("/api/player/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -680,28 +806,16 @@
         return;
       }
 
-      const chosen = (($("fp-profile") || {}).value) || "auto";
-      const active = sess.playback_label
-        || (sess.mode === "direct" ? tt("Direct-Play") : `${tt("HLS")} · ${sess.profile || "copy"}`);
-      const modeLine = chosen === "auto" && sess.decision_summary
-        ? `${tt("Aktiv")}: ${active} · ${sess.decision_summary}`
-        : chosen === "auto" && sess.profile && sess.profile !== "auto"
-          ? `${tt("Aktiv")}: ${active} (${tt("Auswahl")}: ${tt("Automatisch")} → ${sess.profile})`
-          : `${tt("Aktiv")}: ${active}`;
-      setActiveMode(modeLine);
-      if (d.plan) setDecision(d.plan);
-      else if (sess.decision_summary) {
-        setDecision({
-          summary: sess.decision_summary,
-          reasons: sess.decision_reasons || [],
-        });
-      }
+      renderPlan(d.plan || {
+        strategy: sess.decision_strategy,
+        summary: sess.decision_summary,
+        reasons: sess.decision_reasons || [],
+      }, sess);
 
       if (sess.mode === "direct") {
         playDirect(sess.media_url || sess.playlist_url);
         setBadge(tt("Direct-Play"));
-        setStatus(tt("Direct-Play · keine Server-Umcodierung")
-          + (fp.duration ? ` · ${fmtClock(fp.duration)}` : ""));
+        setStatus(fp.duration ? fmtClock(fp.duration) : "");
       } else {
         const url = sess.playlist_url || `/api/player/session/${fp.sid}/index.m3u8`;
         let tries = 0;
@@ -719,25 +833,15 @@
         };
         await waitReady();
         playHls(url);
-        const burnNote = sess.burn_subs ? ` · ${tt("Bild-UT eingebrannt")}` : "";
-        const resNote = sess.encoder && sess.encoder !== "copy"
-          ? (sess.height
-            ? ` · ${sess.height}p`
-            : ` · ${tt("Original-Auflösung")}`)
-            + (sess.v_bitrate ? ` @ ${sess.v_bitrate}k` : "")
-            + ` · ${sess.platform}/${sess.codec || ""}/${sess.encoder}`
-          : "";
-        const laNote = sess.lookahead_sec > 0
-          ? ` · ${tt("Puffer")} ${Math.round(sess.lookahead_sec)}s`
-          : ` · ${tt("Puffer unbegrenzt")}`;
-        const aNote = sess.audio_copy ? ` · ${tt("Ton-Copy")}` : "";
-        const warn = sess.warning ? ` · ⚠ ${sess.warning}` : "";
-        setBadge(sess.profile || tt("HLS"));
-        setStatus(
-          `${tt("HLS")} · ${sess.profile || "copy"}${resNote}${burnNote}${laNote}${aNote}${warn}`
-          + ` · ${tt("Pause hält Encode an")}`
-          + (fp.duration ? ` · ${fmtClock(fp.duration)}` : ""),
-        );
+        const kind = planKind(d.plan, sess);
+        const badgeLab = (PLAN_KIND[kind] && PLAN_KIND[kind].label) || sess.profile || tt("HLS");
+        setBadge(tt(badgeLab));
+        const extra = [];
+        if (sess.burn_subs) extra.push(tt("Bild-UT eingebrannt"));
+        if (sess.warning && !(d.plan && d.plan.summary && sess.warning.indexOf(d.plan.summary) >= 0)) {
+          extra.push(sess.warning);
+        }
+        setStatus(extra.join(" · "));
         if (!isNaN(sub) && sub >= 0 && !sess.burn_subs) attachSubtitles(path, sub);
       }
 
@@ -760,6 +864,8 @@
     } catch (e) {
       setStatus(String(e), true);
       setBadge(tt("Fehler"));
+    } finally {
+      fp.starting = false;
     }
   }
 
@@ -806,6 +912,9 @@
     if (v) {
       v.addEventListener("timeupdate", () => {
         updateTimeUi();
+        if (!v.paused) throttleEncodeByBuffer();
+      });
+      v.addEventListener("progress", () => {
         if (!v.paused) throttleEncodeByBuffer();
       });
       v.addEventListener("play", () => {
