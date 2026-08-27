@@ -72,6 +72,11 @@
     "Outro gespeichert.": "Outro saved.",
     "Projekt geladen.": "Project loaded.",
     "Weitere Quelle anhängen": "Append another source",
+    "Quellen anhängen – mehrere anhaken, Reihenfolge = Timeline":
+      "Append sources – tick several, order = timeline",
+    "Analysiere": "Analysing",
+    "Clip(s) angehängt.": "clip(s) appended.",
+    "Übersprungen": "Skipped",
     "Encode nötig (Fades/Tempo/Schwarz/UT). Modus umgestellt – erneut einreihen.":
       "Encode required (fades/speed/black/subs). Switched mode – enqueue again.",
     "Keine": "None",
@@ -80,7 +85,7 @@
     "An Kapitel einrasten": "Snap to chapters",
     "An Keyframes einrasten": "Snap to keyframes",
     "Teilen": "Split",
-    "+ Quelle": "+ Source",
+    "+ Quellen": "+ Sources",
     "Schwarz 3 s": "Black 3 s",
     "Intro merken": "Remember intro",
     "Intro einfügen": "Insert intro",

@@ -784,6 +784,52 @@
     setStatus(tt("Quelle an Timeline angehängt."));
   }
 
+  /** Mehrere Dateien in der gewählten Reihenfolge als ganze Clips anhängen. */
+  async function appendSources(files) {
+    const list = (files || []).filter((f) => f && f.rel);
+    if (!list.length) return;
+    const needFirst = !ed.src;
+    pushHist();
+    const failed = [];
+    let added = 0;
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setStatus(`${tt("Analysiere")} ${i + 1}/${list.length}: ${f.name}`);
+      let data = null;
+      try {
+        const r = await fetch(`/api/editor/probe?path=${encodeURIComponent(f.rel)}`);
+        data = await r.json();
+        if (!r.ok || data.error || !data.has_video) data = null;
+      } catch (e) {
+        data = null;
+      }
+      if (!data) {
+        failed.push(f.name);
+        continue;
+      }
+      const name = f.name || data.name || f.rel;
+      ed.segments.push(defaultClip({
+        path: f.rel,
+        name,
+        start: 0,
+        end: round2(Number(data.duration) || 0),
+        title: name,
+      }));
+      added += 1;
+    }
+    renderSegList();
+    if (needFirst && added) {
+      const first = ed.segments.find((s) => s.kind === "media" && s.path);
+      if (first) await loadSource(first.path, first.name);
+    }
+    const msg = `${added} ${tt("Clip(s) angehängt.")}`;
+    if (failed.length) {
+      setStatus(`${msg} ${tt("Übersprungen")}: ${failed.join(", ")}`, true);
+    } else {
+      setStatus(msg);
+    }
+  }
+
   function cutOutRange() {
     if (!ed.src) {
       setStatus(tt("Zuerst eine Quelle laden."), true);
@@ -1163,6 +1209,7 @@
         }
         window.openFilePickerModal({
           title: tt("Video für Editor wählen"),
+          rememberKey: "edPickDir",
           onPick: (f) => loadSource(f.rel, f.name),
         });
       });
@@ -1172,7 +1219,10 @@
       addSrc.addEventListener("click", () => {
         if (typeof window.openFilePickerModal !== "function") return;
         window.openFilePickerModal({
-          title: tt("Weitere Quelle anhängen"),
+          title: tt("Quellen anhängen – mehrere anhaken, Reihenfolge = Timeline"),
+          multi: true,
+          rememberKey: "edPickDir",
+          onPickMany: (files) => appendSources(files),
           onPick: async (f) => {
             await loadSource(f.rel, f.name);
             appendWholeSource();

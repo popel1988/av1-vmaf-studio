@@ -787,6 +787,10 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 }
 .row-item:hover .row-pick { opacity: 1; }
 .row-pick:hover { border-color: var(--accent); color: var(--accent); }
+/* Mehrfachauswahl im Datei-Dialog: Haken bleibt sichtbar, Buttons erst bei Hover. */
+.row-sel { margin: 0; width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+.fpick-actions { margin: 10px 0 0; }
+.fpick-actions .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-play {
   font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text); cursor: pointer; opacity: 0; transition: opacity .15s; line-height: 1;

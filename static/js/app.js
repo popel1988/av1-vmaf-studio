@@ -153,20 +153,27 @@
   //
   // opts: { listId, crumbId, kind, showFiles, recursive, playFile,
   //         pickFile(f), onNavigate(data, path), rootLabel, searchPlaceholder,
-  //         browseUrl(path), searchUrl(path, q), playRoot }
+  //         browseUrl(path), searchUrl(path, q), playRoot,
+  //         multiSelect, onSelectionChange(files) }
   function makeFolderBrowser(opts) {
     const listEl = $(opts.listId);
     if (!listEl) return null;
     const crumbEl = opts.crumbId ? $(opts.crumbId) : null;
     const kind = opts.kind || "video";
     const showFiles = opts.showFiles !== false;
+    const multi = !!opts.multiSelect;
     const browseUrl = opts.browseUrl ||
       ((p) => `/api/browse?path=${encodeURIComponent(p)}&kind=${kind}`);
     const searchUrl = opts.searchUrl ||
       ((p, q) => `/api/search?path=${encodeURIComponent(p)}&q=${encodeURIComponent(q)}&kind=${kind}`);
     // Rekursive Suche nur, wenn eine Such-URL existiert (Standard: /api/search).
     const allowRecursive = showFiles && opts.recursive !== false && opts.searchUrl !== null;
-    const S = { path: "", data: null, hist: [], hidx: -1, scroll: {}, timer: null };
+    const S = {
+      path: "", data: null, hist: [], hidx: -1, scroll: {}, timer: null,
+      sel: new Map(),   // rel → Datei; Reihenfolge = Reihenfolge des Anhakens
+      visible: [],      // aktuell gelistete Dateien (für „alle wählen")
+      repaint: null,    // aktuelle Ansicht neu zeichnen (Ordner oder Suche)
+    };
 
     // --- Toolbar (Zurück/Vor · Suche · Unterordner · Zähler) ---
     const bar = document.createElement("div");
@@ -219,7 +226,14 @@
         listEl.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
         return;
       }
-      if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
+      if (data.error) {
+        // Gemerkter Ordner verschwunden? Einmalig auf die Wurzel zurückfallen.
+        if (opts.rootFallback && path && !o.noFallback) {
+          return navigate("", { push: o.push, noFallback: true });
+        }
+        listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`;
+        return;
+      }
       S.path = (data.path != null && data.path !== "") ? data.path : "";
       S.data = data;
       if (o.push !== false) {
@@ -260,22 +274,78 @@
       }
     }
 
+    function selection() { return Array.from(S.sel.values()); }
+
+    function selChanged() {
+      if (opts.onSelectionChange) opts.onSelectionChange(selection());
+    }
+
+    function toggleSel(f, on) {
+      if (on == null) on = !S.sel.has(f.rel);
+      if (on) {
+        S.sel.set(f.rel, {
+          rel: f.rel, name: f.name, size_human: f.size_human || "", folder: f.folder || "",
+        });
+      } else {
+        S.sel.delete(f.rel);
+      }
+      return on;
+    }
+
+    // Datei-Zeile: einfacher Klick wählt aus, im Multi-Modus hakt er an.
+    function fileRow(f, label) {
+      if (!multi) {
+        return makeRow("file", label, f.size_human, null,
+          opts.pickFile ? () => opts.pickFile(f) : null,
+          opts.playFile ? f.rel : null, opts.playRoot || "media");
+      }
+      const row = makeRow("file", label, f.size_human, null, null,
+        opts.playFile ? f.rel : null, opts.playRoot || "media");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "row-sel";
+      cb.title = "Zur Auswahl hinzufügen";
+      const paint = (on) => {
+        cb.checked = on;
+        row.classList.toggle("selected", on);
+      };
+      paint(S.sel.has(f.rel));
+      cb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        paint(toggleSel(f, cb.checked));
+        selChanged();
+      });
+      row.addEventListener("click", () => {
+        paint(toggleSel(f));
+        selChanged();
+      });
+      row.insertBefore(cb, row.firstChild);
+      if (opts.pickFile) {
+        const only = document.createElement("button");
+        only.className = "row-pick";
+        only.textContent = "Nur diese";
+        only.title = "Diese Datei sofort übernehmen";
+        only.addEventListener("click", (e) => { e.stopPropagation(); opts.pickFile(f); });
+        row.appendChild(only);
+      }
+      return row;
+    }
+
     function renderList() {
       const data = S.data;
       if (!data) return;
+      S.repaint = renderList;
       listEl.innerHTML = "";
       const q = search.value.trim().toLowerCase();
       const match = (n) => !q || n.toLowerCase().includes(q);
       const dirs = (data.dirs || []).filter((d) => match(d.name));
       const files = showFiles ? (data.files || []).filter((f) => match(f.name)) : [];
+      S.visible = files;
       if (!data.roots && !data.is_root && !q) {
         listEl.appendChild(makeRow("dir", "..", "", () => go(data.parent || ""), null));
       }
       dirs.forEach((d) => listEl.appendChild(makeRow("dir", d.name, "", () => go(d.rel), null)));
-      files.forEach((f) => listEl.appendChild(makeRow(
-        "file", f.name, f.size_human, null,
-        opts.pickFile ? () => opts.pickFile(f) : null,
-        opts.playFile ? f.rel : null, opts.playRoot || "media")));
+      files.forEach((f) => listEl.appendChild(fileRow(f, f.name)));
       if (!dirs.length && !files.length) {
         listEl.innerHTML = q
           ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
@@ -298,14 +368,17 @@
       try {
         const data = await (await fetch(searchUrl(S.path, q))).json();
         if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
-        listEl.innerHTML = "";
-        (data.files || []).forEach((f) => {
-          const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
-          listEl.appendChild(makeRow("file", label, f.size_human, null,
-            opts.pickFile ? () => opts.pickFile(f) : null,
-            opts.playFile ? f.rel : null, opts.playRoot || "media"));
-        });
-        if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
+        const paint = () => {
+          listEl.innerHTML = "";
+          (data.files || []).forEach((f) => {
+            const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
+            listEl.appendChild(fileRow(f, label));
+          });
+          if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
+        };
+        S.visible = data.files || [];
+        S.repaint = paint;
+        paint();
         count.textContent = `${(data.files || []).length} Treffer${data.truncated ? " (begrenzt)" : ""}`;
       } catch (e) {
         listEl.innerHTML = `<div class="browser-loading">Fehler: ${escapeHtml(String(e))}</div>`;
@@ -325,7 +398,22 @@
     rec.addEventListener("change", onSearch);
 
     syncNav();
-    return { go, current: () => S.path, refresh: () => navigate(S.path, { push: false, restore: true }) };
+    return {
+      go,
+      current: () => S.path,
+      refresh: () => navigate(S.path, { push: false, restore: true }),
+      selection,
+      selectVisible: (on) => {
+        (S.visible || []).forEach((f) => toggleSel(f, on));
+        if (S.repaint) S.repaint();
+        selChanged();
+      },
+      clearSelection: () => {
+        S.sel.clear();
+        if (S.repaint) S.repaint();
+        selChanged();
+      },
+    };
   }
 
   // Instanzen der wiederverwendbaren Browser (einmalig erzeugt).
@@ -373,12 +461,15 @@
       '<button class="btn btn-primary btn-sm" id="fp-choose">Diesen Ordner wählen</button>' +
       '<span id="fp-sel" class="muted"></span></div>');
     let current = "";
+    const memKey = opts.rememberKey === null ? "" : (opts.rememberKey || "fpickFolderDir");
     const picker = makeFolderBrowser({
       listId: "fp-browser", crumbId: "fp-crumb",
       kind: opts.kind || "video", showFiles: false,
       searchPlaceholder: "Unterordner filtern …",
+      rootFallback: true,
       onNavigate: (data, p) => {
         current = p;
+        rememberPickerDir(memKey, p);
         const sel = $("fp-sel");
         if (sel) sel.textContent = p ? `Auswahl: /${p}` : "Auswahl: (Wurzel/gesamt)";
       },
@@ -388,24 +479,73 @@
       closeModal();
       if (opts.onPick) opts.onPick(current);
     });
-    if (picker) picker.go(opts.start || "");
+    if (picker) picker.go(opts.start || pickerDir(memKey));
+  }
+
+  // Zuletzt besuchter Ordner der Datei-/Ordner-Dialoge.
+  function pickerDir(key) {
+    if (!key) return "";
+    try { return localStorage.getItem(key) || ""; } catch (e) { return ""; }
+  }
+  function rememberPickerDir(key, path) {
+    if (!key) return;
+    try { localStorage.setItem(key, path || ""); } catch (e) { /* ignore */ }
   }
 
   // Modal-Dateiauswahl (Video). onPick({rel,name}).
+  // opts.multi + onPickMany([{rel,name}]) → Mehrfachauswahl in Anhak-Reihenfolge.
+  // Der Dialog startet im zuletzt genutzten Ordner (opts.rememberKey, null = aus).
   function openFilePickerModal(opts) {
     opts = opts || {};
+    const multi = !!opts.multi;
+    const memKey = opts.rememberKey === null ? "" : (opts.rememberKey || "fpickDir");
+    const footer = multi
+      ? '<div class="lib-actions fpick-actions">'
+        + '<button class="btn btn-primary btn-sm" id="fpick-ok" disabled>Übernehmen</button>'
+        + '<button class="btn btn-ghost btn-sm" id="fpick-all">Alle im Ordner</button>'
+        + '<button class="btn btn-ghost btn-sm" id="fpick-none">Auswahl leeren</button>'
+        + '<span class="muted" id="fpick-count">Nichts gewählt</span></div>'
+      : "";
     openModal(opts.title || "Datei wählen",
-      '<div class="breadcrumb" id="fpick-crumb"></div>' +
-      '<div class="browser browser-sm" id="fpick-browser"><div class="browser-loading">Lade …</div></div>');
+      '<div class="breadcrumb" id="fpick-crumb"></div>'
+      + '<div class="browser browser-sm" id="fpick-browser"><div class="browser-loading">Lade …</div></div>'
+      + footer);
     const picker = makeFolderBrowser({
       listId: "fpick-browser", crumbId: "fpick-crumb",
       kind: "video", showFiles: true,
       rootLabel: opts.rootLabel || "Medien",
       playRoot: "media",
       searchPlaceholder: "Im Ordner suchen … (Name)",
+      multiSelect: multi,
+      rootFallback: true,
+      onNavigate: (data, p) => rememberPickerDir(memKey, p),
+      onSelectionChange: (files) => {
+        const ok = $("fpick-ok");
+        const info = $("fpick-count");
+        if (ok) ok.disabled = !files.length;
+        if (info) {
+          info.textContent = files.length
+            ? `${files.length} gewählt · ${files.map((f) => f.name).join(", ")}`.slice(0, 160)
+            : "Nichts gewählt";
+        }
+      },
       pickFile: (f) => { closeModal(); if (opts.onPick) opts.onPick(f); },
     });
-    if (picker) picker.go("");
+    if (multi && picker) {
+      const ok = $("fpick-ok");
+      if (ok) ok.addEventListener("click", () => {
+        const files = picker.selection();
+        if (!files.length) return;
+        closeModal();
+        if (opts.onPickMany) opts.onPickMany(files);
+        else if (opts.onPick) files.forEach((f) => opts.onPick(f));
+      });
+      const all = $("fpick-all");
+      if (all) all.addEventListener("click", () => picker.selectVisible(true));
+      const none = $("fpick-none");
+      if (none) none.addEventListener("click", () => picker.clearSelection());
+    }
+    if (picker) picker.go(opts.start != null ? opts.start : pickerDir(memKey));
   }
   window.openFilePickerModal = openFilePickerModal;
   window.openFolderPickerModal = openFolderPickerModal;
