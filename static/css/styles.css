@@ -546,15 +546,185 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ed-seg-main strong { font-size: 13px; }
 .ed-seg-main .muted { font-size: 11.5px; word-break: break-all; }
 .ed-seg-actions { display: flex; gap: 2px; flex-shrink: 0; }
+/* --- Gesamt-Timeline (volle Breite) --- */
+.ed-tl-wrap {
+  margin-top: 16px; padding: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-tl-head {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.ed-tl-head strong { font-size: 13.5px; }
+.ed-tl-head .muted { font-size: 12px; }
+.ed-tl-head #ed-total { margin-left: auto; }
+.ed-tl-tools {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.ed-tl-tools .btn { min-width: 0; }
+.ed-tl-sep {
+  width: 1px; align-self: stretch; margin: 0 4px;
+  background: var(--border);
+}
+.ed-tl-ruler {
+  position: relative; height: 19px; margin-bottom: 2px;
+  font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+  cursor: ew-resize; user-select: none;
+}
+.ed-tl-ruler:hover { color: var(--text); }
+.ed-tl-tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.ed-tl-tick::after {
+  content: ""; position: absolute; left: 50%; top: 13px; width: 1px; height: 4px;
+  background: var(--border);
+}
 .ed-timeline {
-  margin-top: 12px; height: 28px; background: var(--surface);
+  position: relative;
+  height: 64px; background: var(--surface);
   border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  cursor: crosshair;
 }
 .ed-timeline-track { display: flex; height: 100%; width: 100%; }
 .ed-tl-block {
-  height: 100%; display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; color: #0b1220; min-width: 18px;
-  border-right: 1px solid rgba(0,0,0,.25);
+  position: relative; height: 100%; min-width: 26px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 4px 6px; box-sizing: border-box;
+  border-right: 2px solid var(--surface-2);
+  background-repeat: no-repeat; background-position: center; background-size: cover;
+  cursor: grab; color: #fff;
+}
+.ed-tl-block::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,.15) 0%, rgba(0,0,0,.78) 100%);
+}
+/* Farbstreifen oben kennzeichnet den Clip auch ohne Vorschaubild. */
+.ed-tl-block::after {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: var(--tl-color, var(--accent));
+}
+.ed-tl-block > * { position: relative; }
+.ed-tl-idx, .ed-tl-name, .ed-tl-meta { z-index: 2; }
+.ed-tl-idx {
+  font-size: 10px; font-weight: 700; opacity: .8;
+}
+.ed-tl-name {
+  font-size: 11.5px; font-weight: 600; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9);
+}
+.ed-tl-meta {
+  font-size: 10.5px; opacity: .85; font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Trimm-Kanten, Fade-Griffe und Tempo-Badge liegen über dem Verlauf. */
+.ed-tl-edge {
+  position: absolute; top: 0; bottom: 0; width: 7px; z-index: 4;
+  cursor: col-resize; background: transparent;
+}
+.ed-tl-edge.left { left: 0; }
+.ed-tl-edge.right { right: 0; }
+.ed-tl-block:hover .ed-tl-edge,
+.ed-tl-block.active .ed-tl-edge {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 40%, transparent);
+}
+.ed-tl-ramp {
+  position: absolute; top: 4px; bottom: 0; z-index: 1; pointer-events: none;
+  background: color-mix(in srgb, #000 62%, transparent);
+}
+.ed-tl-ramp.in { left: 0; clip-path: polygon(0 0, 100% 100%, 0 100%); }
+.ed-tl-ramp.out { right: 0; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+.ed-tl-grip {
+  position: absolute; top: 5px; width: 11px; height: 11px; z-index: 5;
+  border-radius: 3px; cursor: ew-resize;
+  background: color-mix(in srgb, var(--warn) 85%, #fff);
+  opacity: 0; transition: opacity .15s;
+}
+.ed-tl-grip.in { left: 2px; }
+.ed-tl-grip.out { right: 2px; }
+.ed-tl-block:hover .ed-tl-grip,
+.ed-tl-block.active .ed-tl-grip,
+.ed-tl-grip.set { opacity: .95; }
+.ed-tl-speed {
+  position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 5;
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+  background: rgba(0,0,0,.62); color: #fff; border: 1px solid rgba(255,255,255,.22);
+  cursor: pointer; white-space: nowrap;
+}
+.ed-tl-block.narrow .ed-tl-name,
+.ed-tl-block.narrow .ed-tl-meta,
+.ed-tl-block.narrow .ed-tl-speed { display: none; }
+/* Schmale Clips: Kanten dünner, damit die Mitte zum Sortieren bleibt. */
+.ed-tl-block.narrow .ed-tl-edge { width: 4px; }
+.ed-tl-block.narrow .ed-tl-grip { width: 7px; height: 7px; }
+.ed-tl-block.active {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+}
+.ed-tl-block.active::after { height: 5px; background: var(--accent); }
+.ed-tl-block.dragging { opacity: .5; }
+.ed-tl-block.drop-target { box-shadow: inset 3px 0 0 var(--accent-2); }
+.ed-tl-block.flash { animation: edFlash .9s ease-out 2; }
+@keyframes edFlash {
+  0%, 100% { filter: none; }
+  50% { filter: brightness(1.65); }
+}
+.ed-tl-playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: var(--warn); pointer-events: none; z-index: 3;
+}
+.ed-tl-playhead::before {
+  content: ""; position: absolute; top: 0; left: -4px;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid var(--warn);
+}
+.ed-tl-empty {
+  display: flex; align-items: center; justify-content: center; width: 100%;
+  font-size: 12px; color: var(--text-muted);
+}
+/* Kontextmenü der Timeline */
+.ed-ctx {
+  position: fixed; z-index: 1200; min-width: 190px; padding: 5px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  font-size: 12.5px;
+}
+.ed-ctx button {
+  display: flex; width: 100%; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); cursor: pointer;
+  font-size: 12.5px; text-align: left;
+}
+.ed-ctx button:hover { background: var(--surface-3); }
+.ed-ctx button.bad:hover { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.ed-ctx-head {
+  padding: 5px 10px 7px; font-size: 11.5px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); margin-bottom: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ed-ctx-label {
+  padding: 8px 10px 2px; font-size: 11px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.ed-ctx-row { display: flex; gap: 4px; padding: 2px 6px 4px; }
+.ed-ctx-row button {
+  justify-content: center; padding: 5px 0; font-size: 11.5px;
+  border: 1px solid var(--border);
+}
+.ed-ctx-row button.on { border-color: var(--accent); color: var(--accent); }
+/* „Mehr …" in der Werkzeugleiste */
+.ed-tl-more { position: relative; }
+.ed-tl-more > summary { list-style: none; cursor: pointer; display: inline-flex; }
+.ed-tl-more > summary::-webkit-details-marker { display: none; }
+.ed-tl-more-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
+  display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 12px 28px rgba(0,0,0,.4);
+  min-width: 180px;
+}
+.ed-tl-more-panel .btn { justify-content: flex-start; }
+.ed-seg-item.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 .ed-src-ruler {
   position: relative;
@@ -598,6 +768,13 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ed-src-keep {
   position: absolute; top: 0; bottom: 0;
   background: color-mix(in srgb, var(--good) 45%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--good) 85%, #fff);
+  border-right: 1px solid color-mix(in srgb, var(--good) 85%, #fff);
+  box-sizing: border-box;
+}
+.ed-src-keep.active {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: var(--accent);
 }
 .ed-src-keep-empty {
   background: color-mix(in srgb, var(--text-muted) 18%, transparent);

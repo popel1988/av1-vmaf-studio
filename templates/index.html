@@ -1792,46 +1792,93 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-undo" title="Rückgängig (Strg+Z)">↩</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-redo" title="Wiederholen (Strg+Y)">↪</button>
                 </div>
-                <div class="ed-cut-actions field-row field-row-inline" style="margin-top:10px">
-                  <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range" title="Markierten Bereich als Clip behalten (mehrfach möglich)">Bereich behalten</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range" title="Markierten Bereich entfernen – Rest der Quelle bleibt (mehrere Löcher möglich)">Bereich entfernen</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all" title="Gesamte Quelle als einen Clip">Ganze Datei</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source" title="Mehrere Dateien anhaken und in dieser Reihenfolge anhängen">+ Quellen</button>
-                </div>
-                <div class="ed-cut-actions field-row field-row-inline" style="margin-top:8px">
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-black">Schwarz 3 s</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-set-intro" title="Aktuelle Quelle als Intro merken">Intro merken</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-intro">Intro einfügen</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-set-outro" title="Aktuelle Quelle als Outro merken">Outro merken</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-outro">Outro einfügen</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-save-proj">Projekt speichern</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-load-proj">Projekt laden</button>
-                  <input type="file" id="ed-proj-file" accept="application/json,.json" hidden />
-                </div>
-                <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:8px"></p>
+                <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:10px"></p>
                 <p class="hint" style="margin-top:6px;font-size:12px">
                   <strong>I/O</strong> In/Out · <strong>J/K/L</strong> −5s / Pause / Play ·
-                  <strong>Pfeile</strong> Frame · <strong>S</strong> Teilen · <strong>Strg+Z</strong> Undo.
-                  Mehrere Dateien: <strong>+ Quellen</strong> – anhaken, übernehmen, Reihenfolge per Drag &amp; Drop.
+                  <strong>←→</strong> Frame · <strong>↑↓</strong> Clip wechseln ·
+                  <strong>S</strong> Teilen · <strong>Entf</strong> Clip löschen · <strong>Strg+Z</strong> Undo.
+                  Diese Leiste zeigt die <em>ganze Quelldatei</em> – hier wählst du aus,
+                  was in die Timeline wandert.
                 </p>
               </div>
 
               <div class="ed-side">
                 <div class="ed-side-head">
-                  <strong>Timeline-Clips</strong>
+                  <strong>Clip-Details</strong>
                   <span>
-                    <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Leeren</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Alle löschen</button>
                   </span>
                 </div>
                 <ul class="ed-seg-list" id="ed-seg-list"></ul>
-                <div class="ed-timeline" id="ed-timeline" title="Gesamt-Timeline">
-                  <div class="ed-timeline-track" id="ed-timeline-track"></div>
-                </div>
-                <p class="muted" id="ed-total" style="font-size:12px;margin-top:6px">0 Clips · 0:00</p>
-                <div class="field-row field-row-inline" style="margin-top:8px">
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled>Vorschau Timeline</button>
-                </div>
+                <p class="hint" style="font-size:12px;margin-top:8px">
+                  Klick auf einen Clip wählt ihn aus – hier stellst du Titel, In/Out,
+                  Fades, Tempo, Skalierung und Crop ein.
+                </p>
               </div>
+            </div>
+
+            <!-- Gesamt-Timeline über die volle Breite -->
+            <div class="ed-tl-wrap">
+              <div class="ed-tl-head">
+                <strong>Timeline</strong>
+                <span class="muted" id="ed-tl-sel">Kein Clip gewählt</span>
+                <span class="muted ed-time" id="ed-tl-time">0:00 / 0:00</span>
+                <span class="muted" id="ed-total">0 Clips · 0:00</span>
+              </div>
+              <div class="ed-tl-tools">
+                <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range"
+                        title="Markierten Bereich der Quelle als Clip anhängen (mehrfach möglich)">+ Bereich</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range"
+                        title="Markierten Bereich entfernen – der Rest der Quelle bleibt">− Bereich</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all"
+                        title="Gesamte Quelle als einen Clip">Ganze Datei</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source"
+                        title="Mehrere Dateien anhaken und in dieser Reihenfolge anhängen">+ Quellen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-black"
+                        title="Schwarzclip als Pause einfügen (erzwingt Encode)">Schwarz 3 s</button>
+                <span class="ed-tl-sep"></span>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-split" disabled
+                        title="Aktiven Clip am Playhead in zwei Teile schneiden (S)">✂ Teilen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-in" disabled
+                        title="Clip-Anfang auf die aktuelle Position ziehen">⇥ Anfang hier</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-out" disabled
+                        title="Clip-Ende auf die aktuelle Position ziehen">⇤ Ende hier</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-left" disabled
+                        title="Clip nach links schieben">◀</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-right" disabled
+                        title="Clip nach rechts schieben">▶</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-dup" disabled
+                        title="Clip verdoppeln">⧉ Duplizieren</button>
+                <button type="button" class="btn btn-ghost btn-sm bad-btn" id="ed-tl-del" disabled
+                        title="Aktiven Clip aus der Timeline löschen (Entf)">🗑 Clip löschen</button>
+                <span class="ed-tl-sep"></span>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled
+                        title="Alle Clips der Reihe nach abspielen">▶ Vorschau</button>
+                <details class="ed-tl-more">
+                  <summary class="btn btn-ghost btn-sm">Mehr …</summary>
+                  <div class="ed-tl-more-panel">
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-set-intro"
+                            title="Aktuelle Quelle als Intro merken">Intro merken</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-intro">Intro einfügen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-set-outro"
+                            title="Aktuelle Quelle als Outro merken">Outro merken</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-outro">Outro einfügen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-save-proj">Projekt speichern</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-load-proj">Projekt laden</button>
+                    <input type="file" id="ed-proj-file" accept="application/json,.json" hidden />
+                  </div>
+                </details>
+              </div>
+              <div class="ed-tl-ruler" id="ed-tl-ruler"></div>
+              <div class="ed-timeline" id="ed-timeline" title="Klick = Position, Clips per Drag &amp; Drop sortieren">
+                <div class="ed-timeline-track" id="ed-timeline-track"></div>
+                <div class="ed-tl-playhead" id="ed-tl-playhead" hidden></div>
+              </div>
+              <p class="hint" style="font-size:12px;margin-top:8px">
+                Ziehen in der Timeline schiebt den Playhead. Clip-Mitte ziehen sortiert um,
+                <strong>Clip-Ränder ziehen</strong> trimmt, die <strong>Ecken oben</strong> ziehen Fades auf.
+                <strong>Rechtsklick</strong> auf einen Clip öffnet Teilen, Tempo, Stumm und Löschen.
+              </p>
             </div>
 
             <div class="divider" style="margin:16px 0"></div>
