@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import shutil
 import signal
@@ -805,13 +804,15 @@ def can_direct_play(info) -> bool:
 
 def _audio_args(audio_index: int, audio_codec: str,
                 force_copy: bool = False,
-                with_video_reencode: bool = False) -> list[str]:
-    """Ton-Args für HLS.
+                with_video_reencode: bool = False,
+                start_sec: float = 0.0) -> list[str]:
+    """Ton-Args für HLS (Jellyfin-Modell: keine eigene PTS-Nullung).
 
-    AAC-Timeline startet bei 0 (``first_pts`` + ``asetpts``). Video-Copy
-    setzt PTS parallel per ``setts`` auf 0 – sonst läuft der kopierte
-    Video-PTS weiter, während AAC bei 0 beginnt (Desync / Lücken).
-    ``with_video_reencode`` bleibt für Aufrufer erhalten (Filter ist identisch).
+    Zeitstempel bleiben über ``-copyts -start_at_zero`` an Video gekoppelt.
+    ``asetpts`` / ``first_pts=0`` würden Ton unabhängig auf 0 setzen und
+    nach Seek gegen Video-Copy laufen.
+    Video-Transcode + Ton-Copy: ``noise``-BSF droppt Packets vor dem Seek
+    (Jellyfin #16580), weil Copy den Decoder-Trim von ``accurate_seek`` umgeht.
     """
     if audio_index < 0:
         return ["-an"]
@@ -819,12 +820,18 @@ def _audio_args(audio_index: int, audio_codec: str,
     ac = (audio_codec or "").lower()
     if force_copy or _audio_hls_copy_ok(ac):
         args += ["-c:a", "copy"]
+        if with_video_reencode and float(start_sec or 0) > 0:
+            # ffmpeg 5+: drop='lt(pts*tb\,seek)' – Komma im Ausdruck escapen
+            args += [
+                "-bsf:a",
+                f"noise=drop='lt(pts*tb\\,{float(start_sec):.3f})'",
+            ]
         return args
-    # Stereo-Downmix vor aresample: DTS-X/TrueHD sonst mit Objektkanälen.
+    # Stereo-Downmix: DTS-X/TrueHD sonst mit Objektkanälen.
+    # aresample=async gleicht Drift aus, ohne die Timeline auf 0 zu zwingen.
     af = (
         "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        "aresample=async=1:first_pts=0:min_hard_comp=0.100,"
-        "asetpts=PTS-STARTPTS"
+        "aresample=async=1:min_hard_comp=0.100"
     )
     args += [
         "-c:a", "aac", "-ac", "2", "-b:a", "192k", "-ar", "48000",
@@ -843,7 +850,7 @@ def _hwaccel_decode_args(platform: str, source_codec: str = "") -> list[str]:
 
     Nur bei explizit positivem Decode-Funktionstest für den Quellcodec
     (kein Build-Optimistic-Fallback – der erzeugt oft A/V-Sprünge).
-    Frames landen für Scale/setpts im System-RAM, danach hwupload zum Encoder.
+    Frames landen für Scale im System-RAM, danach hwupload zum Encoder.
     """
     plat = (platform or "").lower()
     if plat not in ("nvidia", "intel", "amd"):
@@ -890,9 +897,9 @@ def _build_video_filter(
 ) -> tuple[list[str], list[str]]:
     """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args).
 
-    ``setpts=PTS-STARTPTS`` setzt die Video-Timeline nach Seek auf 0 – analog
-    zu ``asetpts`` beim Ton. Seek bleibt vor ``-i`` (schnell); kein langsames
-    Decode-from-start. Bei H.264-Ziel: Tonemap/``yuv420p`` (10-bit-HDR-Quellen).
+    Zeitstempel kommen von ``-copyts -start_at_zero`` (wie Jellyfin-HLS),
+    nicht von ``setpts`` – sonst läuft Video unabhängig vom Ton auf 0.
+    Seek bleibt vor ``-i``. Bei H.264-Ziel: Tonemap/``yuv420p``.
     """
     pre: list[str] = []
     backend = ff.encoder_backend(platform) if platform != "cpu" else "cpu"
@@ -900,18 +907,16 @@ def _build_video_filter(
     sdr = _player_sdr_8bit_filters(is_hdr=is_hdr, target_codec=target_codec)
 
     scale = f"scale=-2:{int(height)}" if height and height > 0 else ""
-    # setpts immer vor hwupload (nur Systemspeicher-Frames)
-    pts = "setpts=PTS-STARTPTS"
 
     if burn_sub_index >= 0:
-        # Overlay immer auf CPU, danach gemeinsame Timeline, ggf. hwupload
-        pix = (",".join(sdr) + ",") if sdr else ""
+        pix = ",".join(sdr)
         if scale:
             fc = (f"[0:v:0]{scale}[vs];"
-                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto,{pix}{pts}")
+                  f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto")
         else:
-            fc = (f"[0:v:0][0:s:{int(burn_sub_index)}]overlay=format=auto,"
-                  f"{pix}{pts}")
+            fc = "[0:v:0][0:s:{0}]overlay=format=auto".format(int(burn_sub_index))
+        if pix:
+            fc += "," + pix
         if need_hwupload:
             fc += ",format=nv12,hwupload"
             if "qsv" in encoder:
@@ -931,7 +936,6 @@ def _build_video_filter(
     if scale:
         parts.append(scale)
     parts.extend(sdr)
-    parts.append(pts)
     if need_hwupload:
         # Nach SDR-8-bit: nv12-Upload
         if "format=yuv420p" not in ",".join(parts):
@@ -949,8 +953,10 @@ def _build_video_filter(
                    "-filter_hw_device", "hw"]
         return pre, ["-vf", vf, "-map", "0:v:0?"]
 
-    # NVENC / CPU
-    return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"]
+    # NVENC / CPU – ohne Scale/SDR kein Filter (copyts übernimmt die Timeline)
+    if parts:
+        return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"]
+    return pre, ["-map", "0:v:0?"]
 
 
 def _encoder_rate_args(encoder: str, codec: str, v_bitrate: int) -> list[str]:
@@ -1007,13 +1013,22 @@ def _build_hls_cmd(
     source_codec: str = "",
     is_hdr: bool = False,
 ) -> list[str]:
-    """HLS immer als fMP4 (hls.js-tauglich).
+    """HLS als fMP4, Zeitstempel wie Jellyfin Dynamic HLS.
 
-    Video-Copy + Ton→AAC: HEVC braucht ``-tag:v hvc1`` (nicht MPEG-TS).
-    Copy ist instant, AAC nicht – ohne ``-readrate`` und große Mux-Queue
-    spült der Muxer Video ohne Ton (Desync/Lücken). Video-PTS per ``setts``
-    auf 0, analog zum AAC-``asetpts``.
+    Jellyfin (DynamicHlsController / EncodingHelper):
+      ``-copyts -avoid_negative_ts disabled -start_at_zero``
+      ``-hls_playlist_type event -hls_list_size 0`` (wachsende Playlist,
+      keine ``delete_segments``)
+      ``-hls_segment_options movflags=+frag_discont+skip_sidx``
+      (AAC-Encoder-Delay in TFDT; kein SIDX-Rewrite an Open-GOP)
+      Video-Copy: ``-tag:v hvc1``, Seek ``-ss`` vor ``-i``, bei fMP4
+      ``-noaccurate_seek`` damit Ton denselben Keyframe trifft.
+      Remux-Seek +0,5 s, damit ffmpeg den Keyframe am Ziel trifft, nicht
+      den davor.
+
+    Lookahead drosselt FFmpeg clientseitig (SIGSTOP), nicht per Sliding Window.
     """
+    _ = lookahead_sec  # Drossel läuft in player.js, nicht über delete_segments
     playlist = out_dir / "index.m3u8"
     src = ff.normalize_video_codec(source_codec) or (codec or "").lower()
     will_xcode_a = (
@@ -1021,6 +1036,8 @@ def _build_hls_cmd(
         and not bool(audio_copy)
         and not _audio_hls_copy_ok(audio_codec)
     )
+    # Remux: längere Segmente an GOP-Grenzen; Transcode: kürzer für Latenz
+    hls_time = 6 if video_copy else 3
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin",
         "-loglevel", _PLAYER_FF_LOGLEVEL or "warning",
@@ -1040,73 +1057,64 @@ def _build_hls_cmd(
             is_hdr=bool(is_hdr),
         )
         cmd += pre
-    else:
-        # Copy rast sonst in Echtzeit-Minuten voraus; AAC und hls.js kommen
-        # nicht hinterher, delete_segments löscht den Anfang.
-        cmd += ["-readrate", "1.5" if will_xcode_a else "3"]
 
     if start_sec and start_sec > 0:
-        cmd += ["-ss", f"{float(start_sec):.3f}"]
-        # Video-Copy sucht den vorherigen Keyframe; Standard ``accurate_seek``
-        # dekodiert den Ton aber bis zur exakten -ss-Zeit. Beide Streams werden
-        # danach auf PTS 0 gesetzt → Ton eilt dem Bild voraus.
+        ss = float(start_sec)
         if video_copy:
-            cmd += ["-noaccurate_seek", "-seek_timestamp", "1"]
+            # Jellyfin GetFastSeek: +0,5 s, sonst landet Copy auf dem
+            # *vorherigen* Keyframe, wenn die Zielzeit selbst ein Keyframe ist.
+            ss += 0.5
+        cmd += ["-ss", f"{ss:.3f}"]
+        # Copy kann nicht framegenau; ohne noaccurate_seek trimmt AAC auf
+        # die exakte -ss-Zeit, Video startet am Keyframe (Desync).
+        if video_copy:
+            cmd += ["-noaccurate_seek"]
     cmd += ["-i", str(path)]
+    cmd += ["-map_metadata", "-1", "-map_chapters", "-1"]
 
     if video_copy:
         cmd += ["-map", "0:v:0?", "-c:v", "copy"]
-        # Browser/hls.js erwarten hvc1/av01 in fMP4, nicht „hevc“/Annex-B-TS
+        # Browser/hls.js erwarten hvc1/av01 in fMP4, nicht hev1/Annex-B
         if src == "hevc":
             cmd += ["-tag:v", "hvc1"]
         elif src == "av1":
             cmd += ["-tag:v", "av01"]
-        # Gemeinsame Timeline mit AAC (DTS-Offset bleibt erhalten)
-        cmd += ["-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"]
+        cmd += ["-start_at_zero"]
     else:
         cmd += vmap
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
+        # Keyframes an Segmentgrenzen (Jellyfin GetHlsVideoKeyFrameArguments)
+        gop = max(24, int(hls_time * 24))
+        cmd += ["-g", str(gop), "-keyint_min", str(gop)]
+        if encoder in ("libx264", "libx265"):
+            cmd += ["-force_key_frames", f"expr:gte(t,n_forced*{hls_time})"]
+        if encoder == "libx264":
+            cmd += ["-sc_threshold", "0"]
+        cmd += ["-start_at_zero"]
 
     cmd += _audio_args(
         audio_index, audio_codec,
         force_copy=bool(audio_copy),
         with_video_reencode=not bool(video_copy),
+        start_sec=float(start_sec or 0),
     )
 
-    if video_copy and will_xcode_a:
-        cmd += [
-            "-max_muxing_queue_size", "8192",
-            "-max_interleave_delta", "30000000",
-        ]
-
-    la = _normalize_lookahead(lookahead_sec)
-    hls_time = 2
-    if la > 0:
-        # Mehr Segmente behalten, damit delete_segments nicht den Start frisst
-        extra = 10 if video_copy else 4
-        list_size = max(8, int(math.ceil(la / hls_time)) + extra)
-    else:
-        list_size = 30
-    # Copy: keine independent_segments (Schnitt fällt nicht immer auf IDR)
-    hls_flags = (
-        "omit_endlist+delete_segments+temp_file"
-        if video_copy else
-        "independent_segments+omit_endlist+delete_segments+temp_file"
-    )
-
+    queue = "8192" if (video_copy and will_xcode_a) else "2048"
     cmd += [
         "-sn", "-dn",
-        "-avoid_negative_ts", "make_zero",
-        "-start_at_zero",
-        "-muxdelay", "0",
-        "-muxpreload", "0",
+        "-copyts",
+        "-avoid_negative_ts", "disabled",
+        "-max_muxing_queue_size", queue,
         "-f", "hls",
+        "-max_delay", "5000000",
         "-hls_time", str(hls_time),
-        "-hls_list_size", str(list_size),
-        "-hls_flags", hls_flags,
+        "-hls_playlist_type", "event",
+        "-hls_list_size", "0",
+        "-hls_flags", "temp_file",
         "-hls_segment_type", "fmp4",
         "-hls_fmp4_init_filename", "init.mp4",
+        "-hls_segment_options", "movflags=+frag_discont+skip_sidx",
         "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
         str(playlist),
     ]

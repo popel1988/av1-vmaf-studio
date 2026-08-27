@@ -666,8 +666,8 @@
     if (!v) return;
     destroyPlayback();
     fp.mode = "hls";
-    // Datei als wachsendes HLS, nicht als Live-Kante: bei Segment 0 starten
-    // und nicht nach vorn springen, wenn FFmpeg vorausliegt.
+    // EVENT-Playlist (Jellyfin): wächst vom Seek-Punkt, kein Sliding-Window.
+    // Bei Segment 0 starten – nicht an die Live-Kante springen.
     const la = fp.lookahead > 0 ? fp.lookahead : 60;
     const buf = Math.max(12, Math.min(120, la + 8));
     if (window.Hls && window.Hls.isSupported()) {
@@ -676,13 +676,13 @@
         lowLatencyMode: false,
         maxBufferLength: buf,
         maxMaxBufferLength: buf + 30,
-        backBufferLength: 60,
-        maxBufferHole: 0.8,
+        backBufferLength: Infinity,
+        maxBufferHole: 0.5,
         startPosition: 0,
         liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 10000,
+        liveMaxLatencyDurationCount: Infinity,
         maxLiveSyncPlaybackRate: 1,
-        liveDurationInfinity: true,
+        liveDurationInfinity: false,
       });
       fp.hls.loadSource(url);
       fp.hls.attachMedia(v);

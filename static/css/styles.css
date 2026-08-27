@@ -317,16 +317,20 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 
 /* Vollwertiger Media-Player (HLS / Direct-Play) */
 .fp-layout {
+  --fp-video-w: min(100%, calc(min(70vh, 720px) * 16 / 9));
   display: grid;
   grid-template-columns: 1fr;
   gap: 14px;
   align-items: start;
+  justify-content: start;
 }
 @media (min-width: 960px) {
   .fp-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+    /* Erste Spalte = Videobreite, Side-Panel direkt daneben (keine Lücke) */
+    grid-template-columns: var(--fp-video-w) minmax(230px, 280px);
   }
 }
+.fp-main { min-width: 0; }
 .fp-side {
   display: flex;
   flex-direction: column;
@@ -421,7 +425,7 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   aspect-ratio: 16 / 9;
 }
 .fp-playback {
-  width: min(100%, calc(min(70vh, 720px) * 16 / 9));
+  width: var(--fp-video-w);
   max-width: 100%;
 }
 .fp-stage:fullscreen,
