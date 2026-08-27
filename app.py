@@ -776,6 +776,7 @@ class EditorEnqueueRequest(BaseModel):
     audio_bitrate: int = 192
     burn_subs: bool = False
     sub_index: int = -1
+    crossfade: float = 0.0
     out_mode: str = "default"
     out_subdir: str = ""
     post_processing: str = "keep"
@@ -872,6 +873,38 @@ async def editor_probe(path: str):
     return data
 
 
+@app.get("/api/editor/keyframes")
+async def editor_keyframes(path: str, t: float = -1):
+    """Keyframe-Liste oder nächsten Keyframe zur Zeit ``t``."""
+    from core import editor
+    if t >= 0:
+        return await asyncio.to_thread(editor.nearest_keyframe, path, t)
+    times, err = await asyncio.to_thread(editor.list_keyframes, path)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    return {"times": times}
+
+
+@app.get("/api/editor/preview-assets")
+async def editor_preview_assets(path: str):
+    """Filmstrip + Waveform (on-demand, gecacht)."""
+    from core import editor
+    data = await asyncio.to_thread(editor.ensure_preview_assets, path)
+    if data.get("error"):
+        return JSONResponse(data, status_code=404)
+    return data
+
+
+@app.get("/api/editor/asset/{key}/{name}")
+async def editor_asset(key: str, name: str):
+    from core import editor
+    target = editor.resolve_asset(key, name)
+    if target is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    media = "image/jpeg" if name.endswith(".jpg") else "image/png"
+    return FileResponse(target, media_type=media)
+
+
 @app.post("/api/editor/check")
 async def editor_check(req: EditorCheckRequest):
     """Kompatibilität der Segmente für Remux-Export prüfen."""
@@ -881,6 +914,7 @@ async def editor_check(req: EditorCheckRequest):
         return JSONResponse({"error": err}, status_code=400)
     compat = editor.check_remux_compat(segs)
     compat["duration"] = editor.total_duration(segs)
+    compat["needs_encode"] = editor.any_needs_encode(segs)
     compat["chapters"] = editor.chapters_from_segments(segs)
     return compat
 
@@ -898,12 +932,18 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     if mode not in ("remux", "encode"):
         mode = "remux"
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
-    first = segs[0]["abs"]
+    first_abs = next((s["abs"] for s in segs if s.get("abs")), None)
+    if first_abs is None:
+        return JSONResponse(
+            {"error": "Mindestens eine Videodatei auf der Timeline nötig."},
+            status_code=400,
+        )
+    first = first_abs
     # Persistierte Segmente ohne abs-Pfad (Queue-JSON).
-    clean_segs = [{
-        "path": s["path"], "start": s["start"], "end": s["end"],
-        "title": s["title"], "audio_index": s["audio_index"], "mute": s["mute"],
-    } for s in segs]
+    clean_segs = [editor.segment_to_spec(s) for s in segs]
+    xf = float(req.crossfade or 0)
+    if editor.any_needs_encode(segs, xf):
+        mode = "encode"
     d = {
         "video_mode": "editor",
         "vmaf_check": False,
@@ -932,6 +972,7 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "audio_bitrate": int(req.audio_bitrate or 192),
             "burn_subs": bool(req.burn_subs),
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
+            "crossfade": float(req.crossfade or 0),
         },
         "out_mode": req.out_mode,
         "out_subdir": req.out_subdir,
@@ -944,7 +985,7 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     queue._persist()
     return {
         "added": 1, "id": item.id,
-        "duration": editor.total_duration(segs),
+        "duration": editor.total_duration(segs, float(req.crossfade or 0)),
         "mode": mode,
     }
 

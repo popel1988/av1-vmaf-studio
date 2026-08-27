@@ -1709,15 +1709,14 @@
             <span class="badge" id="ed-badge">Keine Clips</span>
           </div>
           <div class="card-body">
-            <p class="hint">Mehrere Bereiche einer Quelle <strong>behalten</strong> oder gezielt
-              <strong>entfernen</strong> (auch mitten im Film). Quellen aus der Bibliothek oder
-              per Upload in den Standard-Upload-Ordner <em>oder</em> einen Medienordner.</p>
+            <p class="hint">Bereiche behalten oder entfernen, mehrere Quellen auf eine Timeline,
+              Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux oder Encode.</p>
 
-            <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-              <div class="field" style="flex:2;min-width:220px">
+            <div class="field-row field-row-inline" style="margin-bottom:12px">
+              <div class="field fp-grow">
                 <label>Quelle</label>
-                <div class="field-row">
-                  <input type="text" id="ed-path" placeholder="Medienpfad oder Upload" style="flex:1" readonly />
+                <div class="field-row field-row-inline fp-file-pick">
+                  <input type="text" id="ed-path" placeholder="Medienpfad oder Upload" readonly />
                   <button class="btn btn-ghost btn-sm" id="ed-browse" type="button">Bibliothek …</button>
                   <label class="btn btn-ghost btn-sm" style="margin:0;cursor:pointer">
                     Upload
@@ -1725,10 +1724,10 @@
                   </label>
                 </div>
               </div>
-              <div class="field" style="min-width:220px;flex:1">
+              <div class="field">
                 <label>Upload-Zielordner</label>
-                <div class="field-row">
-                  <select id="ed-upload-dest" style="flex:1">
+                <div class="field-row field-row-inline fp-file-pick">
+                  <select id="ed-upload-dest">
                     <option value="upload">Standard-Upload (/data/uploads)</option>
                   </select>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-upload-dest-browse" title="Medienordner wählen">…</button>
@@ -1744,59 +1743,92 @@
                 </div>
                 <div class="ed-src-ruler" id="ed-src-ruler" title="Quellen-Timeline – Klick = Seek">
                   <div class="ed-src-ruler-bg"></div>
+                  <div class="ed-src-strip" id="ed-src-strip"></div>
                   <div class="ed-src-keeps" id="ed-src-keeps"></div>
+                  <div class="ed-src-chaps" id="ed-src-chaps"></div>
                   <div class="ed-src-sel" id="ed-src-sel"></div>
                   <div class="ed-src-playhead" id="ed-src-playhead"></div>
                 </div>
+                <div class="ed-wave" id="ed-wave" hidden></div>
                 <div class="ed-transport">
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause (K)">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-back" title="Ein Frame zurück (←)">‹</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-fwd" title="Ein Frame vor (→)">›</button>
                   <input type="range" id="ed-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt setzen">In</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt setzen">Out</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt (I)">In</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt (O)">Out</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-split" title="Am Playhead teilen (S)">Teilen</button>
                 </div>
-                <div class="field-row" style="margin-top:8px;flex-wrap:wrap;gap:8px;align-items:flex-end">
-                  <div class="field" style="min-width:100px">
+                <div class="field-row field-row-inline" style="margin-top:8px">
+                  <div class="field">
                     <label>In (s)</label>
                     <input type="number" id="ed-in" min="0" step="0.01" value="0" />
                   </div>
-                  <div class="field" style="min-width:100px">
+                  <div class="field">
                     <label>Out (s)</label>
                     <input type="number" id="ed-out" min="0" step="0.01" value="0" />
                   </div>
-                  <div class="field" style="min-width:140px;flex:1">
+                  <div class="field">
                     <label>Tonspur</label>
                     <select id="ed-audio"><option value="0">#0</option></select>
                   </div>
-                  <label class="check" style="margin:0 0 2px">
+                  <div class="field">
+                    <label>Untertitel</label>
+                    <select id="ed-sub"><option value="-1">Keine</option></select>
+                  </div>
+                  <label class="check fp-tracks-check">
                     <input type="checkbox" id="ed-mute" />
                     <span>Stumm</span>
                   </label>
+                  <label class="check fp-tracks-check">
+                    <input type="checkbox" id="ed-burn" />
+                    <span data-tip="PGS/DVD ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
+                  </label>
                 </div>
-                <div class="ed-cut-actions field-row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+                <div class="field-row field-row-inline" style="margin-top:8px">
+                  <label class="check"><input type="checkbox" id="ed-snap-ch" checked /><span>An Kapitel einrasten</span></label>
+                  <label class="check"><input type="checkbox" id="ed-snap-kf" /><span>An Keyframes einrasten</span></label>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-undo" title="Rückgängig (Strg+Z)">↩</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-redo" title="Wiederholen (Strg+Y)">↪</button>
+                </div>
+                <div class="ed-cut-actions field-row field-row-inline" style="margin-top:10px">
                   <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range" title="Markierten Bereich als Clip behalten (mehrfach möglich)">Bereich behalten</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range" title="Markierten Bereich entfernen – Rest der Quelle bleibt (mehrere Löcher möglich)">Bereich entfernen</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all" title="Gesamte Quelle als einen Clip">Ganze Datei</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source" title="Weitere Datei laden und als Clip anhängen">+ Quelle</button>
+                </div>
+                <div class="ed-cut-actions field-row field-row-inline" style="margin-top:8px">
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-black">Schwarz 3 s</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-set-intro" title="Aktuelle Quelle als Intro merken">Intro merken</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-intro">Intro einfügen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-set-outro" title="Aktuelle Quelle als Outro merken">Outro merken</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-ins-outro">Outro einfügen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-save-proj">Projekt speichern</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-load-proj">Projekt laden</button>
+                  <input type="file" id="ed-proj-file" accept="application/json,.json" hidden />
                 </div>
                 <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:8px"></p>
                 <p class="hint" style="margin-top:6px;font-size:12px">
-                  <strong>Bereich behalten</strong> = Ausschnitt hinzufügen (beliebig oft).
-                  <strong>Bereich entfernen</strong> = Markierung rausschneiden; der Rest wird
-                  automatisch in Clips aufgeteilt – auch mehrfach mitten im Film.
+                  <strong>I/O</strong> In/Out · <strong>J/K/L</strong> −5s / Pause / Play ·
+                  <strong>Pfeile</strong> Frame · <strong>S</strong> Teilen · <strong>Strg+Z</strong> Undo.
+                  Mehrere Dateien: Quelle laden, dann behalten/anhängen.
                 </p>
               </div>
 
               <div class="ed-side">
                 <div class="ed-side-head">
                   <strong>Timeline-Clips</strong>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Leeren</button>
+                  <span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Leeren</button>
+                  </span>
                 </div>
                 <ul class="ed-seg-list" id="ed-seg-list"></ul>
                 <div class="ed-timeline" id="ed-timeline" title="Gesamt-Timeline">
                   <div class="ed-timeline-track" id="ed-timeline-track"></div>
                 </div>
                 <p class="muted" id="ed-total" style="font-size:12px;margin-top:6px">0 Clips · 0:00</p>
-                <div class="field-row" style="margin-top:8px">
+                <div class="field-row field-row-inline" style="margin-top:8px">
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled>Vorschau Timeline</button>
                 </div>
               </div>
@@ -1804,22 +1836,22 @@
 
             <div class="divider" style="margin:16px 0"></div>
 
-            <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;gap:10px">
-              <div class="field" style="min-width:140px">
+            <div class="field-row field-row-inline">
+              <div class="field">
                 <label>Export-Modus</label>
                 <select id="ed-mode">
                   <option value="remux">Remux (Copy, Keyframe)</option>
                   <option value="encode">Encode (framegenau)</option>
                 </select>
               </div>
-              <div class="field" style="min-width:120px">
+              <div class="field">
                 <label>Container</label>
                 <select id="ed-container">
                   <option value="mkv">MKV</option>
                   <option value="mp4">MP4</option>
                 </select>
               </div>
-              <div class="field" style="min-width:120px">
+              <div class="field">
                 <label>Suffix</label>
                 <input type="text" id="ed-suffix" value="_edit" />
               </div>
@@ -1835,11 +1867,16 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-out-browse">Durchsuchen</button>
                 </div>
               </div>
+              <div class="field">
+                <label>Überblenden (s)</label>
+                <input type="number" id="ed-crossfade" value="0" min="0" max="5" step="0.1"
+                       title="0 = harter Schnitt. >0 erzwingt Encode." />
+              </div>
             </div>
 
             <div id="ed-encode-opts" style="display:none;margin-top:10px">
-              <div class="field-row" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
-                <div class="field" style="min-width:140px">
+              <div class="field-row field-row-inline">
+                <div class="field">
                   <label>Plattform</label>
                   <select id="ed-platform">
                     {% for p in platform_options %}
@@ -1847,7 +1884,7 @@
                     {% endfor %}
                   </select>
                 </div>
-                <div class="field" style="min-width:120px">
+                <div class="field">
                   <label>Codec</label>
                   <select id="ed-codec">
                     <option value="av1">AV1</option>
@@ -1855,11 +1892,11 @@
                     <option value="h264">H.264</option>
                   </select>
                 </div>
-                <div class="field" style="min-width:100px">
+                <div class="field">
                   <label>CQ / QP</label>
                   <input type="number" id="ed-cq" value="30" min="0" max="63" step="1" />
                 </div>
-                <div class="field" style="min-width:120px">
+                <div class="field">
                   <label>Audio</label>
                   <select id="ed-acodec">
                     <option value="aac">AAC</option>
@@ -1867,14 +1904,14 @@
                     <option value="ac3">AC-3</option>
                   </select>
                 </div>
-                <div class="field" style="min-width:100px">
+                <div class="field">
                   <label>Audio kbit/s</label>
                   <input type="number" id="ed-abr" value="192" min="64" max="1536" step="32" />
                 </div>
               </div>
             </div>
 
-            <div class="field-row" style="margin-top:12px;flex-wrap:wrap;gap:12px;align-items:center">
+            <div class="field-row field-row-inline" style="margin-top:12px">
               <label class="check"><input type="checkbox" id="ed-chapters" checked /><span>Kapitel aus Clips</span></label>
               <label class="check" id="ed-force-wrap" style="display:none">
                 <input type="checkbox" id="ed-force" /><span>Remux trotz Warnung erzwingen</span>
@@ -1895,40 +1932,40 @@
           </div>
           <div class="card-body">
             <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.</p>
-            <div class="field-row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
-              <div class="field" style="flex:2;min-width:220px">
+            <div class="field-row field-row-inline fp-file-row" style="margin-bottom:10px">
+              <div class="field fp-grow">
                 <label>Datei</label>
-                <div class="field-row">
-                  <input type="text" id="fp-path" placeholder="Medienpfad, z. B. Filme/film.mkv" style="flex:1" />
+                <div class="field-row field-row-inline fp-file-pick">
+                  <input type="text" id="fp-path" placeholder="Medienpfad, z. B. Filme/film.mkv" />
                   <button class="btn btn-ghost btn-sm" id="fp-browse" type="button">Durchsuchen …</button>
                   <button class="btn btn-primary btn-sm" id="fp-load" type="button">Laden</button>
                   <button class="btn btn-ghost btn-sm" id="fp-unload" type="button" title="Video und Session entladen">Entladen</button>
                 </div>
               </div>
             </div>
-            <div class="field-row fp-encode-opts" style="align-items:flex-end;margin-bottom:8px;flex-wrap:wrap;gap:10px">
-              <div class="field" style="min-width:150px;flex:1">
+            <div class="field-row field-row-inline fp-encode-opts" style="margin-bottom:8px">
+              <div class="field">
                 <label data-tip="Automatisch: Direct-Play wenn möglich, sonst Video-Copy (Ton ggf. AAC), sonst Transcode. Die anderen Einträge erzwingen den Pfad.">Modus</label>
                 <select id="fp-profile"></select>
               </div>
-              <div class="field" style="min-width:140px;flex:1">
+              <div class="field">
                 <label data-tip="Nur relevant beim Transcode. Automatisch wählt die beste verfügbare GPU laut Diagnose.">Hardware</label>
                 <select id="fp-platform"></select>
               </div>
-              <div class="field" style="min-width:140px;flex:1">
+              <div class="field">
                 <label data-tip="Zielcodec nur beim Transcode. HEVC/AV1 nur, wenn der Browser sie kann – sonst Fallback H.264.">Zielcodec</label>
                 <select id="fp-codec"></select>
               </div>
-              <div class="field" id="fp-height-wrap" style="display:none;min-width:100px">
+              <div class="field" id="fp-height-wrap" style="display:none">
                 <label>Höhe (px)</label>
-                <input type="number" id="fp-height" value="720" min="144" max="2160" step="2" style="width:90px" />
+                <input type="number" id="fp-height" value="720" min="144" max="2160" step="2" />
               </div>
-              <div class="field" id="fp-vbr-wrap" style="display:none;min-width:120px">
+              <div class="field" id="fp-vbr-wrap" style="display:none">
                 <label>Bitrate (kbit/s)</label>
-                <input type="number" id="fp-vbr" value="3500" min="300" max="50000" step="100" style="width:110px"
+                <input type="number" id="fp-vbr" value="3500" min="300" max="50000" step="100"
                        title="Videobitrate für den Live-Transcode" />
               </div>
-              <div class="field" style="min-width:150px">
+              <div class="field">
                 <label data-tip="Wie weit FFmpeg vor der Abspielposition arbeiten darf. Ist der Puffer voll, wird der Prozess pausiert (kein Neustart).">Encode-Vorlauf</label>
                 <select id="fp-lookahead" title="Zielpuffer voraus; Encode wird gedrosselt, nicht neu gestartet">
                   <option value="15">15 s</option>
@@ -1938,12 +1975,11 @@
                   <option value="0">Unbegrenzt</option>
                 </select>
               </div>
-              <div class="field" style="min-width:auto">
-                <label>&nbsp;</label>
+              <div class="field fp-apply-wrap">
                 <button type="button" class="btn btn-primary btn-sm" id="fp-apply" disabled title="Einstellungen übernehmen und Session neu starten">Übernehmen</button>
               </div>
             </div>
-            <p class="muted" id="fp-hw-info" style="font-size:12px;margin:0 0 10px"></p>
+            <p class="muted" id="fp-hw-info"></p>
             <div class="fp-layout">
               <div class="fp-main">
                 <div class="fp-playback">
@@ -1961,21 +1997,21 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="fp-fs" title="Vollbild (Esc zum Beenden)">⛶</button>
                 </div>
                 </div>
-                <div class="field-row fp-tracks" style="margin-top:12px;align-items:flex-end;flex-wrap:wrap">
-                  <div class="field" style="flex:1;min-width:140px">
+                <div class="field-row field-row-inline fp-tracks">
+                  <div class="field">
                     <label>Tonspur</label>
                     <select id="fp-audio"><option value="-1">—</option></select>
-                    <p class="muted" id="fp-audio-mode" style="font-size:11.5px;margin:4px 0 0">—</p>
-                    <label class="check" style="margin:6px 0 0" title="Ton nicht nach AAC umcodieren – Originalspur kopieren">
+                    <p class="muted" id="fp-audio-mode">—</p>
+                    <label class="check" title="Ton nicht nach AAC umcodieren – Originalspur kopieren">
                       <input type="checkbox" id="fp-audio-copy" />
                       <span data-tip="Kopiert den Originalton in HLS. DTS/TrueHD/Atmos spielen im Browser dann oft nicht – Spur kann stumm bleiben.">Ton nicht umcodieren</span>
                     </label>
                   </div>
-                  <div class="field" style="flex:1;min-width:140px">
+                  <div class="field">
                     <label>Untertitel</label>
                     <select id="fp-sub"><option value="-1">Keine</option></select>
                   </div>
-                  <label class="check" style="margin:0 0 2px" title="PGS/DVD-Untertitel ins Bild brennen (Transcode)">
+                  <label class="check fp-tracks-check" title="PGS/DVD-Untertitel ins Bild brennen (Transcode)">
                     <input type="checkbox" id="fp-burn" />
                     <span data-tip="PGS/DVD/DVB-Untertitel sind Bilder, kein Text. Einbrennen erzwingt Video-Transcode.">Bild-UT einbrennen</span>
                   </label>
@@ -2015,7 +2051,7 @@
             <div class="ab-pickers">
               <div class="field">
                 <label>Video A</label>
-                <div class="field-row">
+                <div class="field-row field-row-inline fp-file-pick">
                   <input type="hidden" id="ab-root-a" value="media" />
                   <input type="text" id="ab-path-a" placeholder="Medienpfad, z. B. Filme/film.mkv" />
                   <button class="btn btn-ghost btn-sm" id="btn-ab-browse-a" type="button">Durchsuchen …</button>
@@ -2023,7 +2059,7 @@
               </div>
               <div class="field">
                 <label>Video B</label>
-                <div class="field-row">
+                <div class="field-row field-row-inline fp-file-pick">
                   <input type="hidden" id="ab-root-b" value="media" />
                   <input type="text" id="ab-path-b" placeholder="Medienpfad, z. B. output/Filme/film_av1.mkv" />
                   <button class="btn btn-ghost btn-sm" id="btn-ab-browse-b" type="button">Durchsuchen …</button>

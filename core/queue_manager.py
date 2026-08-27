@@ -1203,6 +1203,7 @@ class QueueManager:
                 audio_bitrate=int(spec.get("audio_bitrate", s.audio_bitrate) or 192),
                 burn_subs=bool(spec.get("burn_subs")),
                 sub_index=int(spec.get("sub_index", -1) if spec.get("sub_index") is not None else -1),
+                crossfade=float(spec.get("crossfade") or 0),
             )
             label = "Editor-Export (Re-Encode)"
         else:
@@ -1225,7 +1226,7 @@ class QueueManager:
             item.error = err
             return
         # Dauer = Summe der Segmente (für Fortschritt).
-        info.duration = editor.total_duration(segs) or getattr(info, "duration", 0.0)
+        info.duration = editor.total_duration(segs, float(spec.get("crossfade") or 0)) or getattr(info, "duration", 0.0)
         self._run_copy_job(item, info, cmd, out_path, label)
 
     def _process_split(self, item: "QueueItem", info) -> None:
