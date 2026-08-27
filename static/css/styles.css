@@ -385,7 +385,7 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .fp-plan-facts {
   display: grid;
-  grid-template-columns: 68px 1fr;
+  grid-template-columns: max-content 1fr;
   gap: 5px 10px;
   margin: 0;
   font-size: 12.5px;

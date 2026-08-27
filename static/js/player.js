@@ -31,6 +31,19 @@
   const ENCODE_PROFILES = ["original", "1080p", "720p", "480p", "custom"];
   const PRESET_BR = { original: 8000, "1080p": 6000, "720p": 3500, "480p": 1500 };
 
+  function prettyCodec(c) {
+    const x = String(c || "").toLowerCase().trim();
+    if (!x || x === "?" || x === "-") return "";
+    if (x.startsWith("h264") || x.startsWith("avc")) return "H.264";
+    if (x.startsWith("hevc") || x.startsWith("h265")) return "HEVC";
+    if (x.startsWith("av1") || x.startsWith("av01")) return "AV1";
+    if (x.startsWith("vp9")) return "VP9";
+    if (x.startsWith("vp8")) return "VP8";
+    if (x.startsWith("mpeg2") || x === "mpeg2video") return "MPEG-2";
+    if (x.startsWith("mpeg4")) return "MPEG-4";
+    return String(c).toUpperCase();
+  }
+
   function fmtClock(s) {
     s = Math.max(0, Math.floor(s || 0));
     const h = Math.floor(s / 3600);
@@ -114,8 +127,14 @@
     const browser = (plan && plan.browser) || {};
     const enc = (plan && plan.encode) || {};
 
+    const srcCodec = prettyCodec(file.video || (fp.info && fp.info.codec) || "");
+    const outCodec = prettyCodec((sess && sess.codec) || enc.codec || "");
+    let codecLabel = srcCodec;
+    if (plan && plan.need_encode && outCodec && outCodec !== srcCodec) {
+      codecLabel = srcCodec ? `${srcCodec} → ${outCodec}` : outCodec;
+    }
     const vBits = [
-      (file.video || "").toUpperCase(),
+      codecLabel,
       file.height ? `${file.height}p` : "",
       file.hdr ? "HDR" : "",
     ].filter(Boolean);
@@ -123,7 +142,7 @@
       let how = "";
       if (plan && plan.use_video_copy) how = ` · ${tt("Copy")}`;
       else if (plan && plan.need_encode) how = ` · ${tt("Encode")}`;
-      rows.push([tt("Video"), vBits.join(" ") + how]);
+      rows.push([tt("Video"), vBits.join(" · ") + how]);
     }
 
     const ac = (file.audio || "").toUpperCase();
@@ -144,12 +163,12 @@
       const plat = (sess && sess.platform) || enc.platform || "";
       const codec = (sess && sess.codec) || enc.codec || "";
       const encoder = (sess && sess.encoder) || enc.encoder || "";
-      const hw = [plat, codec && codec.toUpperCase(), encoder].filter(Boolean).join(" / ");
+      const hw = [plat, codec && prettyCodec(codec), encoder].filter(Boolean).join(" / ");
       if (hw) rows.push([tt("Hardware"), hw]);
       const res = sess && sess.height
-        ? `${sess.height}p${sess.v_bitrate ? ` @ ${sess.v_bitrate}k` : ""}`
+        ? `${sess.height}p${sess.v_bitrate ? ` · ${sess.v_bitrate} kbit/s` : ""}`
         : (plan && plan.height ? `${plan.height}p` : tt("Original"));
-      if (res) rows.push([tt("Ziel"), res]);
+      if (res) rows.push([tt("Zielauflösung"), res]);
     }
 
     const la = (sess && sess.lookahead_sec != null) ? sess.lookahead_sec : fp.lookahead;
