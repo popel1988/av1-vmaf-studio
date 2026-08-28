@@ -42,7 +42,7 @@ mode**, and language support for **DE / EN / ES / FR**:
 
 | Page | Purpose |
 |------|---------|
-| **Encoding** | Direct encoding with CQ/bitrate/ABR, size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side (settings in grouped blocks, like Super Tool). |
+| **Encoding** | Direct encoding with CQ/bitrate/ABR **or target-VMAF** (test encodes, then automatic encode), size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side. |
 | **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. Same two-column layout as Encoding. |
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
@@ -167,8 +167,11 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
 
 ## Rate control & quality
 
-- **Rate modes**: CQ/QP/CRF (quality number), fixed bitrate (CBR), or average
-  bitrate (VBR / ABR target).
+- **Rate modes**: CQ/QP/CRF (quality number), fixed bitrate (CBR), average
+  bitrate (VBR / ABR target), or **target VMAF** (test encodes, then the smallest
+  file with VMAF ≥ target is encoded automatically — same idea as Super Tool).
+  Folder batches still run the VMAF test only on the first file (representative).
+  Multi-encoder comparison stays in the **VMAF Tool**.
 - **Size target (MB)**: optional total output budget including audio — the app
   derives an ABR video bitrate before encode (distinct from the post-encode
   size cap below).

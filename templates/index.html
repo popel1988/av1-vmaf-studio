@@ -231,6 +231,7 @@
                     <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
                     <option value="bitrate">Festbitrate (CBR)</option>
                     <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                    <option value="vmaf">Ziel-VMAF (Test-Encodes, dann Encode)</option>
                   </select>
                 </div>
                 <div class="field" id="enc-cq-field">
@@ -258,8 +259,55 @@
                   <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
                 </div>
               </div>
-              <p class="hint" style="margin-top:8px">Reines Encoding ohne Test-Encodes. Für Vergleiche und automatische
-                Wertfindung das <strong>VMAF-Tool</strong> nutzen und den Gewinner übernehmen.</p>
+              <div id="enc-vmaf-config" style="display:none;margin-top:12px">
+                <div class="settings-grid">
+                  <div class="field">
+                    <label>Ziel-VMAF: <strong id="opt-vmaf-target-val">94</strong></label>
+                    <input type="range" id="opt-vmaf-target" min="80" max="99" value="94" />
+                    <p class="hint">Effizientester Testwert (kleinste Datei) mit VMAF ≥ Ziel wird automatisch encodiert.</p>
+                  </div>
+                  <div class="field">
+                    <label>Test-Steuerung</label>
+                    <select id="opt-vmaf-rate">
+                      <option value="cq">CQ / QP / CRF</option>
+                      <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                      <option value="bitrate">Festbitrate (CBR)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Stichproben (Szenen)</label>
+                    <select id="opt-vmaf-samples">
+                      <option value="1">1 – nur Mitte (schnell)</option>
+                      <option value="2">2 Szenen</option>
+                      <option value="3">3 Szenen (robuster)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Vergleichsclip-Länge: <strong id="opt-vmaf-clip-val">20</strong> Sek.</label>
+                    <input type="range" id="opt-vmaf-clip" min="5" max="120" value="20" step="5" />
+                  </div>
+                  <div class="field">
+                    <label id="opt-vmaf-label">Test-CQ-Werte</label>
+                    <div class="test-values-grid" id="opt-vmaf-grid">
+                      <input type="number" class="opt-vmaf-val" value="20" min="1" max="51" />
+                      <input type="number" class="opt-vmaf-val" value="24" min="1" max="51" />
+                      <input type="number" class="opt-vmaf-val" value="28" min="1" max="51" />
+                      <input type="number" class="opt-vmaf-val" value="32" min="1" max="51" />
+                    </div>
+                    <p class="hint" id="opt-vmaf-hint">Leere Felder werden ignoriert. Niedriger CQ = höhere Qualität/größer.</p>
+                  </div>
+                  <div class="field">
+                    <label class="check" style="min-height:0">
+                      <input type="checkbox" id="opt-vmaf-shots" />
+                      <span>Screenshots der Test-Encodes</span>
+                    </label>
+                    <p class="hint">Wie im VMAF-Tool, optional. Bei Ordnern nur die erste Datei (repräsentativ).</p>
+                  </div>
+                </div>
+              </div>
+              <p class="hint" style="margin-top:8px">Fester CQ/CBR/ABR encodiert direkt. <strong>Ziel-VMAF</strong> macht
+                Test-Encodes und encodiert danach automatisch. Encoder-Vergleiche (mehrere Codecs) bleiben im
+                <strong>VMAF-Tool</strong>.</p>
             </div>
 
             <div class="opt-section">

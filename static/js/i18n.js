@@ -588,6 +588,15 @@
     "CQ / QP / CRF (Qualitätszahl)": "CQ / QP / CRF (quality number)",
     "Festbitrate (CBR)": "Fixed bitrate (CBR)",
     "Average Bitrate (VBR-Ziel)": "Average bitrate (VBR target)",
+    "Ziel-VMAF (Test-Encodes, dann Encode)": "Target VMAF (test encodes, then encode)",
+    "Effizientester Testwert (kleinste Datei) mit VMAF ≥ Ziel wird automatisch encodiert.":
+      "The most efficient test value (smallest file) with VMAF ≥ target is encoded automatically.",
+    "Screenshots der Test-Encodes": "Screenshots of the test encodes",
+    "Wie im VMAF-Tool, optional. Bei Ordnern nur die erste Datei (repräsentativ).":
+      "Optional, as in the VMAF Tool. For folders only the first file (representative).",
+    "Fester CQ/CBR/ABR encodiert direkt.": "Fixed CQ/CBR/ABR encodes immediately.",
+    "macht Test-Encodes und encodiert danach automatisch. Encoder-Vergleiche (mehrere Codecs) bleiben im":
+      "runs test encodes and then encodes automatically. Encoder comparisons (several codecs) stay in the",
     "Qualität (CQ/QP/CRF):": "Quality (CQ/QP/CRF):",
     "10 · hohe Qualität": "10 · high quality",
     "51 · klein": "51 · small",
@@ -1523,6 +1532,13 @@
     "CQ / QP / CRF (Qualitätszahl)": "CQ / QP / CRF (valor de calidad)",
     "Festbitrate (CBR)": "Bitrate fijo (CBR)",
     "Average Bitrate (VBR-Ziel)": "Bitrate medio (objetivo VBR)",
+    "Ziel-VMAF (Test-Encodes, dann Encode)": "VMAF objetivo (codificaciones de prueba, luego encode)",
+    "Effizientester Testwert (kleinste Datei) mit VMAF ≥ Ziel wird automatisch encodiert.":
+      "Se codifica automáticamente el valor de prueba más eficiente (archivo más pequeño) con VMAF ≥ objetivo.",
+    "Screenshots der Test-Encodes": "Capturas de las codificaciones de prueba",
+    "Wie im VMAF-Tool, optional. Bei Ordnern nur die erste Datei (repräsentativ).":
+      "Opcional, como en la herramienta VMAF. En carpetas solo el primer archivo (representativo).",
+    "Fester CQ/CBR/ABR encodiert direkt.": "CQ/CBR/ABR fijo codifica de inmediato.",
     "Qualität (CQ/QP/CRF):": "Calidad (CQ/QP/CRF):",
     "10 · hohe Qualität": "10 · alta calidad",
     "51 · klein": "51 · pequeño",
@@ -2267,6 +2283,13 @@
     "CQ / QP / CRF (Qualitätszahl)": "CQ / QP / CRF (valeur de qualité)",
     "Festbitrate (CBR)": "Débit fixe (CBR)",
     "Average Bitrate (VBR-Ziel)": "Débit moyen (cible VBR)",
+    "Ziel-VMAF (Test-Encodes, dann Encode)": "VMAF cible (encodages de test, puis encodage)",
+    "Effizientester Testwert (kleinste Datei) mit VMAF ≥ Ziel wird automatisch encodiert.":
+      "La valeur de test la plus efficace (plus petit fichier) avec VMAF ≥ cible est encodée automatiquement.",
+    "Screenshots der Test-Encodes": "Captures des encodages de test",
+    "Wie im VMAF-Tool, optional. Bei Ordnern nur die erste Datei (repräsentativ).":
+      "Optionnel, comme dans l'outil VMAF. Pour les dossiers, uniquement le premier fichier (représentatif).",
+    "Fester CQ/CBR/ABR encodiert direkt.": "Un CQ/CBR/ABR fixe encode immédiatement.",
     "Qualität (CQ/QP/CRF):": "Qualité (CQ/QP/CRF) :",
     "10 · hohe Qualität": "10 · haute qualité",
     "51 · klein": "51 · petit",

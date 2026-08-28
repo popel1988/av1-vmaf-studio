@@ -918,15 +918,41 @@
     const fg = $("opt-film-grain");
     if (fg) fg.addEventListener("input", () => { $("film-grain-val").textContent = fg.value; });
 
-    // Encode-Ratemodus: CQ-Slider vs. Bitrate-Feld.
+    // Encode-Ratemodus: CQ-Slider vs. Bitrate-Feld vs. Ziel-VMAF (Test-Encodes).
     const rate = $("opt-rate-mode");
     const syncRate = () => {
+      const vmaf = rate.value === "vmaf";
       const cq = rate.value === "cq";
       $("enc-cq-field").style.display = cq ? "" : "none";
-      $("enc-br-field").style.display = cq ? "none" : "";
+      $("enc-br-field").style.display = (rate.value === "bitrate" || rate.value === "abr") ? "" : "none";
+      const vcfg = $("enc-vmaf-config");
+      if (vcfg) vcfg.style.display = vmaf ? "" : "none";
+      const chunkedLbl = $("opt-chunked") && $("opt-chunked").closest("label");
+      if (chunkedLbl) chunkedLbl.style.display = vmaf ? "none" : "";
+      if (vmaf && $("chunked-config")) $("chunked-config").style.display = "none";
     };
     rate.addEventListener("change", syncRate);
     syncRate();
+
+    const vmafTarget = $("opt-vmaf-target");
+    if (vmafTarget) {
+      vmafTarget.addEventListener("input", () => {
+        const el = $("opt-vmaf-target-val");
+        if (el) el.textContent = vmafTarget.value;
+      });
+    }
+    const vmafClip = $("opt-vmaf-clip");
+    if (vmafClip) {
+      vmafClip.addEventListener("input", () => {
+        const el = $("opt-vmaf-clip-val");
+        if (el) el.textContent = vmafClip.value;
+      });
+    }
+    const encVmafRate = $("opt-vmaf-rate");
+    if (encVmafRate) {
+      encVmafRate.addEventListener("change", () => syncEncVmafRate(true));
+      syncEncVmafRate(false);
+    }
 
     $("opt-platform").addEventListener("change", updateCodecAvailability);
     $("opt-codec").addEventListener("change", updateCodecAvailability);
@@ -1292,17 +1318,21 @@
     }
   }
 
-  // Encoding-Seite: reines Encoden mit manuellem Wert (keine Test-Encodes).
+  // Encoding-Seite: fester CQ/CBR/ABR oder Ziel-VMAF (Test-Encodes, dann auto).
   function gatherSettings() {
-    const rateMode = $("opt-rate-mode").value;
+    const uiMode = $("opt-rate-mode").value;
+    const vmaf = uiMode === "vmaf";
+    const rateMode = vmaf
+      ? ($("opt-vmaf-rate") ? $("opt-vmaf-rate").value : "cq")
+      : uiMode;
     const quality = rateMode === "cq"
       ? parseInt($("opt-quality").value, 10)
       : parseInt($("opt-bitrate").value, 10);
-    return {
+    const out = {
       platform: $("opt-platform").value,
       codec: $("opt-codec").value,
       quality: quality,
-      vmaf_check: false,
+      vmaf_check: vmaf,
       workflow: "auto",
       rate_mode: rateMode,
       suffix: "_" + $("opt-codec").value,
@@ -1311,10 +1341,50 @@
       verify_vmaf: $("opt-verify-vmaf") ? $("opt-verify-vmaf").checked : false,
       verify_min: $("opt-verify-min") ? parseFloat($("opt-verify-min").value) || 93 : 93,
       verify_retry: $("opt-verify-retry") ? $("opt-verify-retry").checked : false,
-      chunked: $("opt-chunked") ? $("opt-chunked").checked : false,
+      chunked: vmaf ? false : ($("opt-chunked") ? $("opt-chunked").checked : false),
       chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
       chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
     };
+    if (vmaf) {
+      out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
+      out.clip_seconds = $("opt-vmaf-clip") ? parseInt($("opt-vmaf-clip").value, 10) || 20 : 20;
+      out.samples = $("opt-vmaf-samples") ? parseInt($("opt-vmaf-samples").value, 10) || 1 : 1;
+      out.test_values = encTestValues();
+      out.generate_screenshots = $("opt-vmaf-shots") ? $("opt-vmaf-shots").checked : false;
+      if (rateMode !== "cq" && out.test_values[0]) out.quality = out.test_values[0];
+    }
+    return out;
+  }
+
+  function encTestValues() {
+    const vals = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")]
+      .map((i) => parseInt(i.value, 10))
+      .filter((v) => !isNaN(v) && v > 0);
+    if (vals.length) return vals;
+    const bitrate = $("opt-vmaf-rate") &&
+      ($("opt-vmaf-rate").value === "abr" || $("opt-vmaf-rate").value === "bitrate");
+    return bitrate ? [8000, 6000, 4000, 2000] : [20, 24, 28, 32];
+  }
+
+  function syncEncVmafRate(resetValues) {
+    const mode = $("opt-vmaf-rate") ? $("opt-vmaf-rate").value : "cq";
+    const bitrate = mode === "abr" || mode === "bitrate";
+    const lbl = $("opt-vmaf-label");
+    if (lbl) lbl.textContent = bitrate ? "Test-Bitraten (kbit/s)" : "Test-CQ-Werte";
+    const hint = $("opt-vmaf-hint");
+    if (hint) hint.textContent = bitrate
+      ? "Leere Felder werden ignoriert. Höhere Bitrate = höhere Qualität/größer."
+      : "Leere Felder werden ignoriert. Niedriger CQ = höhere Qualität/größer.";
+    const inputs = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")];
+    if (resetValues) {
+      const defs = bitrate ? [8000, 6000, 4000, 2000] : [20, 24, 28, 32];
+      inputs.forEach((inp, i) => { inp.value = defs[i] != null ? defs[i] : ""; });
+    }
+    inputs.forEach((inp) => {
+      inp.min = bitrate ? 500 : 1;
+      inp.max = bitrate ? 50000 : 51;
+      inp.step = bitrate ? 500 : 1;
+    });
   }
 
   async function approveEncode(itemId, resultIndex) {
@@ -3374,9 +3444,31 @@
     };
     set("opt-platform", s.platform, "change");
     set("opt-codec", s.codec, "change");
-    set("opt-rate-mode", s.rate_mode, "change");
-    if (s.rate_mode === "cq") set("opt-quality", s.quality);
-    else set("opt-bitrate", s.quality);
+    const useVmaf = !!s.vmaf_check && s.workflow !== "compare_only";
+    if (useVmaf) {
+      set("opt-rate-mode", "vmaf", "change");
+      set("opt-vmaf-rate", s.rate_mode || "cq", "change");
+      if (s.target_vmaf) set("opt-vmaf-target", s.target_vmaf);
+      if ($("opt-vmaf-target-val") && $("opt-vmaf-target")) {
+        $("opt-vmaf-target-val").textContent = $("opt-vmaf-target").value;
+      }
+      if (s.clip_seconds) set("opt-vmaf-clip", s.clip_seconds);
+      if ($("opt-vmaf-clip-val") && $("opt-vmaf-clip")) {
+        $("opt-vmaf-clip-val").textContent = $("opt-vmaf-clip").value;
+      }
+      if (s.samples) set("opt-vmaf-samples", String(s.samples));
+      if (s.generate_screenshots !== undefined) set("opt-vmaf-shots", s.generate_screenshots);
+      const grid = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")];
+      const vals = Array.isArray(s.test_values) ? s.test_values : [];
+      if (grid.length && vals.length) {
+        grid.forEach((inp, i) => { inp.value = vals[i] != null ? vals[i] : ""; });
+      }
+      syncEncVmafRate(false);
+    } else {
+      set("opt-rate-mode", s.rate_mode, "change");
+      if (s.rate_mode === "cq") set("opt-quality", s.quality);
+      else set("opt-bitrate", s.quality);
+    }
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
     if (s.dv_mode) {
