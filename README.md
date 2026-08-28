@@ -246,7 +246,7 @@ encoder speed.
 
 Under **Settings → Encoder speed** you can run an **encoder test**: download
 short free reference clips of different picture types (animation, film CGI,
-live action/VFX, motion, handheld — Blender CC-BY and Google samples, allowlisted
+live action/VFX, motion, handheld — Blender CC-BY, Intel CC-BY and Wikimedia, allowlisted
 URLs only) and/or pick up to four files from your library. The test uses the
 **native presets of the selected encoder** (SVT 0–13, x264/x265
 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow), not only the five
@@ -342,7 +342,11 @@ HDR10-compatible base is kept and the job does not fail.
 VMAF estimates perceptual similarity (roughly 0–100). **93–95** is the
 sweet-spot used here. Anime mode uses **VMAF-NEG** + 10-bit against banding.
 Recommendations also require 1% low within the gap from **Settings → VMAF
-recommendation** (default 6 points below the target mean). VMAF is not a
+recommendation** (default 6 points below the target mean). A **minimum
+savings** filter (default 0% = file must not grow) skips auto-encode when
+every matching tier would be larger — the source is kept, not treated as a
+failure. After the coarse grid, each encoder may get **one midpoint** between
+the last hit and the first miss. VMAF is not a
 guarantee — screenshots and A/B compare still help.
 
 **MKV** is recommended (all codecs and subtitle types). **MP4** converts text
@@ -459,7 +463,12 @@ One media mount is enough — sources and encodes live in the same tree:
   **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
   (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a
   **gap set under Settings → VMAF recommendation** (default 6, so target 94
-  requires 1% low ≥ 88). 0 disables the floor (mean only).
+  requires 1% low ≥ 88). 0 disables the floor (mean only). **Minimum savings**
+  (default 0%) only recommends a tier if the predicted file is at least that
+  much smaller than the source (−1 disables). If the target holds but every
+  matching tier would be too large, the source is kept and auto workflows skip
+  the encode. After the four-value grid, each encoder may test **one midpoint**
+  between the last hit and the first miss (not a full binary search).
 - **Size prediction**: `(test clip size / clip length) × total duration` including
   savings in %.
 - **Quality guardrail**: after encoding, the real VMAF of the output is measured

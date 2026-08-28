@@ -828,6 +828,17 @@ class QueueManager:
                     self._group_skip.add(item.group_id)
                 return
 
+            # Ziel gehalten, aber keine Stufe mit ausreichender Ersparnis
+            # → Quelle behalten, nicht failen. Folgedateien der Gruppe ebenfalls.
+            if analysis.keep_source and s.workflow == "auto":
+                item.status = STATUS_DONE
+                item.message = (
+                    "Quelle behalten: keine Stufe erreicht das Ziel "
+                    "mit ausreichender Ersparnis.")
+                with self._lock:
+                    self._group_skip.add(item.group_id)
+                return
+
             if s.workflow == "manual":
                 item.status = STATUS_AWAITING
                 return

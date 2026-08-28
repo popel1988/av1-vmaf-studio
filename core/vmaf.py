@@ -188,6 +188,7 @@ class VmafAnalysis:
     rate_mode: str = "cq"
     clip_seconds: int = 30
     error: str = ""            # Grund, falls keine Ergebnisse zustande kamen
+    keep_source: bool = False  # Ziel nur mit größerer Datei erreichbar
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -202,6 +203,7 @@ class VmafAnalysis:
             "rate_mode": self.rate_mode,
             "clip_seconds": self.clip_seconds,
             "error": self.error,
+            "keep_source": self.keep_source,
         }
 
 
@@ -503,17 +505,19 @@ def analyze(
 
     # --- Fortschritts-Tracking --------------------------------------------
     n_samples = len(_sample_starts(info.duration, opts.clip_seconds, opts.samples))
-    total_steps = max(1, len(enc_list) * len(values))
     # „Einheiten" = pro (Encoder,Wert,Sample): 1 Encode + 1 VMAF-Vergleich.
-    total_units = max(1, total_steps * n_samples * 2)
+    budget = {
+        "steps": max(1, len(enc_list) * len(values)),
+        "units": max(1, len(enc_list) * len(values) * n_samples * 2),
+    }
     prog = {"done": 0, "step": 0}
 
     def emit(phase: str, fps=None, sub=None) -> None:
         if not progress:
             return
-        pct = round(min(100.0, prog["done"] / total_units * 100.0), 1)
+        pct = round(min(100.0, prog["done"] / budget["units"] * 100.0), 1)
         d = {"percent": pct, "phase": phase,
-             "step": prog["step"], "steps": total_steps}
+             "step": prog["step"], "steps": budget["steps"]}
         if fps is not None:
             d["fps"] = round(fps, 1)
         if sub is not None:
@@ -521,6 +525,138 @@ def analyze(
         progress(d)
 
     last_error = ""  # letzter Test-Encode-Fehler (für Diagnose, falls 0 Ergebnisse)
+
+    def run_value(p: str, c: str, val: int) -> None:
+        """Einen Qualitäts-/Bitrate-Punkt für einen Encoder testen."""
+        nonlocal last_error
+        if any(r.platform == p and r.codec == c and int(r.value) == int(val)
+               for r in analysis.results):
+            return
+        disp = _codec_disp(p, c)
+        key = f"{p}_{c}_{val}"
+        rate_lbl = _label(opts.rate_mode, val)
+        lbl = f"{disp} · {rate_lbl}" if multi else rate_lbl
+        prog["step"] += 1
+
+        total_size = 0
+        total_dur = 0.0
+        scores: list[float] = []
+        hmeans: list[float] = []
+        p1s: list[float] = []
+        psnrs: list[float] = []
+        ssims: list[float] = []
+        shots: list[dict] = []
+        scene_scores: list[dict] = []
+
+        for si, (reference, start, clip_len) in enumerate(references):
+            if cancelled():
+                break
+            skey = f"{key}_s{si}"
+            smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
+            if status:
+                status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
+            emit("encode")
+            test_file = work / f"test_{skey}.mkv"
+            if use_bitrate:
+                cmd = build_encode_cmd(
+                    info, test_file, p, c, 28,
+                    target_height, tonemap,
+                    duration_limit=clip_len, start_at=start,
+                    rate_mode=opts.rate_mode, bitrate_kbps=val,
+                    include_progress=True, audio_mode="none",
+                    preserve_hdr=preserve_hdr, film_grain=film_grain,
+                    denoise=denoise, force_10bit=opts.anime, crop=crop,
+                    encoder_speed=encoder_speed,
+                )
+            else:
+                cmd = build_encode_cmd(
+                    info, test_file, p, c, val,
+                    target_height, tonemap,
+                    duration_limit=clip_len, start_at=start,
+                    include_progress=True, audio_mode="none",
+                    preserve_hdr=preserve_hdr, film_grain=film_grain,
+                    denoise=denoise, force_10bit=opts.anime, crop=crop,
+                    encoder_speed=encoder_speed,
+                )
+            runner = EncodeRunner(on_progress=lambda pr: emit(
+                "encode", fps=pr.fps, sub=pr.percent))
+            rc, enc_err = runner.run(cmd, clip_len)
+            prog["done"] += 1
+            if not test_file.exists() or test_file.stat().st_size == 0:
+                tail = (enc_err or "").strip().splitlines()
+                last_error = (
+                    f"Test-Encode fehlgeschlagen ({disp} @ {rate_lbl}, "
+                    f"FFmpeg Exit {rc}): {tail[-1] if tail else 'keine Ausgabe'}"
+                )
+                logger.warning("%s\nCMD: %s\nSTDERR:\n%s",
+                               last_error, " ".join(cmd), enc_err)
+                continue
+            if status:
+                status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
+            emit("vmaf")
+
+            metrics = _vmaf_metrics(test_file, reference, info, work, skey,
+                                    neg=opts.anime, dims=dims)
+            prog["done"] += 1
+            emit("vmaf")
+
+            if metrics is None:
+                continue
+            score = metrics["vmaf"]
+            scores.append(score)
+            if metrics.get("hmean"):
+                hmeans.append(metrics["hmean"])
+            if metrics.get("p1"):
+                p1s.append(metrics["p1"])
+            if metrics.get("psnr"):
+                psnrs.append(metrics["psnr"])
+            if metrics.get("ssim"):
+                ssims.append(metrics["ssim"])
+            scene_scores.append({"scene": si, "vmaf": score})
+            total_size += test_file.stat().st_size
+            total_dur += clip_len
+            if opts.generate_screenshots:
+                enc_rel = _extract_frame(
+                    test_file, f"{sess}/{key}_s{si}_enc.jpg",
+                    clip_len, info.fps, label=f"Enc {lbl} S{si}")
+                shots.append({
+                    "scene": si,
+                    "ref": ref_shots[si] if si < len(ref_shots) else "",
+                    "enc": enc_rel,
+                })
+
+        if not scores or total_dur <= 0:
+            return
+
+        avg_score = sum(scores) / len(scores)
+        predicted = int((total_size / total_dur) * info.duration)
+        savings = 0.0
+        if info.size_bytes > 0:
+            savings = (info.size_bytes - predicted) / info.size_bytes * 100.0
+
+        def _avg(xs: list[float]) -> float:
+            return sum(xs) / len(xs) if xs else 0.0
+
+        analysis.results.append(VmafResult(
+            value=val,
+            rate_mode=opts.rate_mode,
+            label=lbl,
+            codec=c,
+            platform=p,
+            vmaf=avg_score,
+            vmaf_hmean=_avg(hmeans),
+            vmaf_1pct=_avg(p1s),
+            psnr=_avg(psnrs),
+            ssim=_avg(ssims),
+            clip_size_bytes=total_size,
+            predicted_size_bytes=predicted,
+            savings_percent=savings,
+            screenshot_ref=shots[0]["ref"] if shots else "",
+            screenshot_enc=shots[0]["enc"] if shots else "",
+            screenshots=shots,
+            scene_scores=scene_scores,
+        ))
+
     try:
         # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
         sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
@@ -539,141 +675,35 @@ def analyze(
 
         base_pc = enc_list[0]
         for p, c in enc_list:
-            disp = _codec_disp(p, c)
-            # Im CQ-Modus die Werte pro Codec in einen vergleichbaren
-            # Qualitätsbereich verschieben (CQ-Skalen sind nicht identisch).
             offset = 0 if use_bitrate else _cq_offset(base_pc, (p, c))
             for base_val in values:
                 if cancelled():
                     break
                 val = base_val if use_bitrate else max(1, min(63, base_val + offset))
-                key = f"{p}_{c}_{val}"
-                rate_lbl = _label(opts.rate_mode, val)
-                lbl = f"{disp} · {rate_lbl}" if multi else rate_lbl
-                prog["step"] += 1
+                run_value(p, c, val)
+            if cancelled():
+                break
 
-                total_size = 0
-                total_dur = 0.0
-                scores: list[float] = []
-                hmeans: list[float] = []
-                p1s: list[float] = []
-                psnrs: list[float] = []
-                ssims: list[float] = []
-                shots: list[dict] = []  # je Szene ein {scene, ref, enc}
-                scene_scores: list[dict] = []  # je Szene ein {scene, vmaf}
-
-                for si, (reference, start, clip_len) in enumerate(references):
+        # Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag.
+        if not cancelled() and analysis.results:
+            extras = _midpoint_jobs(analysis, opts.target_vmaf)
+            if extras:
+                budget["steps"] += len(extras)
+                budget["units"] += len(extras) * n_samples * 2
+                if status:
+                    status("Zwischenwert zwischen Treffer und Fehlschlag …")
+                for p, c, mid in extras:
                     if cancelled():
                         break
-                    skey = f"{key}_s{si}"
-                    smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
-                    if status:
-                        status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
-                    emit("encode")
-                    test_file = work / f"test_{skey}.mkv"
-                    if use_bitrate:
-                        cmd = build_encode_cmd(
-                            info, test_file, p, c, 28,
-                            target_height, tonemap,
-                            duration_limit=clip_len, start_at=start,
-                            rate_mode=opts.rate_mode, bitrate_kbps=val,
-                            include_progress=True, audio_mode="none",
-                            preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise, force_10bit=opts.anime, crop=crop,
-                            encoder_speed=encoder_speed,
-                        )
-                    else:
-                        cmd = build_encode_cmd(
-                            info, test_file, p, c, val,
-                            target_height, tonemap,
-                            duration_limit=clip_len, start_at=start,
-                            include_progress=True, audio_mode="none",
-                            preserve_hdr=preserve_hdr, film_grain=film_grain,
-                            denoise=denoise, force_10bit=opts.anime, crop=crop,
-                            encoder_speed=encoder_speed,
-                        )
-                    # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
-                    runner = EncodeRunner(on_progress=lambda pr: emit(
-                        "encode", fps=pr.fps, sub=pr.percent))
-                    rc, enc_err = runner.run(cmd, clip_len)
-                    prog["done"] += 1
-                    if not test_file.exists() or test_file.stat().st_size == 0:
-                        # Test-Encode fehlgeschlagen – Grund merken/loggen, sonst
-                        # bliebe die Analyse ohne Ergebnis und ohne Hinweis stehen.
-                        tail = (enc_err or "").strip().splitlines()
-                        last_error = (
-                            f"Test-Encode fehlgeschlagen ({disp} @ {rate_lbl}, "
-                            f"FFmpeg Exit {rc}): {tail[-1] if tail else 'keine Ausgabe'}"
-                        )
-                        logger.warning("%s\nCMD: %s\nSTDERR:\n%s",
-                                       last_error, " ".join(cmd), enc_err)
-                        continue
-                    if status:
-                        status(f"VMAF-Vergleich {disp} @ {rate_lbl}{smp} …")
-                    emit("vmaf")
+                    run_value(p, c, mid)
 
-                    metrics = _vmaf_metrics(test_file, reference, info, work, skey,
-                                            neg=opts.anime, dims=dims)
-                    prog["done"] += 1
-                    emit("vmaf")
-
-                    if metrics is None:
-                        continue
-                    score = metrics["vmaf"]
-                    scores.append(score)
-                    if metrics.get("hmean"):
-                        hmeans.append(metrics["hmean"])
-                    if metrics.get("p1"):
-                        p1s.append(metrics["p1"])
-                    if metrics.get("psnr"):
-                        psnrs.append(metrics["psnr"])
-                    if metrics.get("ssim"):
-                        ssims.append(metrics["ssim"])
-                    scene_scores.append({"scene": si, "vmaf": score})
-                    total_size += test_file.stat().st_size
-                    total_dur += clip_len
-                    # Screenshot je Szene: Referenz (einmalig) + dieser Encode.
-                    if opts.generate_screenshots:
-                        enc_rel = _extract_frame(
-                            test_file, f"{sess}/{key}_s{si}_enc.jpg",
-                            clip_len, info.fps, label=f"Enc {lbl} S{si}")
-                        shots.append({
-                            "scene": si,
-                            "ref": ref_shots[si] if si < len(ref_shots) else "",
-                            "enc": enc_rel,
-                        })
-
-                if not scores or total_dur <= 0:
-                    continue
-
-                avg_score = sum(scores) / len(scores)
-                predicted = int((total_size / total_dur) * info.duration)
-                savings = 0.0
-                if info.size_bytes > 0:
-                    savings = (info.size_bytes - predicted) / info.size_bytes * 100.0
-
-                def _avg(xs: list[float]) -> float:
-                    return sum(xs) / len(xs) if xs else 0.0
-
-                analysis.results.append(VmafResult(
-                    value=val,
-                    rate_mode=opts.rate_mode,
-                    label=lbl,
-                    codec=c,
-                    platform=p,
-                    vmaf=avg_score,
-                    vmaf_hmean=_avg(hmeans),
-                    vmaf_1pct=_avg(p1s),
-                    psnr=_avg(psnrs),
-                    ssim=_avg(ssims),
-                    clip_size_bytes=total_size,
-                    predicted_size_bytes=predicted,
-                    savings_percent=savings,
-                    screenshot_ref=shots[0]["ref"] if shots else "",
-                    screenshot_enc=shots[0]["enc"] if shots else "",
-                    screenshots=shots,
-                    scene_scores=scene_scores,
-                ))
+        if analysis.results:
+            if use_bitrate:
+                analysis.results.sort(
+                    key=lambda r: (r.platform, r.codec, -int(r.value)))
+            else:
+                analysis.results.sort(
+                    key=lambda r: (r.platform, r.codec, int(r.value)))
 
         _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
@@ -801,6 +831,55 @@ def sessions_for_source(abs_path: str, limit: int = 20) -> list[dict]:
     return out[:limit]
 
 
+def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
+    if r.vmaf < lo:
+        return False
+    if gap > 0:
+        p1 = r.vmaf_1pct if r.vmaf_1pct else r.vmaf
+        if p1 < lo - gap:
+            return False
+    return True
+
+
+def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str, str, int]]:
+    """Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag."""
+    from . import app_settings
+    lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
+    gap = app_settings.vmaf_p1_gap()
+    bitrate = analysis.rate_mode in ("bitrate", "abr")
+    jobs: list[tuple[str, str, int]] = []
+    groups: dict[tuple[str, str], list[VmafResult]] = {}
+    for r in analysis.results:
+        groups.setdefault((r.platform, r.codec), []).append(r)
+    for (p, c), rows in groups.items():
+        if len(rows) < 2:
+            continue
+        rows = sorted(rows, key=lambda r: r.value, reverse=bitrate)
+        seen = {int(r.value) for r in rows}
+        pair = None
+        for a, b in zip(rows, rows[1:]):
+            if _result_solid(a, lo, gap) and not _result_solid(b, lo, gap):
+                pair = (int(a.value), int(b.value))
+                break
+        if not pair:
+            continue
+        v1, v2 = pair
+        if bitrate:
+            if abs(v1 - v2) < 250:
+                continue
+            mid = int(round((v1 + v2) / 2 / 100.0) * 100)
+            if mid <= 0 or mid in seen:
+                continue
+        else:
+            if abs(v1 - v2) < 2:
+                continue
+            mid = (v1 + v2) // 2
+            if mid in seen:
+                continue
+        jobs.append((p, c, mid))
+    return jobs
+
+
 def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return
@@ -810,28 +889,32 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
     from . import app_settings
     gap = app_settings.vmaf_p1_gap()
+    min_sav = app_settings.vmaf_min_savings()
 
     def _p1(r: VmafResult) -> float:
         return r.vmaf_1pct if r.vmaf_1pct else r.vmaf
 
     mean_ok = [r for r in analysis.results if r.vmaf >= lo]
-    if gap <= 0:
-        solid = mean_ok
-    else:
-        solid = [r for r in mean_ok if _p1(r) >= lo - gap]
-    if solid:
-        # Kleinste Datei unter denen, die Mittel *und* Floor halten.
+    solid = [r for r in analysis.results if _result_solid(r, lo, gap)]
+    compact = solid if min_sav is None else [
+        r for r in solid if r.savings_percent >= min_sav
+    ]
+    analysis.keep_source = False
+    if compact:
+        best = min(compact, key=lambda r: r.predicted_size_bytes)
+    elif solid:
+        # Ziel gehalten, aber jede Stufe wäre größer als die Quelle.
+        analysis.keep_source = True
         best = min(solid, key=lambda r: r.predicted_size_bytes)
     elif mean_ok:
-        # Mittel reicht, Lows brechen ein → nicht die kleinste Datei, sondern
-        # die mit dem besten 1%-Low (bei Gleichstand die kleinere).
         best = max(mean_ok, key=lambda r: (_p1(r), -r.predicted_size_bytes))
     else:
         best = max(
             analysis.results,
             key=lambda r: (quality_score(r.vmaf, r.vmaf_1pct, r.vmaf_hmean), r.vmaf),
         )
-    best.recommended = True
+    if not analysis.keep_source:
+        best.recommended = True
     analysis.recommended_value = best.value
     analysis.recommended_quality = best.value
     analysis.recommended_codec = best.codec

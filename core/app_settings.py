@@ -18,6 +18,8 @@ _DEFAULTS: dict[str, Any] = {
     "encoder_speed": "balanced",
     # 1%-Low-Abstand zum Ziel-Mittel (0 = Floor aus, nur Mittelwert).
     "vmaf_p1_gap": 6.0,
+    # Mindest-Ersparnis der Empfehlung in % (−1 = aus, 0 = Datei darf nicht wachsen).
+    "vmaf_min_savings": 0.0,
     # Benannte Unterbibliotheken: [{id, name, path}, ...]
     "libraries": [],
 }
@@ -47,6 +49,9 @@ def load() -> dict:
                             raw.get("encoder_speed"))
                     if "vmaf_p1_gap" in raw:
                         data["vmaf_p1_gap"] = _normalize_p1_gap(raw.get("vmaf_p1_gap"))
+                    if "vmaf_min_savings" in raw:
+                        data["vmaf_min_savings"] = _normalize_min_savings(
+                            raw.get("vmaf_min_savings"))
                     libs = raw.get("libraries")
                     if isinstance(libs, list):
                         data["libraries"] = _normalize_libraries(libs)
@@ -95,6 +100,9 @@ def save(updates: dict) -> dict:
             cur["encoder_speed"] = normalize_encoder_speed(updates.get("encoder_speed"))
         if "vmaf_p1_gap" in updates:
             cur["vmaf_p1_gap"] = _normalize_p1_gap(updates.get("vmaf_p1_gap"))
+        if "vmaf_min_savings" in updates:
+            cur["vmaf_min_savings"] = _normalize_min_savings(
+                updates.get("vmaf_min_savings"))
         if "libraries" in updates:
             cur["libraries"] = _normalize_libraries(list(updates.get("libraries") or []))
         return _write(cur)
@@ -118,6 +126,25 @@ def _normalize_p1_gap(value) -> float:
 
 def vmaf_p1_gap() -> float:
     return _normalize_p1_gap(load().get("vmaf_p1_gap", 6.0))
+
+
+def _normalize_min_savings(value) -> float:
+    """−1 = Filter aus; sonst 0–30 % Mindest-Ersparnis (Default 0 = nicht größer)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if v < 0:
+        return -1.0
+    return round(min(30.0, v), 1)
+
+
+def vmaf_min_savings() -> Optional[float]:
+    """None = kein Größenfilter; sonst Mindest-Ersparnis in Prozent."""
+    v = _normalize_min_savings(load().get("vmaf_min_savings", 0.0))
+    if v < 0:
+        return None
+    return v
 
 
 def default_output_rel() -> str:

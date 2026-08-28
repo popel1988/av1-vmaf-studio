@@ -1317,9 +1317,26 @@
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: SDR, HDR and Dolby Vision profiles",
     "Encoder-Speed": "Encoder speed",
     "VMAF-Empfehlung": "VMAF recommendation",
-    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
-      "Applies to VMAF Tool, target VMAF, Super Tool and the encoder test – not again in the individual tools. The “target VMAF” slider stays the mean; 1% low may be at most this many points below. 0 turns the floor off (mean only, as before).",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher). Mindest-Ersparnis: Empfehlung nur, wenn die Prognose genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).":
+      "Applies to VMAF Tool, target VMAF, Super Tool and the encoder test – not again in the individual tools. The “target VMAF” slider stays the mean; 1% low may be at most this many points below. 0 turns the floor off (mean only, as before). Minimum savings: recommend only if the estimate is smaller enough than the source (0% = file must not grow).",
     "1%-Low-Abstand:": "1% low gap:",
+    "Mindest-Ersparnis:": "Minimum savings:",
+    "−1 · aus": "−1 · off",
+    "0 · nicht größer": "0 · not larger",
+    "30 %": "30%",
+    "Ersparnis aus": "Savings off",
+    "0 %": "0%",
+    "5 %": "5%",
+    "Kein Größenfilter: Empfehlung darf auch eine größere Datei vorschlagen.":
+      "No size filter: the recommendation may also suggest a larger file.",
+    "Datei darf nicht wachsen. Ziel-VMAF und Super-Tool überspringen den Encode, wenn jede passende Stufe größer wäre.":
+      "The file must not grow. Target VMAF and Super Tool skip the encode if every matching tier would be larger.",
+    "Quelle behalten: das Ziel-VMAF wäre nur mit einer größeren Datei erreichbar. Ziel-VMAF und Super-Tool überspringen den Encode. Du kannst eine Stufe trotzdem mit „→ Encoding“ übernehmen.":
+      "Keep the source: the target VMAF would only be reachable with a larger file. Target VMAF and Super Tool skip the encode. You can still apply a tier with “→ Encoding”.",
+    "Quelle behalten: keine Stufe erreicht das Ziel mit ausreichender Ersparnis.":
+      "Keep the source: no tier hits the target with enough savings.",
+    "Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.":
+      "Minimum savings (default 0%): a tier is only recommended if the estimated file is at least that much smaller than the source. −1 turns the filter off. If target VMAF holds but every matching tier would be too large, the source is kept – target VMAF and Super Tool then do not encode (not an error). You can still pick a tier manually. After the coarse grid (typically four values), each encoder gets one extra test at the midpoint between last hit and first miss when the gap is large enough – not a full binary search.",
     "0 · nur Mittel": "0 · mean only",
     "6 · empfohlen": "6 · recommended",
     "12 · locker": "12 · loose",
@@ -1349,17 +1366,17 @@
       "Settings → Encoder speed includes an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "How do I find a matching encoder speed tier?",
-    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
-      "The encoder test under Settings downloads short reference clips (fixed, free sources: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – and Google ExoPlayer samples). You can add up to four files from your library if your sources look different from the demos.",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus Intel- und Wikimedia-Clips für Bewegung und Handkamera). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "The encoder test under Settings downloads short reference clips (fixed, free sources: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus Intel and Wikimedia clips for motion and handheld). You can add up to four files from your library if your sources look different from the demos.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Each clip × speed tier runs a mini VMAF like the VMAF Tool (one excerpt, no screenshots). You choose CQ or ABR/CBR and up to four values. The table shows VMAF, 1% low, clip size and time. The recommendation steps to the next-slower tier only when the VMAF gain is clear and time does not explode (rule of thumb: at least +0.5 VMAF and a time factor under about 3.5 – or a gain over +1.2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "It is a compromise hint for this exact encoder (platform × codec), not for every machine. “Very slow” is unchecked on purpose – CPU AV1 in particular can take a long time. Downloads use the allowlist only, not an arbitrary URL.",
     "Encoder-Test (VMAF)": "Encoder test (VMAF)",
-    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
-      "Finds a matching speed tier: short clips of different picture types (animation, film CGI, live action, lots of motion, handheld) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources (Blender CC-BY, Google samples).",
-    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
-      "Each clip × speed tier runs a VMAF like the VMAF Tool (default: 3 scenes, 1–5 selectable, no screenshots). Short demo clips are split into shorter excerpts instead of collapsing to the middle. You choose CQ or ABR/CBR and up to four values. The table shows mean VMAF, 1% low, clip size and time.",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
+      "Finds a matching speed tier: short clips of different picture types (animation, film CGI, live action, lots of motion, handheld) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources (Blender CC-BY, Intel CC-BY, Wikimedia).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit.":
+      "Each clip × speed tier runs a VMAF like the VMAF Tool (default: 3 scenes, 1–5 selectable, no screenshots). Short demo clips are split into shorter excerpts instead of collapsing to the middle. You choose CQ or ABR/CBR and up to four values. The table shows mean VMAF, 1% low, clip size, expected savings (estimate vs. source) and time.",
     "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
       "The recommendation does not use the mean alone: score = 55% mean + 35% 1% low + 10% harmonic mean. A mean of 95 with 1% low 79 would look like 95 – it does not; the worst frames (action, dark, banding) count extra. The next-slower tier is chosen when the score clearly rises and time does not explode – or when 1% low was too low and lifts noticeably. Native presets of the selected encoder (e.g. SVT 0–13, NVENC p1–p7), not just five aliases.",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
@@ -1385,6 +1402,7 @@
     "Anime-Modus (VMAF-NEG, 10-bit)": "Anime mode (VMAF-NEG, 10-bit)",
     "Test starten": "Start test",
     "Empfehlung übernehmen und speichern": "Apply recommendation and save",
+    "Ergebnisse leeren": "Clear results",
     "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
       "No own files. Optionally up to 4 videos from the library – useful if your sources look different from the demo clips.",
     "Mindestens einen Clip und eine Speed-Stufe wählen.": "Choose at least one clip and one speed tier.",
@@ -2275,9 +2293,26 @@
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: perfiles SDR, HDR y Dolby Vision",
     "Encoder-Speed": "Velocidad del encoder",
     "VMAF-Empfehlung": "Recomendación VMAF",
-    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
-      "Vale para la herramienta VMAF, VMAF objetivo, Super Tool y la prueba de encoder – no otra vez en cada herramienta. El control «VMAF objetivo» sigue siendo la media; el 1 % low puede quedar como máximo tantos puntos por debajo. 0 desactiva el suelo (solo media, como antes).",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher). Mindest-Ersparnis: Empfehlung nur, wenn die Prognose genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).":
+      "Vale para la herramienta VMAF, VMAF objetivo, Super Tool y la prueba de encoder – no otra vez en cada herramienta. El control «VMAF objetivo» sigue siendo la media; el 1 % low puede quedar como máximo tantos puntos por debajo. 0 desactiva el suelo (solo media, como antes). Ahorro mínimo: solo recomendar si la estimación es suficientemente más pequeña que la fuente (0 % = el archivo no puede crecer).",
     "1%-Low-Abstand:": "Margen 1 % low:",
+    "Mindest-Ersparnis:": "Ahorro mínimo:",
+    "−1 · aus": "−1 · off",
+    "0 · nicht größer": "0 · no más grande",
+    "30 %": "30 %",
+    "Ersparnis aus": "Ahorro off",
+    "0 %": "0 %",
+    "5 %": "5 %",
+    "Kein Größenfilter: Empfehlung darf auch eine größere Datei vorschlagen.":
+      "Sin filtro de tamaño: la recomendación también puede proponer un archivo más grande.",
+    "Datei darf nicht wachsen. Ziel-VMAF und Super-Tool überspringen den Encode, wenn jede passende Stufe größer wäre.":
+      "El archivo no puede crecer. VMAF objetivo y Super Tool omiten el encode si cada nivel válido sería más grande.",
+    "Quelle behalten: das Ziel-VMAF wäre nur mit einer größeren Datei erreichbar. Ziel-VMAF und Super-Tool überspringen den Encode. Du kannst eine Stufe trotzdem mit „→ Encoding“ übernehmen.":
+      "Conservar la fuente: el VMAF objetivo solo se alcanzaría con un archivo más grande. VMAF objetivo y Super Tool omiten el encode. Aun así puedes aplicar un nivel con «→ Encoding».",
+    "Quelle behalten: keine Stufe erreicht das Ziel mit ausreichender Ersparnis.":
+      "Conservar la fuente: ningún nivel alcanza el objetivo con ahorro suficiente.",
+    "Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.":
+      "Ahorro mínimo (predeterminado 0 %): un nivel solo se recomienda si el archivo estimado es al menos tanto más pequeño que la fuente. −1 desactiva el filtro. Si el VMAF objetivo se cumple pero cada nivel válido sería demasiado grande, se conserva la fuente: VMAF objetivo y Super Tool no recodifican (no es un error). Aun así puedes elegir un nivel a mano. Tras la cuadrícula gruesa (típicamente cuatro valores), cada encoder prueba una vez el punto medio entre el último acierto y el primer fallo si hay bastante distancia – no es una búsqueda binaria completa.",
     "0 · nur Mittel": "0 · solo media",
     "6 · empfohlen": "6 · recomendado",
     "12 · locker": "12 · holgado",
@@ -2306,17 +2341,17 @@
       "En Ajustes → Encoder-Speed hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "¿Cómo encuentro el nivel de velocidad adecuado?",
-    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
-      "La prueba de encoder en Ajustes descarga clips de referencia cortos (fuentes fijas y libres: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – y samples de Google ExoPlayer). Puedes añadir hasta cuatro archivos de tu biblioteca si tus fuentes no se parecen a las demos.",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus Intel- und Wikimedia-Clips für Bewegung und Handkamera). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "La prueba de encoder en Ajustes descarga clips de referencia cortos (fuentes fijas y libres: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – más clips Intel y Wikimedia para movimiento y cámara en mano). Puedes añadir hasta cuatro archivos de tu biblioteca si tus fuentes no se parecen a las demos.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Por cada clip y nivel de velocidad corre un mini VMAF como en la herramienta VMAF (un fragmento, sin capturas). Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF, 1 % low, tamaño del clip y tiempo. La recomendación pasa al nivel más lento solo si la ganancia de VMAF es clara y el tiempo no explota (regla: al menos +0,5 VMAF y factor de tiempo bajo ~3,5 – o una ganancia sobre +1,2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "Es una pista de compromiso para ese encoder concreto (plataforma × códec), no para todos los equipos. «Muy lento» no está marcado a propósito: el AV1 en CPU puede tardar mucho. Las descargas solo usan la lista permitida, no una URL arbitraria.",
     "Encoder-Test (VMAF)": "Prueba de encoder (VMAF)",
-    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
-      "Encuentra un nivel de velocidad adecuado: clips cortos de distintos tipos de imagen (animación, CGI de cine, acción real, mucho movimiento, cámara en mano) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres (Blender CC-BY, samples de Google).",
-    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
-      "Por cada clip y nivel de velocidad corre un VMAF como en la herramienta VMAF (por defecto: 3 escenas, 1–5 seleccionables, sin capturas). Los clips demo cortos se parten en extractos más cortos en vez de caer en el centro. Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF medio, 1 % low, tamaño del clip y tiempo.",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
+      "Encuentra un nivel de velocidad adecuado: clips cortos de distintos tipos de imagen (animación, CGI de cine, acción real, mucho movimiento, cámara en mano) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit.":
+      "Por cada clip y nivel de velocidad corre un VMAF como en la herramienta VMAF (por defecto: 3 escenas, 1–5 seleccionables, sin capturas). Los clips demo cortos se parten en extractos más cortos en vez de caer en el centro. Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF medio, 1 % low, tamaño del clip, ahorro esperado (previsión vs. origen) y tiempo.",
     "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
       "La recomendación no usa solo la media: puntuación = 55 % media + 35 % 1 % low + 10 % media armónica. Una media de 95 con 1 % low 79 parecería un 95: no lo es; los peores fotogramas (acción, oscuro, banding) cuentan extra. Se elige el nivel más lento si la puntuación sube con claridad y el tiempo no explota, o si el 1 % low era demasiado bajo y sube de forma notable. Presets nativos del encoder elegido (p. ej. SVT 0–13, NVENC p1–p7), no solo cinco alias.",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
@@ -2340,6 +2375,7 @@
     "Anime-Modus (VMAF-NEG, 10-bit)": "Modo anime (VMAF-NEG, 10 bit)",
     "Test starten": "Iniciar prueba",
     "Empfehlung übernehmen und speichern": "Aplicar recomendación y guardar",
+    "Ergebnisse leeren": "Vaciar resultados",
     "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
       "Sin archivos propios. Opcionalmente hasta 4 vídeos de la biblioteca: útil si tus fuentes no se parecen a las demos.",
     "Mindestens einen Clip und eine Speed-Stufe wählen.": "Elige al menos un clip y un nivel de velocidad.",
@@ -3225,9 +3261,26 @@
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ : profils SDR, HDR et Dolby Vision",
     "Encoder-Speed": "Vitesse d'encodeur",
     "VMAF-Empfehlung": "Recommandation VMAF",
-    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
-      "S'applique à l'outil VMAF, au VMAF cible, au Super Tool et au test d'encodeur – pas une deuxième fois dans chaque outil. Le curseur « VMAF cible » reste la moyenne ; le 1 % low peut descendre d'au plus autant de points. 0 désactive le plancher (moyenne seule, comme avant).",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher). Mindest-Ersparnis: Empfehlung nur, wenn die Prognose genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).":
+      "S'applique à l'outil VMAF, au VMAF cible, au Super Tool et au test d'encodeur – pas une deuxième fois dans chaque outil. Le curseur « VMAF cible » reste la moyenne ; le 1 % low peut descendre d'au plus autant de points. 0 désactive le plancher (moyenne seule, comme avant). Économie minimale : ne recommander que si l'estimation est assez plus petite que la source (0 % = le fichier ne doit pas grossir).",
     "1%-Low-Abstand:": "Écart 1 % low :",
+    "Mindest-Ersparnis:": "Économie minimale :",
+    "−1 · aus": "−1 · off",
+    "0 · nicht größer": "0 · pas plus gros",
+    "30 %": "30 %",
+    "Ersparnis aus": "Économie off",
+    "0 %": "0 %",
+    "5 %": "5 %",
+    "Kein Größenfilter: Empfehlung darf auch eine größere Datei vorschlagen.":
+      "Pas de filtre de taille : la recommandation peut aussi proposer un fichier plus gros.",
+    "Datei darf nicht wachsen. Ziel-VMAF und Super-Tool überspringen den Encode, wenn jede passende Stufe größer wäre.":
+      "Le fichier ne doit pas grossir. VMAF cible et Super Tool sautent l'encode si chaque palier valable serait plus gros.",
+    "Quelle behalten: das Ziel-VMAF wäre nur mit einer größeren Datei erreichbar. Ziel-VMAF und Super-Tool überspringen den Encode. Du kannst eine Stufe trotzdem mit „→ Encoding“ übernehmen.":
+      "Garder la source : le VMAF cible ne serait atteignable qu'avec un fichier plus gros. VMAF cible et Super Tool sautent l'encode. Tu peux quand même appliquer un palier avec « → Encoding ».",
+    "Quelle behalten: keine Stufe erreicht das Ziel mit ausreichender Ersparnis.":
+      "Garder la source : aucun palier n'atteint la cible avec assez d'économie.",
+    "Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.":
+      "Économie minimale (défaut 0 %) : un palier n'est recommandé que si le fichier estimé est au moins autant plus petit que la source. −1 désactive le filtre. Si le VMAF cible tient mais que chaque palier valable serait trop gros, on garde la source – VMAF cible et Super Tool n'encodent alors pas (ce n'est pas une erreur). Tu peux quand même choisir un palier à la main. Après la grille grossière (typiquement quatre valeurs), chaque encodeur teste une fois le milieu entre le dernier succès et le premier échec si l'écart est assez grand – pas une recherche binaire complète.",
     "0 · nur Mittel": "0 · moyenne seule",
     "6 · empfohlen": "6 · recommandé",
     "12 · locker": "12 · large",
@@ -3256,17 +3309,17 @@
       "Dans Paramètres → Encoder-Speed, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "Comment trouver le cran de vitesse d'encodeur adapté ?",
-    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
-      "Le test d'encodeur dans Paramètres télécharge de courts clips de référence (sources fixes et libres : Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – et échantillons Google ExoPlayer). Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque si tes sources ne ressemblent pas aux démos.",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus Intel- und Wikimedia-Clips für Bewegung und Handkamera). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "Le test d'encodeur dans Paramètres télécharge de courts clips de référence (sources fixes et libres : Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus clips Intel et Wikimedia pour mouvement et caméra à la main). Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque si tes sources ne ressemblent pas aux démos.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Chaque clip × cran de vitesse lance un mini VMAF comme l'outil VMAF (un extrait, pas de captures). Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF, 1 % low, taille du clip et temps. La recommandation ne passe au cran plus lent que si le gain VMAF est clair et que le temps n'explose pas (règle : au moins +0,5 VMAF et facteur de temps sous ~3,5 – ou un gain au-delà de +1,2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "C'est un indice de compromis pour cet encodeur précis (plateforme × codec), pas pour toutes les machines. « Très lent » n'est pas coché exprès – l'AV1 CPU surtout peut durer longtemps. Les téléchargements passent uniquement par la liste autorisée, pas par une URL libre.",
     "Encoder-Test (VMAF)": "Test d'encodeur (VMAF)",
-    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
-      "Trouve un cran de vitesse adapté : de courts clips de types d'image différents (animation, CGI film, prise de vue réelle, beaucoup de mouvement, caméra à la main) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres (Blender CC-BY, échantillons Google).",
-    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
-      "Chaque clip × cran de vitesse lance un VMAF comme l'outil VMAF (défaut : 3 scènes, 1–5 au choix, pas de captures). Les clips démo courts sont découpés en extraits plus courts au lieu de tout ramener au milieu. Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF moyen, 1 % low, taille du clip et temps.",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
+      "Trouve un cran de vitesse adapté : de courts clips de types d'image différents (animation, CGI film, prise de vue réelle, beaucoup de mouvement, caméra à la main) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit.":
+      "Chaque clip × cran de vitesse lance un VMAF comme l'outil VMAF (défaut : 3 scènes, 1–5 au choix, pas de captures). Les clips démo courts sont découpés en extraits plus courts au lieu de tout ramener au milieu. Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF moyen, 1 % low, taille du clip, économie attendue (prévision vs. source) et temps.",
     "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
       "La recommandation n'utilise pas seulement la moyenne : score = 55 % moyenne + 35 % 1 % low + 10 % moyenne harmonique. Une moyenne de 95 avec 1 % low 79 aurait l'air d'un 95 – ce n'est pas le cas ; les pires images (action, sombre, banding) comptent en plus. Le cran plus lent est choisi si le score monte clairement et que le temps n'explose pas – ou si le 1 % low était trop bas et remonte nettement. Presets natifs de l'encodeur choisi (p. ex. SVT 0–13, NVENC p1–p7), pas seulement cinq alias.",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
@@ -3290,6 +3343,7 @@
     "Anime-Modus (VMAF-NEG, 10-bit)": "Mode anime (VMAF-NEG, 10 bit)",
     "Test starten": "Lancer le test",
     "Empfehlung übernehmen und speichern": "Appliquer la recommandation et enregistrer",
+    "Ergebnisse leeren": "Vider les résultats",
     "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
       "Aucun fichier personnel. Optionnellement jusqu'à 4 vidéos de la bibliothèque – utile si tes sources ne ressemblent pas aux démos.",
     "Mindestens einen Clip und eine Speed-Stufe wählen.": "Choisis au moins un clip et un cran de vitesse.",
@@ -3340,6 +3394,10 @@
     [/^Geladen · (.+)$/, function (m) { return "Downloaded · " + m[1]; }],
     [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Not downloaded · ~" + m[1] + " MB"; }],
     [/^(\d+) Punkte$/, function (m) { return m[1] + " points"; }],
+    [/^≥ (\d+(?:\.\d+)?) %$/, function (m) { return "≥ " + m[1] + "%"; }],
+    [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + "%"; }],
+    [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
+      function (m) { return "At least " + m[1] + "% smaller than the source, otherwise keep the source."; }],
     [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
       function (m) { return "At target 94, 1% low must be ≥ " + m[1] + ". At target 93: ≥ " + m[2] + "."; }],
     [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,
@@ -3383,6 +3441,10 @@
     [/^Geladen · (.+)$/, function (m) { return "Descargado · " + m[1]; }],
     [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Sin descargar · ~" + m[1] + " MB"; }],
     [/^(\d+) Punkte$/, function (m) { return m[1] + " puntos"; }],
+    [/^≥ (\d+(?:\.\d+)?) %$/, function (m) { return "≥ " + m[1] + " %"; }],
+    [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + " %"; }],
+    [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
+      function (m) { return "Al menos un " + m[1] + " % más pequeño que la fuente; si no, conservar la fuente."; }],
     [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
       function (m) { return "Con objetivo 94, el 1 % low debe ser ≥ " + m[1] + ". Con objetivo 93: ≥ " + m[2] + "."; }],
     [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,
@@ -3425,6 +3487,10 @@
     [/^Geladen · (.+)$/, function (m) { return "Téléchargé · " + m[1]; }],
     [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Non téléchargé · ~" + m[1] + " Mo"; }],
     [/^(\d+) Punkte$/, function (m) { return m[1] + " points"; }],
+    [/^≥ (\d+(?:\.\d+)?) %$/, function (m) { return "≥ " + m[1] + " %"; }],
+    [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + " %"; }],
+    [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
+      function (m) { return "Au moins " + m[1] + " % plus petit que la source, sinon garder la source."; }],
     [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
       function (m) { return "À la cible 94, le 1 % low doit être ≥ " + m[1] + ". À la cible 93 : ≥ " + m[2] + "."; }],
     [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,

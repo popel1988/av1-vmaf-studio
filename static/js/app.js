@@ -1274,6 +1274,11 @@
     return Number.isFinite(n) ? n : 6;
   }
 
+  function vmafMinSavingsValue() {
+    const n = Number(window.APP_CONFIG && APP_CONFIG.vmafMinSavings);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function applyVmafP1Gap(gap, persist) {
     gap = Number(gap);
     if (!Number.isFinite(gap)) gap = 6;
@@ -1294,16 +1299,47 @@
     if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Gap = gap;
   }
 
+  function applyVmafMinSavings(raw, persist) {
+    let v = Number(raw);
+    if (!Number.isFinite(v)) v = 0;
+    if (v < 0) v = -1;
+    else v = Math.min(30, Math.max(0, Math.round(v)));
+    const slider = $("cfg-min-sav");
+    if (slider) slider.value = String(v);
+    const valEl = $("cfg-min-sav-val");
+    if (valEl) valEl.textContent = v < 0 ? "aus" : `${v} %`;
+    const badge = $("vmaf-sav-badge");
+    if (badge) badge.textContent = v < 0 ? "Ersparnis aus" : `≥ ${v} %`;
+    const hint = $("cfg-min-sav-hint");
+    if (hint) {
+      if (v < 0) {
+        hint.textContent = "Kein Größenfilter: Empfehlung darf auch eine größere Datei vorschlagen.";
+      } else if (v === 0) {
+        hint.textContent = "Datei darf nicht wachsen. Ziel-VMAF und Super-Tool überspringen den Encode, wenn jede passende Stufe größer wäre.";
+      } else {
+        hint.textContent = `Mindestens ${v} % kleiner als die Quelle, sonst Quelle behalten.`;
+      }
+    }
+    if (persist && window.APP_CONFIG) APP_CONFIG.vmafMinSavings = v;
+  }
+
   function initVmafP1Gap() {
     const slider = $("cfg-p1-gap");
+    const sav = $("cfg-min-sav");
     if (!slider) return;
     applyVmafP1Gap(vmafP1GapValue(), true);
+    applyVmafMinSavings(vmafMinSavingsValue(), true);
     slider.addEventListener("input", () => applyVmafP1Gap(slider.value, false));
+    if (sav) sav.addEventListener("input", () => applyVmafMinSavings(sav.value, false));
     document.querySelectorAll("[data-p1-gap]").forEach((btn) => {
       btn.addEventListener("click", () => applyVmafP1Gap(btn.getAttribute("data-p1-gap"), false));
     });
+    document.querySelectorAll("[data-min-sav]").forEach((btn) => {
+      btn.addEventListener("click", () => applyVmafMinSavings(btn.getAttribute("data-min-sav"), false));
+    });
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d && d.vmaf_p1_gap != null) applyVmafP1Gap(d.vmaf_p1_gap, true);
+      if (d && d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
     }).catch(() => {});
     const save = $("btn-p1-gap-save");
     if (save) save.addEventListener("click", async () => {
@@ -1311,10 +1347,14 @@
       try {
         const d = await (await fetch("/api/settings", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vmaf_p1_gap: Number(slider.value) }),
+          body: JSON.stringify({
+            vmaf_p1_gap: Number(slider.value),
+            vmaf_min_savings: sav ? Number(sav.value) : vmafMinSavingsValue(),
+          }),
         })).json();
         if (d.error) { alert(d.error); return; }
         applyVmafP1Gap(d.vmaf_p1_gap, true);
+        if (d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
       } finally { save.disabled = false; }
     });
   }
@@ -1642,13 +1682,17 @@
       const status = c.present
         ? `Geladen · ${c.human || ""}`
         : `Nicht geladen · ca. ${c.approx_mb} MB`;
-      return `<label class="enc-bench-clip">
+      const media = c.present && c.media
+        ? `<span class="why">${escapeHtml(c.media)}</span>` : "";
+      const lic = c.license || "";
+      return `<label class="enc-bench-clip"${lic ? ` title="${escapeHtml(lic)}"` : ""}>
         <input type="checkbox" class="eb-clip" value="${escapeHtml(c.id)}" ${checked} />
         <span>
           <strong>${escapeHtml(c.title)}</strong>
           <span class="enc-bench-status${c.present ? " ok" : ""}">${escapeHtml(status)}</span>
+          ${media}
           <span class="why">${escapeHtml(c.why || "")}</span>
-          <span class="why">${escapeHtml(c.license || "")}</span>
+          ${lic ? `<span class="why license">${escapeHtml(lic)}</span>` : ""}
         </span>
       </label>`;
     }).join("");
@@ -1666,7 +1710,10 @@
       return;
     }
     box.innerHTML = ebExtra.map((f, i) =>
-      `<div class="enc-bench-extra">${escapeHtml(f.name)}
+      `<div class="enc-bench-extra"><span>
+        ${escapeHtml(f.name)}
+        ${f.media ? `<span class="why">${escapeHtml(f.media)}</span>` : ""}
+      </span>
         <button type="button" class="btn btn-ghost btn-sm" data-eb-x="${i}">Entfernen</button>
       </div>`).join("");
     box.querySelectorAll("[data-eb-x]").forEach((btn) => {
@@ -1676,6 +1723,25 @@
       });
     });
     ebUpdateEstimate();
+  }
+  function ebCodecLabel(c) {
+    const n = String(c || "").toLowerCase();
+    return ({ h264: "H.264", avc: "H.264", hevc: "HEVC", h265: "HEVC",
+              av1: "AV1", vp9: "VP9", vp8: "VP8" })[n]
+      || (c ? String(c).toUpperCase() : "");
+  }
+  function ebMediaLine(d) {
+    if (!d || d.error) return "";
+    const br = d.video_bitrate_human || d.overall_bitrate_human || "";
+    const fps = d.fps ? `${Math.round(Number(d.fps))} fps` : "";
+    return [ebCodecLabel(d.codec), d.resolution, fps, br, d.duration_human]
+      .filter(Boolean).join(" · ");
+  }
+  async function ebFillExtraMedia(item) {
+    try {
+      const d = await (await fetch(`/api/probe?path=${encodeURIComponent(item.rel)}`)).json();
+      item.media = ebMediaLine(d);
+    } catch (_) { item.media = ""; }
   }
   function ebFillValuesDefault() {
     const inp = $("eb-values");
@@ -1699,6 +1765,12 @@
     if (start) start.disabled = running;
     if (dl) dl.disabled = running;
     if (cancel) cancel.disabled = !running;
+    const clear = $("btn-eb-clear");
+    if (clear) {
+      const last = d.last || {};
+      const has = !!(d.rows && d.rows.length) || !!(last.rows && last.rows.length);
+      clear.disabled = running || !has;
+    }
   }
   function ebRenderTable(rows, rec) {
     const wrap = $("eb-results");
@@ -1707,13 +1779,19 @@
     const recSpeed = rec && rec.speed;
     const body = rows.map((r) => {
       if (r.error) {
-        return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="6" class="bad">${escapeHtml(r.error)}</td></tr>`;
+        return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="7" class="bad">${escapeHtml(r.error)}</td></tr>`;
       }
       const recCls = recSpeed && r.speed === recSpeed ? " row-recommended" : "";
       const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
       const vmaf = r.vmaf != null ? Number(r.vmaf).toFixed(1) : "—";
       const low = r.vmaf_1pct != null ? Number(r.vmaf_1pct).toFixed(1) : "—";
       const spd = speedLabelFor(r.platform, r.codec, r.speed);
+      const sav = r.savings_percent;
+      const savTxt = sav == null || sav === "" ? "—" : `${Number(sav).toFixed(1)}%`;
+      const savCls = sav == null || sav === "" ? "num" : (Number(sav) >= 0 ? "num good" : "num bad");
+      const tip = r.predicted_human
+        ? `title="${escapeHtml(`Prognose ${r.predicted_human}` + (r.source_human ? ` vs. Quelle ${r.source_human}` : ""))}"`
+        : "";
       return `<tr class="${recCls}">
         <td>${escapeHtml(r.clip || "")}</td>
         <td>${escapeHtml(spd)}</td>
@@ -1721,12 +1799,13 @@
         <td class="num">${vmaf}</td>
         <td class="num">${low}</td>
         <td class="num">${escapeHtml(r.size_human || "")}</td>
+        <td class="${savCls}" ${tip}>${savTxt}</td>
         <td class="num">${r.seconds != null ? Number(r.seconds).toFixed(1) + " s" : ""}</td>
       </tr>`;
     }).join("");
     wrap.innerHTML = `<div class="data-table-wrap"><table class="data-table enc-bench-table">
       <thead><tr>
-        <th>Clip</th><th>Speed</th><th>Wert</th><th>VMAF</th><th>1%-Low</th><th>Größe</th><th>Zeit</th>
+        <th>Clip</th><th>Speed</th><th>Wert</th><th>VMAF</th><th>1%-Low</th><th>Größe</th><th>Ersparnis</th><th>Zeit</th>
       </tr></thead><tbody>${body}</tbody></table></div>`;
   }
   function ebRenderRec(rec) {
@@ -1809,18 +1888,26 @@
         title: "Eigene Testdatei wählen",
         rememberKey: "encBenchDir",
         multi: true,
-        onPickMany: (files) => {
+        onPickMany: async (files) => {
+          const added = [];
           (files || []).forEach((f) => {
             if (ebExtra.length >= 4) return;
             if (ebExtra.some((x) => x.rel === f.rel)) return;
-            ebExtra.push({ rel: f.rel, name: f.name });
+            const item = { rel: f.rel, name: f.name, media: "" };
+            ebExtra.push(item);
+            added.push(item);
           });
           ebRenderExtras();
+          await Promise.all(added.map(ebFillExtraMedia));
+          if (added.length) ebRenderExtras();
         },
-        onPick: (f) => {
+        onPick: async (f) => {
           if (ebExtra.length >= 4) return;
           if (ebExtra.some((x) => x.rel === f.rel)) return;
-          ebExtra.push({ rel: f.rel, name: f.name });
+          const item = { rel: f.rel, name: f.name, media: "" };
+          ebExtra.push(item);
+          ebRenderExtras();
+          await ebFillExtraMedia(item);
           ebRenderExtras();
         },
       });
@@ -1873,6 +1960,15 @@
     if (cancel) cancel.addEventListener("click", async () => {
       try { await ebPost("/api/encoder-bench/cancel", {}); ebRefresh(); }
       catch (e) { alert(e.message || e); }
+    });
+    const clearBtn = $("btn-eb-clear");
+    if (clearBtn) clearBtn.addEventListener("click", async () => {
+      try {
+        await ebPost("/api/encoder-bench/clear", {});
+        ebRenderTable([], null);
+        ebRenderRec(null);
+        ebRefresh();
+      } catch (e) { alert(e.message || e); }
     });
     const apply = $("btn-eb-apply");
     if (apply) apply.addEventListener("click", async () => {
@@ -2856,6 +2952,7 @@
     const actions = $("vmaf-actions");
     if (!target || !target.vmaf || !target.vmaf.results.length) {
       if (actions) actions.style.display = "none";
+      syncKeepSourceBanner(null);
       // Gibt es archivierte Vergleiche, Karte + Dropdown sichtbar lassen, damit
       // ältere Analysen auch ohne aktuelle Analyse abrufbar sind.
       if (state.hasArchive) {
@@ -2884,7 +2981,7 @@
     } else if (!state.vmafSource.info) {
       state.vmafSource.info = target.info || null;
     }
-    const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status;
+    const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status + ":" + (vmaf.keep_source ? "1" : "0");
     showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
 
@@ -2965,6 +3062,7 @@
     if (tb) tb.innerHTML = "";
     const sc = $("vmaf-screenshots"); if (sc) sc.innerHTML = "";
     const note = $("vmaf-archive-note"); if (note) note.style.display = "none";
+    syncKeepSourceBanner(null);
     const badge = $("vmaf-model-badge");
     if (badge) badge.textContent = "Kein aktueller Vergleich – oben einen früheren auswählen";
   }
@@ -3196,7 +3294,14 @@
     return s;
   }
 
+  function syncKeepSourceBanner(vmaf) {
+    const el = $("vmaf-keep-source");
+    if (!el) return;
+    el.style.display = vmaf && vmaf.keep_source ? "" : "none";
+  }
+
   function fillVmafTable(vmaf) {
+    syncKeepSourceBanner(vmaf);
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r, idx) => `
       <tr class="${r.recommended ? "row-recommended" : ""}">

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import threading
 import time
 import urllib.error
@@ -21,7 +22,11 @@ logger = logging.getLogger("vcompress.encoder_bench")
 
 BENCH_DIR = config.DATA_DIR / "encoder_bench"
 MAX_DOWNLOAD_BYTES = 400 * 1024 * 1024
-_UA = "VideoStudio/1.0 (encoder-bench; +https://github.com/popel1988/av1-vmaf-studio)"
+# Browser-UA: manche Spiegel (früher GCS) blocken sonst mit 403.
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+_HTTP_HDR = {"User-Agent": _UA, "Accept": "*/*"}
+_probe_cache: dict[str, tuple[float, int, dict]] = {}
 
 # Kurzclips unterschiedlicher Bildtypen. Nur diese HTTPS-URLs werden geladen
 # (Allowlist, kein freies URL-Feld → kein SSRF). Fallbacks, falls ein Spiegel tot ist.
@@ -56,39 +61,42 @@ CLIPS: list[dict] = [
         "id": "live",
         "title": "Live-Action / VFX",
         "kind": "live",
-        "license": "CC-BY · Blender Foundation · Tears of Steel",
-        "filename": "tos_trailer_1080p.mp4",
-        "approx_mb": 80,
+        "license": "CC-BY · Blender Foundation · Tears of Steel (Fallback: Intel CC-BY)",
+        "filename": "tos_live_20s.mp4",
+        "approx_mb": 40,
         "why": "Echte Kamera plus Effekte – Korn und hohe Komplexität.",
         "urls": [
-            "https://download.blender.org/mango/trailer/tearsofsteel_trailer-1080p.mp4",
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+            {
+                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+                "extract": {"start": 90, "seconds": 18},
+            },
+            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/people-detection.mp4",
         ],
     },
     {
         "id": "motion",
         "title": "Viel Bewegung",
         "kind": "motion",
-        "license": "Google sample (ExoPlayer-Testclip)",
-        "filename": "for_bigger_escapes.mp4",
-        "approx_mb": 10,
+        "license": "CC-BY 4.0 · Intel sample-videos · car-detection",
+        "filename": "car_detection.mp4",
+        "approx_mb": 3,
         "why": "Schnelle Kamerafahrten – Speed-Presets sparen hier oft falsch.",
         "urls": [
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/car-detection.mp4",
+            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/people-detection.mp4",
         ],
     },
     {
         "id": "camera",
         "title": "Handkamera / Straße",
         "kind": "camera",
-        "license": "Google sample (ExoPlayer-Testclip)",
-        "filename": "subaru_outback.mp4",
-        "approx_mb": 20,
+        "license": "CC-BY 4.0 · Intel sample-videos · walking",
+        "filename": "people_walking.mp4",
+        "approx_mb": 6,
         "why": "Rauschen, Detail im Hintergrund – näher an Serien-Remuxes als CGI.",
         "urls": [
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/SubaruOutbackOnStreetAndDirt.mp4",
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
+            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/face-demographics-walking.mp4",
+            "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Schlossbergbahn.webm/Schlossbergbahn.webm.720p.vp9.webm",
         ],
     },
 ]
@@ -113,15 +121,60 @@ def _clip_path(clip: dict) -> Path:
     return BENCH_DIR / clip["filename"]
 
 
+def _pretty_codec(name: str) -> str:
+    n = (name or "").lower()
+    return {
+        "h264": "H.264", "avc": "H.264", "avc1": "H.264",
+        "hevc": "HEVC", "h265": "HEVC", "hev1": "HEVC", "hvc1": "HEVC",
+        "av1": "AV1", "vp9": "VP9", "vp8": "VP8",
+        "mpeg4": "MPEG-4", "mpeg2video": "MPEG-2", "prores": "ProRes",
+    }.get(n, (name or "?").upper())
+
+
+def _probe_clip(path: Path) -> dict:
+    """Codec, Auflösung, fps, Bitrate – gecacht nach mtime/Größe."""
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    key = str(path)
+    hit = _probe_cache.get(key)
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+        return dict(hit[2])
+    info, _ = ff.probe_with_error(path)
+    data: dict = {}
+    if info:
+        br = ff._bitrate_human(info.video_bitrate) if info.video_bitrate else ""
+        fps = f"{info.fps:.0f} fps" if info.fps else ""
+        res = f"{info.width}×{info.height}" if info.width else ""
+        dur = ff.human_duration(info.duration) if info.duration else ""
+        parts = [p for p in (_pretty_codec(info.codec), res, fps, br, dur) if p]
+        data = {
+            "codec": info.codec,
+            "width": info.width,
+            "height": info.height,
+            "fps": round(info.fps, 2) if info.fps else 0,
+            "duration_human": dur,
+            "video_bitrate_human": br,
+            "media": " · ".join(parts),
+        }
+    _probe_cache[key] = (st.st_mtime, st.st_size, data)
+    return dict(data)
+
+
 def _local_info(clip: dict) -> dict:
     p = _clip_path(clip)
     ok = p.is_file() and p.stat().st_size > 50_000
-    return {
+    out = {
         "present": ok,
         "bytes": p.stat().st_size if ok else 0,
         "human": ff.human_size(p.stat().st_size) if ok else "",
         "path": str(p) if ok else "",
+        "media": "",
     }
+    if ok:
+        out.update(_probe_clip(p))
+    return out
 
 
 def catalog() -> list[dict]:
@@ -167,6 +220,65 @@ def _set(**kwargs) -> None:
         _state.update(kwargs)
 
 
+def _sources(clip: dict):
+    """(url, extract|None) – extract = {start, seconds} für ffmpeg-Ausschnitt."""
+    for item in clip.get("urls") or []:
+        if isinstance(item, str):
+            yield item, None
+        elif isinstance(item, dict) and item.get("url"):
+            yield str(item["url"]), item.get("extract")
+
+
+def _http_err(exc: BaseException) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code} {exc.reason or 'Fehler'}"
+    return str(exc) or type(exc).__name__
+
+
+def _ffmpeg_extract(url: str, dest: Path, extract: dict) -> str:
+    """Kurzen Ausschnitt per HTTP-Range holen (ganze ToS-Datei wäre ~350 MB)."""
+    start = float((extract or {}).get("start") or 0)
+    seconds = float((extract or {}).get("seconds") or 15)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    base = [
+        config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+        "-user_agent", _UA,
+        "-ss", f"{start:.3f}",
+        "-t", f"{seconds:.3f}",
+        "-i", url,
+    ]
+    variants = [
+        ["-c", "copy", "-an", "-movflags", "+faststart"],
+        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-an",
+         "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+    ]
+    last = "ffmpeg-Ausschnitt fehlgeschlagen"
+    for extra in variants:
+        if _cancel.is_set():
+            return "Abgebrochen"
+        try:
+            proc = subprocess.run(base + extra + [str(tmp)],
+                                  capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            last = str(e)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            continue
+        err = (proc.stderr or "").strip()
+        if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 50_000:
+            tmp.replace(dest)
+            return ""
+        last = err or f"ffmpeg-Ausschnitt fehlgeschlagen ({proc.returncode})"
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return last
+
+
 def _download_one(clip: dict, on_bytes) -> str:
     """Lädt den Clip; leerer String = ok, sonst Fehlertext."""
     dest = _clip_path(clip)
@@ -174,12 +286,17 @@ def _download_one(clip: dict, on_bytes) -> str:
         return ""
     dest.parent.mkdir(parents=True, exist_ok=True)
     last_err = "kein Spiegel erreichbar"
-    for url in clip.get("urls") or []:
+    for url, extract in _sources(clip):
         if _cancel.is_set():
             return "Abgebrochen"
+        if extract:
+            last_err = _ffmpeg_extract(url, dest, extract)
+            if not last_err and dest.is_file() and dest.stat().st_size > 50_000:
+                return ""
+            continue
         tmp = dest.with_suffix(dest.suffix + ".part")
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": _UA})
+            req = urllib.request.Request(url, headers=_HTTP_HDR)
             with urllib.request.urlopen(req, timeout=60) as resp:
                 total = int(resp.headers.get("Content-Length") or 0)
                 if total > MAX_DOWNLOAD_BYTES:
@@ -222,7 +339,7 @@ def _download_one(clip: dict, on_bytes) -> str:
                 tmp.replace(dest)
                 return ""
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            last_err = str(e)
+            last_err = _http_err(e)
             try:
                 tmp.unlink()
             except OSError:
@@ -277,6 +394,21 @@ def start_download(ids: list[str]) -> Optional[str]:
 
 def cancel() -> None:
     _cancel.set()
+
+
+def clear_results() -> Optional[str]:
+    """Letzten Test aus Speicher und UI entfernen (nicht während eines Laufs)."""
+    with _lock:
+        if _state.get("running"):
+            return "Es läuft bereits ein Test oder Download."
+        _state.update(rows=[], recommendation=None, phase="idle",
+                      message="", percent=0, error="")
+    p = BENCH_DIR / "last.json"
+    try:
+        p.unlink(missing_ok=True)
+    except OSError as e:
+        return str(e)
+    return None
 
 
 def start_bench(cfg: dict) -> Optional[str]:
@@ -438,6 +570,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 continue
             nres = max(1, len(analysis.results))
             per = round(elapsed / nres, 2)
+            src_human = ff.human_size(info.size_bytes) if info.size_bytes else ""
             for r in analysis.results:
                 rows.append({
                     "clip_id": job["id"],
@@ -451,6 +584,10 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                     "vmaf_hmean": round(r.vmaf_hmean, 2) if r.vmaf_hmean else None,
                     "size_bytes": r.clip_size_bytes,
                     "size_human": ff.human_size(r.clip_size_bytes),
+                    "predicted_bytes": r.predicted_size_bytes,
+                    "predicted_human": ff.human_size(r.predicted_size_bytes),
+                    "savings_percent": round(r.savings_percent, 1),
+                    "source_human": src_human,
                     "seconds": per,
                     "seconds_pack": elapsed,
                     "platform": platform,

@@ -234,6 +234,7 @@ async def index(request: Request):
             "default_output": app_settings.default_output_rel(),
             "encoder_speed": app_settings.encoder_speed(),
             "vmaf_p1_gap": app_settings.vmaf_p1_gap(),
+            "vmaf_min_savings": app_settings.load().get("vmaf_min_savings", 0.0),
             "speed_presets": ff.speed_preset_catalog(),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
@@ -1775,6 +1776,7 @@ class AppSettingsRequest(BaseModel):
     default_output: Optional[str] = None
     encoder_speed: Optional[str] = None
     vmaf_p1_gap: Optional[float] = None
+    vmaf_min_savings: Optional[float] = None
 
 
 @app.get("/api/settings")
@@ -1810,6 +1812,8 @@ async def set_app_settings(req: AppSettingsRequest):
         updates["encoder_speed"] = normalize_encoder_speed(req.encoder_speed)
     if req.vmaf_p1_gap is not None:
         updates["vmaf_p1_gap"] = req.vmaf_p1_gap
+    if req.vmaf_min_savings is not None:
+        updates["vmaf_min_savings"] = req.vmaf_min_savings
     if not updates:
         cfg = app_settings.load()
     else:
@@ -2271,6 +2275,15 @@ async def encoder_bench_start(req: EncoderBenchStartRequest):
 async def encoder_bench_cancel():
     from core import encoder_bench
     encoder_bench.cancel()
+    return {"ok": True}
+
+
+@app.post("/api/encoder-bench/clear")
+async def encoder_bench_clear():
+    from core import encoder_bench
+    err = encoder_bench.clear_results()
+    if err:
+        return JSONResponse({"error": err}, status_code=409)
     return {"ok": True}
 
 
