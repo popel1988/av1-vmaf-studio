@@ -344,6 +344,7 @@
     "Daten & Archive": "Data & Archives",
     "Einstellungen": "Settings",
     "Diagnose": "Diagnostics",
+    "FAQ": "FAQ",
     "Design-Modus": "Theme",
     "Server Anthrazit": "Server Anthracite",
     "Hardware-Auslastung": "Hardware Usage",
@@ -1204,6 +1205,95 @@
     "Löschen": "Delete",
     "Name": "Name",
 
+    // --- FAQ ---
+    "FAQ & Technik": "FAQ & technical notes",
+    "Kurze Erklärungen zu den Einstellungen – so wie Video Studio sie wirklich nutzt, nicht als allgemeine Encoder-Theorie.":
+      "Short explanations of the settings – as Video Studio actually uses them, not general encoder theory.",
+    "Qualität & Bitrate": "Quality & bitrate",
+    "Was bedeutet CQ / CRF / QP?": "What does CQ / CRF / QP mean?",
+    "CQ steuert nicht die Dateigröße, sondern wie streng der Encoder Fehler vermeiden soll. Die Größe ergibt sich erst daraus. Die Zahl ist umgekehrt: niedriger = schärfer und größer, höher = grober und kleiner. Der Slider geht von 10 bis 51, Vorgabe ist 28.":
+      "CQ does not set a file size; it sets how hard the encoder should avoid visible errors. Size follows from that. The number is inverted: lower = sharper and larger, higher = coarser and smaller. The slider goes from 10 to 51, default is 28.",
+    "Je nach Plattform heißt der Parameter anders, meint aber dasselbe: CPU nutzt CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Dieselbe Zahl ist nicht bei jedem Codec gleich „scharf“: AV1 CQ 28 ist oft deutlich kleiner als HEVC CRF 28, und das wiederum kleiner als H.264 CRF 28.":
+      "The flag name differs by platform but means the same: CPU uses CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. The same number is not equally “sharp” across codecs: AV1 CQ 28 is often much smaller than HEVC CRF 28, which is smaller than H.264 CRF 28.",
+    "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
+      "The encoder may spend as many bits as a scene needs to hold that quality. Action and grain cost more; still scenes cost less. Bitrate therefore varies – there is no fixed MB target.",
+    "Welche CQ-Werte sind sinnvoll?": "Which CQ values make sense?",
+    "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
+      "18–22: very high, often close to the source, file stays large. 24–28: movie, good compromise (Movie preset = 28). 28–32: series, noticeably smaller (Series preset = 30). 34–40: much smaller; 1080p often already soft. 40+: clearly visible, size-first only.",
+    "Anime liegt oft etwas niedriger (Preset 26), weil Flächen und Banding bei zu hohem CQ schnell unschön werden. Ziel-VMAF testet mehrere Werte und wählt automatisch den kleinsten mit ausreichend VMAF.":
+      "Anime often uses a lower CQ (preset 26) because flat areas band easily at a high CQ. Target VMAF tries several values and keeps the smallest one with enough VMAF.",
+    "Warum kann die Datei mit CQ größer werden?": "Why can CQ make the file larger?",
+    "CQ sagt: Halte Qualität X. Wenn die Quelle schon kleiner und effizienter ist als das, was CQ X erzeugt, wächst die Datei. Typisch: Quelle ist schon gut komprimiertes AV1/HEVC und du wählst ein zu niedriges CQ (z. B. 20). Oder du gehst von einem effizienten Codec auf H.264, von 8-bit auf 10-bit (Anime-Modus), oder der Ton bleibt als fettes TrueHD kopiert.":
+      "CQ means “hold quality X”. If the source is already smaller and more efficient than what CQ X produces, the file grows. Typical: already well-compressed AV1/HEVC with a too-low CQ (e.g. 20). Or switching to H.264, 8-bit → 10-bit (anime mode), or keeping bulky TrueHD audio.",
+    "Aus einem fetten Remux macht CQ 28 fast immer weniger. Aus einer schon kleinen AV1-Datei macht CQ 24 oft mehr. Wenn du eine Obergrenze willst, nimm ABR, Größenziel oder Ziel-VMAF – nicht ein extrem niedriges CQ.":
+      "A fat remux at CQ 28 almost always shrinks. A small AV1 file at CQ 24 often grows. For a size cap use ABR, size target, or target VMAF – not an extremely low CQ.",
+    "CQ, ABR oder CBR – wann was? Ist variabel nicht immer besser?":
+      "CQ, ABR or CBR – when to use which? Is variable always better?",
+    "Variabel ist nicht immer besser. Es kommt darauf an, ob du Qualität, ungefähre Größe oder eine harte Obergrenze steuerst.":
+      "Variable is not always better. It depends whether you care about quality, approximate size, or a hard rate cap.",
+    "CQ: beste Wahl für Archive, wenn die Größe egal ist. ABR: „im Schnitt etwa X kbit/s“, schwierige Szenen dürfen höher (hier typisch bis 1,5×). CBR: Rate soll durchgängig bei X liegen – Größe sehr planbar, Qualität ungleichmäßiger.":
+      "CQ: best for archives when size is secondary. ABR: “about X kbit/s on average”; hard scenes may go higher (here typically up to 1.5×). CBR: rate should stay at X throughout – size is very predictable, quality is less even.",
+    "Beim One-Pass kennt der Encoder die Zukunft nicht. ABR verteilt trotzdem besser als CBR, weil er lokal schwanken darf. Zwei-Pass (Bitraten-Modus) verbessert vor allem ABR. CBR lohnt sich nur, wenn die Rate wirklich nicht über X steigen darf (Streaming, striktes Decoder-Limit).":
+      "One-pass cannot see the future. ABR still distributes bits better than CBR because it may vary locally. Two-pass (bitrate mode) mainly helps ABR. CBR is worth it only when the rate must not exceed X (streaming, strict decoder cap).",
+    "Bei CPU/SVT-AV1 sind CBR und ABR technisch gleich (−b:v ohne echtes CBR). Der Unterschied greift vor allem bei Nvidia NVENC und anderen Hardware-Encodern.":
+      "On CPU/SVT-AV1, CBR and ABR are technically the same (−b:v, no real CBR). The CBR vs ABR split mainly applies to Nvidia NVENC and other hardware encoders.",
+    "HDR & Dolby Vision": "HDR & Dolby Vision",
+    "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
+      "What is “dynamic range” – SDR, HDR10, HLG, HDR10+?",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
+      "SDR is a normal TV/monitor picture (limited contrast). HDR10 has static metadata for the whole file (MaxCLL/MaxFALL) and 10-bit PQ. HLG is broadcast HDR, often without extra metadata, and is still watchable on many SDR TVs. HDR10+ can carry per-scene metadata – this studio treats it as HDR (no separate HDR10+ encode path).",
+    "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
+      "For HDR sources without Dolby Vision: “Keep HDR” holds 10-bit and the metadata. “Tone-mapping” converts to SDR – any display can play it, contrast is lost. VMAF tests are then tonemapped the same way so scores stay fair.",
+    "Was sind Dolby-Vision-Profile 5, 7 und 8?": "What are Dolby Vision profiles 5, 7 and 8?",
+    "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
+      "Dolby Vision (DV) has a dynamic layer (RPU): brightness and colour are adjusted per scene or frame. The profile describes how that is stored in the file.",
+    "Profil 5: Streaming (oft Streaming-Dienste). Eigenes Farbsystem (IPTPQc2), kein HDR10-Fallback. Ohne DV-Player sieht das Bild falsch aus. Auto mappt deshalb nach SDR.":
+      "Profile 5: streaming (often streaming services). Its own colour system (IPTPQc2), no HDR10 fallback. Without a DV player the picture looks wrong. Auto therefore maps to SDR.",
+    "Profil 7: Blu-ray, zwei Layer (Basis + Enhancement). Beim Re-Encode entfällt der zweite Layer. Auto wandelt nach HEVC 8.1 (auch GPU) bzw. AV1 10.1 nur CPU/SVT.":
+      "Profile 7: Blu-ray, two layers (base + enhancement). The second layer is dropped on re-encode. Auto converts to HEVC 8.1 (GPU ok) or AV1 10.1 (CPU/SVT only).",
+    "Profil 8 (meist 8.1): ein Layer plus HDR10-Basis. Ohne DV-Player bleibt HDR10 sichtbar. Auto übernimmt die RPU, wenn der Encoder das kann.":
+      "Profile 8 (usually 8.1): one layer plus an HDR10 base. Without a DV player, HDR10 remains visible. Auto keeps the RPU when the encoder can.",
+    "Profil 10.1: AV1-Dolby-Vision. Im Studio nur mit CPU/SVT (libsvtav1), nicht mit Nvidia/Intel/AMD.":
+      "Profile 10.1: AV1 Dolby Vision. In this studio only with CPU/SVT (libsvtav1), not Nvidia/Intel/AMD.",
+    "Wann DV übernehmen, nur HDR10, oder Tone-Mapping?":
+      "When to keep DV, HDR10 only, or tone-map?",
+    "Übernehmen (RPU): Film bleibt Dolby Vision, wo es geht. HEVC: Profil 8.1 via dovi_tool, auch GPU. AV1: nur CPU/SVT als 10.1. Nvidia-AV1 kann die RPU nicht einbetten → automatischer HDR10-Fallback.":
+      "Keep (RPU): the film stays Dolby Vision where possible. HEVC: profile 8.1 via dovi_tool, GPU ok. AV1: CPU/SVT only as 10.1. Nvidia AV1 cannot embed the RPU → automatic HDR10 fallback.",
+    "Nur HDR10-Basis: RPU weg, statisches HDR bleibt. Sinnvoll, wenn der Player kein DV kann, die Quelle aber Profil 8/7 mit HDR10-Fallback hat.":
+      "HDR10 base only: drop the RPU, keep static HDR. Useful when the player has no DV but the source is profile 8/7 with an HDR10 fallback.",
+    "Tone-Mapping nach SDR: sicher für jedes Display, etwas Qualitätsverlust. Pflicht-Empfehlung bei Profil 5 ohne DV-fähigen Player.":
+      "Tone-map to SDR: safe for any display, some quality loss. Strongly recommended for profile 5 without a DV-capable player.",
+    "Schlägt ein DV-Schritt fehl, bleibt die HDR10-kompatible Basis erhalten – der Job bricht deshalb nicht ab.":
+      "If a DV step fails, the HDR10-compatible base is kept – the job does not fail because of that.",
+    "VMAF, Tools & Ausgabe": "VMAF, tools & output",
+    "Encoding, VMAF-Tool, Super-Tool – was ist der Unterschied?":
+      "Encoding, VMAF Tool, Super Tool – what’s the difference?",
+    "Encoding mit festem CQ/CBR/ABR encodiert sofort mit deinem Wert. Encoding mit Ziel-VMAF macht Test-Encodes und encodiert danach automatisch den kleinsten Wert mit VMAF ≥ Ziel (bei Ordnern nur die erste Datei, repräsentativ).":
+      "Encoding with fixed CQ/CBR/ABR encodes immediately with your value. Encoding with target VMAF runs test encodes, then auto-encodes the smallest value with VMAF ≥ target (folders: first file only, representative).",
+    "VMAF-Tool: reiner Vergleich mehrerer Encoder/Codecs, kein Encode. Du wählst den Gewinner und übernimmst ihn ins Encoding.":
+      "VMAF Tool: compare several encoders/codecs, no encode. You pick the winner and apply it to Encoding.",
+    "Super-Tool: Stapel für ganze Ordner. Ziel-VMAF pro Datei, ein repräsentativer Test für alle, oder feste Qualität ohne VMAF.":
+      "Super Tool: folder batches. Per-file target VMAF, one representative test for all, or fixed quality without VMAF.",
+    "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
+      "The quality guardrail measures sample VMAF after encode. That is a check, not a pre-comparison. Optionally it re-encodes automatically if the score is too low.",
+    "Was ist VMAF überhaupt?": "What is VMAF, actually?",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
+      "VMAF estimates how similar output and source look (typically 0–100). 93–95 is the sweet spot here: below that it often looks worse, above that the file grows a lot for little gain. Anime mode uses VMAF-NEG and 10-bit against banding.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "There is also 1% low (worst frames), harmonic mean, PSNR and SSIM. VMAF is not a guarantee – screenshots and A/B compare still help.",
+    "MKV oder MP4?": "MKV or MP4?",
+    "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
+      "MKV is recommended: AV1/HEVC/H.264 and all subtitle types (incl. PGS). MP4 converts text subs to mov_text; image subs (PGS/VobSub) are dropped. Automatic: AV1 and HEVC → MKV, H.264 → MP4.",
+    "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
+      "What do anime mode, auto-crop and film grain do?",
+    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Anime mode: VMAF-NEG model plus 10-bit encode so flat areas band less. Auto-crop detects black bars (letterbox) and cuts them before encode – saves bits. VMAF and the guardrail use the same area. Film grain (AV1/CPU/SVT only) synthesizes grain so the encoder spends fewer bits on real noise. 0 = off.",
+    "Erklärung in der FAQ": "Explained in the FAQ",
+    "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
+      "CQ, ABR, CBR and HDR/Dolby Vision profiles:",
+    "FAQ: Dynamik": "FAQ: dynamic range",
+    "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: SDR, HDR and Dolby Vision profiles",
+
     // --- Sprachumschalter (bleibt zweisprachig) ---
     "Sprache / Language": "Sprache / Language"
   };
@@ -1365,6 +1455,7 @@
     "Daten & Archive": "Datos y archivos",
     "Einstellungen": "Ajustes",
     "Diagnose": "Diagnóstico",
+    "FAQ": "FAQ",
     "Design-Modus": "Tema",
     "Server Anthrazit": "Antracita servidor",
     "Hardware-Auslastung": "Uso del hardware",
@@ -1963,6 +2054,94 @@
     "Löschen": "Eliminar",
     "Name": "Nombre",
 
+    "FAQ & Technik": "FAQ y técnica",
+    "Kurze Erklärungen zu den Einstellungen – so wie Video Studio sie wirklich nutzt, nicht als allgemeine Encoder-Theorie.":
+      "Explicaciones breves de los ajustes, tal como Video Studio los usa de verdad, no como teoría general de encoders.",
+    "Qualität & Bitrate": "Calidad y bitrate",
+    "Was bedeutet CQ / CRF / QP?": "¿Qué significan CQ / CRF / QP?",
+    "CQ steuert nicht die Dateigröße, sondern wie streng der Encoder Fehler vermeiden soll. Die Größe ergibt sich erst daraus. Die Zahl ist umgekehrt: niedriger = schärfer und größer, höher = grober und kleiner. Der Slider geht von 10 bis 51, Vorgabe ist 28.":
+      "CQ no fija el tamaño del archivo, sino lo estrictamente que el encoder debe evitar errores visibles. El tamaño sale de eso. El número es inverso: más bajo = más nítido y más grande, más alto = más grosero y más pequeño. El control va de 10 a 51, el valor por defecto es 28.",
+    "Je nach Plattform heißt der Parameter anders, meint aber dasselbe: CPU nutzt CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Dieselbe Zahl ist nicht bei jedem Codec gleich „scharf“: AV1 CQ 28 ist oft deutlich kleiner als HEVC CRF 28, und das wiederum kleiner als H.264 CRF 28.":
+      "El nombre del parámetro cambia según la plataforma, pero significa lo mismo: CPU usa CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. El mismo número no es igual de “nítido” en cada códec: AV1 CQ 28 suele ser mucho más pequeño que HEVC CRF 28, y este a su vez más pequeño que H.264 CRF 28.",
+    "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
+      "El encoder puede usar tantos bits como la escena necesite para mantener esa calidad. Acción y grano cuestan más; planos quietos, menos. Por eso el bitrate varía: no hay un objetivo fijo en MB.",
+    "Welche CQ-Werte sind sinnvoll?": "¿Qué valores de CQ tienen sentido?",
+    "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
+      "18–22: muy alto, a menudo cerca del original, el archivo sigue grande. 24–28: cine, buen compromiso (preset Película = 28). 28–32: series, notablemente más pequeño (preset Serie = 30). 34–40: bastante más pequeño; en 1080p a menudo ya suave. 40+: claramente visible, solo si el tamaño manda.",
+    "Anime liegt oft etwas niedriger (Preset 26), weil Flächen und Banding bei zu hohem CQ schnell unschön werden. Ziel-VMAF testet mehrere Werte und wählt automatisch den kleinsten mit ausreichend VMAF.":
+      "El anime suele ir un poco más bajo (preset 26), porque las áreas planas y el banding se feos rápido con un CQ alto. VMAF objetivo prueba varios valores y elige automáticamente el más pequeño con VMAF suficiente.",
+    "Warum kann die Datei mit CQ größer werden?": "¿Por qué CQ puede hacer el archivo más grande?",
+    "CQ sagt: Halte Qualität X. Wenn die Quelle schon kleiner und effizienter ist als das, was CQ X erzeugt, wächst die Datei. Typisch: Quelle ist schon gut komprimiertes AV1/HEVC und du wählst ein zu niedriges CQ (z. B. 20). Oder du gehst von einem effizienten Codec auf H.264, von 8-bit auf 10-bit (Anime-Modus), oder der Ton bleibt als fettes TrueHD kopiert.":
+      "CQ dice: mantén calidad X. Si la fuente ya es más pequeña y eficiente que lo que produce CQ X, el archivo crece. Típico: la fuente ya es AV1/HEVC bien comprimido y eliges un CQ demasiado bajo (p. ej. 20). O pasas a H.264, de 8 bit a 10 bit (modo anime), o el audio se copia como TrueHD pesado.",
+    "Aus einem fetten Remux macht CQ 28 fast immer weniger. Aus einer schon kleinen AV1-Datei macht CQ 24 oft mehr. Wenn du eine Obergrenze willst, nimm ABR, Größenziel oder Ziel-VMAF – nicht ein extrem niedriges CQ.":
+      "De un remux gordo, CQ 28 casi siempre reduce. De un AV1 ya pequeño, CQ 24 a menudo aumenta. Si quieres un tope de tamaño, usa ABR, objetivo de tamaño o VMAF objetivo, no un CQ extremadamente bajo.",
+    "CQ, ABR oder CBR – wann was? Ist variabel nicht immer besser?":
+      "¿CQ, ABR o CBR? ¿Lo variable no es siempre mejor?",
+    "Variabel ist nicht immer besser. Es kommt darauf an, ob du Qualität, ungefähre Größe oder eine harte Obergrenze steuerst.":
+      "Variable no es siempre mejor. Depende de si controlas calidad, un tamaño aproximado o un tope duro.",
+    "CQ: beste Wahl für Archive, wenn die Größe egal ist. ABR: „im Schnitt etwa X kbit/s“, schwierige Szenen dürfen höher (hier typisch bis 1,5×). CBR: Rate soll durchgängig bei X liegen – Größe sehr planbar, Qualität ungleichmäßiger.":
+      "CQ: mejor para archivos cuando el tamaño da igual. ABR: «unas X kbit/s de media»; las escenas difíciles pueden subir (aquí típicamente hasta 1,5×). CBR: el bitrate debe quedarse en X – tamaño muy previsible, calidad menos uniforme.",
+    "Beim One-Pass kennt der Encoder die Zukunft nicht. ABR verteilt trotzdem besser als CBR, weil er lokal schwanken darf. Zwei-Pass (Bitraten-Modus) verbessert vor allem ABR. CBR lohnt sich nur, wenn die Rate wirklich nicht über X steigen darf (Streaming, striktes Decoder-Limit).":
+      "En un solo paso el encoder no ve el futuro. Aun así ABR reparte mejor que CBR porque puede variar localmente. Dos pasos (modo bitrate) ayudan sobre todo a ABR. CBR solo merece la pena si el bitrate no puede superar X (streaming, límite estricto del decodificador).",
+    "Bei CPU/SVT-AV1 sind CBR und ABR technisch gleich (−b:v ohne echtes CBR). Der Unterschied greift vor allem bei Nvidia NVENC und anderen Hardware-Encodern.":
+      "En CPU/SVT-AV1, CBR y ABR son técnicamente iguales (−b:v, sin CBR real). La diferencia aplica sobre todo a Nvidia NVENC y otros encoders de hardware.",
+    "HDR & Dolby Vision": "HDR y Dolby Vision",
+    "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
+      "¿Qué es el «rango dinámico» – SDR, HDR10, HLG, HDR10+?",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
+      "SDR es la imagen normal de TV/monitor (contraste limitado). HDR10 tiene metadatos estáticos para todo el archivo (MaxCLL/MaxFALL) y PQ de 10 bit. HLG es HDR de emisión, a menudo sin metadatos extra, y se ve en muchos televisores SDR. HDR10+ puede llevar metadatos por escena; este estudio lo trata como HDR (sin ruta de encode HDR10+ propia).",
+    "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
+      "En fuentes HDR sin Dolby Vision: «Mantener HDR» conserva 10 bit y los metadatos. «Tone-mapping» convierte a SDR: cualquier pantalla lo reproduce, se pierde contraste. Las pruebas VMAF se tone-mapean igual para que las puntuaciones no salgan torcidas.",
+    "Was sind Dolby-Vision-Profile 5, 7 und 8?": "¿Qué son los perfiles Dolby Vision 5, 7 y 8?",
+    "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
+      "Dolby Vision (DV) tiene una capa dinámica (RPU): brillo y color se ajustan por escena o fotograma. El perfil dice cómo está guardado en el archivo.",
+    "Profil 5: Streaming (oft Streaming-Dienste). Eigenes Farbsystem (IPTPQc2), kein HDR10-Fallback. Ohne DV-Player sieht das Bild falsch aus. Auto mappt deshalb nach SDR.":
+      "Perfil 5: streaming (a menudo servicios de streaming). Sistema de color propio (IPTPQc2), sin fallback HDR10. Sin un reproductor DV la imagen se ve mal. Auto por eso mapea a SDR.",
+    "Profil 7: Blu-ray, zwei Layer (Basis + Enhancement). Beim Re-Encode entfällt der zweite Layer. Auto wandelt nach HEVC 8.1 (auch GPU) bzw. AV1 10.1 nur CPU/SVT.":
+      "Perfil 7: Blu-ray, dos capas (base + enhancement). Al recodificar desaparece la segunda capa. Auto convierte a HEVC 8.1 (también GPU) o AV1 10.1 solo CPU/SVT.",
+    "Profil 8 (meist 8.1): ein Layer plus HDR10-Basis. Ohne DV-Player bleibt HDR10 sichtbar. Auto übernimmt die RPU, wenn der Encoder das kann.":
+      "Perfil 8 (casi siempre 8.1): una capa más base HDR10. Sin reproductor DV sigue viéndose HDR10. Auto conserva la RPU si el encoder puede.",
+    "Profil 10.1: AV1-Dolby-Vision. Im Studio nur mit CPU/SVT (libsvtav1), nicht mit Nvidia/Intel/AMD.":
+      "Perfil 10.1: Dolby Vision en AV1. En este estudio solo con CPU/SVT (libsvtav1), no con Nvidia/Intel/AMD.",
+    "Wann DV übernehmen, nur HDR10, oder Tone-Mapping?":
+      "¿Cuándo conservar DV, solo HDR10, o tone-mapping?",
+    "Übernehmen (RPU): Film bleibt Dolby Vision, wo es geht. HEVC: Profil 8.1 via dovi_tool, auch GPU. AV1: nur CPU/SVT als 10.1. Nvidia-AV1 kann die RPU nicht einbetten → automatischer HDR10-Fallback.":
+      "Conservar (RPU): la película sigue en Dolby Vision donde se puede. HEVC: perfil 8.1 con dovi_tool, también GPU. AV1: solo CPU/SVT como 10.1. Nvidia AV1 no puede incrustar la RPU → fallback automático a HDR10.",
+    "Nur HDR10-Basis: RPU weg, statisches HDR bleibt. Sinnvoll, wenn der Player kein DV kann, die Quelle aber Profil 8/7 mit HDR10-Fallback hat.":
+      "Solo base HDR10: se quita la RPU, queda el HDR estático. Útil si el reproductor no hace DV pero la fuente es perfil 8/7 con fallback HDR10.",
+    "Tone-Mapping nach SDR: sicher für jedes Display, etwas Qualitätsverlust. Pflicht-Empfehlung bei Profil 5 ohne DV-fähigen Player.":
+      "Tone-mapping a SDR: seguro para cualquier pantalla, algo de pérdida de calidad. Recomendación fuerte en perfil 5 sin reproductor con DV.",
+    "Schlägt ein DV-Schritt fehl, bleibt die HDR10-kompatible Basis erhalten – der Job bricht deshalb nicht ab.":
+      "Si un paso DV falla, se conserva la base compatible con HDR10: el trabajo no se aborta por eso.",
+    "VMAF, Tools & Ausgabe": "VMAF, herramientas y salida",
+    "Encoding, VMAF-Tool, Super-Tool – was ist der Unterschied?":
+      "Encoding, herramienta VMAF, Super Tool: ¿cuál es la diferencia?",
+    "Encoding mit festem CQ/CBR/ABR encodiert sofort mit deinem Wert. Encoding mit Ziel-VMAF macht Test-Encodes und encodiert danach automatisch den kleinsten Wert mit VMAF ≥ Ziel (bei Ordnern nur die erste Datei, repräsentativ).":
+      "Encoding con CQ/CBR/ABR fijo recodifica al momento con tu valor. Encoding con VMAF objetivo hace encodes de prueba y luego recodifica automáticamente el valor más pequeño con VMAF ≥ objetivo (en carpetas solo el primer archivo, representativo).",
+    "VMAF-Tool: reiner Vergleich mehrerer Encoder/Codecs, kein Encode. Du wählst den Gewinner und übernimmst ihn ins Encoding.":
+      "Herramienta VMAF: comparación pura de varios encoders/códecs, sin encode. Eliges el ganador y lo aplicas en Encoding.",
+    "Super-Tool: Stapel für ganze Ordner. Ziel-VMAF pro Datei, ein repräsentativer Test für alle, oder feste Qualität ohne VMAF.":
+      "Super Tool: lotes de carpetas enteras. VMAF objetivo por archivo, una prueba representativa para todos, o calidad fija sin VMAF.",
+    "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
+      "El guardrail de calidad mide VMAF por muestras después del encode. Es un control, no una comparación previa. Opcionalmente recodifica si se queda corto.",
+    "Was ist VMAF überhaupt?": "¿Qué es VMAF?",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
+      "VMAF estima cuánto se parecen salida y fuente a la vista (típicamente 0–100). 93–95 es el punto dulce aquí: por debajo suele verse peor, por encima el archivo crece mucho a cambio de poco. El modo anime usa VMAF-NEG y 10 bit contra el banding.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "Además hay 1 % low (peores fotogramas), media armónica, PSNR y SSIM. VMAF no es una garantía: capturas y comparación A/B siguen siendo útiles.",
+    "MKV oder MP4?": "¿MKV o MP4?",
+    "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
+      "Se recomienda MKV: AV1/HEVC/H.264 y todos los subtítulos (incl. PGS). MP4 convierte subtítulos de texto a mov_text; los de imagen (PGS/VobSub) se descartan. Automático: AV1 y HEVC → MKV, H.264 → MP4.",
+    "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
+      "¿Qué hacen el modo anime, el auto-crop y el film grain?",
+    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Modo anime: modelo VMAF-NEG más encode de 10 bit para que las áreas planas banden menos. Auto-crop detecta barras negras (letterbox) y las recorta antes del encode: ahorra bits. VMAF y el guardrail usan la misma área. Film grain (solo AV1/CPU/SVT) sintetiza grano para que el encoder gaste menos en ruido real. 0 = off.",
+    "Erklärung in der FAQ": "Explicado en la FAQ",
+    "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
+      "CQ, ABR, CBR y perfiles HDR/Dolby Vision:",
+    "FAQ: Dynamik": "FAQ: rango dinámico",
+    "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: perfiles SDR, HDR y Dolby Vision",
+
     "Sprache / Language": "Sprache / Language"
   };
 
@@ -2116,6 +2295,7 @@
     "Daten & Archive": "Données et archives",
     "Einstellungen": "Paramètres",
     "Diagnose": "Diagnostic",
+    "FAQ": "FAQ",
     "Design-Modus": "Thème",
     "Server Anthrazit": "Anthracite serveur",
     "Hardware-Auslastung": "Utilisation du matériel",
@@ -2716,6 +2896,94 @@
     "Bearbeiten": "Modifier",
     "Löschen": "Supprimer",
     "Name": "Nom",
+
+    "FAQ & Technik": "FAQ et technique",
+    "Kurze Erklärungen zu den Einstellungen – so wie Video Studio sie wirklich nutzt, nicht als allgemeine Encoder-Theorie.":
+      "Explications courtes des réglages, telles que Video Studio les utilise vraiment, pas comme théorie générale d'encodeur.",
+    "Qualität & Bitrate": "Qualité et débit",
+    "Was bedeutet CQ / CRF / QP?": "Que signifient CQ / CRF / QP ?",
+    "CQ steuert nicht die Dateigröße, sondern wie streng der Encoder Fehler vermeiden soll. Die Größe ergibt sich erst daraus. Die Zahl ist umgekehrt: niedriger = schärfer und größer, höher = grober und kleiner. Der Slider geht von 10 bis 51, Vorgabe ist 28.":
+      "Le CQ ne fixe pas la taille du fichier, mais la rigueur avec laquelle l'encodeur doit éviter les erreurs visibles. La taille en découle. Le chiffre est inversé : plus bas = plus net et plus lourd, plus haut = plus grossier et plus léger. Le curseur va de 10 à 51, la valeur par défaut est 28.",
+    "Je nach Plattform heißt der Parameter anders, meint aber dasselbe: CPU nutzt CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Dieselbe Zahl ist nicht bei jedem Codec gleich „scharf“: AV1 CQ 28 ist oft deutlich kleiner als HEVC CRF 28, und das wiederum kleiner als H.264 CRF 28.":
+      "Le nom du paramètre change selon la plateforme, mais veut dire la même chose : CPU utilise CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Le même chiffre n'est pas aussi « net » d'un codec à l'autre : AV1 CQ 28 est souvent bien plus petit que HEVC CRF 28, lui-même plus petit que H.264 CRF 28.",
+    "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
+      "L'encodeur peut prendre autant de bits que la scène en a besoin pour tenir ce niveau de qualité. L'action et le grain coûtent plus ; les plans calmes, moins. Le débit varie donc – il n'y a pas d'objectif fixe en Mo.",
+    "Welche CQ-Werte sind sinnvoll?": "Quelles valeurs de CQ ont du sens ?",
+    "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
+      "18–22 : très élevé, souvent proche de la source, le fichier reste lourd. 24–28 : film, bon compromis (préréglage Film = 28). 28–32 : série, nettement plus petit (préréglage Série = 30). 34–40 : bien plus petit ; en 1080p souvent déjà doux. 40+ : clairement visible, seulement si la taille prime.",
+    "Anime liegt oft etwas niedriger (Preset 26), weil Flächen und Banding bei zu hohem CQ schnell unschön werden. Ziel-VMAF testet mehrere Werte und wählt automatisch den kleinsten mit ausreichend VMAF.":
+      "L'anime va souvent un peu plus bas (préréglage 26), car les aplats et le banding deviennent vite laids avec un CQ trop haut. Le VMAF cible teste plusieurs valeurs et garde automatiquement la plus petite encore suffisante.",
+    "Warum kann die Datei mit CQ größer werden?": "Pourquoi le CQ peut-il agrandir le fichier ?",
+    "CQ sagt: Halte Qualität X. Wenn die Quelle schon kleiner und effizienter ist als das, was CQ X erzeugt, wächst die Datei. Typisch: Quelle ist schon gut komprimiertes AV1/HEVC und du wählst ein zu niedriges CQ (z. B. 20). Oder du gehst von einem effizienten Codec auf H.264, von 8-bit auf 10-bit (Anime-Modus), oder der Ton bleibt als fettes TrueHD kopiert.":
+      "CQ signifie « tenir la qualité X ». Si la source est déjà plus petite et plus efficace que ce que CQ X produit, le fichier grossit. Typique : source déjà bien compressée en AV1/HEVC avec un CQ trop bas (p. ex. 20). Ou passage vers H.264, 8 bit → 10 bit (mode anime), ou audio TrueHD copié tel quel.",
+    "Aus einem fetten Remux macht CQ 28 fast immer weniger. Aus einer schon kleinen AV1-Datei macht CQ 24 oft mehr. Wenn du eine Obergrenze willst, nimm ABR, Größenziel oder Ziel-VMAF – nicht ein extrem niedriges CQ.":
+      "D'un gros remux, CQ 28 réduit presque toujours. D'un petit fichier AV1, CQ 24 grossit souvent. Pour un plafond de taille, utilise ABR, objectif de taille ou VMAF cible – pas un CQ extrêmement bas.",
+    "CQ, ABR oder CBR – wann was? Ist variabel nicht immer besser?":
+      "CQ, ABR ou CBR – lequel ? Le variable n'est-il pas toujours mieux ?",
+    "Variabel ist nicht immer besser. Es kommt darauf an, ob du Qualität, ungefähre Größe oder eine harte Obergrenze steuerst.":
+      "Le variable n'est pas toujours mieux. Cela dépend si tu contrôles la qualité, une taille approximative ou un plafond dur.",
+    "CQ: beste Wahl für Archive, wenn die Größe egal ist. ABR: „im Schnitt etwa X kbit/s“, schwierige Szenen dürfen höher (hier typisch bis 1,5×). CBR: Rate soll durchgängig bei X liegen – Größe sehr planbar, Qualität ungleichmäßiger.":
+      "CQ : meilleur choix pour les archives si la taille est secondaire. ABR : « environ X kbit/s en moyenne » ; les scènes difficiles peuvent monter (ici typiquement jusqu'à 1,5×). CBR : le débit doit rester à X – taille très prévisible, qualité moins uniforme.",
+    "Beim One-Pass kennt der Encoder die Zukunft nicht. ABR verteilt trotzdem besser als CBR, weil er lokal schwanken darf. Zwei-Pass (Bitraten-Modus) verbessert vor allem ABR. CBR lohnt sich nur, wenn die Rate wirklich nicht über X steigen darf (Streaming, striktes Decoder-Limit).":
+      "En une passe, l'encodeur ne voit pas l'avenir. L'ABR répartit quand même mieux que le CBR, car il peut varier localement. Deux passes (mode débit) aident surtout l'ABR. Le CBR ne vaut que si le débit ne doit vraiment pas dépasser X (streaming, limite stricte du décodeur).",
+    "Bei CPU/SVT-AV1 sind CBR und ABR technisch gleich (−b:v ohne echtes CBR). Der Unterschied greift vor allem bei Nvidia NVENC und anderen Hardware-Encodern.":
+      "Sur CPU/SVT-AV1, CBR et ABR sont techniquement identiques (−b:v, pas de vrai CBR). La différence concerne surtout Nvidia NVENC et les autres encodeurs matériels.",
+    "HDR & Dolby Vision": "HDR et Dolby Vision",
+    "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
+      "Qu'est-ce que la « dynamique » – SDR, HDR10, HLG, HDR10+ ?",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
+      "Le SDR est l'image TV/moniteur normale (contraste limité). Le HDR10 a des métadonnées statiques pour tout le fichier (MaxCLL/MaxFALL) et du PQ 10 bit. Le HLG est du HDR broadcast, souvent sans métadonnées extra, encore regardable sur beaucoup de TV SDR. Le HDR10+ peut porter des métadonnées par scène – ce studio le traite comme du HDR (pas de chemin d'encodage HDR10+ dédié).",
+    "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
+      "Pour les sources HDR sans Dolby Vision : « Conserver le HDR » garde le 10 bit et les métadonnées. Le « tone-mapping » convertit en SDR – tout écran peut le lire, le contraste est perdu. Les tests VMAF sont alors tone-mappés de la même façon pour que les scores restent justes.",
+    "Was sind Dolby-Vision-Profile 5, 7 und 8?": "Que sont les profils Dolby Vision 5, 7 et 8 ?",
+    "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
+      "Dolby Vision (DV) a une couche dynamique (RPU) : luminosité et couleur sont ajustées par scène ou image. Le profil décrit comment c'est stocké dans le fichier.",
+    "Profil 5: Streaming (oft Streaming-Dienste). Eigenes Farbsystem (IPTPQc2), kein HDR10-Fallback. Ohne DV-Player sieht das Bild falsch aus. Auto mappt deshalb nach SDR.":
+      "Profil 5 : streaming (souvent les services de streaming). Système de couleur propre (IPTPQc2), pas de repli HDR10. Sans lecteur DV, l'image est fausse. L'auto mappe donc vers SDR.",
+    "Profil 7: Blu-ray, zwei Layer (Basis + Enhancement). Beim Re-Encode entfällt der zweite Layer. Auto wandelt nach HEVC 8.1 (auch GPU) bzw. AV1 10.1 nur CPU/SVT.":
+      "Profil 7 : Blu-ray, deux couches (base + enhancement). À réencodage, la seconde couche disparaît. L'auto convertit en HEVC 8.1 (GPU ok) ou AV1 10.1 CPU/SVT seulement.",
+    "Profil 8 (meist 8.1): ein Layer plus HDR10-Basis. Ohne DV-Player bleibt HDR10 sichtbar. Auto übernimmt die RPU, wenn der Encoder das kann.":
+      "Profil 8 (souvent 8.1) : une couche plus une base HDR10. Sans lecteur DV, le HDR10 reste visible. L'auto conserve la RPU si l'encodeur le peut.",
+    "Profil 10.1: AV1-Dolby-Vision. Im Studio nur mit CPU/SVT (libsvtav1), nicht mit Nvidia/Intel/AMD.":
+      "Profil 10.1 : Dolby Vision en AV1. Dans ce studio uniquement avec CPU/SVT (libsvtav1), pas Nvidia/Intel/AMD.",
+    "Wann DV übernehmen, nur HDR10, oder Tone-Mapping?":
+      "Quand conserver le DV, le HDR10 seul, ou le tone-mapping ?",
+    "Übernehmen (RPU): Film bleibt Dolby Vision, wo es geht. HEVC: Profil 8.1 via dovi_tool, auch GPU. AV1: nur CPU/SVT als 10.1. Nvidia-AV1 kann die RPU nicht einbetten → automatischer HDR10-Fallback.":
+      "Conserver (RPU) : le film reste en Dolby Vision là où c'est possible. HEVC : profil 8.1 via dovi_tool, GPU ok. AV1 : CPU/SVT seulement en 10.1. Nvidia AV1 ne peut pas embarquer la RPU → repli HDR10 automatique.",
+    "Nur HDR10-Basis: RPU weg, statisches HDR bleibt. Sinnvoll, wenn der Player kein DV kann, die Quelle aber Profil 8/7 mit HDR10-Fallback hat.":
+      "Base HDR10 seulement : RPU retirée, HDR statique conservé. Utile si le lecteur n'a pas de DV mais la source est profil 8/7 avec repli HDR10.",
+    "Tone-Mapping nach SDR: sicher für jedes Display, etwas Qualitätsverlust. Pflicht-Empfehlung bei Profil 5 ohne DV-fähigen Player.":
+      "Tone-mapping vers SDR : sûr pour tout écran, un peu de perte de qualité. Fortement recommandé pour le profil 5 sans lecteur DV.",
+    "Schlägt ein DV-Schritt fehl, bleibt die HDR10-kompatible Basis erhalten – der Job bricht deshalb nicht ab.":
+      "Si une étape DV échoue, la base compatible HDR10 est conservée – le travail n'est pas abandonné pour autant.",
+    "VMAF, Tools & Ausgabe": "VMAF, outils et sortie",
+    "Encoding, VMAF-Tool, Super-Tool – was ist der Unterschied?":
+      "Encoding, outil VMAF, Super Tool – quelle différence ?",
+    "Encoding mit festem CQ/CBR/ABR encodiert sofort mit deinem Wert. Encoding mit Ziel-VMAF macht Test-Encodes und encodiert danach automatisch den kleinsten Wert mit VMAF ≥ Ziel (bei Ordnern nur die erste Datei, repräsentativ).":
+      "L'encoding en CQ/CBR/ABR fixe encode tout de suite avec ta valeur. L'encoding en VMAF cible fait des encodes de test, puis encode automatiquement la plus petite valeur avec VMAF ≥ cible (dossiers : premier fichier seulement, représentatif).",
+    "VMAF-Tool: reiner Vergleich mehrerer Encoder/Codecs, kein Encode. Du wählst den Gewinner und übernimmst ihn ins Encoding.":
+      "Outil VMAF : comparaison pure de plusieurs encodeurs/codecs, pas d'encode. Tu choisis le gagnant et tu l'appliques à Encoding.",
+    "Super-Tool: Stapel für ganze Ordner. Ziel-VMAF pro Datei, ein repräsentativer Test für alle, oder feste Qualität ohne VMAF.":
+      "Super Tool : lots de dossiers entiers. VMAF cible par fichier, un test représentatif pour tous, ou qualité fixe sans VMAF.",
+    "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
+      "Le garde-fou qualité mesure un VMAF d'échantillons après l'encode. C'est un contrôle, pas une comparaison préalable. Optionnellement, il réencode si le score est trop bas.",
+    "Was ist VMAF überhaupt?": "Qu'est-ce que le VMAF, au juste ?",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
+      "Le VMAF estime à quel point sortie et source se ressemblent à l'œil (typiquement 0–100). 93–95 est le sweet spot ici : en dessous ça se voit souvent, au-dessus le fichier grossit beaucoup pour peu de gain. Le mode anime utilise VMAF-NEG et 10 bit contre le banding.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "Il y a aussi le 1 % low (pires images), la moyenne harmonique, PSNR et SSIM. Le VMAF n'est pas une garantie – captures et comparaison A/B restent utiles.",
+    "MKV oder MP4?": "MKV ou MP4 ?",
+    "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
+      "MKV est recommandé : AV1/HEVC/H.264 et tous les sous-titres (y compris PGS). MP4 convertit les sous-titres texte en mov_text ; les sous-titres image (PGS/VobSub) sont abandonnés. Automatique : AV1 et HEVC → MKV, H.264 → MP4.",
+    "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
+      "Que font le mode anime, l'auto-crop et le film grain ?",
+    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Mode anime : modèle VMAF-NEG plus encode 10 bit pour que les aplats bandent moins. L'auto-crop détecte les barres noires (letterbox) et les coupe avant l'encode – ça économise des bits. VMAF et garde-fou utilisent la même surface. Le film grain (AV1/CPU/SVT seulement) synthétise du grain pour que l'encodeur dépense moins sur le vrai bruit. 0 = off.",
+    "Erklärung in der FAQ": "Expliqué dans la FAQ",
+    "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
+      "CQ, ABR, CBR et profils HDR/Dolby Vision :",
+    "FAQ: Dynamik": "FAQ : dynamique",
+    "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ : profils SDR, HDR et Dolby Vision",
 
     "Sprache / Language": "Sprache / Language"
   };

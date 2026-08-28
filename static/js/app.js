@@ -112,6 +112,19 @@
     nav.querySelectorAll(".nav-item").forEach((b) =>
       b.addEventListener("click", () => navTo(b.dataset.nav)));
     navTo(localStorage.getItem("page") || "encode");
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest("a.faq-jump");
+      if (!a) return;
+      e.preventDefault();
+      const id = (a.getAttribute("href") || "").replace(/^#/, "");
+      navTo("faq");
+      setTimeout(() => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.tagName === "DETAILS") el.open = true;
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 40);
+    });
   }
 
   /* --------------------------------------------------------------- THEME */

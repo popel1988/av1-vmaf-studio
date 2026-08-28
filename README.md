@@ -19,6 +19,7 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264**).
 - [Containers](#containers)
 - [HDR & Dolby Vision](#hdr--dolby-vision)
 - [Rate control & quality](#rate-control--quality)
+- [FAQ](#faq)
 - [Naming, duplicates & dry-run](#naming-duplicates--dry-run)
 - [Remux & editing (no re-encode)](#remux--editing-no-re-encode)
 - [Video editor](#video-editor)
@@ -56,6 +57,7 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
 | **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles, default output folder. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
+| **FAQ** | In-app explanations of CQ/CBR/ABR, HDR / Dolby Vision profiles, VMAF, and containers. |
 
 Other highlights:
 
@@ -192,6 +194,113 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   `mov_text`/`tx3g`→SRT conversion.
 - **Post-encode caps**: optional max output size (MB) and max video bitrate
   (kbit/s); failed caps are reported after the job.
+
+---
+
+## FAQ
+
+The same topics live in the dashboard under **FAQ** (sidebar). Below is the
+technical version.
+
+### CQ / CRF / QP
+
+CQ does **not** set a file size. It sets how hard the encoder should avoid
+visible errors; size follows. **Lower number = sharper and larger**, higher =
+coarser and smaller. The Encoding slider is **10–51**, default **28**.
+
+Same idea, different flag: CPU **CRF**, Nvidia **CQ**, Intel QSV
+`global_quality`, Intel/AMD VAAPI **QP**. The same number is **not** equally
+“sharp” across codecs: AV1 CQ 28 is often much smaller than HEVC CRF 28, which
+is smaller than H.264 CRF 28.
+
+The encoder may spend as many bits as a scene needs to hold that quality.
+Action and grain cost more; still scenes cost less. Bitrate therefore varies —
+there is no fixed MB target.
+
+| CQ | Typical use |
+|----|-------------|
+| 18–22 | Very high, close to the source, file stays large |
+| **24–28** | Film (preset Film = 28) |
+| **28–32** | Series, noticeably smaller (preset Serie = 30) |
+| 34–40 | Much smaller; 1080p often already soft |
+| 40+ | Clearly visible; size-first only |
+
+Anime often uses a **lower** CQ (preset 26) because flat areas band easily.
+**Target VMAF** tries several values and keeps the smallest file still ≥ target.
+
+**Why a file can grow:** CQ means “hold quality X”. If the source is already
+smaller/more efficient than what CQ X produces, output grows — e.g. already
+good AV1/HEVC with CQ 20, switching to H.264, 8-bit → 10-bit (anime mode), or
+keeping bulky TrueHD audio. A fat remux at CQ 28 almost always shrinks; a
+small AV1 file at CQ 24 often grows. For a size cap use ABR, size target, or
+target VMAF — not an extremely low CQ.
+
+### CBR vs ABR vs CQ (one-pass)
+
+Variable is **not** always better. It depends whether you care about quality,
+approximate size, or a hard rate cap.
+
+- **CQ** — archives when size is secondary.
+- **ABR** — “about X kbit/s on average”; hard scenes may go higher (here
+  typically up to **1.5×**, buffer **2×**).
+- **CBR** — rate should stay at X throughout. Size is very predictable;
+  quality is less even.
+
+One-pass cannot see the future. ABR still distributes bits better than CBR
+because it may vary locally. Two-pass (bitrate mode) mainly helps ABR. CBR is
+worth it only when the rate must not exceed X (streaming, strict decoder
+cap).
+
+On **CPU/SVT-AV1**, CBR and ABR are technically the same (`-b:v` only, no real
+CBR). The CBR vs ABR split mainly applies to **NVENC** and other hardware
+encoders.
+
+### Dynamic range (SDR / HDR / Dolby Vision)
+
+| Kind | What it is |
+|------|------------|
+| **SDR** | Standard contrast (typical PC/TV SDR). |
+| **HDR10** | Static metadata for the whole file (MaxCLL/MaxFALL), 10-bit PQ. |
+| **HLG** | Broadcast HDR; often watchable on SDR sets. |
+| **HDR10+** | Can carry per-scene metadata; this app treats it as HDR (no separate HDR10+ encode path). |
+| **Dolby Vision** | Dynamic RPU (per scene/frame). Profile describes how it is stored. |
+
+**HDR without DV:** *Keep HDR* = 10-bit + metadata. *Tone-map* = SDR for any
+display (VMAF tests are tonemapped the same way so scores stay fair).
+
+**Dolby Vision profiles (as used here):**
+
+| Profile | Typical source | Notes |
+|---------|----------------|-------|
+| **5** | Streaming | IPTPQc2, **no HDR10 fallback**. Wrong colours without a DV player. Auto → **SDR**. |
+| **7** | Blu-ray (dual layer) | Enhancement layer is dropped on re-encode. Auto → HEVC **8.1** (GPU ok) or AV1 **10.1** (CPU/SVT only). |
+| **8 / 8.1** | Single layer + HDR10 base | Watchable as HDR10 without DV. Auto keeps the RPU when the encoder can. |
+| **10.1** | AV1 DV | **CPU/SVT only** (`libsvtav1 -dolbyvision`). Nvidia/Intel/AMD cannot embed the RPU → HDR10 fallback. |
+
+*Preserve RPU:* HEVC 8.1 via `dovi_tool` (GPU ok); AV1 10.1 CPU only. *HDR10
+base only:* drop RPU, keep static HDR. *Tone-map:* safest for any display;
+recommended for profile 5 without a DV player. If a DV step fails, the
+HDR10-compatible base is kept and the job does not fail.
+
+### Which tool?
+
+| Place | Behaviour |
+|-------|-----------|
+| **Encoding** (fixed CQ/CBR/ABR) | Encodes immediately with your value. |
+| **Encoding** (target VMAF) | Test encodes, then auto-encode the smallest value ≥ target. Folders: first file only (representative). |
+| **VMAF Tool** | Compare several encoders/codecs; no encode. Pick a winner → Encoding. |
+| **Super Tool** | Folder batches: per-file target VMAF, one representative test, or fixed quality. |
+| **Quality guardrail** | Measures VMAF **after** encode (optional re-encode). Not a pre-comparison. |
+
+VMAF estimates perceptual similarity (roughly 0–100). **93–95** is the
+sweet-spot used here. Anime mode uses **VMAF-NEG** + 10-bit against banding.
+VMAF is not a guarantee — screenshots and A/B compare still help.
+
+**MKV** is recommended (all codecs and subtitle types). **MP4** converts text
+subs to `mov_text` and drops image subs (PGS/VobSub).
+
+**Anime mode** = VMAF-NEG + 10-bit. **Auto-crop** = `cropdetect` letterbox
+(same crop for VMAF/guardrail). **Film grain** = AV1/CPU/SVT only; 0 = off.
 
 ---
 

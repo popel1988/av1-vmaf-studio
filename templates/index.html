@@ -34,6 +34,7 @@
         <button class="nav-item" data-nav="data"><span>💾</span> Daten &amp; Archive</button>
         <button class="nav-item" data-nav="settings"><span>⚙</span> Einstellungen</button>
         <button class="nav-item" data-nav="diag"><span>🩺</span> Diagnose</button>
+        <button class="nav-item" data-nav="faq"><span>?</span> FAQ</button>
         <button class="nav-item" type="button" id="btn-global-search"><span>🔎</span> Suche</button>
       </nav>
 
@@ -213,7 +214,7 @@
                       <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
                       <option value="preserve">HDR beibehalten (10-bit)</option>
                     </select>
-                    <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
+                    <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer). <a href="#faq-hdr" class="faq-jump">FAQ: Dynamik</a></p>
                   </div>
                   <div id="dv-mode-wrap" style="display:none">
                     <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
@@ -233,6 +234,7 @@
                     <option value="abr">Average Bitrate (VBR-Ziel)</option>
                     <option value="vmaf">Ziel-VMAF (Test-Encodes, dann Encode)</option>
                   </select>
+                  <p class="hint">CQ, ABR, CBR und HDR/Dolby-Vision-Profile: <a href="#faq-cbr" class="faq-jump">Erklärung in der FAQ</a></p>
                 </div>
                 <div class="field" id="enc-cq-field">
                   <label data-tip="Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.">Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
@@ -1034,6 +1036,7 @@
               <p class="hint" id="st-dynamik-hint">Automatisch wählt pro Datei die sinnvolle
                 Behandlung: Dolby Vision (RPU) bzw. HDR10/HLG bleiben erhalten, SDR bleibt SDR.
                 DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.</p>
+              <p class="hint"><a href="#faq-hdr" class="faq-jump">FAQ: SDR, HDR und Dolby-Vision-Profile</a></p>
             </div>
 
             <div class="field-row" id="st-quality-field" style="display:none">
@@ -2246,6 +2249,110 @@
               <span id="diag-progress" class="muted"></span>
             </div>
             <div id="diag-report"></div>
+          </div>
+        </section>
+
+        <!-- PAGE: FAQ / Technik -->
+        <section class="card span-3" data-page="faq">
+          <div class="card-head">
+            <h3><span class="card-idx">?</span> FAQ &amp; Technik</h3>
+          </div>
+          <div class="card-body faq-page">
+            <p class="hint">Kurze Erklärungen zu den Einstellungen – so wie Video Studio sie wirklich nutzt, nicht als allgemeine Encoder-Theorie.</p>
+
+            <h4 class="subsection">Qualität &amp; Bitrate</h4>
+
+            <details class="faq-item" id="faq-cq">
+              <summary>Was bedeutet CQ / CRF / QP?</summary>
+              <div class="faq-body">
+                <p>CQ steuert nicht die Dateigröße, sondern wie streng der Encoder Fehler vermeiden soll. Die Größe ergibt sich erst daraus. Die Zahl ist umgekehrt: niedriger = schärfer und größer, höher = grober und kleiner. Der Slider geht von 10 bis 51, Vorgabe ist 28.</p>
+                <p>Je nach Plattform heißt der Parameter anders, meint aber dasselbe: CPU nutzt CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Dieselbe Zahl ist nicht bei jedem Codec gleich „scharf“: AV1 CQ 28 ist oft deutlich kleiner als HEVC CRF 28, und das wiederum kleiner als H.264 CRF 28.</p>
+                <p>Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-cq-values">
+              <summary>Welche CQ-Werte sind sinnvoll?</summary>
+              <div class="faq-body">
+                <p>18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.</p>
+                <p>Anime liegt oft etwas niedriger (Preset 26), weil Flächen und Banding bei zu hohem CQ schnell unschön werden. Ziel-VMAF testet mehrere Werte und wählt automatisch den kleinsten mit ausreichend VMAF.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-cq-grow">
+              <summary>Warum kann die Datei mit CQ größer werden?</summary>
+              <div class="faq-body">
+                <p>CQ sagt: Halte Qualität X. Wenn die Quelle schon kleiner und effizienter ist als das, was CQ X erzeugt, wächst die Datei. Typisch: Quelle ist schon gut komprimiertes AV1/HEVC und du wählst ein zu niedriges CQ (z. B. 20). Oder du gehst von einem effizienten Codec auf H.264, von 8-bit auf 10-bit (Anime-Modus), oder der Ton bleibt als fettes TrueHD kopiert.</p>
+                <p>Aus einem fetten Remux macht CQ 28 fast immer weniger. Aus einer schon kleinen AV1-Datei macht CQ 24 oft mehr. Wenn du eine Obergrenze willst, nimm ABR, Größenziel oder Ziel-VMAF – nicht ein extrem niedriges CQ.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-cbr">
+              <summary>CQ, ABR oder CBR – wann was? Ist variabel nicht immer besser?</summary>
+              <div class="faq-body">
+                <p>Variabel ist nicht immer besser. Es kommt darauf an, ob du Qualität, ungefähre Größe oder eine harte Obergrenze steuerst.</p>
+                <p>CQ: beste Wahl für Archive, wenn die Größe egal ist. ABR: „im Schnitt etwa X kbit/s“, schwierige Szenen dürfen höher (hier typisch bis 1,5×). CBR: Rate soll durchgängig bei X liegen – Größe sehr planbar, Qualität ungleichmäßiger.</p>
+                <p>Beim One-Pass kennt der Encoder die Zukunft nicht. ABR verteilt trotzdem besser als CBR, weil er lokal schwanken darf. Zwei-Pass (Bitraten-Modus) verbessert vor allem ABR. CBR lohnt sich nur, wenn die Rate wirklich nicht über X steigen darf (Streaming, striktes Decoder-Limit).</p>
+                <p>Bei CPU/SVT-AV1 sind CBR und ABR technisch gleich (−b:v ohne echtes CBR). Der Unterschied greift vor allem bei Nvidia NVENC und anderen Hardware-Encodern.</p>
+              </div>
+            </details>
+
+            <h4 class="subsection">HDR &amp; Dolby Vision</h4>
+
+            <details class="faq-item" id="faq-hdr">
+              <summary>Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?</summary>
+              <div class="faq-body">
+                <p>SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).</p>
+                <p>Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-dv-profiles">
+              <summary>Was sind Dolby-Vision-Profile 5, 7 und 8?</summary>
+              <div class="faq-body">
+                <p>Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.</p>
+                <p>Profil 5: Streaming (oft Streaming-Dienste). Eigenes Farbsystem (IPTPQc2), kein HDR10-Fallback. Ohne DV-Player sieht das Bild falsch aus. Auto mappt deshalb nach SDR.</p>
+                <p>Profil 7: Blu-ray, zwei Layer (Basis + Enhancement). Beim Re-Encode entfällt der zweite Layer. Auto wandelt nach HEVC 8.1 (auch GPU) bzw. AV1 10.1 nur CPU/SVT.</p>
+                <p>Profil 8 (meist 8.1): ein Layer plus HDR10-Basis. Ohne DV-Player bleibt HDR10 sichtbar. Auto übernimmt die RPU, wenn der Encoder das kann.</p>
+                <p>Profil 10.1: AV1-Dolby-Vision. Im Studio nur mit CPU/SVT (libsvtav1), nicht mit Nvidia/Intel/AMD.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-dv-mode">
+              <summary>Wann DV übernehmen, nur HDR10, oder Tone-Mapping?</summary>
+              <div class="faq-body">
+                <p>Übernehmen (RPU): Film bleibt Dolby Vision, wo es geht. HEVC: Profil 8.1 via dovi_tool, auch GPU. AV1: nur CPU/SVT als 10.1. Nvidia-AV1 kann die RPU nicht einbetten → automatischer HDR10-Fallback.</p>
+                <p>Nur HDR10-Basis: RPU weg, statisches HDR bleibt. Sinnvoll, wenn der Player kein DV kann, die Quelle aber Profil 8/7 mit HDR10-Fallback hat.</p>
+                <p>Tone-Mapping nach SDR: sicher für jedes Display, etwas Qualitätsverlust. Pflicht-Empfehlung bei Profil 5 ohne DV-fähigen Player.</p>
+                <p>Schlägt ein DV-Schritt fehl, bleibt die HDR10-kompatible Basis erhalten – der Job bricht deshalb nicht ab.</p>
+              </div>
+            </details>
+
+            <h4 class="subsection">VMAF, Tools &amp; Ausgabe</h4>
+
+            <details class="faq-item" id="faq-tools">
+              <summary>Encoding, VMAF-Tool, Super-Tool – was ist der Unterschied?</summary>
+              <div class="faq-body">
+                <p>Encoding mit festem CQ/CBR/ABR encodiert sofort mit deinem Wert. Encoding mit Ziel-VMAF macht Test-Encodes und encodiert danach automatisch den kleinsten Wert mit VMAF ≥ Ziel (bei Ordnern nur die erste Datei, repräsentativ).</p>
+                <p>VMAF-Tool: reiner Vergleich mehrerer Encoder/Codecs, kein Encode. Du wählst den Gewinner und übernimmst ihn ins Encoding.</p>
+                <p>Super-Tool: Stapel für ganze Ordner. Ziel-VMAF pro Datei, ein repräsentativer Test für alle, oder feste Qualität ohne VMAF.</p>
+                <p>Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-vmaf">
+              <summary>Was ist VMAF überhaupt?</summary>
+              <div class="faq-body">
+                <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.</p>
+                <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-container">
+              <summary>MKV oder MP4?</summary>
+              <div class="faq-body">
+                <p>MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-anime">
+              <summary>Was tun Anime-Modus, Auto-Crop und Film-Grain?</summary>
+              <div class="faq-body">
+                <p>Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.</p>
+              </div>
+            </details>
           </div>
         </section>
       </div>
