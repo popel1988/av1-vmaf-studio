@@ -630,15 +630,16 @@ def build_concat_reencode_cmd(files: list, output: Path, platform: str,
     cmd += ["-filter_complex", filt, "-map", "[v]", "-map", "[a]", "-c:v", enc]
     cq = int(cq or 30)
     if backend == "nvenc":
-        cmd += ["-rc", "vbr", "-cq", str(cq), "-preset", "p5"]
+        cmd += ["-rc", "vbr", "-cq", str(cq)]
+        cmd += ff.encoder_preset_args(enc, "balanced")
     elif backend == "qsv":
         cmd += ["-global_quality", str(cq)]
+        cmd += ff.encoder_preset_args(enc, "balanced")
     elif backend == "vaapi":
         cmd += ["-rc_mode", "CQP", "-qp", str(cq)]
     else:
         cmd += ["-crf", str(cq)]
-        if enc == "libsvtav1":
-            cmd += ["-preset", "6"]
+        cmd += ff.encoder_preset_args(enc, "balanced")
     cmd += ["-c:a", "aac", "-b:a", "384k",
             "-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""

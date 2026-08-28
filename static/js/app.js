@@ -1073,6 +1073,7 @@
       if ($("opt-codec")) updateCodecAvailability();
       if ($("vt-codec")) vtUpdateCodecAvailability();
       if ($("st-codec")) stUpdateCodec();
+      if ($("eb-codec")) ebUpdateCodec();
       buildCompareOptions();
     } catch (e) { /* still: UI fällt auf Build-Verfügbarkeit zurück */ }
   }
@@ -1101,6 +1102,7 @@
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
     }
     syncDvOption();
+    fillJobSpeedSelect("opt-enc-speed", "opt-platform", "opt-codec");
   }
 
   function compareLabel(v, info) {
@@ -1267,6 +1269,56 @@
     });
   }
 
+  function vmafP1GapValue() {
+    const n = Number(window.APP_CONFIG && APP_CONFIG.vmafP1Gap);
+    return Number.isFinite(n) ? n : 6;
+  }
+
+  function applyVmafP1Gap(gap, persist) {
+    gap = Number(gap);
+    if (!Number.isFinite(gap)) gap = 6;
+    if (gap <= 0) gap = 0;
+    else gap = Math.min(12, Math.max(1, Math.round(gap)));
+    const slider = $("cfg-p1-gap");
+    if (slider) slider.value = String(gap);
+    const valEl = $("cfg-p1-gap-val");
+    if (valEl) valEl.textContent = String(gap);
+    const badge = $("vmaf-p1-badge");
+    if (badge) badge.textContent = gap <= 0 ? "nur Mittel" : `${gap} Punkte`;
+    const hint = $("cfg-p1-gap-hint");
+    if (hint) {
+      hint.textContent = gap <= 0
+        ? "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert."
+        : `Bei Ziel 94 muss das 1%-Low ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
+    }
+    if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Gap = gap;
+  }
+
+  function initVmafP1Gap() {
+    const slider = $("cfg-p1-gap");
+    if (!slider) return;
+    applyVmafP1Gap(vmafP1GapValue(), true);
+    slider.addEventListener("input", () => applyVmafP1Gap(slider.value, false));
+    document.querySelectorAll("[data-p1-gap]").forEach((btn) => {
+      btn.addEventListener("click", () => applyVmafP1Gap(btn.getAttribute("data-p1-gap"), false));
+    });
+    fetch("/api/settings").then((r) => r.json()).then((d) => {
+      if (d && d.vmaf_p1_gap != null) applyVmafP1Gap(d.vmaf_p1_gap, true);
+    }).catch(() => {});
+    const save = $("btn-p1-gap-save");
+    if (save) save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const d = await (await fetch("/api/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vmaf_p1_gap: Number(slider.value) }),
+        })).json();
+        if (d.error) { alert(d.error); return; }
+        applyVmafP1Gap(d.vmaf_p1_gap, true);
+      } finally { save.disabled = false; }
+    });
+  }
+
   // Ordner im Medienbaum wählen → media-relativer Pfad in out-subdir.
   function openOutPicker(prefix) {
     state.outPick = { prefix, path: "" };
@@ -1331,6 +1383,514 @@
     }
   }
 
+  const ENC_SPEED_IDS = ["cfg-enc-speed", "opt-enc-speed", "vt-enc-speed", "st-enc-speed", "ed-enc-speed"];
+  const ENC_SPEED_JOB_IDS = [
+    ["opt-enc-speed", "opt-platform", "opt-codec"],
+    ["vt-enc-speed", "vt-platform", "vt-codec"],
+    ["st-enc-speed", "st-platform", "st-codec"],
+    ["ed-enc-speed", "ed-platform", "ed-codec"],
+  ];
+  const ENC_SPEED_LABELS = {
+    fastest: "Sehr schnell", fast: "Schnell", balanced: "Ausgewogen",
+    slow: "Langsam", slowest: "Sehr langsam",
+  };
+
+  function speedFamily(platform, codec) {
+    const e = encoderInfo(platform, codec);
+    const enc = (e && e.encoder) || "";
+    if (enc === "libsvtav1") return "svt";
+    if (enc.indexOf("libx") === 0) return "x264";
+    if (enc.indexOf("nvenc") >= 0) return "nvenc";
+    if (enc.indexOf("qsv") >= 0) return "qsv";
+    return "none";
+  }
+  function speedPresetsFor(platform, codec) {
+    const cat = (window.APP_CONFIG && APP_CONFIG.speedPresets) || {};
+    return cat[speedFamily(platform, codec)] || [];
+  }
+  function normalizeSpeedValue(v) {
+    v = String(v || "").trim().toLowerCase();
+    if (["fastest", "fast", "balanced", "slow", "slowest"].includes(v)) return v;
+    const cat = (window.APP_CONFIG && APP_CONFIG.speedPresets) || {};
+    for (const k of Object.keys(cat)) {
+      if ((cat[k] || []).some((p) => p.value === v)) return v;
+    }
+    return "balanced";
+  }
+  function encoderSpeedValue(id) {
+    const el = $(id);
+    return normalizeSpeedValue(el ? el.value : "");
+  }
+  function nativeForAlias(platform, codec, speed) {
+    const presets = speedPresetsFor(platform, codec);
+    const v = normalizeSpeedValue(speed);
+    if (!presets.length) return v;
+    if (presets.some((p) => p.value === v)) return v;
+    const hit = presets.find((p) => p.alias === v);
+    if (hit) return hit.value;
+    const bal = presets.find((p) => p.alias === "balanced");
+    return (bal && bal.value) || presets[0].value;
+  }
+  function speedLabelFor(platform, codec, speed) {
+    const p = speedPresetsFor(platform, codec).find((x) => x.value === speed);
+    if (p) return p.label;
+    return ENC_SPEED_LABELS[speed] || speed || "";
+  }
+  function fillJobSpeedSelect(selId, platformId, codecId, preferred) {
+    const sel = $(selId);
+    const platEl = $(platformId);
+    const codecEl = $(codecId);
+    if (!sel || !platEl || !codecEl) return;
+    const presets = speedPresetsFor(platEl.value, codecEl.value);
+    const want = nativeForAlias(platEl.value, codecEl.value, preferred || sel.value);
+    if (!presets.length) {
+      sel.innerHTML = '<option value="balanced">Kein Speed-Preset (VAAPI)</option>';
+      sel.value = "balanced";
+      refreshEncSpeedWarn(sel);
+      return;
+    }
+    sel.innerHTML = presets.map((p) =>
+      `<option value="${escapeHtml(p.value)}">${escapeHtml(p.label)}</option>`).join("");
+    sel.value = presets.some((p) => p.value === want)
+      ? want
+      : nativeForAlias(platEl.value, codecEl.value, "balanced");
+    refreshEncSpeedWarn(sel);
+  }
+  function refreshAllJobSpeedSelects(preferred) {
+    ENC_SPEED_JOB_IDS.forEach(([sid, pid, cid]) => fillJobSpeedSelect(sid, pid, cid, preferred));
+  }
+
+  function encSpeedWarnText(v, platform, codec) {
+    if (v === "fastest" || v === "fast") {
+      return "Achtung: schnellere Stufe = weniger gründliche Suche. Die Datei wird oft größer bzw. die Bit-Effizienz schlechter. VMAF-Werte gelten nur für genau diese Stufe.";
+    }
+    if (v === "slow" || v === "slowest") {
+      return "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.";
+    }
+    const presets = speedPresetsFor(platform, codec);
+    const idx = presets.findIndex((p) => p.value === v);
+    if (idx < 0 || presets.length < 2) return "";
+    const frac = idx / (presets.length - 1);
+    if (frac <= 0.22) {
+      return "Achtung: schnellere Stufe = weniger gründliche Suche. Die Datei wird oft größer bzw. die Bit-Effizienz schlechter. VMAF-Werte gelten nur für genau diese Stufe.";
+    }
+    if (frac >= 0.75) {
+      return "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.";
+    }
+    return "";
+  }
+
+  function refreshEncSpeedWarn(sel) {
+    if (!sel) return;
+    const warn = sel.parentElement && sel.parentElement.querySelector(".enc-speed-warn");
+    if (!warn) return;
+    let plat = "", cod = "";
+    const row = ENC_SPEED_JOB_IDS.find((r) => r[0] === sel.id);
+    if (row) {
+      plat = ($(row[1]) && $(row[1]).value) || "";
+      cod = ($(row[2]) && $(row[2]).value) || "";
+    }
+    const t = encSpeedWarnText(sel.value, plat, cod);
+    warn.textContent = t;
+    warn.style.display = t ? "" : "none";
+    warn.classList.toggle("warn", !!t);
+  }
+
+  function applyEncoderSpeed(speed) {
+    const v = normalizeSpeedValue(speed);
+    const cfg = $("cfg-enc-speed");
+    if (cfg) {
+      if (v && ![...cfg.options].some((o) => o.value === v)) {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = v + " (vom Encoder-Test)";
+        cfg.appendChild(o);
+      }
+      if ([...cfg.options].some((o) => o.value === v)) cfg.value = v;
+      else if (["fastest", "fast", "balanced", "slow", "slowest"].includes(v)) cfg.value = v;
+      refreshEncSpeedWarn(cfg);
+    }
+    refreshAllJobSpeedSelects(v);
+    const badge = $("enc-speed-badge");
+    if (badge) {
+      const plat = $("opt-platform") && $("opt-platform").value;
+      const codec = $("opt-codec") && $("opt-codec").value;
+      badge.textContent = speedLabelFor(plat, codec, v) || ENC_SPEED_LABELS[v] || v;
+    }
+    if (window.APP_CONFIG) APP_CONFIG.encoderSpeed = v;
+  }
+
+  function initEncoderSpeed() {
+    ENC_SPEED_IDS.forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", () => refreshEncSpeedWarn(el));
+    });
+    [["opt-platform", "opt-codec", "opt-enc-speed"],
+     ["vt-platform", "vt-codec", "vt-enc-speed"],
+     ["st-platform", "st-codec", "st-enc-speed"],
+     ["ed-platform", "ed-codec", "ed-enc-speed"]].forEach(([p, c, s]) => {
+      const pe = $(p); const ce = $(c);
+      if (pe) pe.addEventListener("change", () => fillJobSpeedSelect(s, p, c));
+      if (ce) ce.addEventListener("change", () => fillJobSpeedSelect(s, p, c));
+    });
+    const saved = (window.APP_CONFIG && APP_CONFIG.encoderSpeed) || "balanced";
+    applyEncoderSpeed(saved);
+    fetch("/api/settings").then((r) => r.json()).then((d) => {
+      if (d && d.encoder_speed) applyEncoderSpeed(d.encoder_speed);
+    }).catch(() => {});
+    const save = $("btn-enc-speed-save");
+    if (save) save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const speed = encoderSpeedValue("cfg-enc-speed");
+        const d = await (await fetch("/api/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ encoder_speed: speed }),
+        })).json();
+        if (d.error) { alert(d.error); return; }
+        applyEncoderSpeed(d.encoder_speed || speed);
+      } finally { save.disabled = false; }
+    });
+  }
+
+  let ebExtra = [];
+  let ebPoll = null;
+
+  function ebSelectedClipIds() {
+    return [...document.querySelectorAll(".eb-clip:checked")].map((el) => el.value);
+  }
+  function ebSelectedSpeeds() {
+    return [...document.querySelectorAll(".eb-speed:checked")].map((el) => el.value);
+  }
+  function ebParseValues() {
+    const raw = ($("eb-values") && $("eb-values").value) || "";
+    return raw.split(/[,;\s]+/).map((s) => parseInt(s, 10)).filter((n) => n > 0).slice(0, 4);
+  }
+  function ebRateMode() {
+    return ($("eb-rate") && $("eb-rate").value) || "cq";
+  }
+  function ebUpdateEstimate() {
+    const el = $("eb-estimate");
+    if (!el) return;
+    const nClips = ebSelectedClipIds().length + ebExtra.length;
+    const nSp = ebSelectedSpeeds().length;
+    const nVal = ebParseValues().length || 0;
+    const nSamp = parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 1;
+    const n = nClips * nSp * nVal * nSamp;
+    if (!n) {
+      el.textContent = "Mindestens einen Clip und eine Speed-Stufe wählen.";
+      return;
+    }
+    el.textContent = `Ungefähr ${n} Mini-Encodes (${nClips} Clips × ${nSp} Speed-Stufen × ${nVal} Qualitätswerte × ${nSamp} Szenen).`
+      + (n >= 40
+        ? " Das dauert – CPU-AV1 mit allen Stufen kann Stunden laufen."
+        : " CPU-AV1 dauert deutlich länger als GPU.");
+  }
+  function ebUpdateCodec() {
+    const sel = $("eb-codec");
+    const platEl = $("eb-platform");
+    if (!sel || !platEl) return;
+    const plat = platEl.value;
+    let firstAvail = null;
+    [...sel.options].forEach((opt) => {
+      const ok = isEncoderAvailable(plat, opt.value);
+      opt.disabled = !ok;
+      opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
+        + (ok ? "" : encUnavailReason(plat, opt.value));
+      if (ok && firstAvail === null) firstAvail = opt.value;
+    });
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) {
+      sel.value = firstAvail;
+    }
+    fillBenchSpeeds("default");
+  }
+  function fillBenchSpeeds(mode) {
+    const box = $("eb-speeds");
+    if (!box) return;
+    const plat = $("eb-platform") && $("eb-platform").value;
+    const codec = $("eb-codec") && $("eb-codec").value;
+    const presets = speedPresetsFor(plat, codec);
+    const prev = new Set(ebSelectedSpeeds());
+    const first = !box.querySelector(".eb-speed");
+    if (!presets.length) {
+      box.innerHTML = '<p class="hint">Dieser Encoder hat kein Speed-Preset (VAAPI). Der Test vergleicht dann nur CQ-/ABR-Werte auf einer Stufe.</p>';
+      ebUpdateEstimate();
+      return;
+    }
+    box.innerHTML = presets.map((p) => {
+      let checked = "";
+      if (mode === "all") checked = "checked";
+      else if (mode === "default" || first) checked = p.bench_default ? "checked" : "";
+      else checked = prev.has(p.value) ? "checked" : "";
+      return `<label class="check"><input type="checkbox" class="eb-speed" value="${escapeHtml(p.value)}" ${checked}/><span>${escapeHtml(p.label)}</span></label>`;
+    }).join("");
+    box.querySelectorAll(".eb-speed").forEach((el) => {
+      el.addEventListener("change", ebUpdateEstimate);
+    });
+    ebUpdateEstimate();
+  }
+  function ebRenderClips(clips) {
+    const box = $("eb-clips");
+    if (!box) return;
+    const prev = new Set(ebSelectedClipIds());
+    const first = !box.querySelector(".eb-clip");
+    box.innerHTML = (clips || []).map((c) => {
+      const checked = first
+        ? (["anim", "cgi", "live"].includes(c.id) ? "checked" : "")
+        : (prev.has(c.id) ? "checked" : "");
+      const status = c.present
+        ? `Geladen · ${c.human || ""}`
+        : `Nicht geladen · ca. ${c.approx_mb} MB`;
+      return `<label class="enc-bench-clip">
+        <input type="checkbox" class="eb-clip" value="${escapeHtml(c.id)}" ${checked} />
+        <span>
+          <strong>${escapeHtml(c.title)}</strong>
+          <span class="enc-bench-status${c.present ? " ok" : ""}">${escapeHtml(status)}</span>
+          <span class="why">${escapeHtml(c.why || "")}</span>
+          <span class="why">${escapeHtml(c.license || "")}</span>
+        </span>
+      </label>`;
+    }).join("");
+    box.querySelectorAll(".eb-clip").forEach((el) => {
+      el.addEventListener("change", ebUpdateEstimate);
+    });
+    ebUpdateEstimate();
+  }
+  function ebRenderExtras() {
+    const box = $("eb-extras");
+    if (!box) return;
+    if (!ebExtra.length) {
+      box.innerHTML = '<p class="hint">Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.</p>';
+      ebUpdateEstimate();
+      return;
+    }
+    box.innerHTML = ebExtra.map((f, i) =>
+      `<div class="enc-bench-extra">${escapeHtml(f.name)}
+        <button type="button" class="btn btn-ghost btn-sm" data-eb-x="${i}">Entfernen</button>
+      </div>`).join("");
+    box.querySelectorAll("[data-eb-x]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        ebExtra.splice(parseInt(btn.getAttribute("data-eb-x"), 10), 1);
+        ebRenderExtras();
+      });
+    });
+    ebUpdateEstimate();
+  }
+  function ebFillValuesDefault() {
+    const inp = $("eb-values");
+    if (!inp) return;
+    inp.value = ebRateMode() === "cq" ? "24, 28, 32" : "8000, 6000, 4000";
+    inp.placeholder = ebRateMode() === "cq" ? "z. B. 24, 28, 32" : "z. B. 8000, 6000, 4000";
+    ebUpdateEstimate();
+  }
+  function ebRenderProgress(d) {
+    const msg = $("eb-msg");
+    const fill = $("eb-bar-fill");
+    const pct = $("eb-pct");
+    if (msg) msg.textContent = d.error || d.message || "";
+    const p = Math.max(0, Math.min(100, Number(d.percent) || 0));
+    if (fill) fill.style.width = p + "%";
+    if (pct) pct.textContent = p.toFixed(0) + " %";
+    const running = !!d.running;
+    const start = $("btn-eb-start");
+    const cancel = $("btn-eb-cancel");
+    const dl = $("btn-eb-download");
+    if (start) start.disabled = running;
+    if (dl) dl.disabled = running;
+    if (cancel) cancel.disabled = !running;
+  }
+  function ebRenderTable(rows, rec) {
+    const wrap = $("eb-results");
+    if (!wrap) return;
+    if (!rows || !rows.length) { wrap.innerHTML = ""; return; }
+    const recSpeed = rec && rec.speed;
+    const body = rows.map((r) => {
+      if (r.error) {
+        return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="6" class="bad">${escapeHtml(r.error)}</td></tr>`;
+      }
+      const recCls = recSpeed && r.speed === recSpeed ? " row-recommended" : "";
+      const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
+      const vmaf = r.vmaf != null ? Number(r.vmaf).toFixed(1) : "—";
+      const low = r.vmaf_1pct != null ? Number(r.vmaf_1pct).toFixed(1) : "—";
+      const spd = speedLabelFor(r.platform, r.codec, r.speed);
+      return `<tr class="${recCls}">
+        <td>${escapeHtml(r.clip || "")}</td>
+        <td>${escapeHtml(spd)}</td>
+        <td class="num">${escapeHtml(String(val))}</td>
+        <td class="num">${vmaf}</td>
+        <td class="num">${low}</td>
+        <td class="num">${escapeHtml(r.size_human || "")}</td>
+        <td class="num">${r.seconds != null ? Number(r.seconds).toFixed(1) + " s" : ""}</td>
+      </tr>`;
+    }).join("");
+    wrap.innerHTML = `<div class="data-table-wrap"><table class="data-table enc-bench-table">
+      <thead><tr>
+        <th>Clip</th><th>Speed</th><th>Wert</th><th>VMAF</th><th>1%-Low</th><th>Größe</th><th>Zeit</th>
+      </tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+  function ebRenderRec(rec) {
+    const box = $("eb-rec");
+    const apply = $("btn-eb-apply");
+    if (!box) return;
+    if (!rec || !rec.reason) {
+      box.style.display = "none";
+      box.textContent = "";
+      if (apply) apply.style.display = "none";
+      return;
+    }
+    box.style.display = "";
+    box.textContent = rec.reason;
+    if (apply) {
+      apply.style.display = rec.speed ? "" : "none";
+      apply.dataset.speed = rec.speed || "";
+    }
+  }
+  function ebApplySnapshot(d) {
+    if (!d) return;
+    ebRenderClips(d.clips || []);
+    ebRenderProgress(d);
+    if (d.running) {
+      ebRenderTable(d.rows || [], d.recommendation);
+      ebRenderRec(d.recommendation);
+    } else {
+      const last = d.last || {};
+      ebRenderTable(last.rows || d.rows || [], last.recommendation || d.recommendation);
+      ebRenderRec(last.recommendation || d.recommendation);
+    }
+  }
+  function ebStopPoll() {
+    if (ebPoll) { clearInterval(ebPoll); ebPoll = null; }
+  }
+  function ebEnsurePoll() {
+    if (ebPoll) return;
+    ebPoll = setInterval(ebRefresh, 1200);
+  }
+  async function ebRefresh() {
+    try {
+      const d = await (await fetch("/api/encoder-bench")).json();
+      ebApplySnapshot(d);
+      if (d.running) ebEnsurePoll();
+      else ebStopPoll();
+    } catch (e) { /* ignore */ }
+  }
+  async function ebPost(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
+  function initEncoderBench() {
+    if (!$("eb-clips")) return;
+    ebRenderExtras();
+    const plat = $("eb-platform");
+    if (plat) plat.addEventListener("change", ebUpdateCodec);
+    const codec = $("eb-codec");
+    if (codec) codec.addEventListener("change", ebUpdateCodec);
+    ebUpdateCodec();
+    const rate = $("eb-rate");
+    if (rate) rate.addEventListener("change", ebFillValuesDefault);
+    const vals = $("eb-values");
+    if (vals) vals.addEventListener("input", ebUpdateEstimate);
+    const samp = $("eb-samples");
+    if (samp) samp.addEventListener("change", ebUpdateEstimate);
+    const allBtn = $("btn-eb-speeds-all");
+    if (allBtn) allBtn.addEventListener("click", () => fillBenchSpeeds("all"));
+    const defBtn = $("btn-eb-speeds-default");
+    if (defBtn) defBtn.addEventListener("click", () => fillBenchSpeeds("default"));
+    const add = $("btn-eb-add");
+    if (add) add.addEventListener("click", () => {
+      if (ebExtra.length >= 4) { alert("Höchstens 4 eigene Dateien."); return; }
+      openFilePickerModal({
+        title: "Eigene Testdatei wählen",
+        rememberKey: "encBenchDir",
+        multi: true,
+        onPickMany: (files) => {
+          (files || []).forEach((f) => {
+            if (ebExtra.length >= 4) return;
+            if (ebExtra.some((x) => x.rel === f.rel)) return;
+            ebExtra.push({ rel: f.rel, name: f.name });
+          });
+          ebRenderExtras();
+        },
+        onPick: (f) => {
+          if (ebExtra.length >= 4) return;
+          if (ebExtra.some((x) => x.rel === f.rel)) return;
+          ebExtra.push({ rel: f.rel, name: f.name });
+          ebRenderExtras();
+        },
+      });
+    });
+    const dl = $("btn-eb-download");
+    if (dl) dl.addEventListener("click", async () => {
+      const ids = ebSelectedClipIds();
+      if (!ids.length) { alert("Mindestens einen Referenzclip anhaken."); return; }
+      try {
+        await ebPost("/api/encoder-bench/download", { ids });
+        ebEnsurePoll();
+        ebRefresh();
+      } catch (e) { alert(e.message || e); }
+    });
+    const start = $("btn-eb-start");
+    if (start) start.addEventListener("click", async () => {
+      const clip_ids = ebSelectedClipIds();
+      const extra_paths = ebExtra.map((f) => f.rel);
+      let speeds = ebSelectedSpeeds();
+      const values = ebParseValues();
+      if (!clip_ids.length && !extra_paths.length) {
+        alert("Mindestens einen Clip laden oder eine eigene Datei wählen.");
+        return;
+      }
+      const platform = ($("eb-platform") && $("eb-platform").value) || "cpu";
+      const codec = ($("eb-codec") && $("eb-codec").value) || "av1";
+      if (!speeds.length) {
+        if (speedPresetsFor(platform, codec).length) {
+          alert("Mindestens eine Speed-Stufe wählen.");
+          return;
+        }
+        speeds = ["balanced"];
+      }
+      if (!values.length) { alert("Mindestens einen CQ- oder Bitrate-Wert angeben."); return; }
+      try {
+        await ebPost("/api/encoder-bench/start", {
+          clip_ids, extra_paths, speeds,
+          rate_mode: ebRateMode(),
+          values,
+          platform, codec,
+          clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
+          samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
+          anime: !!($("eb-anime") && $("eb-anime").checked),
+        });
+        ebEnsurePoll();
+        ebRefresh();
+      } catch (e) { alert(e.message || e); }
+    });
+    const cancel = $("btn-eb-cancel");
+    if (cancel) cancel.addEventListener("click", async () => {
+      try { await ebPost("/api/encoder-bench/cancel", {}); ebRefresh(); }
+      catch (e) { alert(e.message || e); }
+    });
+    const apply = $("btn-eb-apply");
+    if (apply) apply.addEventListener("click", async () => {
+      const speed = apply.dataset.speed;
+      if (!speed) return;
+      apply.disabled = true;
+      try {
+        const d = await (await fetch("/api/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ encoder_speed: speed }),
+        })).json();
+        if (d.error) { alert(d.error); return; }
+        applyEncoderSpeed(d.encoder_speed || speed);
+      } finally { apply.disabled = false; }
+    });
+    ebRefresh();
+  }
+
   // Encoding-Seite: fester CQ/CBR/ABR oder Ziel-VMAF (Test-Encodes, dann auto).
   function gatherSettings() {
     const uiMode = $("opt-rate-mode").value;
@@ -1349,6 +1909,7 @@
       workflow: "auto",
       rate_mode: rateMode,
       suffix: "_" + $("opt-codec").value,
+      encoder_speed: encoderSpeedValue("opt-enc-speed"),
       ...gatherOutputCommon(),
       anime: $("opt-anime") ? $("opt-anime").checked : false,
       verify_vmaf: $("opt-verify-vmaf") ? $("opt-verify-vmaf").checked : false,
@@ -1656,6 +2217,7 @@
       const e = encoderInfo(plat, sel.value);
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
     }
+    fillJobSpeedSelect("vt-enc-speed", "vt-platform", "vt-codec");
   }
 
   function vtUpdateTestHints(refill) {
@@ -1697,6 +2259,7 @@
       samples: parseInt($("vt-samples").value, 10),
       generate_screenshots: $("vt-screenshots").checked,
       suffix: "_" + $("vt-codec").value,
+      encoder_speed: encoderSpeedValue("vt-enc-speed"),
       ...gatherOutputCommon(),
       anime: $("vt-anime") ? $("vt-anime").checked : false,
     };
@@ -2614,9 +3177,15 @@
     const extra = [];
     if (r.vmaf_1pct != null) extra.push(`1%-Low ${r.vmaf_1pct.toFixed(1)}`);
     if (r.vmaf_hmean != null) extra.push(`H-Ø ${r.vmaf_hmean.toFixed(1)}`);
+    if (r.vmaf_score != null && r.vmaf_1pct != null) extra.push(`Score ${Number(r.vmaf_score).toFixed(1)}`);
     if (extra.length) {
+      const gap = vmafP1GapValue();
+      const rec = gap <= 0
+        ? "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus)."
+        : `Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als ${gap} darunter.`;
       s += `<br><span class="muted" title="1%-Low = Mittel der schlechtesten 1 % Frames; `
-        + `H-Ø = harmonisches Mittel">${extra.join(" · ")}</span>`;
+        + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
+        + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
     }
     const qual = [];
     if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
@@ -3515,6 +4084,7 @@
     if (s.size_target_mb !== undefined) set("opt-size-target", s.size_target_mb);
     if (s.out_mode !== undefined) set("opt-out-mode", s.out_mode, "change");
     if (s.out_subdir !== undefined) set("opt-out-subdir", s.out_subdir);
+    if (s.encoder_speed) set("opt-enc-speed", s.encoder_speed, "change");
     if (s.remux_only || s.video_mode === "edit") {
       // Remux-Profil → Remux & Bearbeiten (nicht Super-Tool), Auswahl mitnehmen.
       navTo("remux");
@@ -4804,6 +5374,7 @@
       const e = encoderInfo(plat, sel.value);
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
     }
+    fillJobSpeedSelect("st-enc-speed", "st-platform", "st-codec");
   }
 
   function stBuildFormats() {
@@ -5368,6 +5939,7 @@
       platform: $("st-platform").value,
       codec: $("st-codec").value,
       suffix: "_" + $("st-codec").value,
+      encoder_speed: encoderSpeedValue("st-enc-speed"),
       post_processing: $("st-post").value,
       audio_mode: $("st-audio-mode").value,
       rate_mode: "cq",
@@ -7336,6 +7908,9 @@
     initDiagnostics();
     initOutTargets();
     initMediaSettings();
+    initVmafP1Gap();
+    initEncoderSpeed();
+    initEncoderBench();
     initGlobalSearch();
     const sizeT = $("opt-size-target");
     if (sizeT) sizeT.addEventListener("change", refreshSizeTargetHint);

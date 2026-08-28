@@ -185,6 +185,7 @@ def build_encode_cmd(
     container: str = "mkv",
     preserve_dv: bool = False,
     crop: str = "",
+    encoder_speed: str = "balanced",
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
     from . import config
@@ -260,7 +261,8 @@ def build_encode_cmd(
         svt = "tune=0"
         if film_grain > 0:
             svt += f":film-grain={int(film_grain)}:film-grain-denoise=0"
-        cmd += ["-preset", "6", "-svtav1-params", svt]
+        cmd += ff.encoder_preset_args(enc, encoder_speed)
+        cmd += ["-svtav1-params", svt]
         # Dolby Vision (Profil 10.1) nativ einbetten: FFmpeg liest die DV-RPU der
         # Quelle als Frame-Side-Data, libsvtav1 schreibt sie als T.35-Metadaten-
         # OBUs mit. Das ist der EINZIGE Weg zu AV1-DV (dovi_tool kann kein AV1).
@@ -270,15 +272,17 @@ def build_encode_cmd(
         if preserve_dv and info.dolby_vision and not tonemap and not downscale:
             cmd += ["-dolbyvision", "auto"]
     elif enc.startswith("libx"):
-        cmd += ["-preset", "medium"]
+        cmd += ff.encoder_preset_args(enc, encoder_speed)
     elif "nvenc" in enc and not is_bitrate:
-        cmd += ["-preset", "p5", "-rc", "vbr", "-tune", "hq"]
+        cmd += ff.encoder_preset_args(enc, encoder_speed)
+        cmd += ["-rc", "vbr", "-tune", "hq"]
     elif "nvenc" in enc:
-        cmd += ["-preset", "p5", "-tune", "hq"]
+        cmd += ff.encoder_preset_args(enc, encoder_speed)
+        cmd += ["-tune", "hq"]
         if two_pass:
             cmd += ["-multipass", "fullres"]  # NVENC-eigenes 2-Pass (1 Durchlauf)
     elif "qsv" in enc:
-        cmd += ["-preset", "slower"]
+        cmd += ff.encoder_preset_args(enc, encoder_speed)
 
     # Echtes Zwei-Pass (zwei Durchläufe) nur für CPU-Encoder im Bitraten-Modus.
     if two_pass and pass_num in (1, 2) and passlog:

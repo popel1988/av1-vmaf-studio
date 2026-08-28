@@ -62,6 +62,26 @@ def _codec_disp(platform: str, codec: str) -> str:
     return _CODEC_NAMES.get(codec, codec.upper())
 
 
+# 1%-Low-Abstand zum Ziel-Mittel. Default 6 (einstellbar unter Einstellungen):
+# bei Ziel 94 muss das Low ≥ 88 bleiben („gut“, nicht nur „ok“).
+# 4 wäre streng (Action/Korn/GPU-Encoder fliegen oft raus), 8 großzügig
+# (Low 86 bei Ziel 94 ist schon eine Qualitätsstufe darunter). 0 = Floor aus.
+VMAF_P1_GAP = 6.0
+
+
+def quality_score(mean: float, p1: float = 0.0, hmean: float = 0.0) -> float:
+    """Sichtqualität für Empfehlungen: Mittel zählt, 1%-Low darf nicht einbrechen.
+
+    55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Der Slider „Ziel-VMAF“
+    bleibt der Mittelwert – dieser Score ersetzt ihn nicht, straft aber
+    Ausreißer, die das Mittel schönrechnen.
+    """
+    m = float(mean or 0)
+    floor = float(p1) if p1 else m
+    h = float(hmean) if hmean else m
+    return 0.55 * m + 0.35 * floor + 0.10 * h
+
+
 # Ungefährer CQ/CRF-Wert je Encoder für ~VMAF 95 ("Sweet Spot"). Dient nur als
 # Referenz, um beim Codec-Vergleich die CQ-Testwerte so zu verschieben, dass
 # alle Encoder im vergleichbaren Qualitätsbereich landen (CQ-Skalen/Effizienz
@@ -117,6 +137,7 @@ class VmafResult:
             "platform": self.platform,
             "codec_disp": _codec_disp(self.platform, self.codec),
             "vmaf": round(self.vmaf, 2),
+            "vmaf_score": round(quality_score(self.vmaf, self.vmaf_1pct, self.vmaf_hmean), 2),
             "clip_size_bytes": self.clip_size_bytes,
             "predicted_size_bytes": self.predicted_size_bytes,
             "predicted_human": ff.human_size(self.predicted_size_bytes),
@@ -216,18 +237,29 @@ def _sample_starts(duration: float, clip_seconds: int, count: int) -> list[tuple
     """Startpositionen der Stichproben-Clips (start, clip_len).
 
     count=1 → nur Mitte. Bei mehreren gleichmäßig über den Film verteilt
-    (z. B. 3 → 25/50/75 %). Ist der Film zu kurz für getrennte Clips, wird auf
-    eine einzelne Mittenstichprobe zurückgefallen.
+    (max. 5). Ist der Film zu kurz für die gewünschte Cliplänge, werden die
+    Ausschnitte verkürzt, statt auf eine einzige Mitte zusammenzufallen.
     """
-    clip_len = min(clip_seconds, duration) or 1.0
-    count = max(1, int(count))
-    if count <= 1 or duration <= clip_seconds * count:
-        return [(_middle_start(duration, clip_seconds), clip_len)]
+    duration = float(duration or 0.0)
+    count = max(1, min(5, int(count or 1)))
+    want = max(1.0, float(clip_seconds or 1))
+    if duration <= 0:
+        return [(0.0, 1.0)]
+    if count <= 1:
+        clip_len = min(want, duration) or 1.0
+        return [(_middle_start(duration, int(round(clip_len))), clip_len)]
+    clip_len = min(want, duration / count)
+    if clip_len < 1.0:
+        count = max(1, int(duration))
+        clip_len = min(want, duration / max(1, count))
+        if count <= 1:
+            ln = min(want, duration) or 1.0
+            return [(_middle_start(duration, 1), ln)]
     out: list[tuple[float, float]] = []
     for i in range(count):
         frac = (i + 1) / (count + 1)
-        s = max(0.0, min(duration - clip_len, duration * frac - clip_len / 2))
-        out.append((s, clip_len))
+        s = max(0.0, min(duration - clip_len, duration * frac - clip_len / 2.0))
+        out.append((round(s, 3), round(clip_len, 3)))
     return out
 
 
@@ -433,6 +465,7 @@ def analyze(
     denoise: str = "off",
     crop: str = "",
     progress: Optional[Callable[[dict], None]] = None,
+    encoder_speed: str = "balanced",
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -547,6 +580,7 @@ def analyze(
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
                             denoise=denoise, force_10bit=opts.anime, crop=crop,
+                            encoder_speed=encoder_speed,
                         )
                     else:
                         cmd = build_encode_cmd(
@@ -556,6 +590,7 @@ def analyze(
                             include_progress=True, audio_mode="none",
                             preserve_hdr=preserve_hdr, film_grain=film_grain,
                             denoise=denoise, force_10bit=opts.anime, crop=crop,
+                            encoder_speed=encoder_speed,
                         )
                     # Test-Encode mit Live-Fortschritt (FPS) statt blockierend.
                     runner = EncodeRunner(on_progress=lambda pr: emit(
@@ -769,15 +804,33 @@ def sessions_for_source(abs_path: str, limit: int = 20) -> list[dict]:
 def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return
-    # Ziel-VMAF (Super-Tool) hat Vorrang; sonst untere Sweetspot-Grenze.
+    # Ziel-VMAF (Slider / Super-Tool) bleibt der Mittelwert – so wie angegeben.
+    # 1%-Low ist ein Floor: Kandidaten mit klaffendem Low (z. B. 95 / 79)
+    # gelten nicht als „Ziel erreicht“, auch wenn das Mittel passt.
     lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
-    candidates = [r for r in analysis.results if r.vmaf >= lo]
-    # Codec-übergreifend: beste Effizienz = kleinste prognostizierte Datei bei
-    # noch gutem VMAF. Das wählt automatisch den effizientesten Encoder.
-    if candidates:
-        best = min(candidates, key=lambda r: r.predicted_size_bytes)
+    from . import app_settings
+    gap = app_settings.vmaf_p1_gap()
+
+    def _p1(r: VmafResult) -> float:
+        return r.vmaf_1pct if r.vmaf_1pct else r.vmaf
+
+    mean_ok = [r for r in analysis.results if r.vmaf >= lo]
+    if gap <= 0:
+        solid = mean_ok
     else:
-        best = max(analysis.results, key=lambda r: r.vmaf)
+        solid = [r for r in mean_ok if _p1(r) >= lo - gap]
+    if solid:
+        # Kleinste Datei unter denen, die Mittel *und* Floor halten.
+        best = min(solid, key=lambda r: r.predicted_size_bytes)
+    elif mean_ok:
+        # Mittel reicht, Lows brechen ein → nicht die kleinste Datei, sondern
+        # die mit dem besten 1%-Low (bei Gleichstand die kleinere).
+        best = max(mean_ok, key=lambda r: (_p1(r), -r.predicted_size_bytes))
+    else:
+        best = max(
+            analysis.results,
+            key=lambda r: (quality_score(r.vmaf, r.vmaf_1pct, r.vmaf_hmean), r.vmaf),
+        )
     best.recommended = True
     analysis.recommended_value = best.value
     analysis.recommended_quality = best.value

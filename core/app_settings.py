@@ -14,6 +14,10 @@ _cache: dict | None = None
 _DEFAULTS: dict[str, Any] = {
     # Relativer Pfad unter den Media-Roots (z. B. "output" → /media/output).
     "default_output": "output",
+    # Encoder-Speed: fastest | fast | balanced | slow | slowest
+    "encoder_speed": "balanced",
+    # 1%-Low-Abstand zum Ziel-Mittel (0 = Floor aus, nur Mittelwert).
+    "vmaf_p1_gap": 6.0,
     # Benannte Unterbibliotheken: [{id, name, path}, ...]
     "libraries": [],
 }
@@ -37,6 +41,12 @@ def load() -> dict:
                 if isinstance(raw, dict):
                     if "default_output" in raw:
                         data["default_output"] = raw["default_output"]
+                    if "encoder_speed" in raw:
+                        from .ffmpeg_utils import normalize_encoder_speed
+                        data["encoder_speed"] = normalize_encoder_speed(
+                            raw.get("encoder_speed"))
+                    if "vmaf_p1_gap" in raw:
+                        data["vmaf_p1_gap"] = _normalize_p1_gap(raw.get("vmaf_p1_gap"))
                     libs = raw.get("libraries")
                     if isinstance(libs, list):
                         data["libraries"] = _normalize_libraries(libs)
@@ -80,9 +90,34 @@ def save(updates: dict) -> dict:
         if "default_output" in updates:
             rel = config.safe_subdir(str(updates.get("default_output") or ""))
             cur["default_output"] = rel or "output"
+        if "encoder_speed" in updates:
+            from .ffmpeg_utils import normalize_encoder_speed
+            cur["encoder_speed"] = normalize_encoder_speed(updates.get("encoder_speed"))
+        if "vmaf_p1_gap" in updates:
+            cur["vmaf_p1_gap"] = _normalize_p1_gap(updates.get("vmaf_p1_gap"))
         if "libraries" in updates:
             cur["libraries"] = _normalize_libraries(list(updates.get("libraries") or []))
         return _write(cur)
+
+
+def encoder_speed() -> str:
+    from .ffmpeg_utils import normalize_encoder_speed
+    return normalize_encoder_speed(load().get("encoder_speed"))
+
+
+def _normalize_p1_gap(value) -> float:
+    """0 = Floor aus; sonst 1–12 Punkte Abstand (Default 6)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 6.0
+    if v <= 0:
+        return 0.0
+    return round(min(12.0, max(1.0, v)), 1)
+
+
+def vmaf_p1_gap() -> float:
+    return _normalize_p1_gap(load().get("vmaf_p1_gap", 6.0))
 
 
 def default_output_rel() -> str:

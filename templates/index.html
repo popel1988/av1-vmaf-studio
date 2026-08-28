@@ -8,6 +8,20 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 </head>
 <body>
+  {% macro enc_speed_options() %}
+              <option value="fastest">Sehr schnell – größere Datei</option>
+              <option value="fast">Schnell</option>
+              <option value="balanced" selected>Ausgewogen (Standard)</option>
+              <option value="slow">Langsam – bessere Kompression</option>
+              <option value="slowest">Sehr langsam – beste Kompression</option>
+  {% endmacro %}
+  {% macro vmaf_sample_options(selected="1") %}
+                      <option value="1"{% if selected == "1" %} selected{% endif %}>1 – nur Mitte (schnell)</option>
+                      <option value="2"{% if selected == "2" %} selected{% endif %}>2 Szenen</option>
+                      <option value="3"{% if selected == "3" %} selected{% endif %}>3 Szenen (robuster)</option>
+                      <option value="4"{% if selected == "4" %} selected{% endif %}>4 Szenen</option>
+                      <option value="5"{% if selected == "5" %} selected{% endif %}>5 Szenen</option>
+  {% endmacro %}
   <div class="app">
     <!-- ============================= SIDEBAR ============================= -->
     <aside class="sidebar">
@@ -198,6 +212,11 @@
                   <p class="hint" id="codec-hint"></p>
                 </div>
                 <div class="field">
+                  <label data-tip="Wie gründlich der Encoder sucht – nicht die CQ-Zahl. Langsamer = meist kleinere Datei bei ähnlichem Bild. Vorgabe kommt aus Einstellungen.">Encoder-Speed</label>
+                  <select id="opt-enc-speed">{{ enc_speed_options() }}</select>
+                  <p class="hint enc-speed-warn" style="display:none"></p>
+                </div>
+                <div class="field">
                   <label>Zielauflösung</label>
                   <select id="opt-resolution">
                     <option value="">Original beibehalten</option>
@@ -279,9 +298,7 @@
                   <div class="field">
                     <label>Stichproben (Szenen)</label>
                     <select id="opt-vmaf-samples">
-                      <option value="1">1 – nur Mitte (schnell)</option>
-                      <option value="2">2 Szenen</option>
-                      <option value="3">3 Szenen (robuster)</option>
+                      {{ vmaf_sample_options("1") }}
                     </select>
                   </div>
                   <div class="field">
@@ -544,6 +561,11 @@
                   <p class="hint" id="vt-codec-hint"></p>
                 </div>
                 <div class="field">
+                  <label data-tip="Gleiche Speed-Stufe wie beim späteren Encode, sonst sind VMAF-Werte nicht vergleichbar.">Encoder-Speed</label>
+                  <select id="vt-enc-speed">{{ enc_speed_options() }}</select>
+                  <p class="hint enc-speed-warn" style="display:none"></p>
+                </div>
+                <div class="field">
                   <label>Steuerungsmodus</label>
                   <select id="vt-rate-mode">
                     <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
@@ -554,9 +576,7 @@
                 <div class="field">
                   <label>Stichproben (Szenen)</label>
                   <select id="vt-samples">
-                    <option value="1">1 – nur Mitte (schnell)</option>
-                    <option value="2">2 Szenen</option>
-                    <option value="3">3 Szenen (robuster)</option>
+                    {{ vmaf_sample_options("1") }}
                   </select>
                   <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
                 </div>
@@ -965,6 +985,11 @@
                 <p class="hint" id="st-codec-hint"></p>
               </div>
             </div>
+            <div class="field">
+              <label data-tip="Wie gründlich der Encoder sucht. Langsamer = meist kleinere Datei, nicht automatisch schärfer.">Encoder-Speed</label>
+              <select id="st-enc-speed">{{ enc_speed_options() }}</select>
+              <p class="hint enc-speed-warn" style="display:none"></p>
+            </div>
 
             <div class="field">
               <label>Qualitätsmodus</label>
@@ -997,9 +1022,7 @@
                 <div class="field">
                   <label>Szenen-Stichproben</label>
                   <select id="st-samples">
-                    <option value="1">1 (Mitte)</option>
-                    <option value="2">2 Szenen</option>
-                    <option value="3">3 Szenen</option>
+                    {{ vmaf_sample_options("1") }}
                   </select>
                 </div>
               </div>
@@ -1203,6 +1226,137 @@
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-media-settings-save">Speichern</button>
             </div>
+          </div>
+        </section>
+
+        <section class="card span-2" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">★</span> VMAF-Empfehlung</h3>
+            <span class="badge" id="vmaf-p1-badge">6 Punkte</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test –
+              nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert;
+              das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus
+              (nur Mittel, wie früher). <a href="#faq-vmaf" class="faq-jump">FAQ</a></p>
+            <div class="field">
+              <label>1%-Low-Abstand: <strong id="cfg-p1-gap-val">6</strong></label>
+              <input type="range" id="cfg-p1-gap" min="0" max="12" step="1" value="6" />
+              <div class="range-scale"><span>0 · nur Mittel</span><span>6 · empfohlen</span><span>12 · locker</span></div>
+              <p class="hint" id="cfg-p1-gap-hint"></p>
+            </div>
+            <div class="lib-actions">
+              <button type="button" class="btn btn-ghost btn-sm" data-p1-gap="4">Streng (4)</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-p1-gap="6">Empfohlen (6)</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-p1-gap="8">Großzügig (8)</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-p1-gap-save">Speichern</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-3" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">🎛</span> Encoder-Speed</h3>
+            <span class="badge" id="enc-speed-badge">Ausgewogen</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Bestimmt, wie gründlich der Encoder sucht – nicht die CQ-/Qualitätszahl.
+              Langsamer heißt in der Regel kleinere Datei bei ähnlichem Bild, nicht automatisch
+              schärfer. Die Vorgabe gilt für Encoding, VMAF-Tool, Super-Tool und Editor; am Job
+              kannst du sie überschreiben. <a href="#faq-enc-preset" class="faq-jump">FAQ</a></p>
+            <div class="field">
+              <label>Speed-Stufe (Vorgabe)</label>
+              <select id="cfg-enc-speed">{{ enc_speed_options() }}</select>
+              <p class="hint enc-speed-warn" id="cfg-enc-speed-warn" style="display:none"></p>
+            </div>
+            <p class="hint">Ausgewogen entspricht den bisherigen Werten (SVT 6, x264/x265 medium,
+              NVENC p5, QSV slower). Sehr schnell / schnell: spürbar größere Dateien.
+              Langsam / sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU –
+              nicht mit hoher Parallelität kombinieren.</p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-enc-speed-save">Speichern</button>
+            </div>
+
+            <div class="divider"></div>
+            <h4 class="subsection">Encoder-Test (VMAF)</h4>
+            <p class="hint">Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten
+              (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen
+              Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten
+              encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen.
+              Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).
+              <a href="#faq-enc-bench" class="faq-jump">FAQ</a></p>
+
+            <div id="eb-clips" class="enc-bench-clips"></div>
+            <div class="lib-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-download">Ausgewählte Clips laden</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-add">Eigene Datei aus der Bibliothek</button>
+            </div>
+            <div id="eb-extras" class="enc-bench-extras"></div>
+
+            <div class="settings-grid">
+              <div class="field enc-bench-speeds-field">
+                <label>Speed-Stufen zum Vergleich</label>
+                <p class="hint" id="eb-speed-hint">Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.</p>
+                <div id="eb-speeds" class="enc-bench-speeds"></div>
+                <div class="lib-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-default">Standard (schnell / ausgewogen / langsam)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-all">Alle Stufen</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Steuerung</label>
+                <select id="eb-rate">
+                  <option value="cq" selected>CQ / CRF / QP</option>
+                  <option value="abr">ABR (kbit/s)</option>
+                  <option value="bitrate">CBR (kbit/s)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Werte (kommagetrennt, max. 4)</label>
+                <input type="text" id="eb-values" value="24, 28, 32" placeholder="z. B. 24, 28, 32" />
+              </div>
+              <div class="field">
+                <label>GPU / Plattform</label>
+                <select id="eb-platform">
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label>Codec</label>
+                <select id="eb-codec">
+                  <option value="av1">AV1</option>
+                  <option value="hevc">HEVC / H.265</option>
+                  <option value="h264">H.264</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Stichproben (Szenen)</label>
+                <select id="eb-samples">
+                  {{ vmaf_sample_options("3") }}
+                </select>
+              </div>
+              <div class="field">
+                <label>Clip-Länge (Sekunden)</label>
+                <input type="number" id="eb-seconds" min="5" max="60" value="12" />
+              </div>
+            </div>
+            <label class="check"><input type="checkbox" id="eb-anime" /><span>Anime-Modus (VMAF-NEG, 10-bit)</span></label>
+            <p class="hint" id="eb-estimate"></p>
+
+            <div class="lib-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-start">Test starten</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-cancel" disabled>Abbrechen</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-apply" style="display:none">Empfehlung übernehmen und speichern</button>
+            </div>
+            <div class="enc-bench-progress">
+              <div class="bar-track"><div class="bar-fill" id="eb-bar-fill"></div></div>
+              <span class="bar-pct" id="eb-pct">0 %</span>
+            </div>
+            <p class="hint" id="eb-msg"></p>
+            <div class="enc-bench-rec" id="eb-rec" style="display:none"></div>
+            <div id="eb-results"></div>
           </div>
         </section>
 
@@ -2010,6 +2164,11 @@
                   </select>
                 </div>
                 <div class="field">
+                  <label>Encoder-Speed</label>
+                  <select id="ed-enc-speed">{{ enc_speed_options() }}</select>
+                  <p class="hint enc-speed-warn" style="display:none"></p>
+                </div>
+                <div class="field">
                   <label>Ratensteuerung</label>
                   <select id="ed-rate-mode">
                     <option value="cq">Qualität (CQ/CRF)</option>
@@ -2270,6 +2429,39 @@
                 <p>Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.</p>
               </div>
             </details>
+            <details class="faq-item" id="faq-cq-how">
+              <summary>Woran macht der Encoder fest, was CQ 20 oder 28 ist?</summary>
+              <div class="faq-body">
+                <p>Es gibt kein Vergleichsvideo und keine Norm „CQ 28 = so viele dB“. Die Zahl ist ein Sollwert auf der internen Qualitätsskala genau dieses Encoders. Daraus wird eine Quantisierungsstärke (QP, bei AV1 qindex, plus ein λ für die Rate-Distortion-Suche). Beim Quantisieren werden Transform-Koeffizienten durch eine Schrittweite geteilt und gerundet: größere Schrittweite → mehr Nullen → weniger Bits, groberes Bild.</p>
+                <p>CQ heißt nicht „dieser Frame darf X Bits“. Der Encoder minimiert pro Block ungefähr Fehler + λ×Bits. Höheres CQ → höheres λ → Bits sind teurer → er nimmt mehr Fehler in Kauf. Schwierige Frames (Action, Korn) haben mehr Restenergie und brauchen bei gleichem QP automatisch mehr Bits; ruhige Frames weniger. CRF/CQ darf den QP zusätzlich pro Frame und Block verschieben (Adaptive Quantization), damit die wahrgenommene Qualität ungefähr gleich bleibt. Reines CQP hält den QP fest – Qualität schwankt dann stärker mit der Szene.</p>
+                <p>Dieselbe Zahl ist nicht encoder-gleich. Video Studio reicht sie 1:1 durch: CPU x264/x265/SVT als CRF (jede Library eigene Kurve; AV1 intern qindex 0–255, H.264 QP 0–51), Nvidia als CQ im VBR-Modus, Intel QSV als global_quality, AMD/Intel VAAPI als echtes CQP. NVENC CQ 28 ist deshalb nicht „dasselbe“ wie SVT CRF 28. Zum Vergleichen der Encoder dient VMAF, nicht die CQ-Zahl. Das Preset (z. B. SVT 6, x264 medium, NVENC p5) ändert nicht die Bedeutung der Zahl, sondern wie gut der Encoder bei diesem Sollwert komprimiert.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-cq-efficiency">
+              <summary>Heißt hoher CQ einfach mehr Fehler und weniger Bits? Sind Software-Encoder sparsamer?</summary>
+              <div class="faq-body">
+                <p>Ja. Höheres CQ erlaubt mehr Fehler: Bits sind teurer, die Datei wird in der Regel kleiner. Die Bitrate ist die Folge, nicht das Ziel – Action und Korn bleiben relativ teurer als ruhige Szenen, nur insgesamt sparsamer. Jeder Encoder hat seine eigene Messlatte: CQ 28 ist Stufe 28 auf genau dieser Skala, nicht dieselbe Schärfe wie CQ 28 beim nächsten Encoder.</p>
+                <p>Software (x264, x265, SVT-AV1) sucht gründlicher und nutzt Bits meist effizienter – oft dieselbe wahrgenommene Qualität mit weniger Bits. Hardware (NVENC, QSV, VAAPI) ist fest verdrahtet und grober, dafür viel schneller und entlastet die CPU. Die Lücke wird kleiner bei neuem Nvidia-AV1 und hohen Bitraten; am klarsten ist der Software-Vorteil bei knappem Budget. „Langsamer“ gilt vor allem für AV1 auf der CPU. Das Encoder-Preset zählt oft mehr als CPU gegen GPU: ein sehr schnelles SVT-Preset kann schlechter komprimieren als ein guter NVENC.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-enc-preset">
+              <summary>Was ist das Encoder-Preset – kann ich das ändern?</summary>
+              <div class="faq-body">
+                <p>Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.</p>
+                <p>Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.</p>
+                <p>Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.</p>
+                <p>Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-enc-bench">
+              <summary>Wie finde ich die passende Encoder-Speed-Stufe?</summary>
+              <div class="faq-body">
+                <p>Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.</p>
+                <p>Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.</p>
+                <p>Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.</p>
+                <p>Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.</p>
+              </div>
+            </details>
             <details class="faq-item" id="faq-cq-values">
               <summary>Welche CQ-Werte sind sinnvoll?</summary>
               <div class="faq-body">
@@ -2338,7 +2530,7 @@
               <summary>Was ist VMAF überhaupt?</summary>
               <div class="faq-body">
                 <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.</p>
-                <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
+                <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-container">
@@ -2368,6 +2560,9 @@
       mediaRoots: {{ media_roots|tojson }},
       multiMedia: {{ multi_media|tojson }},
       defaultOutput: {{ default_output|tojson }},
+      encoderSpeed: {{ encoder_speed|tojson }},
+      vmafP1Gap: {{ vmaf_p1_gap|tojson }},
+      speedPresets: {{ speed_presets|tojson }},
     };
   </script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>

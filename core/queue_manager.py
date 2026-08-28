@@ -121,6 +121,8 @@ class JobSettings:
     out_mode: str = "default"
     out_subdir: str = ""
     out_root: str = ""  # veraltet (Queue-Persistenz); wird über out_mode abgebildet
+    # Encoder-Speed: fastest|fast|balanced|slow|slowest (siehe ffmpeg_utils).
+    encoder_speed: str = "balanced"
 
 
 @dataclass
@@ -794,6 +796,7 @@ class QueueManager:
                 info, s.platform, s.codec, s.target_height, s.tonemap,
                 preserve_hdr=s.preserve_hdr,
                 film_grain=s.film_grain, denoise=s.denoise, crop=item.crop,
+                encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
@@ -1211,6 +1214,7 @@ class QueueManager:
                                             getattr(s, "audio_channels", 0)) or 0),
                 work_dir=config.WORK_DIR,
                 container=spec.get("container") or s.container or "mkv",
+                encoder_speed=spec.get("encoder_speed") or getattr(s, "encoder_speed", "balanced") or "balanced",
             )
             label = "Editor-Export (Re-Encode)"
         else:
@@ -1338,6 +1342,7 @@ class QueueManager:
             "container": _container_ext(s).lstrip("."),
             "preserve_dv": s.preserve_dv,
             "crop": item.crop,
+            "encoder_speed": getattr(s, "encoder_speed", "balanced") or "balanced",
         }
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
@@ -1622,6 +1627,11 @@ def build_job_settings(d: dict) -> JobSettings:
                     "(Encoder %s kann keine DV-RPU einbetten).",
                     d.get("title") or d.get("path") or "?", platform)
 
+    speed = d.get("encoder_speed")
+    if not speed:
+        from . import app_settings
+        speed = app_settings.encoder_speed()
+
     return JobSettings(
         platform=platform,
         codec=codec,
@@ -1682,6 +1692,7 @@ def build_job_settings(d: dict) -> JobSettings:
         max_output_mb=float(d.get("max_output_mb", 0) or 0),
         max_video_bitrate_kbps=int(d.get("max_video_bitrate_kbps", 0) or 0),
         size_target_mb=float(d.get("size_target_mb", 0) or 0),
+        encoder_speed=ff.normalize_encoder_speed(speed),
     )
 
 

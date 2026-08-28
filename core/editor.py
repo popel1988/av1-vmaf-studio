@@ -477,6 +477,7 @@ def build_editor_encode_cmd(
     audio_channels: int = 0,
     work_dir: Optional[Path] = None,
     container: str = "mkv",
+    encoder_speed: str = "balanced",
 ) -> tuple[list, str]:
     """Re-Encode-Export: trim/atrim je Segment, optional xfade, dann concat."""
     if not segments:
@@ -679,10 +680,7 @@ def build_editor_encode_cmd(
         if backend == "nvenc":
             cmd += ["-rc", "vbr"]
         cmd += ff.quality_args(platform, int(cq or 30))
-    if backend == "nvenc":
-        cmd += ["-preset", "p5"]
-    elif enc in ("libsvtav1", "libx265", "libx264"):
-        cmd += ["-preset", "6" if enc == "libsvtav1" else "medium"]
+    cmd += ff.encoder_preset_args(enc, encoder_speed)
 
     first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
     audio_sel = list(next((s.get("audio_indexes") or [] for s in segments), []))

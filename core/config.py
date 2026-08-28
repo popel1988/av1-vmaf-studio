@@ -357,7 +357,8 @@ def data_paths_dict() -> dict:
 
 def ensure_dirs() -> None:
     """Stellt sicher, dass alle Arbeitsverzeichnisse existieren."""
-    dirs = [MEDIA_DIR, DATA_DIR, WORK_DIR, PREVIEW_DIR, VMAF_SESSIONS_DIR, UPLOAD_DIR]
+    dirs = [MEDIA_DIR, DATA_DIR, WORK_DIR, PREVIEW_DIR, VMAF_SESSIONS_DIR, UPLOAD_DIR,
+            DATA_DIR / "encoder_bench"]
     for _, base in MEDIA_ROOTS:
         dirs.append(base)
     try:

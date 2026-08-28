@@ -213,6 +213,53 @@ Same idea, different flag: CPU **CRF**, Nvidia **CQ**, Intel QSV
 “sharp” across codecs: AV1 CQ 28 is often much smaller than HEVC CRF 28, which
 is smaller than H.264 CRF 28.
 
+There is **no reference clip or standard** that defines “CQ 28 = N dB”. Each
+encoder maps the number onto its own quantization curve (H.264 QP 0–51, AV1
+qindex 0–255, plus a λ for rate-distortion search). Video Studio passes the
+slider **unchanged**: CPU `-crf`, NVENC `-cq` (VBR), QSV `-global_quality`,
+VAAPI constant QP. Same number ≠ same look, and NVENC CQ 28 is not SVT CRF 28.
+Compare encoders with **VMAF**, not the integer. The preset (SVT 6, x264
+medium, NVENC p5) does not change what the number *means*; it changes how
+well the encoder compresses at that setpoint.
+
+CQ is not a bit budget per frame. The encoder minimises roughly
+*distortion + λ×bits* per block. Higher CQ → higher λ → bits are “more
+expensive”. Hard frames still get more bits (more residual energy); CRF/CQ
+may also move QP per frame/block (adaptive quantization) so *perceived*
+quality stays even. True CQP (VAAPI here) keeps QP fixed, so quality swings
+more with the scene.
+
+**Higher CQ = more error allowed**, so bitrate usually drops. Bitrate is the
+consequence, not the target. Each encoder has its own yardstick: CQ 28 is
+step 28 on *that* scale. Software (x264/x265/SVT) typically spends bits more
+efficiently; GPU encoders are faster. The **speed preset** often matters more
+than CPU vs GPU — a very fast SVT preset can lose to a good NVENC.
+
+Speed presets are selectable under **Settings → Encoder speed** (default
+**balanced**, matching the former hardcoded values: SVT-AV1 **6**, x264/x265
+**medium**, NVENC **p5**, QSV **slower**). Encoding, VMAF Tool, Super Tool and
+the editor can override per job. Faster = larger files / worse bit use;
+slower = much more time, especially CPU AV1. VAAPI has no extra speed preset.
+Diagnostics and the player transcode stay on fast presets on purpose.
+The Film/Series/Anime chips are job templates (CQ, codec, anime mode), not
+encoder speed.
+
+Under **Settings → Encoder speed** you can run an **encoder test**: download
+short free reference clips of different picture types (animation, film CGI,
+live action/VFX, motion, handheld — Blender CC-BY and Google samples, allowlisted
+URLs only) and/or pick up to four files from your library. The test uses the
+**native presets of the selected encoder** (SVT 0–13, x264/x265
+ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow), not only the five
+aliases. Default comparison is fast/balanced/slow; **All tiers** tests every
+preset. VMAF uses 1–5 scene samples (encoder test default: 3). The
+recommendation scores **55% mean + 35% 1% low + 10% harmonic mean**, so a
+mean of 95 with 1% low 79 is not treated as “good enough”. Keep the matrix
+small; CPU AV1 × all presets × 5 scenes is slow on purpose.
+
+VMAF Tool, Encoding (target VMAF) and Super Tool can use up to **5 scene
+samples** (evenly spaced; short files get shorter excerpts instead of
+collapsing to one middle clip).
+
 The encoder may spend as many bits as a scene needs to hold that quality.
 Action and grain cost more; still scenes cost less. Bitrate therefore varies —
 there is no fixed MB target.
@@ -294,7 +341,9 @@ HDR10-compatible base is kept and the job does not fail.
 
 VMAF estimates perceptual similarity (roughly 0–100). **93–95** is the
 sweet-spot used here. Anime mode uses **VMAF-NEG** + 10-bit against banding.
-VMAF is not a guarantee — screenshots and A/B compare still help.
+Recommendations also require 1% low within the gap from **Settings → VMAF
+recommendation** (default 6 points below the target mean). VMAF is not a
+guarantee — screenshots and A/B compare still help.
 
 **MKV** is recommended (all codecs and subtitle types). **MP4** converts text
 subs to `mov_text` and drops image subs (PGS/VobSub).
@@ -407,7 +456,10 @@ One media mount is enough — sources and encodes live in the same tree:
   recommendation (VMAF 93–95). Model choice is automatic: `vmaf_4k_v0.6.1.json`
   for 4K, otherwise `vmaf_v0.6.1.json` (NEG variants in anime mode).
 - **Extra metrics**: besides mean VMAF, **1%-low** (mean of the worst 1% of frames),
-  **harmonic mean**, plus **PSNR** and **SSIM** are reported.
+  **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
+  (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a
+  **gap set under Settings → VMAF recommendation** (default 6, so target 94
+  requires 1% low ≥ 88). 0 disables the floor (mean only).
 - **Size prediction**: `(test clip size / clip length) × total duration` including
   savings in %.
 - **Quality guardrail**: after encoding, the real VMAF of the output is measured

@@ -232,6 +232,9 @@ async def index(request: Request):
             "media_roots": config.media_roots_public(),
             "multi_media": config.MULTI_MEDIA,
             "default_output": app_settings.default_output_rel(),
+            "encoder_speed": app_settings.encoder_speed(),
+            "vmaf_p1_gap": app_settings.vmaf_p1_gap(),
+            "speed_presets": ff.speed_preset_catalog(),
             "sweetspot": config.VMAF_SWEETSPOT,
             "test_qualities": config.VMAF_TEST_QUALITIES,
             "capacity": CAPACITY,
@@ -473,6 +476,7 @@ class EnqueueRequest(BaseModel):
     max_output_mb: float = 0
     max_video_bitrate_kbps: int = 0
     size_target_mb: float = 0        # Encode-Ziel Gesamtgröße inkl. Ton (0 = aus)
+    encoder_speed: str = "balanced"  # fastest|fast|balanced|slow|slowest
     suffix: str = "_av1"
 
 
@@ -785,9 +789,7 @@ class EditorEnqueueRequest(BaseModel):
     out_mode: str = "default"
     out_subdir: str = ""
     post_processing: str = "keep"
-
-
-class EditorCheckRequest(BaseModel):
+    encoder_speed: str = "balanced"
     segments: list[dict] = []
 
 
@@ -1005,9 +1007,11 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "burn_subs": bool(req.burn_subs),
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
             "crossfade": float(req.crossfade or 0),
+            "encoder_speed": req.encoder_speed or "balanced",
         },
         "out_mode": req.out_mode,
         "out_subdir": req.out_subdir,
+        "encoder_speed": req.encoder_speed or "balanced",
     }
     item = queue.add_file(str(first), build_job_settings(d))
     if item is None:
@@ -1768,7 +1772,9 @@ async def set_parallel(req: ParallelRequest):
 
 
 class AppSettingsRequest(BaseModel):
-    default_output: str = "output"
+    default_output: Optional[str] = None
+    encoder_speed: Optional[str] = None
+    vmaf_p1_gap: Optional[float] = None
 
 
 @app.get("/api/settings")
@@ -1787,25 +1793,32 @@ async def get_app_settings():
 @app.post("/api/settings")
 async def set_app_settings(req: AppSettingsRequest):
     from core import app_settings
-    rel = config.safe_subdir(req.default_output)
-    if rel:
-        # Erlaubter Pfad unter Media-Roots (auch wenn Ordner noch fehlt).
-        probe = config.resolve_input(rel)
-        if probe is None and config.MULTI_MEDIA:
-            # Bei Multi-Root muss das erste Segment ein Root-Name sein.
-            first = rel.split("/", 1)[0]
-            if first not in {n for n, _ in config.MEDIA_ROOTS}:
-                return JSONResponse(
-                    {"error": "Pfad liegt außerhalb der Media-Roots"},
-                    status_code=400)
-        elif probe is None and not config.MULTI_MEDIA:
-            # Einzel-Root: relativen Pfad immer akzeptieren und anlegen.
+    from core.ffmpeg_utils import normalize_encoder_speed
+    updates: dict = {}
+    if req.default_output is not None:
+        rel = config.safe_subdir(req.default_output)
+        if rel:
+            probe = config.resolve_input(rel)
+            if probe is None and config.MULTI_MEDIA:
+                first = rel.split("/", 1)[0]
+                if first not in {n for n, _ in config.MEDIA_ROOTS}:
+                    return JSONResponse(
+                        {"error": "Pfad liegt außerhalb der Media-Roots"},
+                        status_code=400)
+        updates["default_output"] = rel or "output"
+    if req.encoder_speed is not None:
+        updates["encoder_speed"] = normalize_encoder_speed(req.encoder_speed)
+    if req.vmaf_p1_gap is not None:
+        updates["vmaf_p1_gap"] = req.vmaf_p1_gap
+    if not updates:
+        cfg = app_settings.load()
+    else:
+        cfg = app_settings.save(updates)
+    if "default_output" in updates:
+        try:
+            config.default_output_path().mkdir(parents=True, exist_ok=True)
+        except OSError:
             pass
-    cfg = app_settings.save({"default_output": rel or "output"})
-    try:
-        config.default_output_path().mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
     return {**cfg, "default_output_abs": str(config.default_output_path())}
 
 
@@ -2211,6 +2224,54 @@ async def diagnostics(deep: bool = False):
     from core import diagnostics as diag
     # Blockierende ffmpeg-Aufrufe im Threadpool, damit der Event-Loop frei bleibt.
     return await asyncio.to_thread(diag.run_diagnostics, monitor, deep)
+
+
+class EncoderBenchDownloadRequest(BaseModel):
+    ids: list[str] = []
+
+
+class EncoderBenchStartRequest(BaseModel):
+    clip_ids: list[str] = []
+    extra_paths: list[str] = []
+    speeds: list[str] = ["fast", "balanced", "slow"]
+    rate_mode: str = "cq"
+    values: list[int] = [24, 28, 32]
+    platform: str = "cpu"
+    codec: str = "av1"
+    clip_seconds: int = 12
+    samples: int = 3
+    anime: bool = False
+
+
+@app.get("/api/encoder-bench")
+async def encoder_bench_status():
+    from core import encoder_bench
+    return encoder_bench.snapshot()
+
+
+@app.post("/api/encoder-bench/download")
+async def encoder_bench_download(req: EncoderBenchDownloadRequest):
+    from core import encoder_bench
+    err = encoder_bench.start_download(req.ids or [])
+    if err:
+        return JSONResponse({"error": err}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/encoder-bench/start")
+async def encoder_bench_start(req: EncoderBenchStartRequest):
+    from core import encoder_bench
+    err = encoder_bench.start_bench(req.model_dump())
+    if err:
+        return JSONResponse({"error": err}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/encoder-bench/cancel")
+async def encoder_bench_cancel():
+    from core import encoder_bench
+    encoder_bench.cancel()
+    return {"ok": True}
 
 
 @app.get("/api/capabilities")

@@ -1217,6 +1217,28 @@
       "The flag name differs by platform but means the same: CPU uses CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. The same number is not equally “sharp” across codecs: AV1 CQ 28 is often much smaller than HEVC CRF 28, which is smaller than H.264 CRF 28.",
     "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
       "The encoder may spend as many bits as a scene needs to hold that quality. Action and grain cost more; still scenes cost less. Bitrate therefore varies – there is no fixed MB target.",
+    "Woran macht der Encoder fest, was CQ 20 oder 28 ist?":
+      "How does the encoder decide what CQ 20 or 28 actually is?",
+    "Es gibt kein Vergleichsvideo und keine Norm „CQ 28 = so viele dB“. Die Zahl ist ein Sollwert auf der internen Qualitätsskala genau dieses Encoders. Daraus wird eine Quantisierungsstärke (QP, bei AV1 qindex, plus ein λ für die Rate-Distortion-Suche). Beim Quantisieren werden Transform-Koeffizienten durch eine Schrittweite geteilt und gerundet: größere Schrittweite → mehr Nullen → weniger Bits, groberes Bild.":
+      "There is no reference clip and no standard “CQ 28 = N dB”. The number is a setpoint on that encoder’s own quality curve. It becomes a quantization strength (QP, AV1 qindex, plus a λ for rate-distortion search). Quantization divides transform coefficients by a step size and rounds: larger step → more zeros → fewer bits, coarser picture.",
+    "CQ heißt nicht „dieser Frame darf X Bits“. Der Encoder minimiert pro Block ungefähr Fehler + λ×Bits. Höheres CQ → höheres λ → Bits sind teurer → er nimmt mehr Fehler in Kauf. Schwierige Frames (Action, Korn) haben mehr Restenergie und brauchen bei gleichem QP automatisch mehr Bits; ruhige Frames weniger. CRF/CQ darf den QP zusätzlich pro Frame und Block verschieben (Adaptive Quantization), damit die wahrgenommene Qualität ungefähr gleich bleibt. Reines CQP hält den QP fest – Qualität schwankt dann stärker mit der Szene.":
+      "CQ does not mean “this frame may use X bits”. Per block the encoder roughly minimises error + λ×bits. Higher CQ → higher λ → bits are more expensive → it accepts more error. Hard frames (action, grain) have more residual energy and need more bits at the same QP; still frames need fewer. CRF/CQ may also move QP per frame and block (adaptive quantization) so perceived quality stays even. True CQP keeps QP fixed – quality then swings more with the scene.",
+    "Dieselbe Zahl ist nicht encoder-gleich. Video Studio reicht sie 1:1 durch: CPU x264/x265/SVT als CRF (jede Library eigene Kurve; AV1 intern qindex 0–255, H.264 QP 0–51), Nvidia als CQ im VBR-Modus, Intel QSV als global_quality, AMD/Intel VAAPI als echtes CQP. NVENC CQ 28 ist deshalb nicht „dasselbe“ wie SVT CRF 28. Zum Vergleichen der Encoder dient VMAF, nicht die CQ-Zahl. Das Preset (z. B. SVT 6, x264 medium, NVENC p5) ändert nicht die Bedeutung der Zahl, sondern wie gut der Encoder bei diesem Sollwert komprimiert.":
+      "The same number is not equal across encoders. Video Studio passes it through unchanged: CPU x264/x265/SVT as CRF (each library has its own curve; AV1 uses qindex 0–255 internally, H.264 QP 0–51), Nvidia as CQ in VBR mode, Intel QSV as global_quality, AMD/Intel VAAPI as true CQP. NVENC CQ 28 is therefore not “the same” as SVT CRF 28. Compare encoders with VMAF, not the CQ integer. The preset (e.g. SVT 6, x264 medium, NVENC p5) does not change what the number means, only how well the encoder compresses at that setpoint.",
+    "Heißt hoher CQ einfach mehr Fehler und weniger Bits? Sind Software-Encoder sparsamer?":
+      "Does a high CQ just mean more error and fewer bits? Are software encoders more efficient?",
+    "Ja. Höheres CQ erlaubt mehr Fehler: Bits sind teurer, die Datei wird in der Regel kleiner. Die Bitrate ist die Folge, nicht das Ziel – Action und Korn bleiben relativ teurer als ruhige Szenen, nur insgesamt sparsamer. Jeder Encoder hat seine eigene Messlatte: CQ 28 ist Stufe 28 auf genau dieser Skala, nicht dieselbe Schärfe wie CQ 28 beim nächsten Encoder.":
+      "Yes. Higher CQ allows more error: bits are more expensive, the file usually gets smaller. Bitrate is the consequence, not the target – action and grain still cost more than still scenes, just at a leaner overall level. Each encoder has its own yardstick: CQ 28 is step 28 on that scale, not the same sharpness as CQ 28 on the next encoder.",
+    "Software (x264, x265, SVT-AV1) sucht gründlicher und nutzt Bits meist effizienter – oft dieselbe wahrgenommene Qualität mit weniger Bits. Hardware (NVENC, QSV, VAAPI) ist fest verdrahtet und grober, dafür viel schneller und entlastet die CPU. Die Lücke wird kleiner bei neuem Nvidia-AV1 und hohen Bitraten; am klarsten ist der Software-Vorteil bei knappem Budget. „Langsamer“ gilt vor allem für AV1 auf der CPU. Das Encoder-Preset zählt oft mehr als CPU gegen GPU: ein sehr schnelles SVT-Preset kann schlechter komprimieren als ein guter NVENC.":
+      "Software (x264, x265, SVT-AV1) searches more thoroughly and usually spends bits more efficiently – often the same perceived quality with fewer bits. Hardware (NVENC, QSV, VAAPI) is hard-wired and coarser, but much faster and leaves the CPU free. The gap shrinks with recent Nvidia AV1 and high bitrates; the software advantage is clearest when the budget is tight. “Slower” applies mainly to AV1 on the CPU. The encoder preset often matters more than CPU vs GPU: a very fast SVT preset can compress worse than a good NVENC.",
+    "Was ist das Encoder-Preset – kann ich das ändern?":
+      "What is the encoder preset – can I change it?",
+    "Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.":
+      "There are two different “presets”. The Film, Series and Anime chips on Encoding are templates for CQ, codec, anime mode and audio – you can apply them and then change anything, and save your own profiles. That is not encoder speed.",
+    "Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.":
+      "The encoder speed preset sets how thoroughly the encoder searches (not what CQ 28 means). Slower = usually a smaller file at a similar picture, not automatically sharper. Set the default under Settings → Encoder speed; Encoding, VMAF Tool, Super Tool and the editor can override it per job.",
+    "Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.":
+      "Balanced (default) matches the former values: SVT-AV1 6 (scale 0 slow … 13 fast), x264/x265 medium, Nvidia NVENC p5 (p1 fast … p7 slow), Intel QSV slower. AMD/Intel VAAPI has no extra speed preset on this path. Fastest/fast: larger files, worse bit efficiency. Slow/slowest: much more time, especially CPU AV1 – do not combine with high parallelism. Diagnostics and the player transcode stay fast on purpose so tests do not take minutes.",
     "Welche CQ-Werte sind sinnvoll?": "Which CQ values make sense?",
     "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
       "18–22: very high, often close to the source, file stays large. 24–28: movie, good compromise (Movie preset = 28). 28–32: series, noticeably smaller (Series preset = 30). 34–40: much smaller; 1080p often already soft. 40+: clearly visible, size-first only.",
@@ -1279,8 +1301,8 @@
     "Was ist VMAF überhaupt?": "What is VMAF, actually?",
     "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
       "VMAF estimates how similar output and source look (typically 0–100). 93–95 is the sweet spot here: below that it often looks worse, above that the file grows a lot for little gain. Anime mode uses VMAF-NEG and 10-bit against banding.",
-    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
-      "There is also 1% low (worst frames), harmonic mean, PSNR and SSIM. VMAF is not a guarantee – screenshots and A/B compare still help.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "There is also 1% low (worst frames), harmonic mean, PSNR and SSIM. Target VMAF on the slider stays the mean (94 means mean ≥ 94). Recommendations (VMAF Tool, target VMAF, Super Tool, encoder test) do not let 1% low slip – you set the gap under Settings → VMAF recommendation (default 6, so at 94 low ≥ 88). 0 = mean only. A bigger gap (mean 95, 1% low 79) does not count as hitting the target – then the pick is not the smallest file, but the one with the better low. The shown score (55% mean + 35% 1% low + 10% harmonic mean) is only a comparison number, not a new slider. Samples: 1–5 scenes. VMAF is not a guarantee – screenshots and A/B compare still help.",
     "MKV oder MP4?": "MKV or MP4?",
     "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
       "MKV is recommended: AV1/HEVC/H.264 and all subtitle types (incl. PGS). MP4 converts text subs to mov_text; image subs (PGS/VobSub) are dropped. Automatic: AV1 and HEVC → MKV, H.264 → MP4.",
@@ -1293,6 +1315,94 @@
       "CQ, ABR, CBR and HDR/Dolby Vision profiles:",
     "FAQ: Dynamik": "FAQ: dynamic range",
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: SDR, HDR and Dolby Vision profiles",
+    "Encoder-Speed": "Encoder speed",
+    "VMAF-Empfehlung": "VMAF recommendation",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
+      "Applies to VMAF Tool, target VMAF, Super Tool and the encoder test – not again in the individual tools. The “target VMAF” slider stays the mean; 1% low may be at most this many points below. 0 turns the floor off (mean only, as before).",
+    "1%-Low-Abstand:": "1% low gap:",
+    "0 · nur Mittel": "0 · mean only",
+    "6 · empfohlen": "6 · recommended",
+    "12 · locker": "12 · loose",
+    "Streng (4)": "Strict (4)",
+    "Empfohlen (6)": "Recommended (6)",
+    "Großzügig (8)": "Generous (8)",
+    "nur Mittel": "mean only",
+    "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert.":
+      "Floor off: recommendation by mean only, 1% low is not a minimum.",
+    "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus).":
+      "Recommendation: mean ≥ target only (1% low floor off).",
+    "Speed-Stufe (Vorgabe)": "Speed tier (default)",
+    "Sehr schnell – größere Datei": "Very fast – larger file",
+    "Schnell": "Fast",
+    "Ausgewogen (Standard)": "Balanced (default)",
+    "Langsam – bessere Kompression": "Slow – better compression",
+    "Sehr langsam – beste Kompression": "Very slow – best compression",
+    "Ausgewogen": "Balanced",
+    "Sehr schnell": "Very fast",
+    "Langsam": "Slow",
+    "Sehr langsam": "Very slow",
+    "Achtung: schnellere Stufe = weniger gründliche Suche. Die Datei wird oft größer bzw. die Bit-Effizienz schlechter. VMAF-Werte gelten nur für genau diese Stufe.":
+      "Warning: a faster tier searches less thoroughly. The file is often larger / less bit-efficient. VMAF scores apply only to this exact tier.",
+    "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
+      "Warning: much longer, especially AV1 on the CPU. Very slow can take many hours on movies. Do not combine with high parallelism.",
+    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
+      "Settings → Encoder speed includes an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default.",
+    "Wie finde ich die passende Encoder-Speed-Stufe?":
+      "How do I find a matching encoder speed tier?",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "The encoder test under Settings downloads short reference clips (fixed, free sources: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – and Google ExoPlayer samples). You can add up to four files from your library if your sources look different from the demos.",
+    "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
+      "Each clip × speed tier runs a mini VMAF like the VMAF Tool (one excerpt, no screenshots). You choose CQ or ABR/CBR and up to four values. The table shows VMAF, 1% low, clip size and time. The recommendation steps to the next-slower tier only when the VMAF gain is clear and time does not explode (rule of thumb: at least +0.5 VMAF and a time factor under about 3.5 – or a gain over +1.2).",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "It is a compromise hint for this exact encoder (platform × codec), not for every machine. “Very slow” is unchecked on purpose – CPU AV1 in particular can take a long time. Downloads use the allowlist only, not an arbitrary URL.",
+    "Encoder-Test (VMAF)": "Encoder test (VMAF)",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
+      "Finds a matching speed tier: short clips of different picture types (animation, film CGI, live action, lots of motion, handheld) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources (Blender CC-BY, Google samples).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
+      "Each clip × speed tier runs a VMAF like the VMAF Tool (default: 3 scenes, 1–5 selectable, no screenshots). Short demo clips are split into shorter excerpts instead of collapsing to the middle. You choose CQ or ABR/CBR and up to four values. The table shows mean VMAF, 1% low, clip size and time.",
+    "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
+      "The recommendation does not use the mean alone: score = 55% mean + 35% 1% low + 10% harmonic mean. A mean of 95 with 1% low 79 would look like 95 – it does not; the worst frames (action, dark, banding) count extra. The next-slower tier is chosen when the score clearly rises and time does not explode – or when 1% low was too low and lifts noticeably. Native presets of the selected encoder (e.g. SVT 0–13, NVENC p1–p7), not just five aliases.",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "It is a compromise hint for this exact encoder (platform × codec), not for every machine. Default is fast/balanced/slow; “All tiers” tests every preset – CPU AV1 can then take a long time. Downloads use the allowlist only, not an arbitrary URL.",
+    "Speed-Stufen zum Vergleich": "Speed tiers to compare",
+    "Standard (schnell / ausgewogen / langsam)": "Default (fast / balanced / slow)",
+    "Alle Stufen": "All tiers",
+    "Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.":
+      "Depends on the encoder (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI has no extra preset.",
+    "4 Szenen": "4 scenes",
+    "5 Szenen": "5 scenes",
+    "3 Szenen (robuster)": "3 scenes (more robust)",
+    "Kein Speed-Preset (VAAPI)": "No speed preset (VAAPI)",
+    "Ausgewählte Clips laden": "Download selected clips",
+    "Eigene Datei aus der Bibliothek": "Own file from the library",
+    "Speed-Stufen zum Vergleich": "Speed tiers to compare",
+    "Steuerung": "Rate control",
+    "CQ / CRF / QP": "CQ / CRF / QP",
+    "ABR (kbit/s)": "ABR (kbit/s)",
+    "CBR (kbit/s)": "CBR (kbit/s)",
+    "Werte (kommagetrennt, max. 4)": "Values (comma-separated, max. 4)",
+    "Clip-Länge (Sekunden)": "Clip length (seconds)",
+    "Anime-Modus (VMAF-NEG, 10-bit)": "Anime mode (VMAF-NEG, 10-bit)",
+    "Test starten": "Start test",
+    "Empfehlung übernehmen und speichern": "Apply recommendation and save",
+    "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
+      "No own files. Optionally up to 4 videos from the library – useful if your sources look different from the demo clips.",
+    "Mindestens einen Clip und eine Speed-Stufe wählen.": "Choose at least one clip and one speed tier.",
+    "Wert": "Value",
+    "1%-Low": "1% low",
+    "Zeit": "Time",
+    "Entfernen": "Remove",
+    "Eigene Testdatei wählen": "Choose your own test file",
+    "Höchstens 4 eigene Dateien.": "At most 4 own files.",
+    "Mindestens einen Referenzclip anhaken.": "Tick at least one reference clip.",
+    "Mindestens einen Clip laden oder eine eigene Datei wählen.": "Download at least one clip or pick a file of your own.",
+    "Mindestens eine Speed-Stufe wählen.": "Choose at least one speed tier.",
+    "Mindestens einen CQ- oder Bitrate-Wert angeben.": "Enter at least one CQ or bitrate value.",
+    "Animation (Flächen, Banding)": "Animation (flats, banding)",
+    "Film-CGI (Detail, Dunkel)": "Film CGI (detail, dark)",
+    "Live-Action / VFX": "Live action / VFX",
+    "Viel Bewegung": "Lots of motion",
+    "Handkamera / Straße": "Handheld / street",
 
     // --- Sprachumschalter (bleibt zweisprachig) ---
     "Sprache / Language": "Sprache / Language"
@@ -2065,6 +2175,28 @@
       "El nombre del parámetro cambia según la plataforma, pero significa lo mismo: CPU usa CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. El mismo número no es igual de “nítido” en cada códec: AV1 CQ 28 suele ser mucho más pequeño que HEVC CRF 28, y este a su vez más pequeño que H.264 CRF 28.",
     "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
       "El encoder puede usar tantos bits como la escena necesite para mantener esa calidad. Acción y grano cuestan más; planos quietos, menos. Por eso el bitrate varía: no hay un objetivo fijo en MB.",
+    "Woran macht der Encoder fest, was CQ 20 oder 28 ist?":
+      "¿Cómo decide el encoder qué es realmente CQ 20 o 28?",
+    "Es gibt kein Vergleichsvideo und keine Norm „CQ 28 = so viele dB“. Die Zahl ist ein Sollwert auf der internen Qualitätsskala genau dieses Encoders. Daraus wird eine Quantisierungsstärke (QP, bei AV1 qindex, plus ein λ für die Rate-Distortion-Suche). Beim Quantisieren werden Transform-Koeffizienten durch eine Schrittweite geteilt und gerundet: größere Schrittweite → mehr Nullen → weniger Bits, groberes Bild.":
+      "No hay un vídeo de referencia ni una norma «CQ 28 = N dB». El número es un punto de consigna en la curva de calidad de ese encoder. Se convierte en una fuerza de cuantización (QP, qindex en AV1, más un λ para la búsqueda rate-distortion). Al cuantizar se dividen los coeficientes de la transformada por un paso y se redondean: paso más grande → más ceros → menos bits, imagen más grosera.",
+    "CQ heißt nicht „dieser Frame darf X Bits“. Der Encoder minimiert pro Block ungefähr Fehler + λ×Bits. Höheres CQ → höheres λ → Bits sind teurer → er nimmt mehr Fehler in Kauf. Schwierige Frames (Action, Korn) haben mehr Restenergie und brauchen bei gleichem QP automatisch mehr Bits; ruhige Frames weniger. CRF/CQ darf den QP zusätzlich pro Frame und Block verschieben (Adaptive Quantization), damit die wahrgenommene Qualität ungefähr gleich bleibt. Reines CQP hält den QP fest – Qualität schwankt dann stärker mit der Szene.":
+      "CQ no significa «este fotograma puede usar X bits». Por bloque el encoder minimiza aproximadamente error + λ×bits. CQ más alto → λ más alto → los bits son más caros → acepta más error. Los fotogramas difíciles (acción, grano) tienen más energía residual y a igual QP necesitan más bits; los planos quietos, menos. CRF/CQ puede además mover el QP por fotograma y bloque (cuantización adaptativa) para que la calidad percibida se mantenga pareja. El CQP puro deja el QP fijo: entonces la calidad oscila más con la escena.",
+    "Dieselbe Zahl ist nicht encoder-gleich. Video Studio reicht sie 1:1 durch: CPU x264/x265/SVT als CRF (jede Library eigene Kurve; AV1 intern qindex 0–255, H.264 QP 0–51), Nvidia als CQ im VBR-Modus, Intel QSV als global_quality, AMD/Intel VAAPI als echtes CQP. NVENC CQ 28 ist deshalb nicht „dasselbe“ wie SVT CRF 28. Zum Vergleichen der Encoder dient VMAF, nicht die CQ-Zahl. Das Preset (z. B. SVT 6, x264 medium, NVENC p5) ändert nicht die Bedeutung der Zahl, sondern wie gut der Encoder bei diesem Sollwert komprimiert.":
+      "El mismo número no es equivalente entre encoders. Video Studio lo pasa tal cual: CPU x264/x265/SVT como CRF (cada librería tiene su curva; AV1 usa qindex 0–255, H.264 QP 0–51), Nvidia como CQ en modo VBR, Intel QSV como global_quality, AMD/Intel VAAPI como CQP real. NVENC CQ 28 no es «lo mismo» que SVT CRF 28. Para comparar encoders sirve VMAF, no el entero CQ. El preset (p. ej. SVT 6, x264 medium, NVENC p5) no cambia el significado del número, solo lo bien que comprime a esa consigna.",
+    "Heißt hoher CQ einfach mehr Fehler und weniger Bits? Sind Software-Encoder sparsamer?":
+      "¿Un CQ alto significa simplemente más error y menos bits? ¿Los encoders de software ahorran más?",
+    "Ja. Höheres CQ erlaubt mehr Fehler: Bits sind teurer, die Datei wird in der Regel kleiner. Die Bitrate ist die Folge, nicht das Ziel – Action und Korn bleiben relativ teurer als ruhige Szenen, nur insgesamt sparsamer. Jeder Encoder hat seine eigene Messlatte: CQ 28 ist Stufe 28 auf genau dieser Skala, nicht dieselbe Schärfe wie CQ 28 beim nächsten Encoder.":
+      "Sí. Un CQ más alto permite más error: los bits son más caros y el archivo suele salir más pequeño. El bitrate es la consecuencia, no el objetivo: acción y grano siguen costando más que planos quietos, solo a un nivel más austero. Cada encoder tiene su propia vara: CQ 28 es el peldaño 28 de esa escala, no la misma nitidez que CQ 28 en el siguiente encoder.",
+    "Software (x264, x265, SVT-AV1) sucht gründlicher und nutzt Bits meist effizienter – oft dieselbe wahrgenommene Qualität mit weniger Bits. Hardware (NVENC, QSV, VAAPI) ist fest verdrahtet und grober, dafür viel schneller und entlastet die CPU. Die Lücke wird kleiner bei neuem Nvidia-AV1 und hohen Bitraten; am klarsten ist der Software-Vorteil bei knappem Budget. „Langsamer“ gilt vor allem für AV1 auf der CPU. Das Encoder-Preset zählt oft mehr als CPU gegen GPU: ein sehr schnelles SVT-Preset kann schlechter komprimieren als ein guter NVENC.":
+      "El software (x264, x265, SVT-AV1) busca más a fondo y suele gastar mejor los bits: a menudo la misma calidad percibida con menos bits. El hardware (NVENC, QSV, VAAPI) va cableado y más grosero, pero es mucho más rápido y deja libre la CPU. La diferencia se estrecha con el AV1 reciente de Nvidia y con bitrates altos; la ventaja del software se ve más clara cuando el presupuesto es justo. «Más lento» aplica sobre todo al AV1 en CPU. El preset del encoder cuenta a menudo más que CPU frente a GPU: un preset SVT muy rápido puede comprimir peor que un buen NVENC.",
+    "Was ist das Encoder-Preset – kann ich das ändern?":
+      "¿Qué es el preset del encoder? ¿Se puede cambiar?",
+    "Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.":
+      "Hay dos «presets» distintos. Los chips Película, Serie y Anime en Encoding son plantillas de CQ, códec, modo anime y audio: las puedes aplicar y luego cambiarlo todo, y guardar perfiles propios. Eso no es la velocidad del encoder.",
+    "Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.":
+      "El preset de velocidad del encoder fija lo a fondo que busca (no lo que significa CQ 28). Más lento = suele ser un archivo más pequeño con una imagen similar, no automáticamente más nítido. La consigna se pone en Ajustes → Encoder-Speed; Encoding, herramienta VMAF, Super Tool y el editor pueden anularla por trabajo.",
+    "Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.":
+      "Equilibrado (predeterminado) coincide con los valores anteriores: SVT-AV1 6 (escala 0 lento … 13 rápido), x264/x265 medium, Nvidia NVENC p5 (p1 rápido … p7 lento), Intel QSV slower. AMD/Intel VAAPI no tiene preset de velocidad extra en esta ruta. Muy rápido/rápido: archivos más grandes, peor eficiencia. Lento/muy lento: mucho más tiempo, sobre todo AV1 en CPU – no combinar con alta paralelidad. Diagnóstico y el transcode del reproductor siguen rápidos a propósito para que las pruebas no duren minutos.",
     "Welche CQ-Werte sind sinnvoll?": "¿Qué valores de CQ tienen sentido?",
     "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
       "18–22: muy alto, a menudo cerca del original, el archivo sigue grande. 24–28: cine, buen compromiso (preset Película = 28). 28–32: series, notablemente más pequeño (preset Serie = 30). 34–40: bastante más pequeño; en 1080p a menudo ya suave. 40+: claramente visible, solo si el tamaño manda.",
@@ -2127,8 +2259,8 @@
     "Was ist VMAF überhaupt?": "¿Qué es VMAF?",
     "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
       "VMAF estima cuánto se parecen salida y fuente a la vista (típicamente 0–100). 93–95 es el punto dulce aquí: por debajo suele verse peor, por encima el archivo crece mucho a cambio de poco. El modo anime usa VMAF-NEG y 10 bit contra el banding.",
-    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
-      "Además hay 1 % low (peores fotogramas), media armónica, PSNR y SSIM. VMAF no es una garantía: capturas y comparación A/B siguen siendo útiles.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "Además hay 1 % low (peores fotogramas), media armónica, PSNR y SSIM. El VMAF objetivo del control sigue siendo la media (94 significa media ≥ 94). La recomendación (herramienta VMAF, VMAF objetivo, Super Tool, prueba de encoder) no deja escapar el 1 % low: el margen se fija en Ajustes → Recomendación VMAF (valor 6, con 94 low ≥ 88). 0 = solo media. Si la brecha es mayor (media 95, 1 % low 79), no cuenta como objetivo cumplido: entonces no se elige el archivo más pequeño, sino el de mejor low. La puntuación mostrada (55 % media + 35 % 1 % low + 10 % media armónica) es solo un número de comparación, no un control nuevo. Muestras: 1–5 escenas. VMAF no es una garantía: capturas y comparación A/B siguen siendo útiles.",
     "MKV oder MP4?": "¿MKV o MP4?",
     "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
       "Se recomienda MKV: AV1/HEVC/H.264 y todos los subtítulos (incl. PGS). MP4 convierte subtítulos de texto a mov_text; los de imagen (PGS/VobSub) se descartan. Automático: AV1 y HEVC → MKV, H.264 → MP4.",
@@ -2141,6 +2273,91 @@
       "CQ, ABR, CBR y perfiles HDR/Dolby Vision:",
     "FAQ: Dynamik": "FAQ: rango dinámico",
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ: perfiles SDR, HDR y Dolby Vision",
+    "Encoder-Speed": "Velocidad del encoder",
+    "VMAF-Empfehlung": "Recomendación VMAF",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
+      "Vale para la herramienta VMAF, VMAF objetivo, Super Tool y la prueba de encoder – no otra vez en cada herramienta. El control «VMAF objetivo» sigue siendo la media; el 1 % low puede quedar como máximo tantos puntos por debajo. 0 desactiva el suelo (solo media, como antes).",
+    "1%-Low-Abstand:": "Margen 1 % low:",
+    "0 · nur Mittel": "0 · solo media",
+    "6 · empfohlen": "6 · recomendado",
+    "12 · locker": "12 · holgado",
+    "Streng (4)": "Estricto (4)",
+    "Empfohlen (6)": "Recomendado (6)",
+    "Großzügig (8)": "Generoso (8)",
+    "nur Mittel": "solo media",
+    "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert.":
+      "Suelo desactivado: recomendación solo por la media, el 1 % low no es un mínimo.",
+    "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus).":
+      "Recomendación: solo media ≥ objetivo (suelo 1 % low desactivado).",
+    "Speed-Stufe (Vorgabe)": "Nivel de velocidad (predeterminado)",
+    "Sehr schnell – größere Datei": "Muy rápido – archivo más grande",
+    "Ausgewogen (Standard)": "Equilibrado (predeterminado)",
+    "Langsam – bessere Kompression": "Lento – mejor compresión",
+    "Sehr langsam – beste Kompression": "Muy lento – mejor compresión",
+    "Ausgewogen": "Equilibrado",
+    "Sehr schnell": "Muy rápido",
+    "Langsam": "Lento",
+    "Sehr langsam": "Muy lento",
+    "Achtung: schnellere Stufe = weniger gründliche Suche. Die Datei wird oft größer bzw. die Bit-Effizienz schlechter. VMAF-Werte gelten nur für genau diese Stufe.":
+      "Atención: un nivel más rápido busca menos a fondo. El archivo suele ser más grande o menos eficiente. Los valores VMAF valen solo para ese nivel.",
+    "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
+      "Atención: mucho más lento, sobre todo AV1 en CPU. Muy lento puede llevar muchas horas en películas. No combinar con alta paralelidad.",
+    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
+      "En Ajustes → Encoder-Speed hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna.",
+    "Wie finde ich die passende Encoder-Speed-Stufe?":
+      "¿Cómo encuentro el nivel de velocidad adecuado?",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "La prueba de encoder en Ajustes descarga clips de referencia cortos (fuentes fijas y libres: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – y samples de Google ExoPlayer). Puedes añadir hasta cuatro archivos de tu biblioteca si tus fuentes no se parecen a las demos.",
+    "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
+      "Por cada clip y nivel de velocidad corre un mini VMAF como en la herramienta VMAF (un fragmento, sin capturas). Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF, 1 % low, tamaño del clip y tiempo. La recomendación pasa al nivel más lento solo si la ganancia de VMAF es clara y el tiempo no explota (regla: al menos +0,5 VMAF y factor de tiempo bajo ~3,5 – o una ganancia sobre +1,2).",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "Es una pista de compromiso para ese encoder concreto (plataforma × códec), no para todos los equipos. «Muy lento» no está marcado a propósito: el AV1 en CPU puede tardar mucho. Las descargas solo usan la lista permitida, no una URL arbitraria.",
+    "Encoder-Test (VMAF)": "Prueba de encoder (VMAF)",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
+      "Encuentra un nivel de velocidad adecuado: clips cortos de distintos tipos de imagen (animación, CGI de cine, acción real, mucho movimiento, cámara en mano) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres (Blender CC-BY, samples de Google).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
+      "Por cada clip y nivel de velocidad corre un VMAF como en la herramienta VMAF (por defecto: 3 escenas, 1–5 seleccionables, sin capturas). Los clips demo cortos se parten en extractos más cortos en vez de caer en el centro. Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF medio, 1 % low, tamaño del clip y tiempo.",
+    "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
+      "La recomendación no usa solo la media: puntuación = 55 % media + 35 % 1 % low + 10 % media armónica. Una media de 95 con 1 % low 79 parecería un 95: no lo es; los peores fotogramas (acción, oscuro, banding) cuentan extra. Se elige el nivel más lento si la puntuación sube con claridad y el tiempo no explota, o si el 1 % low era demasiado bajo y sube de forma notable. Presets nativos del encoder elegido (p. ej. SVT 0–13, NVENC p1–p7), no solo cinco alias.",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "Es una pista de compromiso para ese encoder concreto (plataforma × códec), no para todos los equipos. Lo predeterminado es rápido/equilibrado/lento; «Todas las etapas» prueba cada preset: el AV1 en CPU puede tardar mucho. Las descargas solo usan la lista permitida, no una URL arbitraria.",
+    "Ausgewählte Clips laden": "Descargar clips seleccionados",
+    "Eigene Datei aus der Bibliothek": "Archivo propio de la biblioteca",
+    "Speed-Stufen zum Vergleich": "Niveles de velocidad a comparar",
+    "Standard (schnell / ausgewogen / langsam)": "Predeterminado (rápido / equilibrado / lento)",
+    "Alle Stufen": "Todas las etapas",
+    "Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.":
+      "Depende del encoder (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI no tiene preset extra.",
+    "4 Szenen": "4 escenas",
+    "5 Szenen": "5 escenas",
+    "3 Szenen (robuster)": "3 escenas (más robusto)",
+    "Kein Speed-Preset (VAAPI)": "Sin preset de velocidad (VAAPI)",
+    "Steuerung": "Control de tasa",
+    "ABR (kbit/s)": "ABR (kbit/s)",
+    "CBR (kbit/s)": "CBR (kbit/s)",
+    "Werte (kommagetrennt, max. 4)": "Valores (separados por comas, máx. 4)",
+    "Clip-Länge (Sekunden)": "Duración del clip (segundos)",
+    "Anime-Modus (VMAF-NEG, 10-bit)": "Modo anime (VMAF-NEG, 10 bit)",
+    "Test starten": "Iniciar prueba",
+    "Empfehlung übernehmen und speichern": "Aplicar recomendación y guardar",
+    "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
+      "Sin archivos propios. Opcionalmente hasta 4 vídeos de la biblioteca: útil si tus fuentes no se parecen a las demos.",
+    "Mindestens einen Clip und eine Speed-Stufe wählen.": "Elige al menos un clip y un nivel de velocidad.",
+    "Wert": "Valor",
+    "1%-Low": "1 % low",
+    "Zeit": "Tiempo",
+    "Entfernen": "Quitar",
+    "Eigene Testdatei wählen": "Elegir archivo de prueba propio",
+    "Höchstens 4 eigene Dateien.": "Como máximo 4 archivos propios.",
+    "Mindestens einen Referenzclip anhaken.": "Marca al menos un clip de referencia.",
+    "Mindestens einen Clip laden oder eine eigene Datei wählen.": "Descarga al menos un clip o elige un archivo propio.",
+    "Mindestens eine Speed-Stufe wählen.": "Elige al menos un nivel de velocidad.",
+    "Mindestens einen CQ- oder Bitrate-Wert angeben.": "Indica al menos un valor de CQ o bitrate.",
+    "Animation (Flächen, Banding)": "Animación (aplanados, banding)",
+    "Film-CGI (Detail, Dunkel)": "CGI de cine (detalle, oscuro)",
+    "Live-Action / VFX": "Acción real / VFX",
+    "Viel Bewegung": "Mucho movimiento",
+    "Handkamera / Straße": "Cámara en mano / calle",
 
     "Sprache / Language": "Sprache / Language"
   };
@@ -2908,6 +3125,28 @@
       "Le nom du paramètre change selon la plateforme, mais veut dire la même chose : CPU utilise CRF, Nvidia CQ, Intel QSV global_quality, Intel/AMD VAAPI QP. Le même chiffre n'est pas aussi « net » d'un codec à l'autre : AV1 CQ 28 est souvent bien plus petit que HEVC CRF 28, lui-même plus petit que H.264 CRF 28.",
     "Der Encoder darf so viele Bits nehmen, wie die Szene braucht, um ungefähr diese Qualitätsstufe zu halten. Action und Korn brauchen mehr, ruhige Stellen weniger. Deshalb schwankt die Bitrate – es gibt kein festes MB-Ziel.":
       "L'encodeur peut prendre autant de bits que la scène en a besoin pour tenir ce niveau de qualité. L'action et le grain coûtent plus ; les plans calmes, moins. Le débit varie donc – il n'y a pas d'objectif fixe en Mo.",
+    "Woran macht der Encoder fest, was CQ 20 oder 28 ist?":
+      "Comment l'encodeur décide-t-il ce que CQ 20 ou 28 représente vraiment ?",
+    "Es gibt kein Vergleichsvideo und keine Norm „CQ 28 = so viele dB“. Die Zahl ist ein Sollwert auf der internen Qualitätsskala genau dieses Encoders. Daraus wird eine Quantisierungsstärke (QP, bei AV1 qindex, plus ein λ für die Rate-Distortion-Suche). Beim Quantisieren werden Transform-Koeffizienten durch eine Schrittweite geteilt und gerundet: größere Schrittweite → mehr Nullen → weniger Bits, groberes Bild.":
+      "Il n'y a pas de clip de référence ni de norme « CQ 28 = N dB ». Le chiffre est une consigne sur la courbe de qualité de cet encodeur. Elle devient une force de quantification (QP, qindex AV1, plus un λ pour la recherche débit-distorsion). La quantification divise les coefficients de transformée par un pas et arrondit : pas plus grand → plus de zéros → moins de bits, image plus grossière.",
+    "CQ heißt nicht „dieser Frame darf X Bits“. Der Encoder minimiert pro Block ungefähr Fehler + λ×Bits. Höheres CQ → höheres λ → Bits sind teurer → er nimmt mehr Fehler in Kauf. Schwierige Frames (Action, Korn) haben mehr Restenergie und brauchen bei gleichem QP automatisch mehr Bits; ruhige Frames weniger. CRF/CQ darf den QP zusätzlich pro Frame und Block verschieben (Adaptive Quantization), damit die wahrgenommene Qualität ungefähr gleich bleibt. Reines CQP hält den QP fest – Qualität schwankt dann stärker mit der Szene.":
+      "CQ ne veut pas dire « cette image a droit à X bits ». Par bloc, l'encodeur minimise à peu près erreur + λ×bits. CQ plus haut → λ plus haut → les bits coûtent plus cher → il accepte plus d'erreur. Les images difficiles (action, grain) ont plus d'énergie résiduelle et, à QP égal, demandent plus de bits ; les plans calmes, moins. CRF/CQ peut aussi déplacer le QP par image et par bloc (quantification adaptative) pour garder une qualité perçue plus égale. Le CQP pur fixe le QP – la qualité varie alors plus avec la scène.",
+    "Dieselbe Zahl ist nicht encoder-gleich. Video Studio reicht sie 1:1 durch: CPU x264/x265/SVT als CRF (jede Library eigene Kurve; AV1 intern qindex 0–255, H.264 QP 0–51), Nvidia als CQ im VBR-Modus, Intel QSV als global_quality, AMD/Intel VAAPI als echtes CQP. NVENC CQ 28 ist deshalb nicht „dasselbe“ wie SVT CRF 28. Zum Vergleichen der Encoder dient VMAF, nicht die CQ-Zahl. Das Preset (z. B. SVT 6, x264 medium, NVENC p5) ändert nicht die Bedeutung der Zahl, sondern wie gut der Encoder bei diesem Sollwert komprimiert.":
+      "Le même chiffre n'est pas équivalent d'un encodeur à l'autre. Video Studio le transmet tel quel : CPU x264/x265/SVT en CRF (chaque bibliothèque a sa courbe ; AV1 utilise qindex 0–255, H.264 QP 0–51), Nvidia en CQ mode VBR, Intel QSV en global_quality, AMD/Intel VAAPI en vrai CQP. NVENC CQ 28 n'est donc pas « la même chose » que SVT CRF 28. Pour comparer les encodeurs, c'est le VMAF, pas l'entier CQ. Le préréglage (p. ex. SVT 6, x264 medium, NVENC p5) ne change pas le sens du chiffre, seulement la qualité de compression à cette consigne.",
+    "Heißt hoher CQ einfach mehr Fehler und weniger Bits? Sind Software-Encoder sparsamer?":
+      "Un CQ élevé veut-il simplement dire plus d'erreurs et moins de bits ? Les encodeurs logiciels sont-ils plus économes ?",
+    "Ja. Höheres CQ erlaubt mehr Fehler: Bits sind teurer, die Datei wird in der Regel kleiner. Die Bitrate ist die Folge, nicht das Ziel – Action und Korn bleiben relativ teurer als ruhige Szenen, nur insgesamt sparsamer. Jeder Encoder hat seine eigene Messlatte: CQ 28 ist Stufe 28 auf genau dieser Skala, nicht dieselbe Schärfe wie CQ 28 beim nächsten Encoder.":
+      "Oui. Un CQ plus élevé autorise plus d'erreurs : les bits coûtent plus cher, le fichier est en général plus petit. Le débit est la conséquence, pas l'objectif – l'action et le grain restent plus chers que les plans calmes, juste à un niveau plus sobre. Chaque encodeur a sa propre échelle : CQ 28 est le cran 28 de *cette* courbe, pas la même netteté que CQ 28 chez le suivant.",
+    "Software (x264, x265, SVT-AV1) sucht gründlicher und nutzt Bits meist effizienter – oft dieselbe wahrgenommene Qualität mit weniger Bits. Hardware (NVENC, QSV, VAAPI) ist fest verdrahtet und grober, dafür viel schneller und entlastet die CPU. Die Lücke wird kleiner bei neuem Nvidia-AV1 und hohen Bitraten; am klarsten ist der Software-Vorteil bei knappem Budget. „Langsamer“ gilt vor allem für AV1 auf der CPU. Das Encoder-Preset zählt oft mehr als CPU gegen GPU: ein sehr schnelles SVT-Preset kann schlechter komprimieren als ein guter NVENC.":
+      "Le logiciel (x264, x265, SVT-AV1) cherche plus à fond et utilise en général mieux les bits – souvent la même qualité perçue avec moins de bits. Le matériel (NVENC, QSV, VAAPI) est câblé et plus grossier, mais beaucoup plus rapide et laisse le CPU libre. L'écart se réduit avec l'AV1 Nvidia récent et les hauts débits ; l'avantage logiciel est le plus net quand le budget est serré. « Plus lent » concerne surtout l'AV1 sur CPU. Le préréglage d'encodeur compte souvent plus que CPU contre GPU : un preset SVT très rapide peut moins bien compresser qu'un bon NVENC.",
+    "Was ist das Encoder-Preset – kann ich das ändern?":
+      "Qu'est-ce que le préréglage d'encodeur – puis-je le changer ?",
+    "Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.":
+      "Il y a deux « presets » différents. Les puces Film, Série et Anime sur Encoding sont des modèles pour CQ, codec, mode anime et audio – tu peux les appliquer puis tout modifier, et enregistrer tes propres profils. Ce n'est pas la vitesse de l'encodeur.",
+    "Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.":
+      "Le préréglage de vitesse de l'encodeur fixe à quel point il cherche (pas ce que signifie CQ 28). Plus lent = en général un fichier plus petit pour une image similaire, pas automatiquement plus net. La consigne se règle dans Paramètres → Encoder-Speed ; Encoding, outil VMAF, Super Tool et l'éditeur peuvent la remplacer par tâche.",
+    "Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.":
+      "Équilibré (défaut) reprend les anciennes valeurs : SVT-AV1 6 (échelle 0 lent … 13 rapide), x264/x265 medium, Nvidia NVENC p5 (p1 rapide … p7 lent), Intel QSV slower. AMD/Intel VAAPI n'a pas de préréglage de vitesse extra sur ce chemin. Très rapide/rapide : fichiers plus lourds, moins bonne efficacité. Lent/très lent : beaucoup plus de temps, surtout l'AV1 CPU – ne pas combiner avec une forte parallélisation. Diagnostic et transcodage du lecteur restent rapides exprès pour que les tests ne durent pas des minutes.",
     "Welche CQ-Werte sind sinnvoll?": "Quelles valeurs de CQ ont du sens ?",
     "18–22: sehr hoch, oft nah am Original, Datei bleibt groß. 24–28: Film, guter Kompromiss (Preset Film = 28). 28–32: Serie, spürbar kleiner (Preset Serie = 30). 34–40: deutlich kleiner, bei 1080p oft schon weich. 40+: stark sichtbar, nur wenn Größe Priorität hat.":
       "18–22 : très élevé, souvent proche de la source, le fichier reste lourd. 24–28 : film, bon compromis (préréglage Film = 28). 28–32 : série, nettement plus petit (préréglage Série = 30). 34–40 : bien plus petit ; en 1080p souvent déjà doux. 40+ : clairement visible, seulement si la taille prime.",
@@ -2970,8 +3209,8 @@
     "Was ist VMAF überhaupt?": "Qu'est-ce que le VMAF, au juste ?",
     "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
       "Le VMAF estime à quel point sortie et source se ressemblent à l'œil (typiquement 0–100). 93–95 est le sweet spot ici : en dessous ça se voit souvent, au-dessus le fichier grossit beaucoup pour peu de gain. Le mode anime utilise VMAF-NEG et 10 bit contre le banding.",
-    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
-      "Il y a aussi le 1 % low (pires images), la moyenne harmonique, PSNR et SSIM. Le VMAF n'est pas une garantie – captures et comparaison A/B restent utiles.",
+    "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
+      "Il y a aussi le 1 % low (pires images), la moyenne harmonique, PSNR et SSIM. Le VMAF cible du curseur reste la moyenne (94 veut dire moyenne ≥ 94). La recommandation (outil VMAF, VMAF cible, Super Tool, test d'encodeur) ne laisse pas passer le 1 % low – l'écart se règle dans Paramètres → Recommandation VMAF (défaut 6, à 94 low ≥ 88). 0 = moyenne seulement. Un écart plus grand (moyenne 95, 1 % low 79) ne compte pas comme cible atteinte – on ne prend alors pas le plus petit fichier, mais celui au meilleur low. Le score affiché (55 % moyenne + 35 % 1 % low + 10 % moyenne harmonique) n'est qu'un chiffre de comparaison, pas un nouveau curseur. Échantillons : 1–5 scènes. Le VMAF n'est pas une garantie – captures et comparaison A/B restent utiles.",
     "MKV oder MP4?": "MKV ou MP4 ?",
     "MKV wird empfohlen: AV1/HEVC/H.264 und alle Untertitel (inkl. PGS). MP4 wandelt Text-Untertitel in mov_text; Bild-Untertitel (PGS/VobSub) entfallen. Automatisch: AV1 und HEVC → MKV, H.264 → MP4.":
       "MKV est recommandé : AV1/HEVC/H.264 et tous les sous-titres (y compris PGS). MP4 convertit les sous-titres texte en mov_text ; les sous-titres image (PGS/VobSub) sont abandonnés. Automatique : AV1 et HEVC → MKV, H.264 → MP4.",
@@ -2984,6 +3223,91 @@
       "CQ, ABR, CBR et profils HDR/Dolby Vision :",
     "FAQ: Dynamik": "FAQ : dynamique",
     "FAQ: SDR, HDR und Dolby-Vision-Profile": "FAQ : profils SDR, HDR et Dolby Vision",
+    "Encoder-Speed": "Vitesse d'encodeur",
+    "VMAF-Empfehlung": "Recommandation VMAF",
+    "Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test – nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert; das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus (nur Mittel, wie früher).":
+      "S'applique à l'outil VMAF, au VMAF cible, au Super Tool et au test d'encodeur – pas une deuxième fois dans chaque outil. Le curseur « VMAF cible » reste la moyenne ; le 1 % low peut descendre d'au plus autant de points. 0 désactive le plancher (moyenne seule, comme avant).",
+    "1%-Low-Abstand:": "Écart 1 % low :",
+    "0 · nur Mittel": "0 · moyenne seule",
+    "6 · empfohlen": "6 · recommandé",
+    "12 · locker": "12 · large",
+    "Streng (4)": "Strict (4)",
+    "Empfohlen (6)": "Recommandé (6)",
+    "Großzügig (8)": "Généreux (8)",
+    "nur Mittel": "moyenne seule",
+    "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert.":
+      "Plancher off : recommandation sur la moyenne seule, le 1 % low n'est pas un minimum.",
+    "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus).":
+      "Recommandation : moyenne ≥ cible seulement (plancher 1 % low off).",
+    "Speed-Stufe (Vorgabe)": "Niveau de vitesse (défaut)",
+    "Sehr schnell – größere Datei": "Très rapide – fichier plus lourd",
+    "Ausgewogen (Standard)": "Équilibré (défaut)",
+    "Langsam – bessere Kompression": "Lent – meilleure compression",
+    "Sehr langsam – beste Kompression": "Très lent – meilleure compression",
+    "Ausgewogen": "Équilibré",
+    "Sehr schnell": "Très rapide",
+    "Langsam": "Lent",
+    "Sehr langsam": "Très lent",
+    "Achtung: schnellere Stufe = weniger gründliche Suche. Die Datei wird oft größer bzw. die Bit-Effizienz schlechter. VMAF-Werte gelten nur für genau diese Stufe.":
+      "Attention : un cran plus rapide cherche moins à fond. Le fichier est souvent plus lourd / moins efficace. Les scores VMAF ne valent que pour ce cran.",
+    "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
+      "Attention : nettement plus long, surtout l'AV1 sur CPU. Très lent peut prendre des heures sur un film. Ne pas combiner avec une forte parallélisation.",
+    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
+      "Dans Paramètres → Encoder-Speed, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne.",
+    "Wie finde ich die passende Encoder-Speed-Stufe?":
+      "Comment trouver le cran de vitesse d'encodeur adapté ?",
+    "Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – und Google ExoPlayer-Samples). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.":
+      "Le test d'encodeur dans Paramètres télécharge de courts clips de référence (sources fixes et libres : Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – et échantillons Google ExoPlayer). Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque si tes sources ne ressemblent pas aux démos.",
+    "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
+      "Chaque clip × cran de vitesse lance un mini VMAF comme l'outil VMAF (un extrait, pas de captures). Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF, 1 % low, taille du clip et temps. La recommandation ne passe au cran plus lent que si le gain VMAF est clair et que le temps n'explose pas (règle : au moins +0,5 VMAF et facteur de temps sous ~3,5 – ou un gain au-delà de +1,2).",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "C'est un indice de compromis pour cet encodeur précis (plateforme × codec), pas pour toutes les machines. « Très lent » n'est pas coché exprès – l'AV1 CPU surtout peut durer longtemps. Les téléchargements passent uniquement par la liste autorisée, pas par une URL libre.",
+    "Encoder-Test (VMAF)": "Test d'encodeur (VMAF)",
+    "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Google-Samples).":
+      "Trouve un cran de vitesse adapté : de courts clips de types d'image différents (animation, CGI film, prise de vue réelle, beaucoup de mouvement, caméra à la main) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres (Blender CC-BY, échantillons Google).",
+    "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe und Zeit.":
+      "Chaque clip × cran de vitesse lance un VMAF comme l'outil VMAF (défaut : 3 scènes, 1–5 au choix, pas de captures). Les clips démo courts sont découpés en extraits plus courts au lieu de tout ramener au milieu. Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF moyen, 1 % low, taille du clip et temps.",
+    "Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.":
+      "La recommandation n'utilise pas seulement la moyenne : score = 55 % moyenne + 35 % 1 % low + 10 % moyenne harmonique. Une moyenne de 95 avec 1 % low 79 aurait l'air d'un 95 – ce n'est pas le cas ; les pires images (action, sombre, banding) comptent en plus. Le cran plus lent est choisi si le score monte clairement et que le temps n'explose pas – ou si le 1 % low était trop bas et remonte nettement. Presets natifs de l'encodeur choisi (p. ex. SVT 0–13, NVENC p1–p7), pas seulement cinq alias.",
+    "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
+      "C'est un indice de compromis pour cet encodeur précis (plateforme × codec), pas pour toutes les machines. Par défaut : rapide / équilibré / lent ; « Tous les crans » teste vraiment chaque preset – l'AV1 CPU peut alors durer longtemps. Les téléchargements passent uniquement par la liste autorisée, pas par une URL libre.",
+    "Ausgewählte Clips laden": "Télécharger les clips choisis",
+    "Eigene Datei aus der Bibliothek": "Fichier personnel de la bibliothèque",
+    "Speed-Stufen zum Vergleich": "Crans de vitesse à comparer",
+    "Standard (schnell / ausgewogen / langsam)": "Défaut (rapide / équilibré / lent)",
+    "Alle Stufen": "Tous les crans",
+    "Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.":
+      "Dépend de l'encodeur (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI n'a pas de preset extra.",
+    "4 Szenen": "4 scènes",
+    "5 Szenen": "5 scènes",
+    "3 Szenen (robuster)": "3 scènes (plus robuste)",
+    "Kein Speed-Preset (VAAPI)": "Pas de préréglage de vitesse (VAAPI)",
+    "Steuerung": "Pilotage du débit",
+    "ABR (kbit/s)": "ABR (kbit/s)",
+    "CBR (kbit/s)": "CBR (kbit/s)",
+    "Werte (kommagetrennt, max. 4)": "Valeurs (séparées par des virgules, max. 4)",
+    "Clip-Länge (Sekunden)": "Durée du clip (secondes)",
+    "Anime-Modus (VMAF-NEG, 10-bit)": "Mode anime (VMAF-NEG, 10 bit)",
+    "Test starten": "Lancer le test",
+    "Empfehlung übernehmen und speichern": "Appliquer la recommandation et enregistrer",
+    "Keine eigenen Dateien. Optional bis zu 4 Videos aus der Bibliothek – sinnvoll, wenn deine Quellen anders sind als die Demo-Clips.":
+      "Aucun fichier personnel. Optionnellement jusqu'à 4 vidéos de la bibliothèque – utile si tes sources ne ressemblent pas aux démos.",
+    "Mindestens einen Clip und eine Speed-Stufe wählen.": "Choisis au moins un clip et un cran de vitesse.",
+    "Wert": "Valeur",
+    "1%-Low": "1 % low",
+    "Zeit": "Temps",
+    "Entfernen": "Retirer",
+    "Eigene Testdatei wählen": "Choisir ton propre fichier de test",
+    "Höchstens 4 eigene Dateien.": "Au plus 4 fichiers personnels.",
+    "Mindestens einen Referenzclip anhaken.": "Coche au moins un clip de référence.",
+    "Mindestens einen Clip laden oder eine eigene Datei wählen.": "Télécharge au moins un clip ou choisis un fichier personnel.",
+    "Mindestens eine Speed-Stufe wählen.": "Choisis au moins un cran de vitesse.",
+    "Mindestens einen CQ- oder Bitrate-Wert angeben.": "Indique au moins une valeur CQ ou de débit.",
+    "Animation (Flächen, Banding)": "Animation (aplats, banding)",
+    "Film-CGI (Detail, Dunkel)": "CGI film (détail, sombre)",
+    "Live-Action / VFX": "Prise de vue réelle / VFX",
+    "Viel Bewegung": "Beaucoup de mouvement",
+    "Handkamera / Straße": "Caméra à la main / rue",
 
     "Sprache / Language": "Sprache / Language"
   };
@@ -3011,6 +3335,17 @@
     [/^Pausiert: (.+)$/, function (m) { return "Paused: " + m[1]; }],
     [/^Analyse-Fehler: (.+)$/, function (m) { return "Analysis error: " + m[1]; }],
     [/^Fehler: (.+)$/, function (m) { return "Error: " + m[1]; }],
+    [/^Ungefähr (\d+) Mini-Encodes \((\d+) Clips × (\d+) Speed-Stufen × (\d+) Qualitätswerte\)\. CPU-AV1 dauert deutlich länger als GPU\. „Sehr langsam“ nicht vorausgewählt\.$/,
+      function (m) { return "About " + m[1] + " mini-encodes (" + m[2] + " clips × " + m[3] + " speed tiers × " + m[4] + " quality values). CPU AV1 takes much longer than GPU. “Very slow” is not preselected."; }],
+    [/^Geladen · (.+)$/, function (m) { return "Downloaded · " + m[1]; }],
+    [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Not downloaded · ~" + m[1] + " MB"; }],
+    [/^(\d+) Punkte$/, function (m) { return m[1] + " points"; }],
+    [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
+      function (m) { return "At target 94, 1% low must be ≥ " + m[1] + ". At target 93: ≥ " + m[2] + "."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,
+      function (m) { return "1% low = mean of the worst 1% of frames; H-Ø = harmonic mean; score = 55% mean + 35% 1% low + 10% H-Ø. Recommendation: mean ≥ target and 1% low no more than " + m[1] + " below."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: nur Mittel ≥ Ziel \(1%-Low-Floor aus\)\.$/,
+      function () { return "1% low = mean of the worst 1% of frames; H-Ø = harmonic mean; score = 55% mean + 35% 1% low + 10% H-Ø. Recommendation: mean ≥ target only (1% low floor off)."; }],
     // Reine Status-Badges (Backend-Status)
     [/^wartend$/, function () { return "waiting"; }],
     [/^in arbeit$/, function () { return "processing"; }],
@@ -3043,6 +3378,17 @@
     [/^Pausiert: (.+)$/, function (m) { return "En pausa: " + m[1]; }],
     [/^Analyse-Fehler: (.+)$/, function (m) { return "Error de análisis: " + m[1]; }],
     [/^Fehler: (.+)$/, function (m) { return "Error: " + m[1]; }],
+    [/^Ungefähr (\d+) Mini-Encodes \((\d+) Clips × (\d+) Speed-Stufen × (\d+) Qualitätswerte\)\. CPU-AV1 dauert deutlich länger als GPU\. „Sehr langsam“ nicht vorausgewählt\.$/,
+      function (m) { return "Unos " + m[1] + " mini-encodes (" + m[2] + " clips × " + m[3] + " niveles × " + m[4] + " valores de calidad). AV1 en CPU tarda mucho más que GPU. «Muy lento» no está preseleccionado."; }],
+    [/^Geladen · (.+)$/, function (m) { return "Descargado · " + m[1]; }],
+    [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Sin descargar · ~" + m[1] + " MB"; }],
+    [/^(\d+) Punkte$/, function (m) { return m[1] + " puntos"; }],
+    [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
+      function (m) { return "Con objetivo 94, el 1 % low debe ser ≥ " + m[1] + ". Con objetivo 93: ≥ " + m[2] + "."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,
+      function (m) { return "1 % low = media del 1 % de fotogramas peores; H-Ø = media armónica; puntuación = 55 % media + 35 % 1 % low + 10 % H-Ø. Recomendación: media ≥ objetivo y 1 % low no más de " + m[1] + " por debajo."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: nur Mittel ≥ Ziel \(1%-Low-Floor aus\)\.$/,
+      function () { return "1 % low = media del 1 % de fotogramas peores; H-Ø = media armónica; puntuación = 55 % media + 35 % 1 % low + 10 % H-Ø. Recomendación: solo media ≥ objetivo (suelo 1 % low desactivado)."; }],
     [/^wartend$/, function () { return "en espera"; }],
     [/^in arbeit$/, function () { return "en curso"; }],
     [/^vmaf-test$/, function () { return "prueba vmaf"; }],
@@ -3074,6 +3420,17 @@
     [/^Pausiert: (.+)$/, function (m) { return "En pause : " + m[1]; }],
     [/^Analyse-Fehler: (.+)$/, function (m) { return "Erreur d'analyse : " + m[1]; }],
     [/^Fehler: (.+)$/, function (m) { return "Erreur : " + m[1]; }],
+    [/^Ungefähr (\d+) Mini-Encodes \((\d+) Clips × (\d+) Speed-Stufen × (\d+) Qualitätswerte\)\. CPU-AV1 dauert deutlich länger als GPU\. „Sehr langsam“ nicht vorausgewählt\.$/,
+      function (m) { return "Environ " + m[1] + " mini-encodes (" + m[2] + " clips × " + m[3] + " crans × " + m[4] + " valeurs de qualité). L'AV1 CPU prend nettement plus de temps que le GPU. « Très lent » n'est pas présélectionné."; }],
+    [/^Geladen · (.+)$/, function (m) { return "Téléchargé · " + m[1]; }],
+    [/^Nicht geladen · ca\. (\d+) MB$/, function (m) { return "Non téléchargé · ~" + m[1] + " Mo"; }],
+    [/^(\d+) Punkte$/, function (m) { return m[1] + " points"; }],
+    [/^Bei Ziel 94 muss das 1%-Low ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
+      function (m) { return "À la cible 94, le 1 % low doit être ≥ " + m[1] + ". À la cible 93 : ≥ " + m[2] + "."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als (\d+(?:\.\d+)?) darunter\.$/,
+      function (m) { return "1 % low = moyenne du 1 % des pires images ; H-Ø = moyenne harmonique ; score = 55 % moyenne + 35 % 1 % low + 10 % H-Ø. Recommandation : moyenne ≥ cible et 1 % low pas plus de " + m[1] + " en dessous."; }],
+    [/^1%-Low = Mittel der schlechtesten 1 % Frames; H-Ø = harmonisches Mittel; Score = 55 % Mittel \+ 35 % 1%-Low \+ 10 % H-Ø\. Empfehlung: nur Mittel ≥ Ziel \(1%-Low-Floor aus\)\.$/,
+      function () { return "1 % low = moyenne du 1 % des pires images ; H-Ø = moyenne harmonique ; score = 55 % moyenne + 35 % 1 % low + 10 % H-Ø. Recommandation : moyenne ≥ cible seulement (plancher 1 % low off)."; }],
     [/^wartend$/, function () { return "en attente"; }],
     [/^in arbeit$/, function () { return "en cours"; }],
     [/^vmaf-test$/, function () { return "test vmaf"; }],

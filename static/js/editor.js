@@ -2250,6 +2250,7 @@
       force_remux: !!($("ed-force") && $("ed-force").checked),
       platform: ($("ed-platform") && $("ed-platform").value) || "cpu",
       codec: ($("ed-codec") && $("ed-codec").value) || "av1",
+      encoder_speed: ($("ed-enc-speed") && $("ed-enc-speed").value) || "balanced",
       cq: ($("ed-cq") && parseInt($("ed-cq").value, 10)) || 30,
       rate_mode: ($("ed-rate-mode") && $("ed-rate-mode").value) || "cq",
       v_bitrate: ($("ed-vbr") && parseInt($("ed-vbr").value, 10)) || 0,

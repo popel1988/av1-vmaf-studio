@@ -554,6 +554,162 @@ def quality_args(platform: str, value: int) -> list[str]:
     return ["-crf", str(value)]
 
 
+# Alias-Stufen (encoder-übergreifend) plus native FFmpeg-Presets.
+# „balanced“ = bisherige Defaults (SVT 6, x264/x265 medium, NVENC p5, QSV slower).
+ENCODER_SPEEDS = ("fastest", "fast", "balanced", "slow", "slowest")
+_ALIAS_LABELS = {
+    "fastest": "Sehr schnell", "fast": "Schnell", "balanced": "Ausgewogen",
+    "slow": "Langsam", "slowest": "Sehr langsam",
+}
+_PRESET_SVT = {
+    "fastest": "12", "fast": "10", "balanced": "6", "slow": "4", "slowest": "2",
+}
+_PRESET_X264 = {
+    "fastest": "veryfast", "fast": "fast", "balanced": "medium",
+    "slow": "slow", "slowest": "slower",
+}
+_PRESET_NVENC = {
+    "fastest": "p1", "fast": "p3", "balanced": "p5", "slow": "p6", "slowest": "p7",
+}
+_PRESET_QSV = {
+    "fastest": "veryfast", "fast": "fast", "balanced": "slower",
+    "slow": "slow", "slowest": "veryslow",
+}
+_X264_NATIVES = (
+    "ultrafast", "superfast", "veryfast", "faster", "fast",
+    "medium", "slow", "slower", "veryslow", "placebo",
+)
+_NVENC_NATIVES = tuple(f"p{i}" for i in range(1, 8))
+_QSV_NATIVES = (
+    "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow",
+)
+_SVT_NATIVES = tuple(str(i) for i in range(13, -1, -1))
+_ALL_NATIVES = set(_SVT_NATIVES) | set(_X264_NATIVES) | set(_NVENC_NATIVES) | set(_QSV_NATIVES)
+
+
+def _preset_family(enc: str) -> str:
+    name = enc or ""
+    if name == "libsvtav1":
+        return "svt"
+    if name.startswith("libx"):
+        return "x264"
+    if "nvenc" in name:
+        return "nvenc"
+    if "qsv" in name:
+        return "qsv"
+    return ""
+
+
+def _alias_map(enc: str) -> dict[str, str]:
+    fam = _preset_family(enc)
+    return {
+        "svt": _PRESET_SVT, "x264": _PRESET_X264,
+        "nvenc": _PRESET_NVENC, "qsv": _PRESET_QSV,
+    }.get(fam, {})
+
+
+def native_speed_presets(enc: str) -> list[dict]:
+    """Native Presets schnell → langsam. value/label/alias/bench_default."""
+    fam = _preset_family(enc)
+    amap = _alias_map(enc)
+    native_to_alias = {v: k for k, v in amap.items()}
+    defaults = {amap[a] for a in ("fast", "balanced", "slow") if a in amap}
+    if fam == "svt":
+        values = list(_SVT_NATIVES)
+        labels = {str(i): str(i) for i in range(14)}
+        labels["13"] = "13 · schnellste"
+        labels["0"] = "0 · langsamste"
+    elif fam == "x264":
+        values = list(_X264_NATIVES)
+        labels = {n: n for n in values}
+    elif fam == "nvenc":
+        values = list(_NVENC_NATIVES)
+        labels = {n: n for n in values}
+        labels["p1"] = "p1 · schnellste"
+        labels["p7"] = "p7 · langsamste"
+    elif fam == "qsv":
+        values = list(_QSV_NATIVES)
+        labels = {n: n for n in values}
+    else:
+        return []
+    out = []
+    for val in values:
+        alias = native_to_alias.get(val)
+        label = labels.get(val, val)
+        if alias:
+            extra = _ALIAS_LABELS.get(alias, alias)
+            label = f"{val} · {extra}" if val != extra else extra
+        out.append({
+            "value": val,
+            "label": label,
+            "alias": alias,
+            "bench_default": val in defaults,
+        })
+    return out
+
+
+def speed_preset_catalog() -> dict[str, list[dict]]:
+    """Katalog je Encoder-Familie, fürs UI."""
+    return {
+        "svt": native_speed_presets("libsvtav1"),
+        "x264": native_speed_presets("libx264"),
+        "nvenc": native_speed_presets("h264_nvenc"),
+        "qsv": native_speed_presets("av1_qsv"),
+        "none": [],
+    }
+
+
+def alias_to_native(enc: str, speed: str) -> str:
+    v = str(speed or "balanced").strip().lower()
+    amap = _alias_map(enc)
+    if v in amap:
+        return amap[v]
+    natives = {p["value"] for p in native_speed_presets(enc)}
+    if v in natives:
+        return v
+    return amap.get("balanced") or v
+
+
+def nearest_alias(enc: str, speed: str) -> str:
+    """Nächstgelegene Alias-Stufe zur nativen Preset-Zahl/Name."""
+    v = str(speed or "balanced").strip().lower()
+    if v in ENCODER_SPEEDS:
+        return v
+    presets = native_speed_presets(enc)
+    idx = next((i for i, p in enumerate(presets) if p["value"] == v), None)
+    if idx is None:
+        return "balanced"
+    aliased = [(i, p["alias"]) for i, p in enumerate(presets) if p.get("alias")]
+    if not aliased:
+        return "balanced"
+    return min(aliased, key=lambda t: abs(t[0] - idx))[1]
+
+
+def speed_label(enc: str, speed: str) -> str:
+    v = str(speed or "").strip().lower()
+    if v in _ALIAS_LABELS:
+        return _ALIAS_LABELS[v]
+    for p in native_speed_presets(enc):
+        if p["value"] == v:
+            return p["label"]
+    return v or "Ausgewogen"
+
+
+def normalize_encoder_speed(value) -> str:
+    v = str(value or "balanced").strip().lower()
+    if v in ENCODER_SPEEDS or v in _ALL_NATIVES:
+        return v
+    return "balanced"
+
+
+def encoder_preset_args(enc: str, speed: str = "balanced") -> list[str]:
+    """FFmpeg ``-preset`` für den Encoder; leer, wenn der Encoder keins hat (VAAPI)."""
+    native = alias_to_native(enc, speed)
+    if not native or not _preset_family(enc):
+        return []
+    return ["-preset", native]
+
+
 def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> list[str]:
     """Festbitrate (CBR) oder Average-Bitrate (VBR-Ziel) in kbit/s."""
     br = f"{kbps}k"
