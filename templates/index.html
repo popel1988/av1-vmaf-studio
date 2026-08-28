@@ -1709,32 +1709,9 @@
             <span class="badge" id="ed-badge">Keine Clips</span>
           </div>
           <div class="card-body">
-            <p class="hint">Bereiche behalten oder entfernen, mehrere Quellen auf eine Timeline,
-              Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux oder Encode.</p>
-
-            <div class="field-row field-row-inline" style="margin-bottom:12px">
-              <div class="field fp-grow">
-                <label>Quelle</label>
-                <div class="field-row field-row-inline fp-file-pick">
-                  <input type="text" id="ed-path" placeholder="Medienpfad oder Upload" readonly />
-                  <button class="btn btn-ghost btn-sm" id="ed-browse" type="button">Bibliothek …</button>
-                  <label class="btn btn-ghost btn-sm" style="margin:0;cursor:pointer">
-                    Upload
-                    <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
-                  </label>
-                </div>
-              </div>
-              <div class="field">
-                <label>Upload-Zielordner</label>
-                <div class="field-row field-row-inline fp-file-pick">
-                  <select id="ed-upload-dest">
-                    <option value="upload">Standard-Upload (/data/uploads)</option>
-                  </select>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-upload-dest-browse" title="Medienordner wählen">…</button>
-                </div>
-              </div>
-            </div>
-            <p class="muted" id="ed-upload-status" style="font-size:12px;margin:0 0 10px"></p>
+            <p class="hint">Material holst du über der Timeline: <strong>Quelle laden</strong> zum Sichten,
+              <strong>+ Quellen</strong> hängt mehrere Dateien direkt an. Danach Bereiche behalten oder
+              entfernen, Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux oder Encode.</p>
 
             <div class="ed-layout">
               <div class="ed-preview">
@@ -1752,8 +1729,10 @@
                 <div class="ed-wave" id="ed-wave" hidden></div>
                 <div class="ed-transport">
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause (K)">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-jump-back" title="0,2 s zurück">«0,2s</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-back" title="Ein Frame zurück (←)">‹</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-fwd" title="Ein Frame vor (→)">›</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-jump-fwd" title="0,2 s vor">0,2s»</button>
                   <input type="range" id="ed-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt (I)">In</button>
@@ -1770,35 +1749,55 @@
                     <input type="number" id="ed-out" min="0" step="0.01" value="0" />
                   </div>
                   <div class="field">
-                    <label>Tonspur</label>
-                    <select id="ed-audio"><option value="0">#0</option></select>
+                    <label>Vorschau-Ton</label>
+                    <select id="ed-preview-audio"><option value="0">#0</option></select>
                   </div>
                   <div class="field">
                     <label>Untertitel</label>
                     <select id="ed-sub"><option value="-1">Keine</option></select>
                   </div>
                   <label class="check fp-tracks-check">
-                    <input type="checkbox" id="ed-mute" />
-                    <span>Stumm</span>
-                  </label>
-                  <label class="check fp-tracks-check">
                     <input type="checkbox" id="ed-burn" />
                     <span data-tip="PGS/DVD ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
                   </label>
                 </div>
+                <div class="ed-tracks">
+                  <div class="ed-tracks-head">
+                    <strong>Tonspuren übernehmen</strong>
+                    <span class="muted" id="ed-tracks-info"></span>
+                    <span class="ed-tracks-btns">
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-all">Alle</button>
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-none">Keine</button>
+                    </span>
+                  </div>
+                  <div class="ed-tracks-list" id="ed-tracks-list"></div>
+                  <p class="hint" style="font-size:12px;margin:6px 0 0">
+                    Gilt für alle Clips dieser Quelle. Keine Spur angehakt = stumm.
+                    Mehrere Spuren landen als eigene Tonspuren in der Datei.
+                  </p>
+                </div>
                 <div class="field-row field-row-inline" style="margin-top:8px">
                   <label class="check"><input type="checkbox" id="ed-snap-ch" checked /><span>An Kapitel einrasten</span></label>
                   <label class="check"><input type="checkbox" id="ed-snap-kf" /><span>An Keyframes einrasten</span></label>
+                  <label class="check">
+                    <input type="checkbox" id="ed-follow" checked />
+                    <span data-tip="Beim Abspielen am Clipende zum nächsten Clip springen – geschnittene Stellen werden übersprungen.">Timeline folgen</span>
+                  </label>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-undo" title="Rückgängig (Strg+Z)">↩</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-redo" title="Wiederholen (Strg+Y)">↪</button>
                 </div>
-                <p class="muted" id="ed-src-info" style="font-size:12px;margin-top:10px"></p>
+                <div class="ed-src-line">
+                  <p class="muted" id="ed-src-info">Keine Quelle geladen.</p>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-unload" disabled
+                          title="Quelle aus der Vorschau nehmen – die Clips auf der Timeline bleiben">⏏ Entladen</button>
+                </div>
                 <p class="hint" style="margin-top:6px;font-size:12px">
                   <strong>I/O</strong> In/Out · <strong>J/K/L</strong> −5s / Pause / Play ·
                   <strong>←→</strong> Frame · <strong>↑↓</strong> Clip wechseln ·
                   <strong>S</strong> Teilen · <strong>Entf</strong> Clip löschen · <strong>Strg+Z</strong> Undo.
                   Diese Leiste zeigt die <em>ganze Quelldatei</em> – hier wählst du aus,
-                  was in die Timeline wandert.
+                  was in die Timeline wandert. Mit „Timeline folgen“ überspringt die
+                  Wiedergabe geschnittene Stellen und läuft im nächsten Clip weiter.
                 </p>
               </div>
 
@@ -1826,6 +1825,13 @@
                 <span class="muted" id="ed-total">0 Clips · 0:00</span>
               </div>
               <div class="ed-tl-tools">
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-browse"
+                        title="Datei in die Vorschau laden, um Bereiche auszuwählen">📂 Quelle laden</button>
+                <label class="btn btn-ghost btn-sm ed-upload-btn"
+                       title="Datei hochladen und in die Vorschau laden">⬆ Upload
+                  <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
+                </label>
+                <span class="ed-tl-sep"></span>
                 <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range"
                         title="Markierten Bereich der Quelle als Clip anhängen (mehrfach möglich)">+ Bereich</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range"
@@ -1866,6 +1872,19 @@
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-save-proj">Projekt speichern</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-load-proj">Projekt laden</button>
                     <input type="file" id="ed-proj-file" accept="application/json,.json" hidden />
+                    <div class="ed-more-sep"></div>
+                    <label class="ed-more-label">Upload-Zielordner</label>
+                    <div class="ed-more-row">
+                      <select id="ed-upload-dest">
+                        <option value="upload">Standard-Upload (/data/uploads)</option>
+                      </select>
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-upload-dest-browse"
+                              title="Medienordner wählen">…</button>
+                    </div>
+                    <p class="muted" id="ed-upload-status"></p>
+                    <div class="ed-more-sep"></div>
+                    <button type="button" class="btn btn-ghost btn-sm bad-btn" id="ed-reset"
+                            title="Timeline leeren und Quelle entladen">↺ Alles zurücksetzen</button>
                   </div>
                 </details>
               </div>

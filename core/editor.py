@@ -47,6 +47,34 @@ def _f(v, default: float = 0.0) -> float:
         return default
 
 
+def _audio_list(raw, fallback: int) -> list[int]:
+    """Gewählte Tonspuren normalisieren (Reihenfolge = Ausgabereihenfolge)."""
+    out: list[int] = []
+    if isinstance(raw, (list, tuple)):
+        for x in raw:
+            try:
+                v = int(x)
+            except (TypeError, ValueError):
+                continue
+            if v >= 0 and v not in out:
+                out.append(v)
+        return out
+    if fallback >= 0:
+        return [int(fallback)]
+    return []
+
+
+def _audio_tracks(path: Optional[Path]) -> list[dict]:
+    """Tonspuren einer Datei (für Anzahl und Sprach-Metadaten)."""
+    if not path:
+        return []
+    data, _ = ff.probe_streams(path)
+    if not data:
+        return []
+    tracks = data.get("audio") or []
+    return tracks if isinstance(tracks, list) else []
+
+
 def _clip_out_dur(s: dict) -> float:
     """Dauer auf der Ausgabe-Timeline (nach Tempo)."""
     raw = max(0.0, float(s["end"]) - float(s["start"]))
@@ -89,6 +117,12 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             aidx = int(aidx)
         except (TypeError, ValueError):
             aidx = 0
+        alist = _audio_list(s.get("audio_indexes"), aidx)
+        mute = bool(s.get("mute")) or kind in _GEN_KINDS
+        if mute:
+            alist = []
+        elif not alist:
+            mute = True
         sidx = s.get("sub_index", -1)
         try:
             sidx = int(sidx)
@@ -107,8 +141,9 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             "start": float(start),
             "end": float(end),
             "title": title,
-            "audio_index": aidx,
-            "mute": bool(s.get("mute")) or aidx < 0,
+            "audio_index": alist[0] if alist else -1,
+            "audio_indexes": alist,
+            "mute": mute,
             "sub_index": sidx,
             "burn_subs": bool(s.get("burn_subs")) and sidx >= 0,
             "fade_in": max(0.0, min(30.0, _f(s.get("fade_in")))),
@@ -179,6 +214,15 @@ def check_remux_compat(segments: list[dict]) -> dict:
             ],
             "streams": [],
         }
+    if len({tuple(s.get("audio_indexes") or []) for s in segments}) > 1:
+        return {
+            "compatible": False,
+            "warnings": [
+                "Die Clips übernehmen unterschiedliche Tonspuren – "
+                "verlustfreies Kopieren kann nur eine Streamstruktur.",
+            ],
+            "streams": [],
+        }
     files = [str(s["abs"]) for s in segments if s.get("abs")]
     seen, uniq = set(), []
     for f in files:
@@ -199,6 +243,7 @@ def segment_to_spec(s: dict) -> dict:
         "end": s["end"],
         "title": s.get("title") or "",
         "audio_index": s.get("audio_index", 0),
+        "audio_indexes": list(s.get("audio_indexes") or []),
         "mute": bool(s.get("mute")),
         "sub_index": int(s.get("sub_index", -1)),
         "burn_subs": bool(s.get("burn_subs")),
@@ -221,6 +266,11 @@ def build_editor_remux_cmd(segments: list[dict], output: Path,
         return [], "Keine Segmente."
     if any_needs_encode(segments):
         return [], "Dieser Schnitt braucht Encode (Fades/Tempo/Schwarz/…)."
+    sels = {tuple(s.get("audio_indexes") or []) for s in segments}
+    if len(sels) > 1:
+        return [], ("Die Clips haben unterschiedliche Tonspuren gewählt – "
+                    "das geht nur im Encode-Modus.")
+    sel = list(next(iter(sels))) if sels else []
     work_dir.mkdir(parents=True, exist_ok=True)
     listfile = work_dir / f"editor_{uuid.uuid4().hex[:8]}.txt"
     lines = []
@@ -243,7 +293,22 @@ def build_editor_remux_cmd(segments: list[dict], output: Path,
            "-i", str(listfile)]
     if meta_path:
         cmd += ["-i", str(meta_path), "-map_chapters", "1"]
-    cmd += ["-map", "0", "-c", "copy", "-reset_timestamps", "1",
+    first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
+    n_audio = len(_audio_tracks(first_abs))
+    keeps_all = bool(sel) and sorted(sel) == list(range(n_audio))
+    if keeps_all or (not sel and n_audio == 0):
+        cmd += ["-map", "0"]
+    else:
+        cmd += ["-map", "0:V?"]
+        for a in sel:
+            cmd += ["-map", f"0:a:{int(a)}?"]
+        if not sel:
+            cmd += ["-an"]
+        cmd += ["-map", "0:s?"]
+        # Attachments (Fonts) kann nur Matroska aufnehmen.
+        if output.suffix.lower() in (".mkv", ".mka"):
+            cmd += ["-map", "0:t?"]
+    cmd += ["-c", "copy", "-reset_timestamps", "1",
             "-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""
 
@@ -329,8 +394,11 @@ def build_editor_encode_cmd(
     n_files = len(file_inputs)
     parts: list[str] = []
     v_pads: list[str] = []
-    a_pads: list[str] = []
+    a_pads: list[list[str]] = []
     durs: list[float] = []
+    # Alle Clips müssen gleich viele Tonspuren liefern – fehlende werden still.
+    n_audio = max(1, max((len(s.get("audio_indexes") or []) for s in segments),
+                         default=1))
 
     for i, s in enumerate(segments):
         start, end = float(s["start"]), float(s["end"])
@@ -338,7 +406,7 @@ def build_editor_encode_cmd(
         speed = max(0.25, min(4.0, _f(s.get("speed"), 1.0) or 1.0))
         out_d = dur / speed
         durs.append(out_d)
-        vlabel, alabel = f"v{i}", f"a{i}"
+        vlabel = f"v{i}"
         kind = s.get("kind") or "media"
         fi = min(_f(s.get("fade_in")), out_d * 0.45)
         fo = min(_f(s.get("fade_out")), out_d * 0.45)
@@ -381,60 +449,71 @@ def build_editor_encode_cmd(
                 chain.append(f"fade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
             parts.append(f"[{ii}:v:0]" + ",".join(chain) + f"[{vlabel}]")
             mute = bool(s.get("mute"))
-            aidx = int(s.get("audio_index") if s.get("audio_index") is not None else 0)
-            if aidx < 0:
-                mute = True
 
-        if mute or kind in _GEN_KINDS:
-            ali = n_files + len(lavfi)
-            lavfi.append(
-                f"anullsrc=channel_layout=stereo:sample_rate=48000:d={out_d:.3f}")
-            parts.append(f"[{ali}:a]aformat=sample_fmts=fltp[{alabel}]")
-        else:
-            ii = file_idx(s["abs"])
-            aidx = int(s.get("audio_index") if s.get("audio_index") is not None else 0)
-            achain = [
-                f"atrim=start={start:.3f}:end={end:.3f}",
-                "asetpts=PTS-STARTPTS",
-                "aformat=sample_fmts=fltp:channel_layouts=stereo",
-                "aresample=48000",
-            ]
-            at = _atempo_chain(speed)
-            if at:
-                achain.append(at)
-            if fi > 0.02:
-                achain.append(f"afade=t=in:st=0:d={fi:.3f}")
-            if fo > 0.02:
-                achain.append(f"afade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
-            parts.append(f"[{ii}:a:{aidx}]" + ",".join(achain) + f"[{alabel}]")
+        sel = [] if (mute or kind in _GEN_KINDS) else list(s.get("audio_indexes") or [])
+        labels: list[str] = []
+        for j in range(n_audio):
+            alabel = f"a{i}_{j}"
+            src_idx = sel[j] if j < len(sel) else None
+            if src_idx is None:
+                ali = n_files + len(lavfi)
+                lavfi.append(
+                    f"anullsrc=channel_layout=stereo:sample_rate=48000:d={out_d:.3f}")
+                parts.append(f"[{ali}:a]aformat=sample_fmts=fltp[{alabel}]")
+            else:
+                ii = file_idx(s["abs"])
+                achain = [
+                    f"atrim=start={start:.3f}:end={end:.3f}",
+                    "asetpts=PTS-STARTPTS",
+                    "aformat=sample_fmts=fltp:channel_layouts=stereo",
+                    "aresample=48000",
+                ]
+                at = _atempo_chain(speed)
+                if at:
+                    achain.append(at)
+                if fi > 0.02:
+                    achain.append(f"afade=t=in:st=0:d={fi:.3f}")
+                if fo > 0.02:
+                    achain.append(
+                        f"afade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
+                parts.append(f"[{ii}:a:{int(src_idx)}]" + ",".join(achain) + f"[{alabel}]")
+            labels.append(alabel)
 
         v_pads.append(vlabel)
-        a_pads.append(alabel)
+        a_pads.append(labels)
 
     for spec in lavfi:
         cmd += ["-f", "lavfi", "-i", spec]
 
     if xf > 0.02 and n >= 2:
-        cur_v, cur_a = v_pads[0], a_pads[0]
+        cur_v = v_pads[0]
+        cur_a = list(a_pads[0])
         acc = durs[0]
         for i in range(1, n):
             d = min(xf, durs[i] * 0.45, durs[i - 1] * 0.45)
             off = max(0.0, acc - d)
-            nv, na = f"xfv{i}", f"xfa{i}"
+            nv = f"xfv{i}"
             parts.append(
                 f"[{cur_v}][{v_pads[i]}]xfade=transition=fade:duration={d:.3f}"
                 f":offset={off:.3f}[{nv}]")
-            parts.append(
-                f"[{cur_a}][{a_pads[i]}]acrossfade=d={d:.3f}[{na}]")
-            cur_v, cur_a = nv, na
+            for j in range(n_audio):
+                na = f"xfa{i}_{j}"
+                parts.append(
+                    f"[{cur_a[j]}][{a_pads[i][j]}]acrossfade=d={d:.3f}[{na}]")
+                cur_a[j] = na
+            cur_v = nv
             acc = acc + durs[i] - d
         filt = ";".join(parts)
-        v_out, a_out = cur_v, cur_a
+        v_out, a_outs = cur_v, cur_a
     else:
-        concat = "".join(f"[{v}][{a}]" for v, a in zip(v_pads, a_pads))
+        concat = "".join(
+            f"[{v}]" + "".join(f"[{a}]" for a in al)
+            for v, al in zip(v_pads, a_pads))
         filt = ";".join(parts)
-        filt += ";" + concat + f"concat=n={n}:v=1:a=1[vc][ac]"
-        v_out, a_out = "vc", "ac"
+        a_outs = [f"ac{j}" for j in range(n_audio)]
+        filt += (";" + concat + f"concat=n={n}:v=1:a={n_audio}[vc]"
+                 + "".join(f"[{a}]" for a in a_outs))
+        v_out = "vc"
 
     if backend == "vaapi":
         filt += f";[{v_out}]format=nv12,hwupload[v]"
@@ -442,7 +521,10 @@ def build_editor_encode_cmd(
     else:
         map_v = f"[{v_out}]"
 
-    cmd += ["-filter_complex", filt, "-map", map_v, "-map", f"[{a_out}]", "-c:v", enc]
+    cmd += ["-filter_complex", filt, "-map", map_v]
+    for a in a_outs:
+        cmd += ["-map", f"[{a}]"]
+    cmd += ["-c:v", enc]
     cq = int(cq or 30)
     if backend == "nvenc":
         cmd += ["-rc", "vbr", "-cq", str(cq), "-preset", "p5"]
@@ -465,8 +547,32 @@ def build_editor_encode_cmd(
     cmd += ["-c:a", ac]
     if ac != "flac":
         cmd += ["-b:a", f"{int(audio_bitrate or 192)}k"]
+    cmd += _audio_metadata(segments, n_audio)
     cmd += ["-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""
+
+
+def _audio_metadata(segments: list[dict], n_audio: int) -> list[str]:
+    """Sprache/Titel der Quellspuren auf die Ausgabespuren übertragen."""
+    ref = next((s for s in segments
+                if s.get("abs") and (s.get("audio_indexes") or [])), None)
+    if not ref:
+        return []
+    tracks = _audio_tracks(ref["abs"])
+    if not tracks:
+        return []
+    out: list[str] = []
+    for j, src_idx in enumerate(list(ref["audio_indexes"])[:n_audio]):
+        if not (0 <= int(src_idx) < len(tracks)):
+            continue
+        t = tracks[int(src_idx)] or {}
+        lang = str(t.get("language") or "").strip()
+        if lang and lang.lower() != "und":
+            out += [f"-metadata:s:a:{j}", f"language={lang}"]
+        title = str(t.get("title") or "").strip()
+        if title:
+            out += [f"-metadata:s:a:{j}", f"title={title}"]
+    return out
 
 
 def probe_source(rel: str) -> tuple[Optional[dict], str]:

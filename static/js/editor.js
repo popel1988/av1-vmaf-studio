@@ -28,6 +28,11 @@
     dragId: null,
     activeId: null,
     assets: {},        // Pfad → { strip, duration } für Timeline-Vorschaubilder
+    trackSel: {},      // Pfad → gewählte Tonspur-Indizes (für neue Clips)
+    inClip: false,     // Wiedergabe ist im aktiven Clip angekommen
+    advancing: false,  // Clipwechsel läuft – Follow-Logik pausieren
+    lastAdvance: 0,
+    followTimer: null,
   };
 
   const TL_COLORS = ["#22d3ee", "#38bdf8", "#34d399", "#fbbf24", "#f87171", "#a78bfa"];
@@ -174,22 +179,120 @@
   }
 
   function audioOpts() {
-    const aSel = $("ed-audio");
     const sSel = $("ed-sub");
-    const mute = !!($("ed-mute") && $("ed-mute").checked);
     const burn = !!($("ed-burn") && $("ed-burn").checked);
-    const aidx = aSel ? parseInt(aSel.value, 10) : 0;
     const sidx = sSel ? parseInt(sSel.value, 10) : -1;
+    const tracks = currentTrackSel();
     return {
-      audio_index: Number.isFinite(aidx) ? aidx : 0,
-      mute: mute || aidx < 0,
+      audio_indexes: tracks.slice(),
+      audio_index: tracks.length ? tracks[0] : -1,
+      mute: tracks.length === 0,
       sub_index: Number.isFinite(sidx) ? sidx : -1,
       burn_subs: burn && sidx >= 0,
     };
   }
 
+  /** Tonspuren der geladenen Quelle, die in den Export sollen. */
+  function currentTrackSel() {
+    const path = ed.src && ed.src.path;
+    if (!path) return [];
+    const total = (ed.src.audio || []).length;
+    if (!total) return [];
+    const clip = ed.segments.find((s) => s.kind === "media" && s.path === path);
+    if (clip) {
+      if (clip.mute) return [];
+      const list = (clip.audio_indexes || []).filter((i) => i >= 0 && i < total);
+      if (list.length) return list;
+      const one = Number(clip.audio_index);
+      return one >= 0 && one < total ? [one] : [];
+    }
+    if (ed.trackSel[path]) return ed.trackSel[path].filter((i) => i < total);
+    // Vorgabe: alles behalten – wie beim Remux ohne Auswahl.
+    return ed.src.audio.map((_, i) => i);
+  }
+
+  function trackLabel(a, i) {
+    const bits = [a.language || "und", a.codec || "", a.channels ? `${a.channels}ch` : ""];
+    if (a.title) bits.push(a.title);
+    return `#${i} · ${bits.filter(Boolean).join(" · ")}`;
+  }
+
+  function renderTracks() {
+    const list = $("ed-tracks-list");
+    const info = $("ed-tracks-info");
+    if (!list) return;
+    list.innerHTML = "";
+    const tracks = (ed.src && ed.src.audio) || [];
+    if (!tracks.length) {
+      const p = document.createElement("div");
+      p.className = "ed-tracks-empty";
+      p.textContent = ed.src ? tt("Diese Quelle hat keine Tonspur.") : tt("Keine Quelle geladen.");
+      list.appendChild(p);
+      if (info) info.textContent = "";
+      return;
+    }
+    const sel = currentTrackSel();
+    tracks.forEach((a, i) => {
+      const row = document.createElement("div");
+      row.className = "ed-track-row" + (sel.indexOf(i) < 0 ? " off" : "");
+      const lab = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = sel.indexOf(i) >= 0;
+      cb.addEventListener("change", () => {
+        const next = currentTrackSel().filter((x) => x !== i);
+        if (cb.checked) next.push(i);
+        next.sort((x, y) => x - y);
+        applyTrackSelection(next);
+      });
+      const txt = document.createElement("span");
+      txt.textContent = trackLabel(a, i);
+      lab.appendChild(cb);
+      lab.appendChild(txt);
+      row.appendChild(lab);
+      const listen = document.createElement("button");
+      listen.type = "button";
+      listen.className = "btn btn-ghost btn-sm ed-track-listen";
+      listen.textContent = previewAudioIndex() === i ? "🔊" : "🎧";
+      listen.title = tt("Diese Spur in der Vorschau hören");
+      listen.addEventListener("click", () => setPreviewAudio(i));
+      row.appendChild(listen);
+      list.appendChild(row);
+    });
+    if (info) {
+      info.textContent = sel.length
+        ? `${sel.length}/${tracks.length} ${tt("Spuren")}`
+        : tt("stumm");
+    }
+  }
+
+  /** Auswahl auf alle Clips dieser Quelle anwenden (und für neue merken). */
+  function applyTrackSelection(listSel) {
+    const path = ed.src && ed.src.path;
+    if (!path) return;
+    ed.trackSel[path] = listSel.slice();
+    const mine = ed.segments.filter((s) => s.kind === "media" && s.path === path);
+    if (mine.length) {
+      pushHist();
+      mine.forEach((s) => {
+        s.audio_indexes = listSel.slice();
+        s.audio_index = listSel.length ? listSel[0] : -1;
+        s.mute = listSel.length === 0;
+      });
+      renderSegList();
+    }
+    renderTracks();
+  }
+
+  function setPreviewAudio(idx) {
+    const sel = $("ed-preview-audio");
+    if (sel) sel.value = String(idx);
+    renderTracks();
+    seekPreview(currentPreviewTime(), { snap: false });
+  }
+
   function defaultClip(extra) {
-    return Object.assign({
+    const clip = Object.assign({
       id: uid(),
       kind: "media",
       path: "",
@@ -198,6 +301,7 @@
       end: 3,
       title: "",
       audio_index: 0,
+      audio_indexes: [0],
       mute: false,
       sub_index: -1,
       burn_subs: false,
@@ -207,6 +311,13 @@
       crop: "",
       scale: 0,
     }, extra || {});
+    // Projekte/Vorlagen von früher kennen nur eine einzelne Tonspur.
+    if (!Array.isArray(clip.audio_indexes)) {
+      const one = Number(clip.audio_index);
+      clip.audio_indexes = clip.mute || !(one >= 0) ? [] : [one];
+    }
+    if (!clip.audio_indexes.length && clip.kind === "media") clip.mute = true;
+    return clip;
   }
 
   function snapTime(t) {
@@ -273,7 +384,8 @@
       path, name,
       start: round2(r.start), end: round2(r.end),
       title: `Clip ${i + 1}`,
-      audio_index: opts.audio_index, mute: opts.mute,
+      audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
+      mute: opts.mute,
       sub_index: opts.sub_index, burn_subs: opts.burn_subs,
     }));
     others.splice(Math.min(insertAt, others.length), 0, ...neu);
@@ -284,6 +396,10 @@
   function clipsNeedEncode() {
     const xf = Number(($("ed-crossfade") || {}).value) || 0;
     if (xf > 0.01) return true;
+    // Copy kann nur eine Streamstruktur durchreichen.
+    const sels = new Set(ed.segments.filter((s) => s.kind === "media")
+      .map((s) => (s.audio_indexes || []).join(",")));
+    if (sels.size > 1) return true;
     return ed.segments.some((s) => (
       s.kind === "black" || s.kind === "silence"
       || Number(s.fade_in) > 0 || Number(s.fade_out) > 0
@@ -366,6 +482,7 @@
     if (ed.activeId && !ed.segments.some((s) => s.id === ed.activeId)) ed.activeId = null;
     renderTimeline();
     renderSourceRuler();
+    renderTracks();
     syncBadge();
     syncModeUI();
   }
@@ -635,6 +752,11 @@
       item(s.mute ? `🔊 ${tt("Ton an")}` : `🔇 ${tt("Stumm")}`, () => {
         pushHist();
         s.mute = !s.mute;
+        if (s.mute) s.audio_indexes = [];
+        else if (!(s.audio_indexes || []).length) {
+          s.audio_indexes = [Math.max(0, Number(s.audio_index) || 0)];
+          s.audio_index = s.audio_indexes[0];
+        }
         renderSegList();
       });
     }
@@ -861,7 +983,8 @@
     } else {
       if ($("ed-in")) $("ed-in").value = String(round2(s.start));
       if ($("ed-out")) $("ed-out").value = String(round2(s.end));
-      if (opts.seek !== false) seekSoft(srcTime);
+      // Die Zielzeit ist berechnet – hier darf nichts einrasten.
+      if (opts.seek !== false) seekSoft(srcTime, { snap: false });
       renderSourceRuler();
     }
     markActive();
@@ -978,11 +1101,38 @@
     renderSegList();
   }
 
+  /** Welche Tonspur die Vorschau hörbar machen soll (-1 = stumm). */
+  function previewAudioIndex() {
+    const sel = $("ed-preview-audio");
+    const n = sel ? parseInt(sel.value, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function mediaUrl(path, startSec) {
-    const audio = ($("ed-audio") && $("ed-audio").value) || "0";
+    const audio = previewAudioIndex();
     let u = `/api/media/stream?root=media&path=${encodeURIComponent(path)}&audio=${audio}`;
     if (startSec && startSec > 0) u += `&start=${encodeURIComponent(String(startSec))}`;
     return u;
+  }
+
+  function fileUrl(path) {
+    return `/api/media?root=media&path=${encodeURIComponent(path)}`;
+  }
+
+  /** Originaldatei direkt ins <video>: exakte Zeiten, kein Transcode, kein A/V-Versatz. */
+  function canPlayFile() {
+    if (!ed.src || !clientDirectOk(ed.src)) return false;
+    // Eine andere als die erste Tonspur kann nur der Server heraussuchen.
+    return previewAudioIndex() <= 0;
+  }
+
+  function seekFileTo(v, t) {
+    const target = Math.max(0, Number(t) || 0);
+    const apply = () => {
+      try { v.currentTime = target; } catch (e) { /* noch nicht bereit */ }
+    };
+    if (v.readyState >= 1) apply();
+    else v.addEventListener("loadedmetadata", apply, { once: true });
   }
 
   async function stopPreviewSession() {
@@ -1037,6 +1187,21 @@
     ed.playhead = start;
     ed.previewOffset = start;
     await stopPreviewSession();
+    if (canPlayFile()) {
+      // Ganze Datei laden, im Browser springen: Zeitachse = echte Quellzeit.
+      ed.previewMode = "file";
+      ed.previewOffset = 0;
+      v.muted = previewAudioIndex() < 0;
+      const url = fileUrl(ed.src.path);
+      if (ed.streamUrl !== url || !v.currentSrc) {
+        ed.streamUrl = url;
+        v.src = url;
+        v.load();
+      }
+      seekFileTo(v, start);
+      return;
+    }
+    v.muted = false;
     if (clientDirectOk(ed.src)) {
       ed.previewMode = "direct";
       ed.streamUrl = mediaUrl(ed.src.path, start);
@@ -1050,7 +1215,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           path: ed.src.path,
-          audio: audioOpts().audio_index,
+          audio: previewAudioIndex(),
           subtitle: audioOpts().sub_index,
           start,
           profile: "auto",
@@ -1121,7 +1286,8 @@
   async function loadSource(path, name, opts) {
     opts = opts || {};
     setStatus(tt("Lade Quelle …"));
-    stopTlPreview();
+    // Beim automatischen Clipwechsel läuft die Timeline-Vorschau weiter.
+    if (!ed.advancing) stopTlPreview();
     stopVideo();
     let data;
     try {
@@ -1152,26 +1318,20 @@
       width: data.width || 0,
       height: data.height || 0,
     };
-    const pathEl = $("ed-path");
-    if (pathEl) {
-      pathEl.value = ed.src.name
-        + (path.startsWith("upload:") ? " (Upload)" : ` · ${path}`);
-    }
-    const aSel = $("ed-audio");
+    const aSel = $("ed-preview-audio");
     if (aSel) {
       aSel.innerHTML = "";
-      if (!ed.src.audio.length) {
-        aSel.innerHTML = `<option value="-1">${tt("Kein Ton")}</option>`;
-      } else {
-        ed.src.audio.forEach((a, i) => {
-          const lab = [a.language || "und", a.codec || "", a.channels ? `${a.channels}ch` : ""]
-            .filter(Boolean).join(" · ");
-          const o = document.createElement("option");
-          o.value = String(i);
-          o.textContent = `#${i}: ${lab}`;
-          aSel.appendChild(o);
-        });
-      }
+      const none = document.createElement("option");
+      none.value = "-1";
+      none.textContent = tt("Kein Ton");
+      ed.src.audio.forEach((a, i) => {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = trackLabel(a, i);
+        aSel.appendChild(o);
+      });
+      aSel.appendChild(none);
+      aSel.value = ed.src.audio.length ? "0" : "-1";
     }
     const sSel = $("ed-sub");
     if (sSel) {
@@ -1195,35 +1355,107 @@
         + (data.size_human ? ` · ${data.size_human}` : "")
         + (ed.src.codec ? ` · ${String(ed.src.codec).toUpperCase()}` : "")
         + ((ed.src.chapters || []).length ? ` · ${ed.src.chapters.length} ${tt("Kapitel")}` : "");
+      info.title = path.startsWith("upload:") ? `${path} (Upload)` : path;
     }
-    seekPreview(ed.playhead);
+    const unload = $("ed-unload");
+    if (unload) unload.disabled = false;
+    renderTracks();
+    seekPreview(ed.playhead, { snap: false });
     renderSourceRuler();
     setStatus("");
     loadPreviewAssets(path);
     if ($("ed-snap-kf") && $("ed-snap-kf").checked) loadKeyframes(path);
   }
 
-  function seekSoft(sec) {
-    if (!ed.src) return;
-    const t = snapTime(Math.max(0, Math.min(ed.src.duration || 0, Number(sec) || 0)));
-    const v = $("ed-video");
-    const rel = t - ed.previewOffset;
-    if (v && ed.previewMode !== "none" && rel >= -0.05 && rel < 20) {
-      try { v.currentTime = Math.max(0, rel); } catch (e) { seekPreview(t); return; }
-      ed.playhead = t;
-      updateTimeLabel(t, ed.src.duration);
-      const seek = $("ed-seek");
-      if (seek && ed.src.duration > 0) {
-        seek.value = String(Math.round((t / ed.src.duration) * 1000));
-      }
-      renderSourceRuler();
-      return;
+  function afterSoftSeek(t) {
+    ed.playhead = t;
+    updateTimeLabel(t, ed.src.duration);
+    const seek = $("ed-seek");
+    if (seek && ed.src.duration > 0) {
+      seek.value = String(Math.round((t / ed.src.duration) * 1000));
     }
-    seekPreview(t);
+    renderSourceRuler();
   }
 
-  function seekPreview(sec) {
-    const start = snapTime(Math.max(0, Number(sec) || 0));
+  /** Quelle aus der Vorschau nehmen – die Timeline bleibt unangetastet. */
+  function unloadSource() {
+    stopTlPreview();
+    stopFollowTimer();
+    stopVideo();
+    ed.src = null;
+    ed.inSec = 0;
+    ed.outSec = 0;
+    ed.playhead = 0;
+    ed.keyframes = [];
+    ed.previewOffset = 0;
+    ed.inClip = false;
+    ["ed-in", "ed-out", "ed-seek"].forEach((id) => {
+      const el = $(id);
+      if (el) el.value = "0";
+    });
+    const time = $("ed-time");
+    if (time) time.textContent = "0:00 / 0:00";
+    const info = $("ed-src-info");
+    if (info) {
+      info.textContent = tt("Keine Quelle geladen.");
+      info.title = "";
+    }
+    const unload = $("ed-unload");
+    if (unload) unload.disabled = true;
+    const strip = $("ed-src-strip");
+    if (strip) strip.style.backgroundImage = "";
+    const wave = $("ed-wave");
+    if (wave) { wave.hidden = true; wave.style.backgroundImage = ""; }
+    const aSel = $("ed-preview-audio");
+    if (aSel) aSel.innerHTML = `<option value="-1">${tt("Kein Ton")}</option>`;
+    const sSel = $("ed-sub");
+    if (sSel) sSel.innerHTML = `<option value="-1">${tt("Keine")}</option>`;
+    renderTracks();
+    renderSourceRuler();
+    renderTlPlayhead();
+    syncTools();
+  }
+
+  /** Kompletter Neuanfang: Timeline leeren und Quelle entladen. */
+  function resetAll() {
+    if (ed.segments.length
+        && !window.confirm(tt("Timeline leeren und Quelle entladen?"))) return;
+    pushHist();
+    ed.segments = [];
+    ed.activeId = null;
+    ed.trackSel = {};
+    ed.assets = {};
+    unloadSource();
+    renderSegList();
+    setStatus(tt("Editor zurückgesetzt."));
+  }
+
+  function seekSoft(sec, opts) {
+    if (!ed.src) return;
+    const raw = Math.max(0, Math.min(ed.src.duration || 0, Number(sec) || 0));
+    const noSnap = !!(opts && opts.snap === false);
+    const t = noSnap ? Math.round(raw * 1000) / 1000 : snapTime(raw);
+    const v = $("ed-video");
+    if (v && ed.previewMode === "file" && v.currentSrc) {
+      // Ganze Datei im Player: jeder Punkt ist direkt erreichbar.
+      seekFileTo(v, t);
+      afterSoftSeek(t);
+      return;
+    }
+    const rel = t - ed.previewOffset;
+    if (v && ed.previewMode !== "none" && rel >= -0.05 && rel < 20) {
+      try { v.currentTime = Math.max(0, rel); } catch (e) { seekPreview(t, opts); return; }
+      afterSoftSeek(t);
+      return;
+    }
+    seekPreview(t, opts);
+  }
+
+  function seekPreview(sec, opts) {
+    const raw = Math.max(0, Number(sec) || 0);
+    const start = opts && opts.snap === false
+      ? Math.round(raw * 1000) / 1000
+      : snapTime(raw);
     ed.playhead = start;
     const seek = $("ed-seek");
     if (seek && ed.src && ed.src.duration > 0) {
@@ -1248,6 +1480,10 @@
 
   function currentPreviewTime() {
     if (!ed.src) return 0;
+    if (ed.previewMode === "file") {
+      const v = $("ed-video");
+      if (v && v.currentSrc) return v.currentTime || 0;
+    }
     if (ed.previewMode === "hls" || ed.previewMode === "direct") {
       const v = $("ed-video");
       const t = ed.previewOffset + ((v && v.currentTime) || 0);
@@ -1289,7 +1525,8 @@
       path: ed.src.path, name: ed.src.name,
       start: round2(start), end: round2(end),
       title: `Clip ${ed.segments.length + 1}`,
-      audio_index: opts.audio_index, mute: opts.mute,
+      audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
+      mute: opts.mute,
       sub_index: opts.sub_index, burn_subs: opts.burn_subs,
     });
     ed.segments.push(clip);
@@ -1325,7 +1562,8 @@
       path: ed.src.path, name: ed.src.name,
       start: 0, end: round2(ed.src.duration),
       title: ed.src.name,
-      audio_index: opts.audio_index, mute: opts.mute,
+      audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
+      mute: opts.mute,
       sub_index: opts.sub_index, burn_subs: opts.burn_subs,
     }));
     renderSegList();
@@ -1506,7 +1744,8 @@
     pushHist();
     ed.segments.push(defaultClip({
       kind: "black", name: tt("Schwarz"), title: `${tt("Schwarz")} ${sec}s`,
-      start: 0, end: Number(sec) || 3, mute: true, audio_index: -1,
+      start: 0, end: Number(sec) || 3, mute: true,
+      audio_index: -1, audio_indexes: [],
     }));
     renderSegList();
     setStatus(tt("Schwarzclip eingefügt (Encode)."));
@@ -1568,36 +1807,115 @@
   function stopTlPreview() {
     if (ed.playTl && ed.playTl.timer) clearTimeout(ed.playTl.timer);
     ed.playTl = null;
+    const btn = $("ed-play-tl");
+    if (btn) btn.textContent = `▶ ${tt("Vorschau")}`;
+  }
+
+  function followEnabled() {
+    const el = $("ed-follow");
+    return el ? !!el.checked : true;
+  }
+
+  /** Clip anspielen: Quelle laden falls nötig, an die Clipzeit springen, starten. */
+  async function playClip(s, opts) {
+    opts = opts || {};
+    const v = $("ed-video");
+    if (!v || !s) return;
+    ed.inClip = false;
+    ed.advancing = true;
+    try {
+      if (s.kind !== "media" || !s.path) {
+        // Schwarzclip hat keine Quelle – Bild aus und die Dauer abwarten.
+        ed.activeId = s.id;
+        markActive();
+        v.pause();
+        v.removeAttribute("src");
+        ed.streamUrl = "";
+        if (ed.playTl) {
+          ed.playTl.timer = setTimeout(() => {
+            if (ed.playTl) gotoNextClip();
+          }, Math.max(0.2, clipDur(s)) * 1000);
+        }
+        return;
+      }
+      const t = opts.srcTime != null ? opts.srcTime : s.start;
+      await setActive(s.id, { srcTime: t });
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    } finally {
+      ed.lastAdvance = Date.now();
+      ed.advancing = false;
+    }
+  }
+
+  /** Am Clipende weiter: nächster Clip oder Ende der Timeline. */
+  async function gotoNextClip() {
+    if (ed.advancing) return;
+    const s = activeClip();
+    const idx = s ? ed.segments.indexOf(s) : -1;
+    const next = idx >= 0 ? ed.segments[idx + 1] : null;
+    const wasTl = !!ed.playTl;
+    if (!next) {
+      const v = $("ed-video");
+      if (v) v.pause();
+      stopTlPreview();
+      if (wasTl || s) setStatus(tt("Ende der Timeline erreicht."));
+      return;
+    }
+    await playClip(next);
+    setStatus(`${tt("Clip")} ${ed.segments.indexOf(next) + 1}/${ed.segments.length}: `
+      + clipLabel(next));
+  }
+
+  // timeupdate feuert nur ~4×/s – zu grob für saubere Schnittkanten.
+  function startFollowTimer() {
+    if (ed.followTimer) return;
+    ed.followTimer = setInterval(tlFollowTick, 60);
+  }
+
+  function stopFollowTimer() {
+    if (ed.followTimer) clearInterval(ed.followTimer);
+    ed.followTimer = null;
+  }
+
+  /** Läuft während der Wiedergabe: hält sie innerhalb des aktiven Clips. */
+  function tlFollowTick() {
+    if (ed.advancing) return;
+    if (!ed.playTl && !followEnabled()) return;
+    const s = activeClip();
+    if (!s || s.kind !== "media" || !ed.src || ed.src.path !== s.path) return;
+    const v = $("ed-video");
+    if (!v || v.paused || v.ended) return;
+    const t = currentPreviewTime();
+    if (t < s.start - 0.05) { ed.inClip = false; return; }
+    if (t < s.end - 0.04) { ed.inClip = true; return; }
+    // Weit hinter dem Clip: der Nutzer sichtet frei, nicht automatisch springen.
+    if (t > s.end + 1.5) { ed.inClip = false; return; }
+    if (!ed.inClip) return;
+    if (Date.now() - (ed.lastAdvance || 0) < 250) return;
+    gotoNextClip();
   }
 
   async function playTimeline() {
     if (!ed.segments.length) return;
-    stopTlPreview();
     const v = $("ed-video");
     if (!v) return;
-    let i = 0;
-    const run = async () => {
-      if (i >= ed.segments.length) {
-        stopTlPreview();
-        setStatus(tt("Timeline-Vorschau fertig."));
-        return;
-      }
-      const s = ed.segments[i];
-      const dur = Math.max(0.2, clipDur(s));
-      setStatus(`${tt("Vorschau")} ${i + 1}/${ed.segments.length}: ${s.title || s.name}`);
-      if (s.kind === "black" || !s.path) {
-        v.removeAttribute("src");
-        v.load();
-      } else {
-        await loadSource(s.path, s.name, { inSec: s.start, outSec: s.end });
-        const p = v.play();
-        if (p && p.catch) p.catch(() => {});
-      }
-      ed.playTl = {
-        timer: setTimeout(() => { i += 1; run(); }, Math.min(dur, 120) * 1000),
-      };
-    };
-    run();
+    if (ed.playTl) {
+      stopTlPreview();
+      v.pause();
+      setStatus(tt("Timeline-Vorschau gestoppt."));
+      return;
+    }
+    ed.playTl = { timer: null };
+    const btn = $("ed-play-tl");
+    if (btn) btn.textContent = `⏸ ${tt("Vorschau")}`;
+    const act = activeClip();
+    const first = act || ed.segments[0];
+    const t = currentPreviewTime();
+    const inside = !!(act && act.kind === "media" && ed.src && ed.src.path === act.path
+      && t > act.start + 0.05 && t < act.end - 0.1);
+    setStatus(tt("Timeline-Vorschau läuft – Schnitte werden übersprungen."));
+    await playClip(first, inside ? { srcTime: t } : {});
   }
 
   function currentUploadDest() {
@@ -1701,7 +2019,9 @@
       segments: ed.segments.map((s) => ({
         path: s.path, kind: s.kind || "media",
         start: s.start, end: s.end, title: s.title,
-        audio_index: s.audio_index, mute: !!s.mute,
+        audio_index: s.audio_index,
+        audio_indexes: Array.isArray(s.audio_indexes) ? s.audio_indexes : undefined,
+        mute: !!s.mute,
         sub_index: s.sub_index, burn_subs: !!s.burn_subs,
         fade_in: Number(s.fade_in) || 0, fade_out: Number(s.fade_out) || 0,
         speed: Number(s.speed) || 1, crop: s.crop || "", scale: Number(s.scale) || 0,
@@ -1769,7 +2089,13 @@
   function stepFrame(dir) {
     if (!ed.src) return;
     const fps = ed.src.fps > 1 ? ed.src.fps : 25;
-    seekSoft(currentPreviewTime() + dir / fps);
+    seekSoft(currentPreviewTime() + dir / fps, { snap: false });
+  }
+
+  /** Feinsprung in Sekunden (Buttons ±0,2 s) – ohne Einrasten. */
+  function jumpBy(sec) {
+    if (!ed.src) return;
+    seekSoft(currentPreviewTime() + Number(sec || 0), { snap: false });
   }
 
   function onKey(ev) {
@@ -1935,13 +2261,31 @@
       $("ed-proj-file").value = "";
       if (f) loadProjectFile(f);
     });
+    if ($("ed-unload")) $("ed-unload").addEventListener("click", () => {
+      if (!ed.src) return;
+      unloadSource();
+      setStatus(tt("Quelle entladen."));
+    });
+    if ($("ed-reset")) $("ed-reset").addEventListener("click", resetAll);
     if ($("ed-undo")) $("ed-undo").addEventListener("click", undo);
     if ($("ed-redo")) $("ed-redo").addEventListener("click", redo);
     if ($("ed-frame-back")) $("ed-frame-back").addEventListener("click", () => stepFrame(-1));
     if ($("ed-frame-fwd")) $("ed-frame-fwd").addEventListener("click", () => stepFrame(1));
+    if ($("ed-jump-back")) $("ed-jump-back").addEventListener("click", () => jumpBy(-0.2));
+    if ($("ed-jump-fwd")) $("ed-jump-fwd").addEventListener("click", () => jumpBy(0.2));
     if ($("ed-snap-kf")) $("ed-snap-kf").addEventListener("change", () => {
       if ($("ed-snap-kf").checked && ed.src) loadKeyframes(ed.src.path);
     });
+
+    if ($("ed-preview-audio")) $("ed-preview-audio").addEventListener("change", () => {
+      renderTracks();
+      seekPreview(currentPreviewTime(), { snap: false });
+    });
+    if ($("ed-tracks-all")) $("ed-tracks-all").addEventListener("click", () => {
+      const n = (ed.src && ed.src.audio && ed.src.audio.length) || 0;
+      applyTrackSelection(Array.from({ length: n }, (_, i) => i));
+    });
+    if ($("ed-tracks-none")) $("ed-tracks-none").addEventListener("click", () => applyTrackSelection([]));
 
     if ($("ed-tl-split")) $("ed-tl-split").addEventListener("click", splitAtPlayhead);
     if ($("ed-tl-del")) $("ed-tl-del").addEventListener("click", deleteActive);
@@ -2016,17 +2360,28 @@
     const v = $("ed-video");
     if (v) {
       v.addEventListener("timeupdate", () => {
-        if (!ed.src || ed.playTl) return;
+        if (!ed.src) return;
         const t = ed.previewOffset + (v.currentTime || 0);
         updateTimeLabel(t, ed.src.duration);
         const seekEl = $("ed-seek");
         if (seekEl && ed.src.duration > 0) {
           seekEl.value = String(Math.round((t / ed.src.duration) * 1000));
         }
+        tlFollowTick();
+      });
+      v.addEventListener("ended", () => {
+        // Dateiende mitten in der Timeline: trotzdem zum nächsten Clip.
+        if (ed.playTl || (followEnabled() && ed.inClip)) gotoNextClip();
       });
       v.addEventListener("pause", () => {
         const p = $("ed-play");
-        if (p && !ed.playTl) p.textContent = "▶";
+        if (p) p.textContent = "▶";
+        stopFollowTimer();
+      });
+      v.addEventListener("play", () => {
+        const p = $("ed-play");
+        if (p) p.textContent = "⏸";
+        startFollowTimer();
       });
     }
 
@@ -2046,6 +2401,9 @@
     syncBadge();
     renderTimeline();
     renderSourceRuler();
+    renderTracks();
+    const unload = $("ed-unload");
+    if (unload) unload.disabled = true;
   }
 
   window.editorInit = function editorInit() {

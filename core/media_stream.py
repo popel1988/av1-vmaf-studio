@@ -70,10 +70,14 @@ def build_play_cmd(
         if audio_can_copy(audio_codec):
             cmd += ["-c:a", "copy"]
         else:
-            # first_pts=0 + async: AAC-Priming / Drift gegen Video-copy ausgleichen
+            # Nach einem Seek beginnt das kopierte Video am Keyframe *vor* dem
+            # Ziel, der Ton exakt beim Ziel. first_pts=0 würde den Ton auf den
+            # Videostart ziehen – er liefe dann bis zu einer GOP-Länge voraus.
+            afilter = ("aresample=async=1" if start_sec and start_sec > 0
+                       else "aresample=async=1000:first_pts=0")
             cmd += [
                 "-c:a", "aac", "-ac", "2", "-b:a", "192k",
-                "-af", "aresample=async=1000:first_pts=0",
+                "-af", afilter,
             ]
     cmd += [
         "-sn", "-dn",

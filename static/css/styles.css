@@ -522,6 +522,37 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .ed-transport #ed-seek { flex: 1; min-width: 140px; }
 .ed-time { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
+.ed-tracks {
+  margin-top: 10px; padding: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-tracks-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.ed-tracks-head strong { font-size: 13px; }
+.ed-tracks-head .muted { font-size: 12px; }
+.ed-tracks-btns { margin-left: auto; display: flex; gap: 6px; }
+.ed-tracks-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 170px; overflow: auto;
+}
+.ed-track-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 8px; font-size: 12.5px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+}
+.ed-track-row input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
+}
+.ed-track-row label { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; margin: 0; }
+.ed-track-row .ed-track-tag {
+  font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11.5px;
+}
+.ed-track-row.off { opacity: .55; }
+.ed-track-row .ed-track-listen { flex: 0 0 auto; }
+.ed-tracks-empty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
+
 .ed-side {
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -722,6 +753,16 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   min-width: 180px;
 }
 .ed-tl-more-panel .btn { justify-content: flex-start; }
+.ed-tl-more-panel { min-width: 240px; }
+.ed-more-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.ed-more-label { font-size: 11.5px; color: var(--muted); }
+.ed-more-row { display: flex; gap: 6px; align-items: center; }
+.ed-more-row select { flex: 1; min-width: 0; }
+.ed-tl-more-panel #ed-upload-status { font-size: 11.5px; margin: 0; }
+.ed-tl-more-panel #ed-upload-status:empty { display: none; }
+.ed-upload-btn { margin: 0; cursor: pointer; }
+.ed-src-line { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.ed-src-line p { flex: 1; min-width: 0; font-size: 12px; margin: 0; }
 .ed-seg-item.active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
