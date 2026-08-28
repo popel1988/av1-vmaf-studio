@@ -1204,6 +1204,13 @@ class QueueManager:
                 burn_subs=bool(spec.get("burn_subs")),
                 sub_index=int(spec.get("sub_index", -1) if spec.get("sub_index") is not None else -1),
                 crossfade=float(spec.get("crossfade") or 0),
+                rate_mode=spec.get("rate_mode") or s.rate_mode or "cq",
+                v_bitrate=int(spec.get("v_bitrate", s.quality if s.rate_mode
+                                       in ("bitrate", "abr") else 0) or 0),
+                audio_channels=int(spec.get("audio_channels",
+                                            getattr(s, "audio_channels", 0)) or 0),
+                work_dir=config.WORK_DIR,
+                container=spec.get("container") or s.container or "mkv",
             )
             label = "Editor-Export (Re-Encode)"
         else:

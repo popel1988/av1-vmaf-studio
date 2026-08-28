@@ -128,6 +128,7 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             sidx = int(sidx)
         except (TypeError, ValueError):
             sidx = -1
+        slist = [] if kind in _GEN_KINDS else _audio_list(s.get("sub_indexes"), sidx)
         title = str(s.get("title") or "").strip() or f"Clip {i + 1}"
         crop = str(s.get("crop") or "").strip()
         try:
@@ -144,8 +145,9 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             "audio_index": alist[0] if alist else -1,
             "audio_indexes": alist,
             "mute": mute,
-            "sub_index": sidx,
-            "burn_subs": bool(s.get("burn_subs")) and sidx >= 0,
+            "sub_index": slist[0] if slist else -1,
+            "sub_indexes": slist,
+            "burn_subs": bool(s.get("burn_subs")) and (slist[0] if slist else sidx) >= 0,
             "fade_in": max(0.0, min(30.0, _f(s.get("fade_in")))),
             "fade_out": max(0.0, min(30.0, _f(s.get("fade_out")))),
             "speed": max(0.25, min(4.0, _f(s.get("speed"), 1.0) or 1.0)),
@@ -223,6 +225,15 @@ def check_remux_compat(segments: list[dict]) -> dict:
             ],
             "streams": [],
         }
+    if len({tuple(s.get("sub_indexes") or []) for s in segments}) > 1:
+        return {
+            "compatible": False,
+            "warnings": [
+                "Die Clips übernehmen unterschiedliche Untertitel – "
+                "verlustfreies Kopieren kann nur eine Streamstruktur.",
+            ],
+            "streams": [],
+        }
     files = [str(s["abs"]) for s in segments if s.get("abs")]
     seen, uniq = set(), []
     for f in files:
@@ -246,6 +257,7 @@ def segment_to_spec(s: dict) -> dict:
         "audio_indexes": list(s.get("audio_indexes") or []),
         "mute": bool(s.get("mute")),
         "sub_index": int(s.get("sub_index", -1)),
+        "sub_indexes": list(s.get("sub_indexes") or []),
         "burn_subs": bool(s.get("burn_subs")),
         "fade_in": _f(s.get("fade_in")),
         "fade_out": _f(s.get("fade_out")),
@@ -253,6 +265,88 @@ def segment_to_spec(s: dict) -> dict:
         "crop": s.get("crop") or "",
         "scale": int(s.get("scale") or 0),
     }
+
+
+def _write_concat_list(segments: list[dict], work_dir: Path) -> tuple[Optional[Path], str]:
+    """Concat-Demuxer-Liste mit inpoint/outpoint (Keyframe-genaue Copy-Schnitte)."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    listfile = work_dir / f"editor_{uuid.uuid4().hex[:8]}.txt"
+    lines = []
+    for s in segments:
+        if not s.get("abs"):
+            return None, "Concat braucht eine Quelldatei je Clip."
+        p = str(s["abs"]).replace("'", "'\\''")
+        lines.append(f"file '{p}'")
+        lines.append(f"inpoint {float(s['start']):.3f}")
+        lines.append(f"outpoint {float(s['end']):.3f}")
+    try:
+        listfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as e:
+        return None, f"Konnte Liste nicht schreiben: {e}"
+    return listfile, ""
+
+
+def _sub_tracks(path: Optional[Path]) -> list[dict]:
+    if not path:
+        return []
+    data, _ = ff.probe_streams(path)
+    if not data:
+        return []
+    tracks = data.get("subtitles") or []
+    return tracks if isinstance(tracks, list) else []
+
+
+def _copy_audio_ok(segments: list[dict], crossfade: float = 0.0,
+                   audio_channels: int = 0) -> bool:
+    """Ton per Concat-Copy möglich: gleiche Spuren, keine Audio-Filter."""
+    if int(audio_channels or 0) in (1, 2):
+        return False
+    if float(crossfade or 0) > 0.01:
+        return False
+    sels = {tuple(s.get("audio_indexes") or []) for s in segments}
+    if len(sels) > 1:
+        return False
+    for s in segments:
+        if (s.get("kind") or "media") in _GEN_KINDS:
+            return False
+        if _f(s.get("fade_in")) > 0 or _f(s.get("fade_out")) > 0:
+            return False
+        if abs(_f(s.get("speed"), 1.0) - 1.0) > 0.001:
+            return False
+    return True
+
+
+def _copy_subs_ok(segments: list[dict]) -> bool:
+    sels = {tuple(s.get("sub_indexes") or []) for s in segments}
+    if len(sels) > 1:
+        return False
+    return not any((s.get("kind") or "media") in _GEN_KINDS for s in segments)
+
+
+def _map_copy_audio_subs(cmd: list[str], input_idx: int, audio_sel: list[int],
+                         sub_sel: list[int], container: str,
+                         first_abs: Optional[Path],
+                         map_audio: bool = True) -> None:
+    """Audio/UT vom Concat-Input mappen (Copy, inkl. MP4-UT-Codec)."""
+    if map_audio:
+        if audio_sel:
+            for a in audio_sel:
+                cmd += ["-map", f"{input_idx}:a:{int(a)}?"]
+        else:
+            cmd += ["-an"]
+    sub_codecs = {int(t.get("index", i)): str(t.get("codec") or "")
+                  for i, t in enumerate(_sub_tracks(first_abs))}
+    out_i = 0
+    for si in sub_sel:
+        src = sub_codecs.get(int(si), "")
+        dst = ff._sub_out_codec(src, "mp4" if container == "mp4" else "mkv")
+        if dst is None:
+            continue
+        cmd += ["-map", f"{input_idx}:s:{int(si)}?"]
+        cmd += [f"-c:s:{out_i}", dst]
+        out_i += 1
+    if map_audio and container in ("mkv", "mka") and first_abs:
+        cmd += ["-map", f"{input_idx}:t?"]
 
 
 def build_editor_remux_cmd(segments: list[dict], output: Path,
@@ -270,45 +364,33 @@ def build_editor_remux_cmd(segments: list[dict], output: Path,
     if len(sels) > 1:
         return [], ("Die Clips haben unterschiedliche Tonspuren gewählt – "
                     "das geht nur im Encode-Modus.")
+    ssels = {tuple(s.get("sub_indexes") or []) for s in segments}
+    if len(ssels) > 1:
+        return [], ("Die Clips haben unterschiedliche Untertitel gewählt – "
+                    "das geht nur im Encode-Modus.")
     sel = list(next(iter(sels))) if sels else []
-    work_dir.mkdir(parents=True, exist_ok=True)
-    listfile = work_dir / f"editor_{uuid.uuid4().hex[:8]}.txt"
-    lines = []
-    for s in segments:
-        p = str(s["abs"]).replace("'", "'\\''")
-        lines.append(f"file '{p}'")
-        lines.append(f"inpoint {float(s['start']):.3f}")
-        lines.append(f"outpoint {float(s['end']):.3f}")
-    try:
-        listfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except OSError as e:
-        return [], f"Konnte Liste nicht schreiben: {e}"
+    sub_sel = list(next(iter(ssels))) if ssels else []
+    listfile, err = _write_concat_list(segments, work_dir)
+    if err:
+        return [], err
 
     meta_path = None
     if add_chapters and len(segments) >= 1:
         meta_path = remux.write_chapter_meta(
             chapters_from_segments(segments), work_dir)
 
+    container = "mp4" if output.suffix.lower() == ".mp4" else "mkv"
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-f", "concat", "-safe", "0",
            "-i", str(listfile)]
     if meta_path:
         cmd += ["-i", str(meta_path), "-map_chapters", "1"]
     first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
-    n_audio = len(_audio_tracks(first_abs))
-    keeps_all = bool(sel) and sorted(sel) == list(range(n_audio))
-    if keeps_all or (not sel and n_audio == 0):
-        cmd += ["-map", "0"]
-    else:
-        cmd += ["-map", "0:V?"]
-        for a in sel:
-            cmd += ["-map", f"0:a:{int(a)}?"]
-        if not sel:
-            cmd += ["-an"]
-        cmd += ["-map", "0:s?"]
-        # Attachments (Fonts) kann nur Matroska aufnehmen.
-        if output.suffix.lower() in (".mkv", ".mka"):
-            cmd += ["-map", "0:t?"]
-    cmd += ["-c", "copy", "-reset_timestamps", "1",
+    cmd += ["-map", "0:V?"]
+    _map_copy_audio_subs(cmd, 0, sel, sub_sel, container, first_abs)
+    cmd += ["-c:v", "copy"]
+    if sel:
+        cmd += ["-c:a", "copy"]
+    cmd += ["-reset_timestamps", "1",
             "-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""
 
@@ -347,6 +429,38 @@ def _ref_geometry(segments: list[dict]) -> tuple[int, int, float]:
     return 1920, 1080, 25.0
 
 
+_LAYOUTS = {1: "mono", 2: "stereo", 3: "2.1", 4: "quad", 5: "4.1",
+            6: "5.1", 7: "6.1", 8: "7.1"}
+
+
+def _layout_name(channels: int) -> str:
+    return _LAYOUTS.get(int(channels or 0), "stereo")
+
+
+def _out_layouts(segments: list[dict], n_audio: int, audio_channels: int) -> list[str]:
+    """Kanal-Layout je Ausgabespur.
+
+    Concat verlangt pro Spur überall dasselbe Layout. Bei „wie Quelle" gibt der
+    erste Clip mit Tonauswahl vor, was die jeweilige Spur wird (5.1 bleibt 5.1).
+    """
+    if audio_channels == 1:
+        return ["mono"] * n_audio
+    if audio_channels == 2:
+        return ["stereo"] * n_audio
+    ref = next((s for s in segments
+                if s.get("abs") and (s.get("audio_indexes") or [])), None)
+    tracks = _audio_tracks(ref["abs"]) if ref else []
+    out: list[str] = []
+    for j in range(n_audio):
+        sel = list(ref["audio_indexes"]) if ref else []
+        idx = sel[j] if j < len(sel) else None
+        if idx is None or not (0 <= int(idx) < len(tracks)):
+            out.append("stereo")
+            continue
+        out.append(_layout_name((tracks[int(idx)] or {}).get("channels") or 2))
+    return out
+
+
 def build_editor_encode_cmd(
     segments: list[dict],
     output: Path,
@@ -358,6 +472,11 @@ def build_editor_encode_cmd(
     burn_subs: bool = False,
     sub_index: int = -1,
     crossfade: float = 0.0,
+    rate_mode: str = "cq",
+    v_bitrate: int = 0,
+    audio_channels: int = 0,
+    work_dir: Optional[Path] = None,
+    container: str = "mkv",
 ) -> tuple[list, str]:
     """Re-Encode-Export: trim/atrim je Segment, optional xfade, dann concat."""
     if not segments:
@@ -396,9 +515,15 @@ def build_editor_encode_cmd(
     v_pads: list[str] = []
     a_pads: list[list[str]] = []
     durs: list[float] = []
+    want_copy_a = (audio_codec or "").lower() == "copy"
+    copy_audio = want_copy_a and _copy_audio_ok(
+        segments, xf, int(audio_channels or 0))
+    copy_subs = _copy_subs_ok(segments) and any(
+        s.get("sub_indexes") for s in segments)
     # Alle Clips müssen gleich viele Tonspuren liefern – fehlende werden still.
-    n_audio = max(1, max((len(s.get("audio_indexes") or []) for s in segments),
-                         default=1))
+    n_audio = 0 if copy_audio else max(
+        1, max((len(s.get("audio_indexes") or []) for s in segments), default=1))
+    layouts = _out_layouts(segments, max(1, n_audio), int(audio_channels or 0))
 
     for i, s in enumerate(segments):
         start, end = float(s["start"]), float(s["end"])
@@ -450,22 +575,28 @@ def build_editor_encode_cmd(
             parts.append(f"[{ii}:v:0]" + ",".join(chain) + f"[{vlabel}]")
             mute = bool(s.get("mute"))
 
+        v_pads.append(vlabel)
+        if copy_audio:
+            continue
+
         sel = [] if (mute or kind in _GEN_KINDS) else list(s.get("audio_indexes") or [])
         labels: list[str] = []
         for j in range(n_audio):
             alabel = f"a{i}_{j}"
             src_idx = sel[j] if j < len(sel) else None
+            lay = layouts[j] if j < len(layouts) else "stereo"
             if src_idx is None:
                 ali = n_files + len(lavfi)
                 lavfi.append(
-                    f"anullsrc=channel_layout=stereo:sample_rate=48000:d={out_d:.3f}")
-                parts.append(f"[{ali}:a]aformat=sample_fmts=fltp[{alabel}]")
+                    f"anullsrc=channel_layout={lay}:sample_rate=48000:d={out_d:.3f}")
+                parts.append(
+                    f"[{ali}:a]aformat=sample_fmts=fltp:channel_layouts={lay}[{alabel}]")
             else:
                 ii = file_idx(s["abs"])
                 achain = [
                     f"atrim=start={start:.3f}:end={end:.3f}",
                     "asetpts=PTS-STARTPTS",
-                    "aformat=sample_fmts=fltp:channel_layouts=stereo",
+                    f"aformat=sample_fmts=fltp:channel_layouts={lay}",
                     "aresample=48000",
                 ]
                 at = _atempo_chain(speed)
@@ -479,15 +610,24 @@ def build_editor_encode_cmd(
                 parts.append(f"[{ii}:a:{int(src_idx)}]" + ",".join(achain) + f"[{alabel}]")
             labels.append(alabel)
 
-        v_pads.append(vlabel)
         a_pads.append(labels)
 
     for spec in lavfi:
         cmd += ["-f", "lavfi", "-i", spec]
 
+    concat_idx = -1
+    if copy_audio or copy_subs:
+        wd = work_dir or (_cache_dir() / "concat")
+        listfile, err = _write_concat_list(
+            [s for s in segments if s.get("abs")], wd)
+        if err:
+            return [], err
+        concat_idx = n_files + len(lavfi)
+        cmd += ["-f", "concat", "-safe", "0", "-i", str(listfile)]
+
     if xf > 0.02 and n >= 2:
         cur_v = v_pads[0]
-        cur_a = list(a_pads[0])
+        cur_a = list(a_pads[0]) if a_pads else []
         acc = durs[0]
         for i in range(1, n):
             d = min(xf, durs[i] * 0.45, durs[i - 1] * 0.45)
@@ -496,15 +636,21 @@ def build_editor_encode_cmd(
             parts.append(
                 f"[{cur_v}][{v_pads[i]}]xfade=transition=fade:duration={d:.3f}"
                 f":offset={off:.3f}[{nv}]")
-            for j in range(n_audio):
-                na = f"xfa{i}_{j}"
-                parts.append(
-                    f"[{cur_a[j]}][{a_pads[i][j]}]acrossfade=d={d:.3f}[{na}]")
-                cur_a[j] = na
+            if not copy_audio:
+                for j in range(n_audio):
+                    na = f"xfa{i}_{j}"
+                    parts.append(
+                        f"[{cur_a[j]}][{a_pads[i][j]}]acrossfade=d={d:.3f}[{na}]")
+                    cur_a[j] = na
             cur_v = nv
             acc = acc + durs[i] - d
         filt = ";".join(parts)
-        v_out, a_outs = cur_v, cur_a
+        v_out, a_outs = cur_v, (cur_a if not copy_audio else [])
+    elif copy_audio:
+        concat = "".join(f"[{v}]" for v in v_pads)
+        filt = ";".join(parts)
+        filt += ";" + concat + f"concat=n={n}:v=1:a=0[vc]"
+        v_out, a_outs = "vc", []
     else:
         concat = "".join(
             f"[{v}]" + "".join(f"[{a}]" for a in al)
@@ -525,29 +671,42 @@ def build_editor_encode_cmd(
     for a in a_outs:
         cmd += ["-map", f"[{a}]"]
     cmd += ["-c:v", enc]
-    cq = int(cq or 30)
-    if backend == "nvenc":
-        cmd += ["-rc", "vbr", "-cq", str(cq), "-preset", "p5"]
-    elif backend == "qsv":
-        cmd += ["-global_quality", str(cq)]
-    elif backend == "vaapi":
-        cmd += ["-rc_mode", "CQP", "-qp", str(cq)]
+    br = int(v_bitrate or 0)
+    rm = str(rate_mode or "cq").lower()
+    if rm in ("bitrate", "abr") and br > 0:
+        cmd += ff.bitrate_args(platform, codec, br, abr=(rm == "abr"))
     else:
-        cmd += ["-crf", str(cq)]
-        if enc == "libsvtav1":
-            cmd += ["-preset", "6"]
-        elif enc == "libx265":
-            cmd += ["-preset", "medium"]
-        elif enc == "libx264":
-            cmd += ["-preset", "medium"]
+        if backend == "nvenc":
+            cmd += ["-rc", "vbr"]
+        cmd += ff.quality_args(platform, int(cq or 30))
+    if backend == "nvenc":
+        cmd += ["-preset", "p5"]
+    elif enc in ("libsvtav1", "libx265", "libx264"):
+        cmd += ["-preset", "6" if enc == "libsvtav1" else "medium"]
 
-    ac = (audio_codec or "aac").lower()
-    if ac not in ("aac", "opus", "ac3", "eac3", "flac"):
-        ac = "aac"
-    cmd += ["-c:a", ac]
-    if ac != "flac":
-        cmd += ["-b:a", f"{int(audio_bitrate or 192)}k"]
-    cmd += _audio_metadata(segments, n_audio)
+    first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
+    audio_sel = list(next((s.get("audio_indexes") or [] for s in segments), []))
+    sub_sel = list(next((s.get("sub_indexes") or [] for s in segments), []))
+    cont = "mp4" if str(container or output.suffix).lower().endswith("mp4") else "mkv"
+
+    if copy_audio and concat_idx >= 0:
+        _map_copy_audio_subs(cmd, concat_idx, audio_sel, sub_sel if copy_subs else [],
+                             cont, first_abs)
+        if audio_sel:
+            cmd += ["-c:a", "copy"]
+        cmd += _audio_metadata(segments, len(audio_sel) or 1)
+    else:
+        ac = (audio_codec or "aac").lower()
+        if ac == "copy":
+            ac = "aac"
+        enc_a = ff.AUDIO_ENCODERS.get(ac, "aac")
+        cmd += ["-c:a", enc_a]
+        if enc_a != "flac":
+            cmd += ["-b:a", f"{max(32, int(audio_bitrate or 192))}k"]
+        cmd += _audio_metadata(segments, n_audio)
+        if copy_subs and concat_idx >= 0 and sub_sel:
+            _map_copy_audio_subs(cmd, concat_idx, [], sub_sel, cont, first_abs,
+                                 map_audio=False)
     cmd += ["-progress", "pipe:1", "-nostats", str(output)]
     return cmd, ""
 
@@ -597,6 +756,12 @@ def probe_source(rel: str) -> tuple[Optional[dict], str]:
     data["width"] = int(getattr(info, "width", 0) or 0) if info else 0
     data["height"] = int(getattr(info, "height", 0) or 0) if info else 0
     data["fps"] = float(getattr(info, "fps", 0) or 0) if info else 0.0
+    vbr = int(getattr(info, "video_bitrate", 0) or 0) if info else 0
+    total_br = int(getattr(info, "overall_bitrate", 0) or 0) if info else 0
+    data["video_bitrate"] = vbr
+    data["video_bitrate_human"] = ff._bitrate_human(vbr) if vbr else ""
+    data["overall_bitrate"] = total_br
+    data["overall_bitrate_human"] = ff._bitrate_human(total_br) if total_br else ""
     data["chapters"] = remux.probe_chapters(target)
     return data, ""
 

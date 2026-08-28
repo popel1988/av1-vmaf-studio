@@ -767,13 +767,18 @@ class EditorEnqueueRequest(BaseModel):
     mode: str = "remux"              # remux | encode
     container: str = "mkv"
     suffix: str = "_edit"
+    name_mode: str = "suffix"        # suffix | custom
+    out_name: str = ""               # eigener Dateiname (ohne Endung)
     chapters_from_cuts: bool = True
     force_remux: bool = False        # Kompatibilitätswarnung ignorieren
     platform: str = "cpu"
     codec: str = "av1"
     cq: int = 30
+    rate_mode: str = "cq"            # cq | bitrate
+    v_bitrate: int = 0               # kbit/s im Bitraten-Modus
     audio_codec: str = "aac"
     audio_bitrate: int = 192
+    audio_channels: int = 0          # 0 = wie Quelle, 1 = Mono, 2 = Stereo
     burn_subs: bool = False
     sub_index: int = -1
     crossfade: float = 0.0
@@ -944,6 +949,28 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     xf = float(req.crossfade or 0)
     if editor.any_needs_encode(segs, xf):
         mode = "encode"
+
+    rate_mode = (req.rate_mode or "cq").lower()
+    v_bitrate = max(0, int(req.v_bitrate or 0))
+    if rate_mode not in ("cq", "bitrate", "abr"):
+        rate_mode = "cq"
+    if rate_mode in ("bitrate", "abr") and v_bitrate <= 0:
+        rate_mode, v_bitrate = "cq", 0
+    if rate_mode == "cq":
+        v_bitrate = 0
+    a_codec = (req.audio_codec or "aac").lower()
+    if a_codec not in ("copy", "flac", "aac", "opus", "ac3", "eac3"):
+        a_codec = "aac"
+    a_channels = int(req.audio_channels or 0)
+    if a_channels not in (0, 1, 2):
+        a_channels = 0
+    # Eigener Name landet als Namensmuster; Platzhalter-Klammern raus, damit
+    # render_name nicht auf das Standardmuster zurückfällt.
+    custom_name = (req.out_name or "").replace("{", "").replace("}", "").strip()
+    name_pattern = ("{stem}{suffix}"
+                    if (req.name_mode or "suffix").lower() != "custom" or not custom_name
+                    else custom_name)
+
     d = {
         "video_mode": "editor",
         "vmaf_check": False,
@@ -951,14 +978,16 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "container": container,
         "post_processing": req.post_processing or "keep",
         "suffix": req.suffix or "_edit",
+        "name_pattern": name_pattern,
         "integrity_check": True,
         "platform": req.platform or "cpu",
         "codec": req.codec or "av1",
-        "quality": int(req.cq or 30),
-        "rate_mode": "cq",
-        "audio_mode": "encode" if mode == "encode" else "copy",
-        "audio_codec": req.audio_codec or "aac",
+        "quality": v_bitrate if rate_mode in ("bitrate", "abr") else int(req.cq or 30),
+        "rate_mode": rate_mode,
+        "audio_mode": "copy" if a_codec == "copy" else "encode",
+        "audio_codec": "aac" if a_codec == "copy" else a_codec,
         "audio_bitrate": int(req.audio_bitrate or 192),
+        "audio_channels": a_channels,
         "edit_spec": {
             "segments": clean_segs,
             "mode": mode,
@@ -968,8 +997,11 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "platform": req.platform or "cpu",
             "codec": req.codec or "av1",
             "cq": int(req.cq or 30),
-            "audio_codec": req.audio_codec or "aac",
+            "rate_mode": rate_mode,
+            "v_bitrate": v_bitrate,
+            "audio_codec": a_codec,
             "audio_bitrate": int(req.audio_bitrate or 192),
+            "audio_channels": a_channels,
             "burn_subs": bool(req.burn_subs),
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
             "crossfade": float(req.crossfade or 0),

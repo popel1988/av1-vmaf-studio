@@ -21,6 +21,7 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264**).
 - [Rate control & quality](#rate-control--quality)
 - [Naming, duplicates & dry-run](#naming-duplicates--dry-run)
 - [Remux & editing (no re-encode)](#remux--editing-no-re-encode)
+- [Video editor](#video-editor)
 - [Media tree & output](#media-tree--output)
 - [Quality assurance](#quality-assurance)
 - [Automation & integration](#automation--integration)
@@ -41,12 +42,12 @@ mode**, and language support for **DE / EN / ES / FR**:
 
 | Page | Purpose |
 |------|---------|
-| **Encoding** | Direct encoding with CQ/bitrate/ABR, size target, naming templates, audio/HDR options, dry-run preview. |
-| **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. |
+| **Encoding** | Direct encoding with CQ/bitrate/ABR, size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side (settings in grouped blocks, like Super Tool). |
+| **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. Same two-column layout as Encoding. |
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
 | **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
-| **Editor** | Simple timeline editor: In/Out cuts, reorder clips, multi-file concat, **direct upload**, remux (keyframe copy) or encode export to the queue. |
+| **Editor** | Timeline editor: In/Out cuts, keep/cut ranges, reorder, multi-file concat, **direct upload**, per-source audio/subtitle selection, remux (keyframe copy) or encode export (CQ/CBR/ABR) to the queue. |
 | **Player** | Full media player: Direct-Play when possible, else HLS; quality profiles (NVENC/CPU from diagnostics), chapters, text subs + optional PGS burn-in. |
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
@@ -68,9 +69,10 @@ Other highlights:
 - **In-browser media player** (sidebar **Player**): HLS sessions with probe
   duration / seek-restart, audio remux to AAC, WebVTT text subs; plus a lighter
   modal preview (`/api/media/stream`).
-- **Video editor** (sidebar **Editor**): visual timeline with segment list,
-  library sources or uploads under `/data/uploads` (`upload:…`), export via
-  concat demuxer (copy) or filter_complex encode into the queue.
+- **Video editor** (sidebar **Editor**): visual timeline with source ruler and
+  clip list, library sources or uploads (`/data/uploads` or a chosen media
+  folder), multi-track audio/subtitles, remux (concat copy) or encode into the
+  queue. See [Video editor](#video-editor).
 - **Functional encoder detection**: mini test encodes verify what the hardware
   can actually do; unavailable options are hidden in the UI.
 - **Dynamic GPU capacity**: configurable number of concurrent encodes per GPU.
@@ -227,6 +229,48 @@ through the normal queue.
 
 ---
 
+## Video editor
+
+The **Editor** page builds a new file from one or more sources (cuts, concat,
+optional fades/tempo) and sends it to the same queue as Encoding/Remux.
+
+**Preview & timeline**
+
+- Direct file playback in the browser when the codec is playable; otherwise a
+  light FFmpeg/HLS fallback. Jump **±0.2 s** and frame-step; **Timeline follow**
+  skips cut-away parts and continues at the next clip.
+- Source ruler for the whole loaded file (In/Out, keep/cut range, snap to
+  chapters or keyframes). The output timeline supports trim-by-drag, fade
+  corners, reorder, split, duplicate, black clips, intro/outro, undo/redo.
+- Keyboard: **I/O** In/Out · **J/K/L** −5 s / pause / play · arrows for frames
+  and clip change · **S** split · **Del** delete clip · **Ctrl+Z** undo.
+- Unload a source from the preview without dropping clips already on the
+  timeline. Projects can be saved/loaded as JSON.
+
+**Audio & subtitles**
+
+- Per source: tick which **audio** and **subtitle** tracks to keep (applies to
+  all clips from that file). No audio selected → silent. Burn-in of the first
+  ticked subtitle forces an encode.
+- Clip list shows **video bitrate**, selected **audio bitrates**, and subtitle
+  count so you can see what will go into the export.
+
+**Export**
+
+| Mode | Details |
+|------|---------|
+| **Remux (copy)** | Concat demuxer, cuts on keyframes. Fast; needs compatible clips (same codecs, matching audio/sub selection). |
+| **Encode** | Frame-accurate. Video: CQ/CRF, CBR, or ABR (same rate modes as Encoding). Audio: copy, FLAC, AAC, Opus, AC-3, E-AC-3; optional channel mix. |
+
+- **Audio copy on encode** is used when possible (no fades, tempo change,
+  crossfade, black clips, or channel remix). Otherwise audio is re-encoded.
+  Subtitles stay copy when the selection is consistent across clips.
+- **Filename**: source name + suffix (e.g. `_edit`) or a custom stem.
+- Output folder: standard output · next to source · custom folder (same as
+  Encoding). Optional **chapters from clips**. A non-zero crossfade forces encode.
+
+---
+
 ## Media tree & output
 
 One media mount is enough — sources and encodes live in the same tree:
@@ -320,7 +364,7 @@ survive rebuilds/restarts as long as the volume is kept:
 /data/library_scan.json     Library scan cache (per root / sub-library)
 /data/previews/<session>/   VMAF screenshots + analysis.json
 /data/vmaf/                 optionally retained VMAF session artifacts
-/data/uploads/              User-uploaded external audio/subtitle files
+/data/uploads/              User-uploaded files (editor sources, remux external tracks)
 /data/work/                 short-lived encode scratch files
 ```
 
@@ -423,7 +467,7 @@ core/
   job_plan.py           Naming templates, dry-run, duplicate / requeue paths
   audio_opt.py          Audio-only remux/optimization
   remux.py              Lossless remux/edit: tracks, attachments, chapters, trim, concat/split
-  editor.py             Timeline editor: segment remux/encode export
+  editor.py             Timeline editor: remux/encode (CQ/CBR/ABR), audio/sub copy
   media_stream.py       Light modal player: fMP4 stream + VTT
   player_hls.py         Full Player: HLS sessions (audio remux, seek)
   queue_manager.py      Async queue, guardrail, post-processing, persistence

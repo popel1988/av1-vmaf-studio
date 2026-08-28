@@ -12,6 +12,29 @@
   "use strict";
 
   var DICT = {
+    // --- Editor: Ausgabename, Rate, Ton ---
+    "Dateiname": "File name",
+    "Quellname + Suffix": "Source name + suffix",
+    "Eigener Name": "Custom name",
+    "Mein Schnitt": "My edit",
+    "Kompletter Dateiname ohne Endung.": "Full file name without extension.",
+    "Wird an den Namen der ersten Quelldatei angehängt.":
+      "Appended to the name of the first source file.",
+    "Ratensteuerung": "Rate control",
+    "Video kbit/s": "Video kbit/s",
+    "Ton kbit/s": "Audio kbit/s",
+    "Übernehmen (Copy)": "Keep as is (copy)",
+    "FLAC (verlustlos)": "FLAC (lossless)",
+    "Ausgabedatei": "Output file",
+    "Eigener Name ist leer – es gilt Quellname + Suffix.":
+      "Custom name is empty – source name + suffix applies.",
+    "Remux übernimmt die angehakten Tonspuren unverändert (Copy).":
+      "Remux keeps the ticked audio tracks untouched (copy).",
+    "Encode codiert den Ton neu – FLAC bleibt dabei verlustlos.":
+      "Encode re-encodes audio – FLAC stays lossless.",
+    "Encode codiert den Ton neu, weil der Schnitt durch den Filtergraph läuft. Für unveränderten Ton den Remux-Modus nutzen.":
+      "Encode re-encodes audio because cutting runs through the filter graph. Use remux mode for untouched audio.",
+
     // --- Sidebar / Navigation ---
     "VMAF-gesteuerte Komprimierung": "VMAF-guided compression",
     "Audio-Optimierung": "Audio Optimization",
@@ -71,10 +94,36 @@
     "gelöscht.": "deleted.",
     "Kein Clip gewählt": "No clip selected",
     "Clip": "Clip",
+    "Untertitel übernehmen": "Keep subtitles",
+    "Diese Quelle hat keine Untertitel.": "This source has no subtitles.",
+    "Angehakte Untertitel landen als eigene Spuren in der Datei.":
+      "Ticked subtitles become separate tracks in the file.",
+    "Gilt für alle Clips dieser Quelle. Keine Tonspur = stumm. Angehakte Untertitel landen als eigene Spuren in der Datei.":
+      "Applies to every clip of this source. No audio ticked = silent. Ticked subtitles become separate tracks in the file.",
+    "Angehakte Ton- und Untertitelspuren werden unverändert übernommen (Copy).":
+      "Ticked audio and subtitle tracks are kept as-is (copy).",
+    "Video wird neu encodiert, Ton verlustlos als FLAC. Untertitel bleiben Copy.":
+      "Video is re-encoded, audio as lossless FLAC. Subtitles stay copy.",
+    "Video und Ton werden neu encodiert. Untertitel bleiben Copy, sofern gewählt.":
+      "Video and audio are re-encoded. Subtitles stay copy if selected.",
+    "Quellname + Suffix": "Source name + suffix",
+    "Eigener Name": "Custom name",
+    "Dateiname": "File name",
+    "Ratensteuerung": "Rate control",
+    "Qualität (CQ/CRF)": "Quality (CQ/CRF)",
+    "Video kbit/s": "Video kbit/s",
+    "Tonspuren": "Audio tracks",
+    "Übernehmen (Copy)": "Keep (copy)",
+    "FLAC (verlustlos)": "FLAC (lossless)",
+    "Wie Quelle": "Same as source",
+    "Ausgabedatei": "Output file",
+    "Eigener Name ist leer – es gilt Quellname + Suffix.":
+      "Custom name is empty – source name + suffix is used.",
+    "CBR = feste Rate, ABR = variables Ziel.": "CBR = fixed rate, ABR = variable target.",
+    "keine": "none",
+    "forced": "forced",
     "Vorschau-Ton": "Preview audio",
     "Tonspuren übernehmen": "Keep audio tracks",
-    "Gilt für alle Clips dieser Quelle. Keine Spur angehakt = stumm. Mehrere Spuren landen als eigene Tonspuren in der Datei.":
-      "Applies to every clip of this source. No track ticked = silent. Several tracks end up as separate audio tracks in the file.",
     "Timeline folgen": "Follow timeline",
     "Beim Abspielen am Clipende zum nächsten Clip springen – geschnittene Stellen werden übersprungen.":
       "While playing, jump to the next clip at the end of a clip – cut-out parts are skipped.",
@@ -460,8 +509,13 @@
       "AV1 only (CPU/SVT). 0 = off. Saves bits on grainy material.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)":
       "Two-pass (bitrate mode only – more consistent quality)",
+    "Zwei-Pass (nur Bitraten-Modus)": "Two-pass (bitrate mode only)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)":
       "Anime mode (VMAF-NEG scoring + 10-bit against banding)",
+    "Anime-Modus (VMAF-NEG + 10-bit)": "Anime mode (VMAF-NEG + 10-bit)",
+    "Optionen": "Options",
+    "Vergleich": "Comparison",
+    "Encoder & Optionen": "Encoders & options",
     "Dynamik (HDR / Dolby Vision)": "Dynamic range (HDR / Dolby Vision)",
     "Automatisch je Datei (empfohlen)": "Automatic per file (recommended)",
     "HDR / Dolby Vision beibehalten": "Keep HDR / Dolby Vision",
@@ -511,16 +565,19 @@
     "Scan – Codec/Bitrate ermitteln": "Scan – detect codec/bitrate",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)":
       "Auto-crop: automatically remove black bars (cropdetect)",
+    "Auto-Crop (cropdetect)": "Auto-crop (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.":
       "Detects letterbox/pillarbox borders at several points and crops them before encoding – saves bitrate. VMAF analysis and guardrail automatically use the same cropped area.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)":
       "Chunked adaptive encoding (segments with complexity-based CQ – CQ mode only, slower)",
+    "Chunked Adaptive Encoding (nur CQ)": "Chunked adaptive encoding (CQ only)",
     "Segmentlänge (Sekunden)": "Segment length (seconds)",
     "CQ-Spanne (±)": "CQ range (±)",
     "Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.":
       "Complex scenes get better quality (lower CQ), calm scenes get smaller. The set CQ is the average.",
     "Qualitäts-Guardrail: echten VMAF nach dem Encode messen":
       "Quality guardrail: measure real VMAF after the encode",
+    "Qualitäts-Guardrail (VMAF nach Encode)": "Quality guardrail (VMAF after encode)",
     "Ziel-VMAF (min.)": "Target VMAF (min.)",
     "Bei Unterschreiten automatisch mit höherer Qualität neu encoden":
       "If below, automatically re-encode at higher quality",
@@ -559,10 +616,18 @@
     "Original nach .archiv/ verschieben": "Move original to .archiv/",
     "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)":
       "Output integrity check (sample decode + duration match)",
+    "Integritäts-Check (Stichproben-Decode + Dauer)":
+      "Integrity check (sample decode + duration)",
     "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)":
       "Output integrity check (sample decode + duration match)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind":
       "Safe post-processing: only replace/move the original if the integrity check and (if active) the quality guardrail passed",
+    "Sichere Nachbehandlung (Original nur bei bestandener Prüfung ersetzen)":
+      "Safe post-processing (replace original only if checks passed)",
+    "Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem.":
+      "Can be disabled; still runs for inplace/archive.",
+    "Schlägt die Prüfung fehl, bleibt das Original erhalten.":
+      "If the check fails, the original is kept.",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.":
       "Protects against data loss: if the check fails, the original is kept and the output is also stored in the output folder.",
     "Zur Warteschlange hinzufügen": "Add to queue",
@@ -591,6 +656,7 @@
     "Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.":
       "All encoders available on this system. More encoders = longer comparison.",
     "Screenshots für optischen Vergleich erstellen": "Create screenshots for visual comparison",
+    "Screenshots für optischen Vergleich": "Screenshots for visual comparison",
     "VMAF-Vergleich starten": "Start VMAF comparison",
     "VMAF-Analyse & Größenprognose": "VMAF Analysis & Size Prediction",
     "Aktuelle Analyse": "Current analysis",
@@ -1135,6 +1201,28 @@
 
   // === Spanisch (DE -> ES) =================================================
   var DICT_ES = {
+    "Dateiname": "Nombre de archivo",
+    "Quellname + Suffix": "Nombre de origen + sufijo",
+    "Eigener Name": "Nombre propio",
+    "Mein Schnitt": "Mi montaje",
+    "Kompletter Dateiname ohne Endung.": "Nombre de archivo completo sin extensión.",
+    "Wird an den Namen der ersten Quelldatei angehängt.":
+      "Se añade al nombre del primer archivo de origen.",
+    "Ratensteuerung": "Control de tasa",
+    "Video kbit/s": "Vídeo kbit/s",
+    "Ton kbit/s": "Audio kbit/s",
+    "Übernehmen (Copy)": "Mantener (copia)",
+    "FLAC (verlustlos)": "FLAC (sin pérdidas)",
+    "Ausgabedatei": "Archivo de salida",
+    "Eigener Name ist leer – es gilt Quellname + Suffix.":
+      "El nombre propio está vacío: se usa nombre de origen + sufijo.",
+    "Remux übernimmt die angehakten Tonspuren unverändert (Copy).":
+      "El remux mantiene las pistas marcadas sin cambios (copia).",
+    "Encode codiert den Ton neu – FLAC bleibt dabei verlustlos.":
+      "La recodificación recodifica el audio; FLAC se mantiene sin pérdidas.",
+    "Encode codiert den Ton neu, weil der Schnitt durch den Filtergraph läuft. Für unveränderten Ton den Remux-Modus nutzen.":
+      "La recodificación recodifica el audio porque el corte pasa por el grafo de filtros. Para audio intacto usa el modo remux.",
+
     "VMAF-gesteuerte Komprimierung": "Compresión guiada por VMAF",
     "Audio-Optimierung": "Optimización de audio",
     "Remux & Bearbeiten": "Remux y edición",
@@ -1365,7 +1453,12 @@
     "Film-Grain-Synthese:": "Síntesis de grano de película:",
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "Solo AV1 (CPU/SVT). 0 = desactivado. Ahorra bits en material con grano.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Dos pasadas (solo en modo bitrate – calidad más uniforme)",
+    "Zwei-Pass (nur Bitraten-Modus)": "Dos pasadas (solo modo bitrate)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Modo anime (puntuación VMAF-NEG + 10 bits contra el banding)",
+    "Anime-Modus (VMAF-NEG + 10-bit)": "Modo anime (VMAF-NEG + 10 bits)",
+    "Optionen": "Opciones",
+    "Vergleich": "Comparación",
+    "Encoder & Optionen": "Codificadores y opciones",
     "Dynamik (HDR / Dolby Vision)": "Rango dinámico (HDR / Dolby Vision)",
     "Automatisch je Datei (empfohlen)": "Automático por archivo (recomendado)",
     "HDR / Dolby Vision beibehalten": "Mantener HDR / Dolby Vision",
@@ -1414,11 +1507,14 @@
     "Scan – Spuren ermitteln": "Escanear – detectar pistas",
     "Scan – Codec/Bitrate ermitteln": "Escanear – detectar códec/tasa de bits",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Auto-recorte: eliminar barras negras automáticamente (cropdetect)",
+    "Auto-Crop (cropdetect)": "Auto-recorte (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Detecta los bordes letterbox/pillarbox en varios puntos y los recorta antes de codificar – ahorra bitrate. El análisis VMAF y el guardrail usan automáticamente la misma zona recortada.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Codificación adaptativa por bloques (segmentos con CQ según complejidad – solo modo CQ, más lento)",
+    "Chunked Adaptive Encoding (nur CQ)": "Codificación adaptativa por bloques (solo CQ)",
     "CQ-Spanne (±)": "Rango de CQ (±)",
     "Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.": "Las escenas complejas obtienen mejor calidad (CQ más bajo), las tranquilas se hacen más pequeñas. El CQ configurado es el valor medio.",
     "Qualitäts-Guardrail: echten VMAF nach dem Encode messen": "Guardrail de calidad: medir el VMAF real tras la codificación",
+    "Qualitäts-Guardrail (VMAF nach Encode)": "Guardrail de calidad (VMAF tras la codificación)",
     "Ziel-VMAF (min.)": "VMAF objetivo (mín.)",
     "Bei Unterschreiten automatisch mit höherer Qualität neu encoden": "Si queda por debajo, recodificar automáticamente con mayor calidad",
     "Nach dem Encode werden Stichproben-Clips der Ausgabe gegen die Quelle gemessen. Liegt der VMAF darunter, wird (falls aktiviert) mit besserer Qualität wiederholt – sonst als Warnung markiert.": "Tras la codificación se miden clips de muestra de la salida frente al origen. Si el VMAF queda por debajo, se repite con más calidad (si está activado); si no, se marca como advertencia.",
@@ -1451,8 +1547,12 @@
     "Inplace ersetzen (Original löschen)": "Reemplazar en el sitio (eliminar original)",
     "Original nach .archiv/ verschieben": "Mover el original a .archiv/",
     "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)": "Comprobación de integridad de la salida (decodificación por muestras + cotejo de duración)",
+    "Integritäts-Check (Stichproben-Decode + Dauer)": "Comprobación de integridad (decodificación por muestras + duración)",
     "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Comprobación de integridad de la salida (decodificación por muestras + cotejo de duración)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind": "Postprocesado seguro: reemplazar/mover el original solo si se superan la comprobación de integridad y (si está activo) el guardrail de calidad",
+    "Sichere Nachbehandlung (Original nur bei bestandener Prüfung ersetzen)": "Postprocesado seguro (reemplazar el original solo si las comprobaciones se superan)",
+    "Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem.": "Desactivable; con inplace/archivo se ejecuta igual.",
+    "Schlägt die Prüfung fehl, bleibt das Original erhalten.": "Si la comprobación falla, se conserva el original.",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.": "Protege contra la pérdida de datos: si la comprobación falla, se conserva el original y la salida queda además en la carpeta de salida.",
     "Zur Warteschlange hinzufügen": "Añadir a la cola",
     "VMAF-Vergleich": "Comparación VMAF",
@@ -1473,6 +1573,7 @@
     "Zusätzlich vergleichen mit": "Comparar además con",
     "Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.": "Todos los codificadores disponibles en este sistema. Más codificadores = comparación más larga.",
     "Screenshots für optischen Vergleich erstellen": "Crear capturas para comparación visual",
+    "Screenshots für optischen Vergleich": "Capturas para comparación visual",
     "VMAF-Vergleich starten": "Iniciar comparación VMAF",
     "VMAF-Analyse & Größenprognose": "Análisis VMAF y predicción de tamaño",
     "Aktuelle Analyse": "Análisis actual",
@@ -1851,6 +1952,28 @@
 
   // === Französisch (DE -> FR) ==============================================
   var DICT_FR = {
+    "Dateiname": "Nom de fichier",
+    "Quellname + Suffix": "Nom source + suffixe",
+    "Eigener Name": "Nom personnalisé",
+    "Mein Schnitt": "Mon montage",
+    "Kompletter Dateiname ohne Endung.": "Nom de fichier complet sans extension.",
+    "Wird an den Namen der ersten Quelldatei angehängt.":
+      "Ajouté au nom du premier fichier source.",
+    "Ratensteuerung": "Contrôle du débit",
+    "Video kbit/s": "Vidéo kbit/s",
+    "Ton kbit/s": "Audio kbit/s",
+    "Übernehmen (Copy)": "Conserver (copie)",
+    "FLAC (verlustlos)": "FLAC (sans perte)",
+    "Ausgabedatei": "Fichier de sortie",
+    "Eigener Name ist leer – es gilt Quellname + Suffix.":
+      "Nom personnalisé vide – nom source + suffixe s'applique.",
+    "Remux übernimmt die angehakten Tonspuren unverändert (Copy).":
+      "Le remux conserve les pistes cochées sans modification (copie).",
+    "Encode codiert den Ton neu – FLAC bleibt dabei verlustlos.":
+      "L'encodage recode l'audio – FLAC reste sans perte.",
+    "Encode codiert den Ton neu, weil der Schnitt durch den Filtergraph läuft. Für unveränderten Ton den Remux-Modus nutzen.":
+      "L'encodage recode l'audio car la coupe passe par le graphe de filtres. Pour un audio intact, utilisez le mode remux.",
+
     "📂 Quelle laden": "📂 Charger la source",
     "⬆ Upload": "⬆ Téléverser",
     "⏏ Entladen": "⏏ Décharger",
@@ -2074,7 +2197,12 @@
     "Film-Grain-Synthese:": "Synthèse de grain de film :",
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "AV1 uniquement (CPU/SVT). 0 = désactivé. Économise des bits sur les images granuleuses.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Deux passes (mode bitrate uniquement – qualité plus régulière)",
+    "Zwei-Pass (nur Bitraten-Modus)": "Deux passes (mode bitrate uniquement)",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Mode anime (notation VMAF-NEG + 10 bits contre le banding)",
+    "Anime-Modus (VMAF-NEG + 10-bit)": "Mode anime (VMAF-NEG + 10 bits)",
+    "Optionen": "Options",
+    "Vergleich": "Comparaison",
+    "Encoder & Optionen": "Encodeurs et options",
     "Dynamik (HDR / Dolby Vision)": "Plage dynamique (HDR / Dolby Vision)",
     "Automatisch je Datei (empfohlen)": "Automatique par fichier (recommandé)",
     "HDR / Dolby Vision beibehalten": "Conserver HDR / Dolby Vision",
@@ -2123,11 +2251,14 @@
     "Scan – Spuren ermitteln": "Analyser – détecter les pistes",
     "Scan – Codec/Bitrate ermitteln": "Analyser – détecter codec/débit",
     "Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)": "Rognage auto : supprimer automatiquement les bandes noires (cropdetect)",
+    "Auto-Crop (cropdetect)": "Rognage auto (cropdetect)",
     "Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail nutzen automatisch dieselbe beschnittene Fläche.": "Détecte les bordures letterbox/pillarbox à plusieurs endroits et les rogne avant l'encodage – économise du bitrate. L'analyse VMAF et le garde-fou utilisent automatiquement la même zone rognée.",
     "Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)": "Encodage adaptatif par blocs (segments avec CQ selon la complexité – mode CQ uniquement, plus lent)",
+    "Chunked Adaptive Encoding (nur CQ)": "Encodage adaptatif par blocs (CQ uniquement)",
     "CQ-Spanne (±)": "Plage de CQ (±)",
     "Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.": "Les scènes complexes obtiennent une meilleure qualité (CQ plus bas), les scènes calmes deviennent plus petites. Le CQ défini est la moyenne.",
     "Qualitäts-Guardrail: echten VMAF nach dem Encode messen": "Garde-fou de qualité : mesurer le VMAF réel après l'encodage",
+    "Qualitäts-Guardrail (VMAF nach Encode)": "Garde-fou de qualité (VMAF après encodage)",
     "Ziel-VMAF (min.)": "VMAF cible (min.)",
     "Bei Unterschreiten automatisch mit höherer Qualität neu encoden": "En dessous, réencoder automatiquement avec une meilleure qualité",
     "Nach dem Encode werden Stichproben-Clips der Ausgabe gegen die Quelle gemessen. Liegt der VMAF darunter, wird (falls aktiviert) mit besserer Qualität wiederholt – sonst als Warnung markiert.": "Après l'encodage, des extraits d'échantillon de la sortie sont mesurés par rapport à la source. Si le VMAF est en dessous, l'opération est répétée avec une meilleure qualité (si activé) – sinon elle est signalée comme avertissement.",
@@ -2160,8 +2291,12 @@
     "Inplace ersetzen (Original löschen)": "Remplacer sur place (supprimer l'original)",
     "Original nach .archiv/ verschieben": "Déplacer l'original vers .archiv/",
     "Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)": "Contrôle d'intégrité de la sortie (décodage par échantillons + vérification de durée)",
+    "Integritäts-Check (Stichproben-Decode + Dauer)": "Contrôle d'intégrité (décodage par échantillons + durée)",
     "Integritäts-Check der Ausgabe (Voll-Decode + Dauer-Abgleich)": "Contrôle d'intégrité de la sortie (décodage par échantillons + vérification de durée)",
     "Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind": "Post-traitement sûr : ne remplacer/déplacer l'original que si le contrôle d'intégrité et (si actif) le garde-fou de qualité sont réussis",
+    "Sichere Nachbehandlung (Original nur bei bestandener Prüfung ersetzen)": "Post-traitement sûr (remplacer l'original seulement si les contrôles sont réussis)",
+    "Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem.": "Désactivable ; avec inplace/archive le contrôle s'exécute quand même.",
+    "Schlägt die Prüfung fehl, bleibt das Original erhalten.": "Si le contrôle échoue, l'original est conservé.",
     "Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.": "Protège contre la perte de données : si le contrôle échoue, l'original est conservé et la sortie se trouve en plus dans le dossier de sortie.",
     "Zur Warteschlange hinzufügen": "Ajouter à la file",
     "VMAF-Vergleich": "Comparaison VMAF",
@@ -2182,6 +2317,7 @@
     "Zusätzlich vergleichen mit": "Comparer en plus avec",
     "Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.": "Tous les encodeurs disponibles sur ce système. Plus d'encodeurs = comparaison plus longue.",
     "Screenshots für optischen Vergleich erstellen": "Créer des captures pour comparaison visuelle",
+    "Screenshots für optischen Vergleich": "Captures pour comparaison visuelle",
     "VMAF-Vergleich starten": "Lancer la comparaison VMAF",
     "VMAF-Analyse & Größenprognose": "Analyse VMAF et prévision de taille",
     "Aktuelle Analyse": "Analyse actuelle",

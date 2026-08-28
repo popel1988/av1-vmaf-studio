@@ -130,7 +130,7 @@
 
       <div class="cards">
         <!-- CARD 1: Quellenauswahl & Analyse (Encoding + VMAF-Tool) -->
-        <section class="card span-2" data-page="encode vmaf">
+        <section class="card source-card" data-page="encode vmaf">
           <div class="card-head">
             <h3><span class="card-idx">1</span> Quellenauswahl &amp; Analyse</h3>
             <span class="badge" id="selection-badge">Nichts ausgewählt</span>
@@ -153,328 +153,309 @@
         </section>
 
         <!-- CARD 2: Encoding-Einstellungen -->
-        <section class="card" data-page="encode">
+        <section class="card span-2 settings-card" data-page="encode">
           <div class="card-head">
             <h3><span class="card-idx">2</span> Enkodierung &amp; Workflow</h3>
           </div>
-          <div class="card-body settings">
-            <div class="field profile-field">
-              <label>Profil</label>
-              <div class="profile-row">
-                <select id="opt-profile"><option value="">— kein Profil —</option></select>
-                <button class="btn btn-ghost btn-sm" id="btn-profile-save" title="Aktuelle Einstellungen als Profil speichern">Speichern</button>
-                <button class="btn btn-ghost btn-sm bad-btn" id="btn-profile-delete" title="Gewähltes Profil löschen">Löschen</button>
-              </div>
-              <div class="preset-chips" id="opt-preset-chips" style="margin-top:8px">
-                <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Film" data-tip="AV1 · CQ 28, Ton kopieren – Ausgangspunkt für Spielfilme.">Film</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie" data-tip="Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.">Serie</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime" data-tip="AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).">Anime</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only" data-tip="Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.">Remux-only</button>
-              </div>
-            </div>
-            <div class="divider"></div>
-
-            <div class="field-row">
-              <div class="field">
-                <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).">GPU / Plattform</label>
-                <select id="opt-platform">
-                  {% for p in platform_options %}
-                  <option value="{{ p.value }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="field">
-                <label data-tip="AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.">Codec</label>
-                <select id="opt-codec">
-                  <option value="av1">AV1</option>
-                  <option value="hevc">HEVC / H.265</option>
-                  <option value="h264">H.264</option>
-                </select>
-                <p class="hint" id="codec-hint"></p>
-              </div>
-            </div>
-
-            <div class="field">
-              <label>Zielauflösung</label>
-              <select id="opt-resolution">
-                <option value="">Original beibehalten</option>
-                <option value="2160">2160p (4K)</option>
-                <option value="1440">1440p</option>
-                <option value="1080">1080p</option>
-                <option value="720">720p</option>
-              </select>
-            </div>
-
-            <div class="field" id="hdr-field" style="display:none">
-              <div id="hdr-mode-wrap">
-                <label data-tip="Nur bei HDR-Quellen. Beibehalten = 10-bit HDR10/HLG. Tone-Mapping = SDR für jedes Display, etwas größerer Qualitätsverlust.">HDR-Behandlung</label>
-                <select id="opt-hdr-mode">
-                  <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
-                  <option value="preserve">HDR beibehalten (10-bit)</option>
-                </select>
-                <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
-              </div>
-              <div id="dv-mode-wrap" style="display:none">
-                <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
-                <select id="opt-dv-mode">
-                  <option value="preserve">Dolby Vision übernehmen (RPU)</option>
-                  <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
-                  <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
-                </select>
-                <p class="hint" id="dv-mode-hint"></p>
-              </div>
-            </div>
-
-            <div class="field">
-              <label>Aus Quelle übernehmen</label>
-              <label class="check">
-                <input type="checkbox" id="opt-keep-subs" checked />
-                <span>Untertitel</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-keep-chapters" checked />
-                <span>Kapitelmarken</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-keep-metadata" checked />
-                <span>Metadaten (Titel, Tags)</span>
-              </label>
-            </div>
-
-            <div class="field-row">
-              <div class="field">
-                <label>Rauschminderung (Denoise)</label>
-                <select id="opt-denoise">
-                  <option value="off">Aus</option>
-                  <option value="light">Leicht</option>
-                  <option value="medium">Mittel</option>
-                  <option value="strong">Stark</option>
-                </select>
-              </div>
-              <div class="field">
-                <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
-                <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
-                <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
-              </div>
-            </div>
-
-            <label class="check">
-              <input type="checkbox" id="opt-two-pass" />
-              <span>Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)</span>
-            </label>
-
-            <label class="check">
-              <input type="checkbox" id="opt-anime" />
-              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
-            </label>
-
-            <label class="check">
-              <input type="checkbox" id="opt-autocrop" />
-              <span>Auto-Crop: schwarze Balken automatisch entfernen (cropdetect)</span>
-            </label>
-            <p class="hint">Erkennt Letterbox-/Pillarbox-Ränder an mehreren Stellen und
-              beschneidet sie vor dem Encode – spart Bitrate. VMAF-Analyse und Guardrail
-              nutzen automatisch dieselbe beschnittene Fläche.</p>
-
-            <label class="check">
-              <input type="checkbox" id="opt-chunked" />
-              <span>Chunked Adaptive Encoding (Segmente mit komplexitätsabhängigem CQ – nur CQ-Modus, langsamer)</span>
-            </label>
-            <div id="chunked-config" style="display:none">
-              <div class="field-row">
-                <div class="field">
-                  <label>Segmentlänge (Sekunden)</label>
-                  <input type="number" id="opt-chunk-seconds" min="15" max="600" value="60" />
+          <div class="card-body settings settings-wide">
+            <div class="opt-section">
+              <h4 class="subsection">Profil</h4>
+              <div class="field profile-field">
+                <div class="profile-row">
+                  <select id="opt-profile"><option value="">— kein Profil —</option></select>
+                  <button class="btn btn-ghost btn-sm" id="btn-profile-save" title="Aktuelle Einstellungen als Profil speichern">Speichern</button>
+                  <button class="btn btn-ghost btn-sm bad-btn" id="btn-profile-delete" title="Gewähltes Profil löschen">Löschen</button>
                 </div>
-                <div class="field">
-                  <label>CQ-Spanne (±)</label>
-                  <input type="number" id="opt-chunk-range" min="0" max="12" value="6" />
+                <div class="preset-chips" id="opt-preset-chips" style="margin-top:8px">
+                  <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
+                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Film" data-tip="AV1 · CQ 28, Ton kopieren – Ausgangspunkt für Spielfilme.">Film</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie" data-tip="Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.">Serie</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime" data-tip="AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).">Anime</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only" data-tip="Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.">Remux-only</button>
                 </div>
               </div>
-              <p class="hint">Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige
-                Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.</p>
             </div>
 
-            <label class="check">
-              <input type="checkbox" id="opt-verify-vmaf" />
-              <span data-tip="Misst nach dem Encode Stichproben-VMAF gegen die Quelle. Liegt der Wert unter dem Ziel, Warnung oder automatischer Re-Encode.">Qualitäts-Guardrail: echten VMAF nach dem Encode messen</span>
-            </label>
-            <div id="verify-config" style="display:none">
-              <div class="field-row">
+            <div class="opt-section">
+              <h4 class="subsection">Video</h4>
+              <div class="settings-grid">
                 <div class="field">
-                  <label>Ziel-VMAF (min.)</label>
-                  <input type="number" id="opt-verify-min" min="60" max="100" step="0.5" value="93" />
+                  <label data-tip="Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).">GPU / Plattform</label>
+                  <select id="opt-platform">
+                    {% for p in platform_options %}
+                    <option value="{{ p.value }}">{{ p.label }}</option>
+                    {% endfor %}
+                  </select>
                 </div>
-                <div class="field verify-retry-field">
+                <div class="field">
+                  <label data-tip="AV1: kleinste Dateien, langsam. HEVC: guter Kompromiss. H.264: maximale Kompatibilität, größere Dateien.">Codec</label>
+                  <select id="opt-codec">
+                    <option value="av1">AV1</option>
+                    <option value="hevc">HEVC / H.265</option>
+                    <option value="h264">H.264</option>
+                  </select>
+                  <p class="hint" id="codec-hint"></p>
+                </div>
+                <div class="field">
+                  <label>Zielauflösung</label>
+                  <select id="opt-resolution">
+                    <option value="">Original beibehalten</option>
+                    <option value="2160">2160p (4K)</option>
+                    <option value="1440">1440p</option>
+                    <option value="1080">1080p</option>
+                    <option value="720">720p</option>
+                  </select>
+                </div>
+                <div class="field" id="hdr-field" style="display:none">
+                  <div id="hdr-mode-wrap">
+                    <label data-tip="Nur bei HDR-Quellen. Beibehalten = 10-bit HDR10/HLG. Tone-Mapping = SDR für jedes Display, etwas größerer Qualitätsverlust.">HDR-Behandlung</label>
+                    <select id="opt-hdr-mode">
+                      <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+                      <option value="preserve">HDR beibehalten (10-bit)</option>
+                    </select>
+                    <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).</p>
+                  </div>
+                  <div id="dv-mode-wrap" style="display:none">
+                    <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
+                    <select id="opt-dv-mode">
+                      <option value="preserve">Dolby Vision übernehmen (RPU)</option>
+                      <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
+                      <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
+                    </select>
+                    <p class="hint" id="dv-mode-hint"></p>
+                  </div>
+                </div>
+                <div class="field">
+                  <label data-tip="CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.">Steuerungsmodus</label>
+                  <select id="opt-rate-mode">
+                    <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
+                    <option value="bitrate">Festbitrate (CBR)</option>
+                    <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                  </select>
+                </div>
+                <div class="field" id="enc-cq-field">
+                  <label data-tip="Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.">Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
+                  <input type="range" id="opt-quality" min="10" max="51" value="28" />
+                  <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
+                </div>
+                <div class="field" id="enc-br-field" style="display:none">
+                  <label>Ziel-Bitrate</label>
+                  <input type="number" id="opt-bitrate" min="500" max="50000" step="500" value="6000" />
+                  <p class="hint">kbit/s · CBR = feste Rate, ABR = variables Ziel.</p>
+                </div>
+                <div class="field">
+                  <label>Rauschminderung (Denoise)</label>
+                  <select id="opt-denoise">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
+                  <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
+                  <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
+                </div>
+              </div>
+              <p class="hint" style="margin-top:8px">Reines Encoding ohne Test-Encodes. Für Vergleiche und automatische
+                Wertfindung das <strong>VMAF-Tool</strong> nutzen und den Gewinner übernehmen.</p>
+            </div>
+
+            <div class="opt-section">
+              <h4 class="subsection">Optionen</h4>
+              <div class="fmt-checks">
+                <label class="check">
+                  <input type="checkbox" id="opt-keep-subs" checked />
+                  <span>Untertitel übernehmen</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-keep-chapters" checked />
+                  <span>Kapitelmarken</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-keep-metadata" checked />
+                  <span>Metadaten (Titel, Tags)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-two-pass" />
+                  <span>Zwei-Pass (nur Bitraten-Modus)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-anime" />
+                  <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-autocrop" />
+                  <span data-tip="Erkennt Letterbox-/Pillarbox-Ränder und beschneidet sie vor dem Encode – spart Bitrate. VMAF und Guardrail nutzen dieselbe Fläche.">Auto-Crop (cropdetect)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-chunked" />
+                  <span>Chunked Adaptive Encoding (nur CQ)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-verify-vmaf" />
+                  <span data-tip="Misst nach dem Encode Stichproben-VMAF gegen die Quelle. Liegt der Wert unter dem Ziel, Warnung oder automatischer Re-Encode.">Qualitäts-Guardrail (VMAF nach Encode)</span>
+                </label>
+              </div>
+              <div id="chunked-config" style="display:none">
+                <div class="settings-grid" style="margin-top:10px">
+                  <div class="field">
+                    <label>Segmentlänge (Sekunden)</label>
+                    <input type="number" id="opt-chunk-seconds" min="15" max="600" value="60" />
+                  </div>
+                  <div class="field">
+                    <label>CQ-Spanne (±)</label>
+                    <input type="number" id="opt-chunk-range" min="0" max="12" value="6" />
+                  </div>
+                </div>
+                <p class="hint">Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige
+                  Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.</p>
+              </div>
+              <div id="verify-config" style="display:none">
+                <div class="settings-grid" style="margin-top:10px">
+                  <div class="field">
+                    <label>Ziel-VMAF (min.)</label>
+                    <input type="number" id="opt-verify-min" min="60" max="100" step="0.5" value="93" />
+                  </div>
+                  <div class="field verify-retry-field">
+                    <label class="check">
+                      <input type="checkbox" id="opt-verify-retry" />
+                      <span>Bei Unterschreiten automatisch mit höherer Qualität neu encoden</span>
+                    </label>
+                  </div>
+                </div>
+                <p class="hint">Nach dem Encode werden Stichproben-Clips der Ausgabe gegen die
+                  Quelle gemessen. Liegt der VMAF darunter, wird (falls aktiviert) mit
+                  besserer Qualität wiederholt – sonst als Warnung markiert.</p>
+              </div>
+            </div>
+
+            <div class="opt-section">
+              <h4 class="subsection">Ton</h4>
+              <div class="settings-grid">
+                <div class="field">
+                  <label>Ton – Standard für alle Spuren</label>
+                  <select id="opt-audio-mode">
+                    <option value="copy">Original kopieren (verlustfrei, schnell)</option>
+                    <option value="encode">Neu codieren</option>
+                    <option value="none">Ohne Ton (entfernen)</option>
+                  </select>
+                  <p class="hint">Gilt für Spuren auf „Standard". Einzelne Spuren lassen sich in der Quellanalyse abweichend einstellen.</p>
+                </div>
+                <div id="audio-encode-opts" class="disabled">
+                  <div class="settings-grid">
+                    <div class="field">
+                      <label>Audio-Codec</label>
+                      <select id="opt-audio-codec">
+                        <option value="aac">AAC (universell)</option>
+                        <option value="opus">Opus (effizient)</option>
+                        <option value="ac3">AC3 (Dolby)</option>
+                        <option value="eac3">E-AC3 (Dolby Digital+)</option>
+                        <option value="flac">FLAC (verlustfrei)</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Kanäle</label>
+                      <select id="opt-audio-channels">
+                        <option value="0">Original beibehalten</option>
+                        <option value="2">Stereo (2.0)</option>
+                        <option value="1">Mono (1.0)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="field" id="audio-bitrate-field">
+                    <label>Audio-Bitrate: <strong id="audio-bitrate-val">160</strong> kbit/s</label>
+                    <input type="range" id="opt-audio-bitrate" min="64" max="640" value="160" step="32" />
+                  </div>
                   <label class="check">
-                    <input type="checkbox" id="opt-verify-retry" />
-                    <span>Bei Unterschreiten automatisch mit höherer Qualität neu encoden</span>
+                    <input type="checkbox" id="opt-audio-normalize" />
+                    <span>Lautstärke normalisieren (EBU R128, −16 LUFS)</span>
                   </label>
                 </div>
               </div>
-              <p class="hint">Nach dem Encode werden Stichproben-Clips der Ausgabe gegen die
-                Quelle gemessen. Liegt der VMAF darunter, wird (falls aktiviert) mit
-                besserer Qualität wiederholt – sonst als Warnung markiert.</p>
             </div>
 
-            <div class="divider"></div>
-
-            <h4 class="subsection">Qualität</h4>
-
-            <div class="field">
-              <label data-tip="CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.">Steuerungsmodus</label>
-              <select id="opt-rate-mode">
-                <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
-                <option value="bitrate">Festbitrate (CBR)</option>
-                <option value="abr">Average Bitrate (VBR-Ziel)</option>
-              </select>
-            </div>
-
-            <div class="field" id="enc-cq-field">
-              <label data-tip="Encoder-Qualitätszahl. Niedriger = schärfer und größer. 24–30 ist ein üblicher Film-Bereich, Anime oft etwas niedriger.">Qualität (CQ/QP/CRF): <strong id="quality-val">28</strong></label>
-              <input type="range" id="opt-quality" min="10" max="51" value="28" />
-              <div class="range-scale"><span>10 · hohe Qualität</span><span>51 · klein</span></div>
-            </div>
-
-            <div class="field" id="enc-br-field" style="display:none">
-              <label>Ziel-Bitrate</label>
-              <input type="number" id="opt-bitrate" min="500" max="50000" step="500" value="6000" />
-              <p class="hint">kbit/s · CBR = feste Rate, ABR = variables Ziel.</p>
-            </div>
-
-            <p class="hint">Reines Encoding ohne Test-Encodes. Für Vergleiche und automatische
-              Wertfindung das <strong>VMAF-Tool</strong> nutzen und den Gewinner übernehmen.</p>
-
-            <div class="divider"></div>
-
-            <div class="field">
-              <label>Ton – Standard für alle Spuren</label>
-              <select id="opt-audio-mode">
-                <option value="copy">Original kopieren (verlustfrei, schnell)</option>
-                <option value="encode">Neu codieren</option>
-                <option value="none">Ohne Ton (entfernen)</option>
-              </select>
-              <p class="hint">Gilt für Spuren auf „Standard". Einzelne Spuren lassen sich in der Quellanalyse abweichend einstellen.</p>
-            </div>
-
-            <div id="audio-encode-opts" class="disabled">
-              <div class="field-row">
+            <div class="opt-section">
+              <h4 class="subsection">Ausgabe</h4>
+              <div class="settings-grid-3">
                 <div class="field">
-                  <label>Audio-Codec</label>
-                  <select id="opt-audio-codec">
-                    <option value="aac">AAC (universell)</option>
-                    <option value="opus">Opus (effizient)</option>
-                    <option value="ac3">AC3 (Dolby)</option>
-                    <option value="eac3">E-AC3 (Dolby Digital+)</option>
-                    <option value="flac">FLAC (verlustfrei)</option>
+                  <label>Ausgabe-Container</label>
+                  <select id="opt-container">
+                    <option value="auto">Automatisch (Codec-abhängig)</option>
+                    <option value="mkv">MKV (Matroska)</option>
+                    <option value="mp4">MP4</option>
+                  </select>
+                  <p class="hint">MKV wird empfohlen (AV1/HEVC/H.264 und alle Untertitel). MP4 wandelt Text-UT in mov_text; Bild-UT (PGS) entfallen.</p>
+                </div>
+                <div class="field">
+                  <label data-tip="keep: Original bleibt. Archiv: Original nach .archiv/. Inplace: Original wird nur gelöscht, wenn Integritätscheck ok (Safe-Replace).">Nach erfolgreichem Encode</label>
+                  <select id="opt-post">
+                    <option value="keep">Original behalten + Suffix</option>
+                    <option value="inplace">Inplace ersetzen (Original löschen)</option>
+                    <option value="archive">Original nach .archiv/ verschieben</option>
+                  </select>
+                </div>
+                <div class="field" data-out-target>
+                  <label>Ausgabe</label>
+                  <select id="opt-out-mode">
+                    <option value="default">Standard-Ausgabe</option>
+                    <option value="beside">Neben der Quelle</option>
+                    <option value="custom">Anderen Ordner wählen…</option>
+                  </select>
+                  <div class="subdir-row" data-out-custom style="display:none;margin-top:8px">
+                    <input type="text" id="opt-out-subdir" placeholder="Medienpfad, z. B. Encodes/Filme" />
+                    <button type="button" class="btn btn-ghost btn-sm" id="opt-out-browse">Durchsuchen</button>
+                  </div>
+                  <p class="hint" data-out-default-hint>Ziel laut Einstellungen (Quellstruktur wird gespiegelt).</p>
+                </div>
+                <div class="field">
+                  <label>Dateiname-Vorlage</label>
+                  <input type="text" id="opt-name-pattern" value="{stem}{suffix}" />
+                  <p class="hint">Platzhalter: {stem} {suffix} {codec} {height} {height_suffix} {vmaf} {date}</p>
+                </div>
+                <div class="field">
+                  <label>Bei Duplikat</label>
+                  <select id="opt-on-duplicate">
+                    <option value="ask">Warnen &amp; bestätigen</option>
+                    <option value="skip">Überspringen</option>
+                    <option value="overwrite">Überschreiben</option>
                   </select>
                 </div>
                 <div class="field">
-                  <label>Kanäle</label>
-                  <select id="opt-audio-channels">
-                    <option value="0">Original beibehalten</option>
-                    <option value="2">Stereo (2.0)</option>
-                    <option value="1">Mono (1.0)</option>
-                  </select>
+                  <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
+                  <input type="number" id="opt-max-bitrate" min="0" step="100" value="0" />
+                  <p class="hint">Nach Encode geprüft; bei ABR auch als Encode-Obergrenze.</p>
+                </div>
+                <div class="field">
+                  <label>Größenziel (MB Gesamt, 0 = aus)</label>
+                  <input type="number" id="opt-size-target" min="0" step="1" value="0" />
+                  <p class="hint">Videobitrate inkl. Ton so, dass alles unter das Ziel passt.
+                    <span id="opt-size-target-hint" class="muted"></span></p>
+                </div>
+                <div class="field">
+                  <label>Max. Ausgabegröße Cap (MB, 0 = aus)</label>
+                  <input type="number" id="opt-max-output-mb" min="0" step="1" value="0" />
+                  <p class="hint">Nur Nachprüfung nach dem Encode (Warnung / Safe-Replace).</p>
                 </div>
               </div>
-
-              <div class="field" id="audio-bitrate-field">
-                <label>Audio-Bitrate: <strong id="audio-bitrate-val">160</strong> kbit/s</label>
-                <input type="range" id="opt-audio-bitrate" min="64" max="640" value="160" step="32" />
-              </div>
-
-              <label class="check">
-                <input type="checkbox" id="opt-audio-normalize" />
-                <span>Lautstärke normalisieren (EBU R128, −16 LUFS)</span>
-              </label>
-            </div>
-
-            <div class="divider"></div>
-
-            <div class="field">
-              <label>Ausgabe-Container</label>
-              <select id="opt-container">
-                <option value="auto">Automatisch (Codec-abhängig)</option>
-                <option value="mkv">MKV (Matroska)</option>
-                <option value="mp4">MP4</option>
-              </select>
-              <p class="hint">MKV wird empfohlen (unterstützt AV1/HEVC/H.264 sowie alle
-                Untertitel). MP4 wandelt Text-Untertitel in mov_text um; Bild-Untertitel
-                (PGS/VobSub) können nicht in MP4 und entfallen dann.</p>
-            </div>
-
-            <div class="field">
-              <label data-tip="keep: Original bleibt. Archiv: Original nach .archiv/. Inplace: Original wird nur gelöscht, wenn Integritätscheck ok (Safe-Replace).">Nach erfolgreichem Encode</label>
-              <select id="opt-post">
-                <option value="keep">Original behalten + Suffix</option>
-                <option value="inplace">Inplace ersetzen (Original löschen)</option>
-                <option value="archive">Original nach .archiv/ verschieben</option>
-              </select>
-            </div>
-
-            <div class="field" data-out-target>
-              <label>Ausgabe</label>
-              <select id="opt-out-mode">
-                <option value="default">Standard-Ausgabe</option>
-                <option value="beside">Neben der Quelle</option>
-                <option value="custom">Anderen Ordner wählen…</option>
-              </select>
-              <div class="subdir-row" data-out-custom style="display:none;margin-top:8px">
-                <input type="text" id="opt-out-subdir" placeholder="Medienpfad, z. B. Encodes/Filme" />
-                <button type="button" class="btn btn-ghost btn-sm" id="opt-out-browse">Durchsuchen</button>
-              </div>
-              <p class="hint" data-out-default-hint>Ziel laut Einstellungen (Quellstruktur wird gespiegelt).</p>
-            </div>
-
-            <div class="field-row">
-              <div class="field">
-                <label>Dateiname-Vorlage</label>
-                <input type="text" id="opt-name-pattern" value="{stem}{suffix}" />
-                <p class="hint">Platzhalter: {stem} {suffix} {codec} {height} {height_suffix} {vmaf} {date}</p>
-              </div>
-              <div class="field">
-                <label>Bei Duplikat</label>
-                <select id="opt-on-duplicate">
-                  <option value="ask">Warnen &amp; bestätigen</option>
-                  <option value="skip">Überspringen</option>
-                  <option value="overwrite">Überschreiben</option>
-                </select>
+              <div class="settings-grid" style="margin-top:10px">
+                <div>
+                  <label class="check">
+                    <input type="checkbox" id="opt-integrity" checked />
+                    <span>Integritäts-Check (Stichproben-Decode + Dauer)</span>
+                  </label>
+                  <p class="hint">Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem.</p>
+                </div>
+                <div>
+                  <label class="check">
+                    <input type="checkbox" id="opt-safe-replace" checked />
+                    <span>Sichere Nachbehandlung (Original nur bei bestandener Prüfung ersetzen)</span>
+                  </label>
+                  <p class="hint">Schlägt die Prüfung fehl, bleibt das Original erhalten.</p>
+                </div>
               </div>
             </div>
-            <div class="field-row">
-              <div class="field">
-                <label>Größenziel (MB Gesamt, 0 = aus)</label>
-                <input type="number" id="opt-size-target" min="0" step="1" value="0" />
-                <p class="hint">Steuert die Videobitrate so, dass Video + Tonspuren unter das Ziel passen.
-                  <span id="opt-size-target-hint" class="muted"></span></p>
-              </div>
-              <div class="field">
-                <label>Max. Ausgabegröße Cap (MB, 0 = aus)</label>
-                <input type="number" id="opt-max-output-mb" min="0" step="1" value="0" />
-                <p class="hint">Nur Nachprüfung nach dem Encode (Warnung / Safe-Replace).</p>
-              </div>
-            </div>
-            <div class="field">
-              <label>Max. Videobitrate (kbit/s, 0 = aus)</label>
-              <input type="number" id="opt-max-bitrate" min="0" step="100" value="0" />
-              <p class="hint">Nach Encode geprüft; bei ABR auch als Encode-Obergrenze.</p>
-            </div>
-
-            <label class="check">
-              <input type="checkbox" id="opt-integrity" checked />
-              <span>Integritäts-Check der Ausgabe (Stichproben-Decode + Dauer-Abgleich)</span>
-            </label>
-            <p class="hint">Abschaltbar; bei „Inplace/Archiv“ läuft der Check trotzdem (Schutz vor Datenverlust).</p>
-
-            <label class="check">
-              <input type="checkbox" id="opt-safe-replace" checked />
-              <span>Sichere Nachbehandlung: Original nur ersetzen/verschieben, wenn
-                Integritäts-Check und (falls aktiv) Qualitäts-Guardrail bestanden sind</span>
-            </label>
-            <p class="hint">Schützt vor Datenverlust: Schlägt die Prüfung fehl, bleibt das
-              Original erhalten und die Ausgabe liegt zusätzlich im Ausgabeordner.</p>
 
             <button class="btn btn-primary btn-block" id="btn-enqueue" disabled>
               Zur Warteschlange hinzufügen
@@ -483,85 +464,87 @@
         </section>
 
         <!-- VMAF-TOOL: Vergleichs-Einstellungen -->
-        <section class="card" data-page="vmaf">
+        <section class="card span-2 settings-card" data-page="vmaf">
           <div class="card-head">
             <h3><span class="card-idx">★</span> VMAF-Vergleich</h3>
           </div>
-          <div class="card-body settings">
+          <div class="card-body settings settings-wide">
             <p class="hint">Reiner Vergleich mehrerer Encoder/Codecs und Qualitätsstufen –
               es wird <strong>nicht</strong> encodiert. Der Gewinner lässt sich anschließend
               ins Encoding übernehmen.</p>
 
-            <div class="field-row">
+            <div class="opt-section">
+              <h4 class="subsection">Vergleich</h4>
+              <div class="settings-grid">
+                <div class="field">
+                  <label>GPU / Plattform (Basis)</label>
+                  <select id="vt-platform">
+                    {% for p in platform_options %}
+                    <option value="{{ p.value }}">{{ p.label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Codec (Basis)</label>
+                  <select id="vt-codec">
+                    <option value="av1">AV1</option>
+                    <option value="hevc">HEVC / H.265</option>
+                    <option value="h264">H.264</option>
+                  </select>
+                  <p class="hint" id="vt-codec-hint"></p>
+                </div>
+                <div class="field">
+                  <label>Steuerungsmodus</label>
+                  <select id="vt-rate-mode">
+                    <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
+                    <option value="bitrate">Festbitrate (CBR)</option>
+                    <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Stichproben (Szenen)</label>
+                  <select id="vt-samples">
+                    <option value="1">1 – nur Mitte (schnell)</option>
+                    <option value="2">2 Szenen</option>
+                    <option value="3">3 Szenen (robuster)</option>
+                  </select>
+                  <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
+                </div>
+                <div class="field">
+                  <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
+                  <div class="test-values-grid" id="vt-test-grid">
+                    <input type="number" class="vt-test-val" value="20" min="1" max="51" />
+                    <input type="number" class="vt-test-val" value="24" min="1" max="51" />
+                    <input type="number" class="vt-test-val" value="28" min="1" max="51" />
+                    <input type="number" class="vt-test-val" value="32" min="1" max="51" />
+                  </div>
+                  <p class="hint" id="vt-test-hint">CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei</p>
+                </div>
+                <div class="field">
+                  <label>Vergleichsclip-Länge: <strong id="vt-clip-val">30</strong> Sek.</label>
+                  <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
+                </div>
+              </div>
+            </div>
+
+            <div class="opt-section">
+              <h4 class="subsection">Encoder &amp; Optionen</h4>
               <div class="field">
-                <label>GPU / Plattform (Basis)</label>
-                <select id="vt-platform">
-                  {% for p in platform_options %}
-                  <option value="{{ p.value }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
+                <label>Zusätzlich vergleichen mit</label>
+                <div id="vt-compare" class="compare-encoders"></div>
+                <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.</p>
               </div>
-              <div class="field">
-                <label>Codec (Basis)</label>
-                <select id="vt-codec">
-                  <option value="av1">AV1</option>
-                  <option value="hevc">HEVC / H.265</option>
-                  <option value="h264">H.264</option>
-                </select>
-                <p class="hint" id="vt-codec-hint"></p>
+              <div class="fmt-checks" style="margin-top:10px">
+                <label class="check">
+                  <input type="checkbox" id="vt-screenshots" checked />
+                  <span>Screenshots für optischen Vergleich</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="vt-anime" />
+                  <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
+                </label>
               </div>
             </div>
-
-            <div class="field">
-              <label>Steuerungsmodus</label>
-              <select id="vt-rate-mode">
-                <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
-                <option value="bitrate">Festbitrate (CBR)</option>
-                <option value="abr">Average Bitrate (VBR-Ziel)</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
-              <div class="test-values-grid" id="vt-test-grid">
-                <input type="number" class="vt-test-val" value="20" min="1" max="51" />
-                <input type="number" class="vt-test-val" value="24" min="1" max="51" />
-                <input type="number" class="vt-test-val" value="28" min="1" max="51" />
-                <input type="number" class="vt-test-val" value="32" min="1" max="51" />
-              </div>
-              <p class="hint" id="vt-test-hint">CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei</p>
-            </div>
-
-            <div class="field">
-              <label>Vergleichsclip-Länge: <strong id="vt-clip-val">30</strong> Sek.</label>
-              <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
-            </div>
-
-            <div class="field">
-              <label>Stichproben (Szenen)</label>
-              <select id="vt-samples">
-                <option value="1">1 – nur Mitte (schnell)</option>
-                <option value="2">2 Szenen</option>
-                <option value="3">3 Szenen (robuster)</option>
-              </select>
-              <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
-            </div>
-
-            <div class="field">
-              <label>Zusätzlich vergleichen mit</label>
-              <div id="vt-compare" class="compare-encoders"></div>
-              <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.</p>
-            </div>
-
-            <label class="check">
-              <input type="checkbox" id="vt-screenshots" checked />
-              <span>Screenshots für optischen Vergleich erstellen</span>
-            </label>
-
-            <label class="check">
-              <input type="checkbox" id="vt-anime" />
-              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
-            </label>
 
             <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
               VMAF-Vergleich starten
@@ -1752,13 +1735,9 @@
                     <label>Vorschau-Ton</label>
                     <select id="ed-preview-audio"><option value="0">#0</option></select>
                   </div>
-                  <div class="field">
-                    <label>Untertitel</label>
-                    <select id="ed-sub"><option value="-1">Keine</option></select>
-                  </div>
                   <label class="check fp-tracks-check">
                     <input type="checkbox" id="ed-burn" />
-                    <span data-tip="PGS/DVD ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
+                    <span data-tip="Erste angehakte Untertitelspur ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
                   </label>
                 </div>
                 <div class="ed-tracks">
@@ -1771,9 +1750,18 @@
                     </span>
                   </div>
                   <div class="ed-tracks-list" id="ed-tracks-list"></div>
+                  <div class="ed-tracks-head" style="margin-top:10px">
+                    <strong>Untertitel übernehmen</strong>
+                    <span class="muted" id="ed-subs-info"></span>
+                    <span class="ed-tracks-btns">
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-all">Alle</button>
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-none">Keine</button>
+                    </span>
+                  </div>
+                  <div class="ed-tracks-list" id="ed-subs-list"></div>
                   <p class="hint" style="font-size:12px;margin:6px 0 0">
-                    Gilt für alle Clips dieser Quelle. Keine Spur angehakt = stumm.
-                    Mehrere Spuren landen als eigene Tonspuren in der Datei.
+                    Gilt für alle Clips dieser Quelle. Keine Tonspur = stumm.
+                    Angehakte Untertitel landen als eigene Spuren in der Datei.
                   </p>
                 </div>
                 <div class="field-row field-row-inline" style="margin-top:8px">
@@ -1918,8 +1906,19 @@
                 </select>
               </div>
               <div class="field">
-                <label>Suffix</label>
-                <input type="text" id="ed-suffix" value="_edit" />
+                <label>Dateiname</label>
+                <select id="ed-name-mode">
+                  <option value="suffix">Quellname + Suffix</option>
+                  <option value="custom">Eigener Name</option>
+                </select>
+                <div class="subdir-row" id="ed-name-suffix-row" style="margin-top:8px">
+                  <input type="text" id="ed-suffix" value="_edit" placeholder="_edit"
+                         title="Wird an den Namen der ersten Quelldatei angehängt." />
+                </div>
+                <div class="subdir-row" id="ed-name-custom-row" style="display:none;margin-top:8px">
+                  <input type="text" id="ed-out-name" placeholder="Mein Schnitt"
+                         title="Kompletter Dateiname ohne Endung." />
+                </div>
               </div>
               <div class="field" data-out-target>
                 <label>Ausgabe</label>
@@ -1939,6 +1938,7 @@
                        title="0 = harter Schnitt. >0 erzwingt Encode." />
               </div>
             </div>
+            <p class="hint" id="ed-name-preview" style="margin-top:6px"></p>
 
             <div id="ed-encode-opts" style="display:none;margin-top:10px">
               <div class="field-row field-row-inline">
@@ -1959,23 +1959,51 @@
                   </select>
                 </div>
                 <div class="field">
+                  <label>Ratensteuerung</label>
+                  <select id="ed-rate-mode">
+                    <option value="cq">Qualität (CQ/CRF)</option>
+                    <option value="bitrate">Festbitrate (CBR)</option>
+                    <option value="abr">Average Bitrate (VBR-Ziel)</option>
+                  </select>
+                </div>
+                <div class="field" id="ed-cq-field">
                   <label>CQ / QP</label>
                   <input type="number" id="ed-cq" value="30" min="0" max="63" step="1" />
                 </div>
-                <div class="field">
-                  <label>Audio</label>
-                  <select id="ed-acodec">
-                    <option value="aac">AAC</option>
-                    <option value="opus">Opus</option>
-                    <option value="ac3">AC-3</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Audio kbit/s</label>
-                  <input type="number" id="ed-abr" value="192" min="64" max="1536" step="32" />
+                <div class="field" id="ed-vbr-field" style="display:none">
+                  <label>Video kbit/s</label>
+                  <input type="number" id="ed-vbr" value="6000" min="200" max="200000" step="250" />
+                  <p class="hint" id="ed-vbr-hint">CBR = feste Rate, ABR = variables Ziel.</p>
                 </div>
               </div>
             </div>
+
+            <div class="field-row field-row-inline" style="margin-top:10px">
+              <div class="field">
+                <label>Tonspuren</label>
+                <select id="ed-acodec">
+                  <option value="copy">Übernehmen (Copy)</option>
+                  <option value="flac">FLAC (verlustlos)</option>
+                  <option value="aac">AAC</option>
+                  <option value="opus">Opus</option>
+                  <option value="ac3">AC-3</option>
+                  <option value="eac3">E-AC-3</option>
+                </select>
+              </div>
+              <div class="field" id="ed-abr-field">
+                <label>Ton kbit/s</label>
+                <input type="number" id="ed-abr" value="192" min="32" max="1536" step="32" />
+              </div>
+              <div class="field" id="ed-achannels-field">
+                <label>Kanäle</label>
+                <select id="ed-achannels">
+                  <option value="0">Wie Quelle</option>
+                  <option value="2">Stereo</option>
+                  <option value="1">Mono</option>
+                </select>
+              </div>
+            </div>
+            <p class="hint" id="ed-audio-hint" style="margin-top:6px"></p>
 
             <div class="field-row field-row-inline" style="margin-top:12px">
               <label class="check"><input type="checkbox" id="ed-chapters" checked /><span>Kapitel aus Clips</span></label>

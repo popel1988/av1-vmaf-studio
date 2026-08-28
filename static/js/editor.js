@@ -29,6 +29,7 @@
     activeId: null,
     assets: {},        // Pfad → { strip, duration } für Timeline-Vorschaubilder
     trackSel: {},      // Pfad → gewählte Tonspur-Indizes (für neue Clips)
+    subSel: {},        // Pfad → gewählte Untertitel-Indizes
     inClip: false,     // Wiedergabe ist im aktiven Clip angekommen
     advancing: false,  // Clipwechsel läuft – Follow-Logik pausieren
     lastAdvance: 0,
@@ -179,16 +180,16 @@
   }
 
   function audioOpts() {
-    const sSel = $("ed-sub");
     const burn = !!($("ed-burn") && $("ed-burn").checked);
-    const sidx = sSel ? parseInt(sSel.value, 10) : -1;
     const tracks = currentTrackSel();
+    const subs = currentSubSel();
     return {
       audio_indexes: tracks.slice(),
       audio_index: tracks.length ? tracks[0] : -1,
       mute: tracks.length === 0,
-      sub_index: Number.isFinite(sidx) ? sidx : -1,
-      burn_subs: burn && sidx >= 0,
+      sub_indexes: subs.slice(),
+      sub_index: subs.length ? subs[0] : -1,
+      burn_subs: burn && subs.length > 0,
     };
   }
 
@@ -211,8 +212,34 @@
     return ed.src.audio.map((_, i) => i);
   }
 
+  function currentSubSel() {
+    const path = ed.src && ed.src.path;
+    if (!path) return [];
+    const total = (ed.src.subtitles || []).length;
+    if (!total) return [];
+    const clip = ed.segments.find((s) => s.kind === "media" && s.path === path);
+    if (clip) {
+      if (Array.isArray(clip.sub_indexes)) {
+        return clip.sub_indexes.filter((i) => i >= 0 && i < total);
+      }
+      const one = Number(clip.sub_index);
+      return one >= 0 && one < total ? [one] : [];
+    }
+    if (ed.subSel[path]) return ed.subSel[path].filter((i) => i < total);
+    return ed.src.subtitles.map((_, i) => i);
+  }
+
+  function subLabel(s, i) {
+    const bits = [s.language || "und", s.codec || ""];
+    if (s.title) bits.push(s.title);
+    if (s.forced) bits.push(tt("forced"));
+    return `#${i} · ${bits.filter(Boolean).join(" · ")}`;
+  }
+
   function trackLabel(a, i) {
-    const bits = [a.language || "und", a.codec || "", a.channels ? `${a.channels}ch` : ""];
+    const br = a.bitrate_human && a.bitrate_human !== "—" ? a.bitrate_human : "";
+    const bits = [a.language || "und", a.codec || "",
+      a.channels ? `${a.channels}ch` : "", br];
     if (a.title) bits.push(a.title);
     return `#${i} · ${bits.filter(Boolean).join(" · ")}`;
   }
@@ -264,6 +291,51 @@
         ? `${sel.length}/${tracks.length} ${tt("Spuren")}`
         : tt("stumm");
     }
+    renderSubs();
+  }
+
+  function renderSubs() {
+    const list = $("ed-subs-list");
+    const info = $("ed-subs-info");
+    if (!list) return;
+    list.innerHTML = "";
+    const tracks = (ed.src && ed.src.subtitles) || [];
+    if (!tracks.length) {
+      const p = document.createElement("div");
+      p.className = "ed-tracks-empty";
+      p.textContent = ed.src
+        ? tt("Diese Quelle hat keine Untertitel.")
+        : tt("Keine Quelle geladen.");
+      list.appendChild(p);
+      if (info) info.textContent = "";
+      return;
+    }
+    const sel = currentSubSel();
+    tracks.forEach((s, i) => {
+      const row = document.createElement("div");
+      row.className = "ed-track-row" + (sel.indexOf(i) < 0 ? " off" : "");
+      const lab = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = sel.indexOf(i) >= 0;
+      cb.addEventListener("change", () => {
+        const next = currentSubSel().filter((x) => x !== i);
+        if (cb.checked) next.push(i);
+        next.sort((x, y) => x - y);
+        applySubSelection(next);
+      });
+      const txt = document.createElement("span");
+      txt.textContent = subLabel(s, i);
+      lab.appendChild(cb);
+      lab.appendChild(txt);
+      row.appendChild(lab);
+      list.appendChild(row);
+    });
+    if (info) {
+      info.textContent = sel.length
+        ? `${sel.length}/${tracks.length}`
+        : tt("keine");
+    }
   }
 
   /** Auswahl auf alle Clips dieser Quelle anwenden (und für neue merken). */
@@ -278,6 +350,22 @@
         s.audio_indexes = listSel.slice();
         s.audio_index = listSel.length ? listSel[0] : -1;
         s.mute = listSel.length === 0;
+      });
+      renderSegList();
+    }
+    renderTracks();
+  }
+
+  function applySubSelection(listSel) {
+    const path = ed.src && ed.src.path;
+    if (!path) return;
+    ed.subSel[path] = listSel.slice();
+    const mine = ed.segments.filter((s) => s.kind === "media" && s.path === path);
+    if (mine.length) {
+      pushHist();
+      mine.forEach((s) => {
+        s.sub_indexes = listSel.slice();
+        s.sub_index = listSel.length ? listSel[0] : -1;
       });
       renderSegList();
     }
@@ -304,6 +392,7 @@
       audio_indexes: [0],
       mute: false,
       sub_index: -1,
+      sub_indexes: [],
       burn_subs: false,
       fade_in: 0,
       fade_out: 0,
@@ -315,6 +404,10 @@
     if (!Array.isArray(clip.audio_indexes)) {
       const one = Number(clip.audio_index);
       clip.audio_indexes = clip.mute || !(one >= 0) ? [] : [one];
+    }
+    if (!Array.isArray(clip.sub_indexes)) {
+      const one = Number(clip.sub_index);
+      clip.sub_indexes = one >= 0 ? [one] : [];
     }
     if (!clip.audio_indexes.length && clip.kind === "media") clip.mute = true;
     return clip;
@@ -386,7 +479,8 @@
       title: `Clip ${i + 1}`,
       audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
       mute: opts.mute,
-      sub_index: opts.sub_index, burn_subs: opts.burn_subs,
+      sub_index: opts.sub_index, sub_indexes: (opts.sub_indexes || []).slice(),
+      burn_subs: opts.burn_subs,
     }));
     others.splice(Math.min(insertAt, others.length), 0, ...neu);
     ed.segments = others;
@@ -400,12 +494,62 @@
     const sels = new Set(ed.segments.filter((s) => s.kind === "media")
       .map((s) => (s.audio_indexes || []).join(",")));
     if (sels.size > 1) return true;
+    const subs = new Set(ed.segments.filter((s) => s.kind === "media")
+      .map((s) => (s.sub_indexes || []).join(",")));
+    if (subs.size > 1) return true;
     return ed.segments.some((s) => (
       s.kind === "black" || s.kind === "silence"
       || Number(s.fade_in) > 0 || Number(s.fade_out) > 0
       || Math.abs((Number(s.speed) || 1) - 1) > 0.001
       || s.crop || Number(s.scale) > 0 || s.burn_subs
     ));
+  }
+
+  /** Cache-Eintrag einer Quelle ergänzen, ohne bekannte Werte zu verlieren. */
+  function setAsset(path, patch) {
+    ed.assets[path] = Object.assign(
+      { strip: "", duration: 0 }, ed.assets[path] || {}, patch || {});
+    return ed.assets[path];
+  }
+
+  /** Video-/Ton-Bitraten einer Quelle aus dem Probe-Cache, kurz gefasst. */
+  function assetRates(path, clip) {
+    const a = path ? ed.assets[path] : null;
+    if (!a) return "";
+    const bits = [];
+    if (a.vbr) bits.push(`${tt("Video")} ${a.vbr}`);
+    const tracks = a.audio || [];
+    const sel = clip && Array.isArray(clip.audio_indexes)
+      ? clip.audio_indexes
+      : tracks.map((_, i) => i);
+    const parts = sel.map((i) => {
+      const t = tracks[i];
+      if (!t) return "";
+      const br = t.bitrate_human && t.bitrate_human !== "—" ? t.bitrate_human : "";
+      return br ? `#${i} ${br}` : (t.codec ? `#${i} ${t.codec}` : "");
+    }).filter(Boolean);
+    if (parts.length) bits.push(`${tt("Ton")} ${parts.join(" · ")}`);
+    else if (a.abr) bits.push(`${tt("Ton")} ${a.abr}`);
+    const nsub = clip && Array.isArray(clip.sub_indexes) ? clip.sub_indexes.length
+      : ((a.subtitles || []).length || 0);
+    if (nsub) bits.push(`${nsub} UT`);
+    return bits.join(" · ");
+  }
+
+  /** Bitraten aus einer Probe-Antwort für die Anzeige aufbereiten. */
+  function rateInfo(data) {
+    const audio = data.audio || [];
+    const abr = audio
+      .map((a) => a.bitrate_human)
+      .filter((x) => x && x !== "—")
+      .slice(0, 4)
+      .join(" / ");
+    return {
+      vbr: data.video_bitrate_human || "",
+      abr,
+      audio,
+      subtitles: data.subtitles || [],
+    };
   }
 
   function renderSegList() {
@@ -419,6 +563,7 @@
       li.draggable = true;
       const dur = clipDur(s);
       const extras = [];
+      const rates = assetRates(s.path, s);
       if (s.mute) extras.push(tt("stumm"));
       if (s.kind === "black") extras.push(tt("Schwarz"));
       if (Number(s.speed) && Number(s.speed) !== 1) extras.push(`${s.speed}×`);
@@ -427,6 +572,7 @@
         <div class="ed-seg-main">
           <strong>${i + 1}. ${escapeHtml(s.title || s.name)}</strong>
           <span class="muted">${escapeHtml(s.name || s.kind)} · ${fmt(s.start)} → ${fmt(s.end)} (${fmt(dur)})${extras.length ? " · " + extras.join(" · ") : ""}</span>
+          ${rates ? `<span class="muted ed-seg-rates">${escapeHtml(rates)}</span>` : ""}
           <div class="ed-seg-edit">
             <input class="ed-seg-title" data-f="title" value="${escapeHtml(s.title || "")}" placeholder="${tt("Titel")}" />
             <input type="number" step="0.01" data-f="start" value="${s.start}" title="In" />
@@ -535,11 +681,13 @@
       if (Number(s.speed) && Number(s.speed) !== 1) extras.push(`${s.speed}×`);
       if (Number(s.fade_in) || Number(s.fade_out)) extras.push("Fade");
       if (s.mute) extras.push(tt("stumm"));
+      const rates = assetRates(s.path, s);
       block.innerHTML = `
         <span class="ed-tl-idx">${i + 1}</span>
         <span class="ed-tl-name">${escapeHtml(clipLabel(s))}</span>
         <span class="ed-tl-meta">${fmt(dur)}${extras.length ? " · " + extras.join(" · ") : ""}</span>`;
       block.title = `${i + 1}. ${clipLabel(s)}\n${fmt(s.start)} → ${fmt(s.end)} (${fmt(dur)})`
+        + (rates ? `\n${rates}` : "")
         + `\n${tt("Ränder ziehen = trimmen, Ecken oben = Fade, Rechtsklick = Menü")}`;
       addBlockHandles(block, s);
       wireBlockDrag(block, s);
@@ -1020,14 +1168,14 @@
     paths.forEach(async (p) => {
       const prev = ed.assets[p] || { strip: "", duration: 0 };
       // tried verhindert Doppelanfragen bei jedem Neuzeichnen.
-      ed.assets[p] = { strip: "", duration: prev.duration, tried: true };
+      setAsset(p, { tried: true });
       try {
         const d = await (await fetch(`/api/editor/preview-assets?path=${encodeURIComponent(p)}`)).json();
-        ed.assets[p] = {
+        setAsset(p, {
           strip: d.filmstrip || "",
           duration: Number(d.duration) || prev.duration || 0,
           tried: true,
-        };
+        });
         if (ed.assets[p].strip) renderTimeline();
       } catch (e) { /* ohne Bild weiter */ }
     });
@@ -1266,11 +1414,11 @@
         wave.style.backgroundImage = `url(${d.waveform})`;
       }
       const prev = ed.assets[path] || { strip: "", duration: 0 };
-      ed.assets[path] = {
+      setAsset(path, {
         strip: d.filmstrip || "",
         duration: Number(d.duration) || prev.duration || 0,
         tried: true,
-      };
+      });
       if (!prev.strip && d.filmstrip) renderTimeline();
     } catch (e) { /* ignore */ }
   }
@@ -1300,11 +1448,8 @@
     }
     const srcDur = Number(data.duration) || 0;
     const knownAsset = ed.assets[path] || { strip: "", duration: 0 };
-    ed.assets[path] = {
-      strip: knownAsset.strip,
-      duration: srcDur || knownAsset.duration,
-      tried: knownAsset.tried,
-    };
+    setAsset(path, Object.assign(
+      { duration: srcDur || knownAsset.duration }, rateInfo(data)));
     ed.src = {
       path,
       name: name || data.name || path,
@@ -1333,17 +1478,6 @@
       aSel.appendChild(none);
       aSel.value = ed.src.audio.length ? "0" : "-1";
     }
-    const sSel = $("ed-sub");
-    if (sSel) {
-      sSel.innerHTML = `<option value="-1">${tt("Keine")}</option>`;
-      (ed.src.subtitles || []).forEach((s, i) => {
-        const lab = [s.language || "und", s.codec || s.title || ""].filter(Boolean).join(" · ");
-        const o = document.createElement("option");
-        o.value = String(i);
-        o.textContent = `#${i}: ${lab}`;
-        sSel.appendChild(o);
-      });
-    }
     ed.inSec = opts.inSec != null ? opts.inSec : 0;
     ed.outSec = opts.outSec != null ? opts.outSec : ed.src.duration;
     ed.playhead = opts.seek != null ? opts.seek : ed.inSec;
@@ -1354,6 +1488,7 @@
       info.textContent = `${ed.src.name} · ${fmt(ed.src.duration)}`
         + (data.size_human ? ` · ${data.size_human}` : "")
         + (ed.src.codec ? ` · ${String(ed.src.codec).toUpperCase()}` : "")
+        + (data.video_bitrate_human ? ` · ${data.video_bitrate_human} ${tt("Video")}` : "")
         + ((ed.src.chapters || []).length ? ` · ${ed.src.chapters.length} ${tt("Kapitel")}` : "");
       info.title = path.startsWith("upload:") ? `${path} (Upload)` : path;
     }
@@ -1408,8 +1543,6 @@
     if (wave) { wave.hidden = true; wave.style.backgroundImage = ""; }
     const aSel = $("ed-preview-audio");
     if (aSel) aSel.innerHTML = `<option value="-1">${tt("Kein Ton")}</option>`;
-    const sSel = $("ed-sub");
-    if (sSel) sSel.innerHTML = `<option value="-1">${tt("Keine")}</option>`;
     renderTracks();
     renderSourceRuler();
     renderTlPlayhead();
@@ -1424,6 +1557,7 @@
     ed.segments = [];
     ed.activeId = null;
     ed.trackSel = {};
+    ed.subSel = {};
     ed.assets = {};
     unloadSource();
     renderSegList();
@@ -1527,7 +1661,8 @@
       title: `Clip ${ed.segments.length + 1}`,
       audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
       mute: opts.mute,
-      sub_index: opts.sub_index, burn_subs: opts.burn_subs,
+      sub_index: opts.sub_index, sub_indexes: (opts.sub_indexes || []).slice(),
+      burn_subs: opts.burn_subs,
     });
     ed.segments.push(clip);
     ed.activeId = clip.id;
@@ -1564,7 +1699,8 @@
       title: ed.src.name,
       audio_index: opts.audio_index, audio_indexes: opts.audio_indexes.slice(),
       mute: opts.mute,
-      sub_index: opts.sub_index, burn_subs: opts.burn_subs,
+      sub_index: opts.sub_index, sub_indexes: (opts.sub_indexes || []).slice(),
+      burn_subs: opts.burn_subs,
     }));
     renderSegList();
     setStatus(tt("Quelle an Timeline angehängt."));
@@ -1596,15 +1732,19 @@
       const name = f.name || data.name || f.rel;
       const dur = Number(data.duration) || 0;
       const known = ed.assets[f.rel] || { strip: "", duration: 0 };
-      ed.assets[f.rel] = {
-        strip: known.strip, duration: dur || known.duration, tried: known.tried,
-      };
+      setAsset(f.rel, Object.assign(
+        { duration: dur || known.duration }, rateInfo(data)));
       ed.segments.push(defaultClip({
         path: f.rel,
         name,
         start: 0,
         end: round2(Number(data.duration) || 0),
         title: name,
+        audio_indexes: (data.audio || []).map((_, i) => i),
+        audio_index: (data.audio || []).length ? 0 : -1,
+        mute: !(data.audio || []).length,
+        sub_indexes: (data.subtitles || []).map((_, i) => i),
+        sub_index: (data.subtitles || []).length ? 0 : -1,
       }));
       added += 1;
     }
@@ -2010,6 +2150,79 @@
         ? tt("Encode schneidet framegenau und vereinheitlicht inkompatible Quellen.")
         : tt("Remux kopiert Streams ohne Neucodierung. Schnitte liegen am nächsten Keyframe.");
     }
+    syncRateUI();
+    syncAudioUI(mode);
+    syncNameUI();
+  }
+
+  function syncRateUI() {
+    const mode = ($("ed-rate-mode") && $("ed-rate-mode").value) || "cq";
+    const br = mode === "bitrate" || mode === "abr";
+    const cqf = $("ed-cq-field");
+    const vbf = $("ed-vbr-field");
+    if (cqf) cqf.style.display = br ? "none" : "";
+    if (vbf) vbf.style.display = br ? "" : "none";
+  }
+
+  function audioCopyPossible() {
+    if (Number(($("ed-crossfade") || {}).value) > 0.01) return false;
+    return !ed.segments.some((s) => (
+      s.kind === "black" || s.kind === "silence"
+      || Number(s.fade_in) > 0 || Number(s.fade_out) > 0
+      || Math.abs((Number(s.speed) || 1) - 1) > 0.001
+    ));
+  }
+
+  function syncAudioUI(mode) {
+    const sel = $("ed-acodec");
+    if (!sel) return;
+    const encMode = (mode || ($("ed-mode") && $("ed-mode").value) || "remux") === "encode";
+    const copyOk = !encMode || audioCopyPossible();
+    const copyOpt = [...sel.options].find((o) => o.value === "copy");
+    if (copyOpt) copyOpt.disabled = encMode && !copyOk;
+    if (encMode && sel.value === "copy" && !copyOk) sel.value = "flac";
+    if (!encMode) sel.value = "copy";
+    const copy = sel.value === "copy";
+    const abrf = $("ed-abr-field");
+    const chf = $("ed-achannels-field");
+    if (abrf) abrf.style.display = copy || sel.value === "flac" ? "none" : "";
+    if (chf) chf.style.display = copy ? "none" : "";
+    const hint = $("ed-audio-hint");
+    if (!hint) return;
+    if (!encMode || copy) {
+      hint.textContent = tt("Angehakte Ton- und Untertitelspuren werden unverändert übernommen (Copy).");
+    } else if (sel.value === "flac") {
+      hint.textContent = tt("Video wird neu encodiert, Ton verlustlos als FLAC. Untertitel bleiben Copy.");
+    } else {
+      hint.textContent = tt("Video und Ton werden neu encodiert. Untertitel bleiben Copy, sofern gewählt.");
+    }
+  }
+
+  function nameModeCustom() {
+    return ($("ed-name-mode") && $("ed-name-mode").value) === "custom";
+  }
+
+  function syncNameUI() {
+    const custom = nameModeCustom();
+    const sr = $("ed-name-suffix-row");
+    const cr = $("ed-name-custom-row");
+    if (sr) sr.style.display = custom ? "none" : "";
+    if (cr) cr.style.display = custom ? "" : "none";
+    const prev = $("ed-name-preview");
+    if (!prev) return;
+    const ext = "." + (($("ed-container") && $("ed-container").value) || "mkv");
+    if (custom) {
+      const raw = (($("ed-out-name") && $("ed-out-name").value) || "").trim();
+      prev.textContent = raw
+        ? `${tt("Ausgabedatei")}: ${raw}${ext}`
+        : tt("Eigener Name ist leer – es gilt Quellname + Suffix.");
+      return;
+    }
+    const first = ed.segments.find((s) => s.path);
+    const base = first ? String(first.path).split("/").pop().replace(/\.[^.]+$/, "")
+      : tt("Quelle");
+    const sfx = (($("ed-suffix") && $("ed-suffix").value) || "_edit");
+    prev.textContent = `${tt("Ausgabedatei")}: ${base}${sfx}${ext}`;
   }
 
   async function enqueue() {
@@ -2022,20 +2235,27 @@
         audio_index: s.audio_index,
         audio_indexes: Array.isArray(s.audio_indexes) ? s.audio_indexes : undefined,
         mute: !!s.mute,
-        sub_index: s.sub_index, burn_subs: !!s.burn_subs,
+        sub_index: s.sub_index,
+        sub_indexes: Array.isArray(s.sub_indexes) ? s.sub_indexes : undefined,
+        burn_subs: !!s.burn_subs,
         fade_in: Number(s.fade_in) || 0, fade_out: Number(s.fade_out) || 0,
         speed: Number(s.speed) || 1, crop: s.crop || "", scale: Number(s.scale) || 0,
       })),
       mode,
       container: ($("ed-container") && $("ed-container").value) || "mkv",
       suffix: ($("ed-suffix") && $("ed-suffix").value) || "_edit",
+      name_mode: nameModeCustom() ? "custom" : "suffix",
+      out_name: (($("ed-out-name") && $("ed-out-name").value) || "").trim(),
       chapters_from_cuts: !!($("ed-chapters") && $("ed-chapters").checked),
       force_remux: !!($("ed-force") && $("ed-force").checked),
       platform: ($("ed-platform") && $("ed-platform").value) || "cpu",
       codec: ($("ed-codec") && $("ed-codec").value) || "av1",
       cq: ($("ed-cq") && parseInt($("ed-cq").value, 10)) || 30,
+      rate_mode: ($("ed-rate-mode") && $("ed-rate-mode").value) || "cq",
+      v_bitrate: ($("ed-vbr") && parseInt($("ed-vbr").value, 10)) || 0,
       audio_codec: ($("ed-acodec") && $("ed-acodec").value) || "aac",
       audio_bitrate: ($("ed-abr") && parseInt($("ed-abr").value, 10)) || 192,
+      audio_channels: ($("ed-achannels") && parseInt($("ed-achannels").value, 10)) || 0,
       out_mode: ($("ed-out-mode") && $("ed-out-mode").value) || "default",
       out_subdir: ($("ed-out-subdir") && $("ed-out-subdir").value) || "",
       crossfade: Number(($("ed-crossfade") || {}).value) || 0,
@@ -2286,6 +2506,11 @@
       applyTrackSelection(Array.from({ length: n }, (_, i) => i));
     });
     if ($("ed-tracks-none")) $("ed-tracks-none").addEventListener("click", () => applyTrackSelection([]));
+    if ($("ed-subs-all")) $("ed-subs-all").addEventListener("click", () => {
+      const n = (ed.src && ed.src.subtitles && ed.src.subtitles.length) || 0;
+      applySubSelection(Array.from({ length: n }, (_, i) => i));
+    });
+    if ($("ed-subs-none")) $("ed-subs-none").addEventListener("click", () => applySubSelection([]));
 
     if ($("ed-tl-split")) $("ed-tl-split").addEventListener("click", splitAtPlayhead);
     if ($("ed-tl-del")) $("ed-tl-del").addEventListener("click", deleteActive);
@@ -2395,6 +2620,13 @@
     });
     if ($("ed-play-tl")) $("ed-play-tl").addEventListener("click", playTimeline);
     if ($("ed-mode")) $("ed-mode").addEventListener("change", syncModeUI);
+    if ($("ed-rate-mode")) $("ed-rate-mode").addEventListener("change", syncRateUI);
+    if ($("ed-acodec")) $("ed-acodec").addEventListener("change", () => syncAudioUI());
+    if ($("ed-name-mode")) $("ed-name-mode").addEventListener("change", syncNameUI);
+    ["ed-suffix", "ed-out-name"].forEach((id) => {
+      if ($(id)) $(id).addEventListener("input", syncNameUI);
+    });
+    if ($("ed-container")) $("ed-container").addEventListener("change", syncNameUI);
     if ($("ed-enqueue")) $("ed-enqueue").addEventListener("click", enqueue);
     document.addEventListener("keydown", onKey);
     syncModeUI();

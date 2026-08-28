@@ -1,0 +1,6 @@
+file 'a.mkv'
+inpoint 0.000
+outpoint 10.000
+file 'b.mkv'
+inpoint 5.000
+outpoint 12.000

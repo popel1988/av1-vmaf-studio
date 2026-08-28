@@ -218,6 +218,18 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 
 /* ------------------------------ CARDS ----------------------------------- */
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); align-items: start; }
+
+/* Encoding/VMAF: Quelle als schmale Spalte, Einstellungen daneben (wie Super-Tool-Blöcke) */
+.source-card .card-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.source-card .browser {
+  flex: 1 1 auto;
+  max-height: min(58vh, 620px);
+  min-height: 240px;
+}
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -805,6 +817,7 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   padding: 5px 7px; font-size: 12px; width: 100%;
 }
 .ed-seg-edit .ed-seg-title { grid-column: 1 / -1; }
+.ed-seg-rates { display: block; font-size: 11.5px; margin-top: 2px; }
 .ed-src-keeps { position: absolute; inset: 0; pointer-events: none; }
 .ed-src-keep {
   position: absolute; top: 0; bottom: 0;
@@ -1096,6 +1109,47 @@ tr.queue-row:hover { background: rgba(127,127,127,.08); }
 
 /* ----------------------------- SETTINGS --------------------------------- */
 .settings { display: flex; flex-direction: column; gap: 14px; }
+.settings-wide { gap: 12px; }
+.opt-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 12px 14px;
+}
+.opt-section .subsection { margin-top: 0; }
+.opt-section select,
+.opt-section input[type="text"],
+.opt-section input[type="number"],
+.opt-section input[type="search"] {
+  background: var(--surface);
+}
+.opt-section .compare-encoders label {
+  background: var(--surface);
+}
+.settings-grid,
+.settings-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+.settings-grid .field,
+.settings-grid-3 .field { min-width: 0; }
+.settings-grid .field > label,
+.settings-grid-3 .field > label {
+  min-height: 2.4em;
+  display: flex;
+  align-items: flex-end;
+  line-height: 1.3;
+}
+#audio-encode-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#audio-encode-opts .settings-grid {
+  grid-template-columns: 1fr 1fr;
+}
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* Kompakte Toolbars: nicht über die volle Kartenbreite strecken (sonst
    zwei Selects = je 50 % der Seite). */
@@ -1228,6 +1282,18 @@ input[type="range"]::-moz-range-thumb {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 999px; padding: 5px 11px; font-size: 12px; user-select: none;
+}
+.opt-section .fmt-checks label {
+  background: var(--surface);
+}
+.fmt-checks label.check {
+  margin: 0;
+  font-size: 12px;
+  gap: 6px;
+}
+.fmt-checks label.check input {
+  width: 15px;
+  height: 15px;
 }
 .fmt-checks label:has(input:checked) {
   border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -1545,6 +1611,10 @@ input[type="range"]::-moz-range-thumb {
   .sidebar { width: 100%; height: auto; position: relative; flex-direction: column; }
   .cards { grid-template-columns: 1fr; }
   .span-2, .span-3 { grid-column: span 1; }
+  .source-card .browser { max-height: 300px; min-height: 0; }
+  .settings-grid,
+  .settings-grid-3,
+  #audio-encode-opts .settings-grid { grid-template-columns: 1fr; }
 }
 
 /* scrollbar */
@@ -1720,6 +1790,10 @@ input[type="range"]::-moz-range-thumb {
 [data-density="compact"] .hint { font-size: 11px; margin-top: 2px; }
 [data-density="compact"] .stat-grid { gap: 8px; }
 [data-density="compact"] .profile-row { gap: 6px; }
+[data-density="compact"] .opt-section { padding: 10px 12px; }
+[data-density="compact"] .settings-wide { gap: 10px; }
+[data-density="compact"] .settings-grid,
+[data-density="compact"] .settings-grid-3 { gap: 10px 12px; }
 
 .preset-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .preset-chips .btn.active,
