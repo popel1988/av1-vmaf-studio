@@ -983,6 +983,7 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 }
 .vmaf-verify.vv-ok { background: color-mix(in srgb, var(--good, #2ecc71) 22%, transparent); color: var(--good, #2ecc71); }
 .vmaf-verify.vv-bad { background: color-mix(in srgb, var(--bad, #e74c3c) 22%, transparent); color: var(--bad, #e74c3c); }
+.vmaf-verify.vv-warn { background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent); color: var(--warn, #d97706); }
 
 /* Diagnose / Selbsttest */
 .diag-section { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
@@ -1582,8 +1583,9 @@ input[type="range"]::-moz-range-thumb {
 .bad { color: var(--bad); }
 
 /* ------------------------------ VMAF CARD ------------------------------- */
-.vmaf-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; align-items: center; }
-.vmaf-chart-wrap { position: relative; height: 280px; }
+.vmaf-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; align-items: start; }
+.vmaf-chart-wrap { position: relative; height: 300px; }
+.shot-wrap { grid-column: 1 / -1; }
 @media (max-width: 1100px) { .vmaf-body { grid-template-columns: 1fr; } }
 
 /* --------------------------- PROGRESS CARD ------------------------------ */
@@ -1616,6 +1618,9 @@ input[type="range"]::-moz-range-thumb {
 .status-cell { white-space: nowrap; }
 .queue-err { font-size: 11px; color: var(--bad); margin-top: 3px; white-space: pre-wrap;
   word-break: break-word; max-width: 460px; cursor: help; }
+.st-dash-row { cursor: pointer; }
+.st-dash-row:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.st-dash-row.is-active td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* Parallel-Regler + mehrere Live-Fortschritte */
 .parallel-ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }

@@ -21,82 +21,132 @@ from .ffmpeg_utils import (
 logger = logging.getLogger("vcompress.encoder_bench")
 
 BENCH_DIR = config.DATA_DIR / "encoder_bench"
-MAX_DOWNLOAD_BYTES = 400 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 450 * 1024 * 1024
 # Browser-UA: manche Spiegel (früher GCS) blocken sonst mit 403.
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-_HTTP_HDR = {"User-Agent": _UA, "Accept": "*/*"}
+_HTTP_HDR = {
+    "User-Agent": _UA,
+    "Accept": "*/*",
+    "Referer": "https://commons.wikimedia.org/",
+}
 _probe_cache: dict[str, tuple[float, int, dict]] = {}
 
-# Kurzclips unterschiedlicher Bildtypen. Nur diese HTTPS-URLs werden geladen
-# (Allowlist, kein freies URL-Feld → kein SSRF). Fallbacks, falls ein Spiegel tot ist.
+# Längere, höher aufgelöste Referenzclips. Nur diese HTTPS-URLs (Allowlist).
+# 4K-Filme liegen als volle Dateien bei mehreren GB – wir schneiden per ffmpeg
+# einen Ausschnitt (HTTP-Range, Copy), statt das Archiv zu laden.
+_JF_4K_HEVC10_40M = (
+    "https://repo.jellyfin.org/files/files/test-videos/"
+    "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4"
+)
+_JF_4K_AVC_40M = (
+    "https://repo.jellyfin.org/files/files/test-videos/"
+    "SDR/AVC/Test%20Jellyfin%204K%20AVC%2040M.mp4"
+)
 CLIPS: list[dict] = [
     {
         "id": "anim",
-        "title": "Animation (Flächen, Banding)",
+        "title": "Animation 4K (Flächen, Banding)",
         "kind": "animation",
-        "license": "CC-BY · Blender Foundation · Big Buck Bunny",
-        "filename": "bbb_1080_10s.mp4",
-        "approx_mb": 30,
-        "why": "Flächen und harte Kanten – zeigt, ob schnelle Presets banden.",
+        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, Wikimedia)",
+        "filename": "bbb_4k_40s.mkv",
+        "approx_mb": 190,
+        "why": "4K, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.",
         "urls": [
+            {
+                "url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Big_Buck_Bunny_4K.webm",
+                "extract": {"start": 28, "seconds": 40, "copy_only": True},
+            },
             "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4",
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
         ],
     },
     {
         "id": "cgi",
-        "title": "Film-CGI (Detail, Dunkel)",
+        "title": "Film-CGI 4K (Detail, Dunkel)",
         "kind": "cgi",
-        "license": "CC-BY · Blender Foundation · Sintel",
-        "filename": "sintel_trailer_1080p.mp4",
-        "approx_mb": 50,
-        "why": "Weiche Gradienten und dunkle Szenen – typisch für Spielfilm.",
+        "license": "CC-BY · Blender Foundation · Sintel (4K, Wikimedia)",
+        "filename": "sintel_4k_40s.mkv",
+        "approx_mb": 160,
+        "why": "4K, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.",
         "urls": [
+            {
+                "url": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Sintel_movie_4K.webm",
+                "extract": {"start": 95, "seconds": 40, "copy_only": True},
+            },
             "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
-            "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
         ],
     },
     {
         "id": "live",
         "title": "Live-Action / VFX",
         "kind": "live",
-        "license": "CC-BY · Blender Foundation · Tears of Steel (Fallback: Intel CC-BY)",
-        "filename": "tos_live_20s.mp4",
-        "approx_mb": 40,
-        "why": "Echte Kamera plus Effekte – Korn und hohe Komplexität.",
+        "license": "CC-BY · Blender Foundation · Tears of Steel",
+        "filename": "tos_live_40s.mp4",
+        "approx_mb": 25,
+        "why": "Echte Kamera plus Effekte, ~40 s – Korn und hohe Komplexität.",
         "urls": [
             {
                 "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
-                "extract": {"start": 90, "seconds": 18},
+                "extract": {"start": 90, "seconds": 40},
+            },
+            {
+                "url": "https://mirrors.ocf.berkeley.edu/blender/demo/movies/ToS/tears_of_steel_720p.mov",
+                "extract": {"start": 90, "seconds": 40},
             },
             "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/people-detection.mp4",
         ],
     },
     {
         "id": "motion",
-        "title": "Viel Bewegung",
+        "title": "Viel Bewegung 4K",
         "kind": "motion",
-        "license": "CC-BY 4.0 · Intel sample-videos · car-detection",
-        "filename": "car_detection.mp4",
-        "approx_mb": 3,
-        "why": "Schnelle Kamerafahrten – Speed-Presets sparen hier oft falsch.",
+        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, Wikimedia)",
+        "filename": "bbb_4k_chase_40s.mkv",
+        "approx_mb": 190,
+        "why": "4K-Verfolgungsjagd, ~40 s – Speed-Presets sparen hier oft falsch.",
         "urls": [
-            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/car-detection.mp4",
-            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/people-detection.mp4",
+            {
+                "url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Big_Buck_Bunny_4K.webm",
+                "extract": {"start": 248, "seconds": 40, "copy_only": True},
+            },
+            {
+                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+                "extract": {"start": 200, "seconds": 40},
+            },
         ],
     },
     {
         "id": "camera",
         "title": "Handkamera / Straße",
         "kind": "camera",
-        "license": "CC-BY 4.0 · Intel sample-videos · walking",
-        "filename": "people_walking.mp4",
-        "approx_mb": 6,
-        "why": "Rauschen, Detail im Hintergrund – näher an Serien-Remuxes als CGI.",
+        "license": "CC-BY · Blender Foundation · Tears of Steel (Fallback: Wikimedia)",
+        "filename": "tos_street_40s.mp4",
+        "approx_mb": 22,
+        "why": "Längerer Ausschnitt mit mehr Detail im Hintergrund als die alten Mini-Clips.",
         "urls": [
-            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/face-demographics-walking.mp4",
+            {
+                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+                "extract": {"start": 12, "seconds": 40},
+            },
             "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Schlossbergbahn.webm/Schlossbergbahn.webm.720p.vp9.webm",
+            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/face-demographics-walking.mp4",
+        ],
+    },
+    {
+        "id": "uhd",
+        "title": "4K hohe Bitrate (Jellyfin)",
+        "kind": "uhd",
+        "license": "CC-BY-SA 4.0 · Jellyfin Test Videos (Gnattu)",
+        "filename": "jellyfin_4k_hevc10_40m.mp4",
+        "approx_mb": 141,
+        "why": "UHD, ~40 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 1080p-Kurzclips.",
+        "urls": [
+            _JF_4K_HEVC10_40M,
+            "https://tor1.mirror.jellyfin.org/test-videos/"
+            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4",
+            "https://lon1.mirror.jellyfin.org/files/files/test-videos/"
+            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4",
+            _JF_4K_AVC_40M,
         ],
     },
 ]
@@ -236,30 +286,36 @@ def _http_err(exc: BaseException) -> str:
 
 
 def _ffmpeg_extract(url: str, dest: Path, extract: dict) -> str:
-    """Kurzen Ausschnitt per HTTP-Range holen (ganze ToS-Datei wäre ~350 MB)."""
+    """Ausschnitt per HTTP-Range (Copy). Ganze 4K-Filme wären mehrere GB."""
     start = float((extract or {}).get("start") or 0)
     seconds = float((extract or {}).get("seconds") or 15)
+    copy_only = bool((extract or {}).get("copy_only"))
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     base = [
         config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
         "-user_agent", _UA,
+        "-headers", "Referer: https://commons.wikimedia.org/\r\n",
         "-ss", f"{start:.3f}",
         "-t", f"{seconds:.3f}",
         "-i", url,
     ]
     variants = [
-        ["-c", "copy", "-an", "-movflags", "+faststart"],
-        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-an",
-         "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+        ["-c", "copy", "-an", "-avoid_negative_ts", "make_zero"],
     ]
+    if not copy_only:
+        variants.append(
+            ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "16", "-an",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+        )
     last = "ffmpeg-Ausschnitt fehlgeschlagen"
+    timeout = 480 if copy_only or seconds >= 30 else 180
     for extra in variants:
         if _cancel.is_set():
             return "Abgebrochen"
         try:
             proc = subprocess.run(base + extra + [str(tmp)],
-                                  capture_output=True, text=True, timeout=180)
+                                  capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as e:
             last = str(e)
             try:
@@ -318,7 +374,7 @@ def _download_one(clip: dict, on_bytes) -> str:
                         got += len(chunk)
                         if got > MAX_DOWNLOAD_BYTES:
                             too_big = True
-                            last_err = "Download über Limit (400 MB)"
+                            last_err = "Download über Limit (450 MB)"
                             try:
                                 tmp.unlink()
                             except OSError:
@@ -545,7 +601,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 test_values=list(values),
                 clip_seconds=clip_seconds,
                 samples=samples,
-                generate_screenshots=False,
+                generate_screenshots=True,
                 session_name=f"bench_{job['id']}_{speed}",
                 source_title=job["title"],
                 source_path=str(job["path"]),
@@ -572,6 +628,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
             per = round(elapsed / nres, 2)
             src_human = ff.human_size(info.size_bytes) if info.size_bytes else ""
             for r in analysis.results:
+                rd = r.to_dict()
                 rows.append({
                     "clip_id": job["id"],
                     "clip": job["title"],
@@ -592,6 +649,10 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                     "seconds_pack": elapsed,
                     "platform": platform,
                     "codec": codec,
+                    "screenshots": rd.get("screenshots") or [],
+                    "screenshot_ref": rd.get("screenshot_ref") or "",
+                    "screenshot_enc": rd.get("screenshot_enc") or "",
+                    "scene_scores": rd.get("scene_scores") or [],
                 })
             _set(rows=list(rows), percent=round(done / total * 100, 1))
 

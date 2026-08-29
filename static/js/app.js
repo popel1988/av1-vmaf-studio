@@ -18,6 +18,7 @@
     currentPage: "encode",
     hasArchive: false, // es existieren archivierte VMAF-Vergleiche
     shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
+    stVmafId: null,    // Super-Tool-Zeile für Vergleichsbilder
     superBatch: null,  // aktive Super-Tool-Stapelkennung
     vmafSource: null,  // Quelle des aktuell gezeigten VMAF-Vergleichs (für „→ Encoding")
     browseData: null,  // zuletzt geladener Ordnerinhalt (für Live-Filter)
@@ -157,6 +158,19 @@
 
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function colorWithAlpha(hex, a) {
+    const h = (hex || "").trim();
+    if (h[0] === "#" && (h.length === 7 || h.length === 4)) {
+      const n = h.length === 4
+        ? ("#" + h[1] + h[1] + h[2] + h[2] + h[3] + h[3]) : h;
+      const r = parseInt(n.slice(1, 3), 16);
+      const g = parseInt(n.slice(3, 5), 16);
+      const b = parseInt(n.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},${a})`;
+    }
+    return hex;
   }
 
   /* ------------------------------------------------------------- BROWSER */
@@ -1677,7 +1691,7 @@
     const first = !box.querySelector(".eb-clip");
     box.innerHTML = (clips || []).map((c) => {
       const checked = first
-        ? (["anim", "cgi", "live"].includes(c.id) ? "checked" : "")
+        ? (["anim", "live", "uhd"].includes(c.id) ? "checked" : "")
         : (prev.has(c.id) ? "checked" : "");
       const status = c.present
         ? `Geladen · ${c.human || ""}`
@@ -1808,6 +1822,30 @@
         <th>Clip</th><th>Speed</th><th>Wert</th><th>VMAF</th><th>1%-Low</th><th>Größe</th><th>Ersparnis</th><th>Zeit</th>
       </tr></thead><tbody>${body}</tbody></table></div>`;
   }
+  function ebRenderShots(rows, rec) {
+    const grid = $("eb-screenshots");
+    if (!grid) return;
+    const usable = (rows || []).filter((r) => !r.error && shotsOf(r).length);
+    const sig = usable.map((r) =>
+      (r.clip || "") + ":" + (r.speed || "") + ":" + (r.value || "") + ":"
+      + ((r.screenshots || []).length)).join("|");
+    if (grid._shotKey === sig) return;
+    grid._shotKey = sig;
+    const recSpeed = rec && rec.speed;
+    renderScreenshots({
+      results: usable.map((r) => ({
+        label: `${speedLabelFor(r.platform, r.codec, r.speed)} · `
+          + (r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s")),
+        vmaf: r.vmaf,
+        recommended: !!(recSpeed && r.speed === recSpeed),
+        screenshots: r.screenshots,
+        screenshot_ref: r.screenshot_ref,
+        screenshot_enc: r.screenshot_enc,
+        scene_scores: r.scene_scores,
+        shotGroup: r.clip,
+      })),
+    }, grid);
+  }
   function ebRenderRec(rec) {
     const box = $("eb-rec");
     const apply = $("btn-eb-apply");
@@ -1831,11 +1869,15 @@
     ebRenderProgress(d);
     if (d.running) {
       ebRenderTable(d.rows || [], d.recommendation);
+      ebRenderShots(d.rows || [], d.recommendation);
       ebRenderRec(d.recommendation);
     } else {
       const last = d.last || {};
-      ebRenderTable(last.rows || d.rows || [], last.recommendation || d.recommendation);
-      ebRenderRec(last.recommendation || d.recommendation);
+      const rows = last.rows || d.rows || [];
+      const rec = last.recommendation || d.recommendation;
+      ebRenderTable(rows, rec);
+      ebRenderShots(rows, rec);
+      ebRenderRec(rec);
     }
   }
   function ebStopPoll() {
@@ -2705,6 +2747,12 @@
     if (it.caps_failed) {
       extra += ` <span class="vmaf-verify vv-bad" title="Größen-/Bitrate-Cap überschritten">⚠ Cap</span>`;
     }
+    if (it.message && String(it.message).startsWith("Quelle behalten")) {
+      extra += ` <span class="vmaf-verify vv-ok" title="${escapeHtml(it.message)}">Quelle behalten</span>`;
+    }
+    if (it.vmaf_warning) {
+      extra += ` <span class="vmaf-verify vv-warn" title="${escapeHtml(it.vmaf_warning)}">⚠ 1%-Low</span>`;
+    }
     const det = detail && detail !== "—" ? ` ${escapeHtml(detail)}` : "";
     return `<span class="codec-badge">${escapeHtml(badge)}</span>${det}${verify}${extra}`;
   }
@@ -2730,12 +2778,15 @@
       const err = it.error
         ? `<div class="queue-err" title="${escapeHtml(it.error)}">${escapeHtml(it.error.slice(0, 200))}${it.error.length > 200 ? " …" : ""}</div>`
         : "";
+      const warn = it.vmaf_warning
+        ? `<div class="queue-warn" title="${escapeHtml(it.vmaf_warning)}">${escapeHtml(it.vmaf_warning)}</div>`
+        : "";
       // Dauer: laufend (aktiv) oder final (abgeschlossen).
       const dur = (active.has(it.id) || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
       const finished = DONE.includes(it.status) && it.finished_at
         ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
       return `<tr class="queue-row" data-details="${it.id}" title="Details / ffprobe anzeigen">
-        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}</td>
+        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
@@ -2981,7 +3032,7 @@
     } else if (!state.vmafSource.info) {
       state.vmafSource.info = target.info || null;
     }
-    const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status + ":" + (vmaf.keep_source ? "1" : "0");
+    const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status + ":" + (vmaf.keep_source ? "1" : "0") + ":" + (vmaf.pick_warning ? "w" : "");
     showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
 
@@ -3129,26 +3180,33 @@
     return [];
   }
 
-  function renderScreenshots(vmaf) {
-    const grid = $("vmaf-screenshots");
+  function renderScreenshots(vmaf, gridEl) {
+    const grid = gridEl || $("vmaf-screenshots");
     if (!grid) return;
-    const results = (vmaf.results || [])
+    const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
+    const all = (vmaf.results || [])
       .map((r) => ({ r, shots: shotsOf(r) }))
       .filter((x) => x.shots.length);
-    if (!results.length) { grid.innerHTML = ""; return; }
+    if (!all.length) { grid.innerHTML = ""; return; }
 
-    // Verfügbare Szenen (Vereinigung) und aktuell gewählte Szene.
+    const groups = [...new Set(all.map((x) => x.r.shotGroup).filter(Boolean))];
+    if (groups.length && (ui.group == null || !groups.includes(ui.group)))
+      ui.group = groups[0];
+    const results = groups.length
+      ? all.filter((x) => x.r.shotGroup === ui.group)
+      : all;
+
     const scenes = [...new Set(
       results.flatMap((x) => x.shots.map((s) => s.scene))
     )].sort((a, b) => a - b);
-    if (state.shotScene == null || !scenes.includes(state.shotScene))
-      state.shotScene = scenes[0];
-    const sc = state.shotScene;
+    if (ui.scene == null || !scenes.includes(ui.scene))
+      ui.scene = scenes[0];
+    const sc = ui.scene;
+    if (grid === $("vmaf-screenshots")) state.shotScene = sc;
 
-    // Kacheln der aktuellen Szene: eine Referenz + je Qualität ein Encode.
     let refSrc = "";
     results.forEach((x) => {
-      const s = x.shots.find((s) => s.scene === sc);
+      const s = x.shots.find((sh) => sh.scene === sc);
       if (s && s.ref && !refSrc) refSrc = s.ref;
     });
 
@@ -3156,21 +3214,25 @@
     if (refSrc)
       tiles.push({ src: refSrc, label: "Original", sub: `Szene ${sc + 1}`, ref: true });
     results.forEach((x) => {
-      const s = x.shots.find((s) => s.scene === sc);
+      const s = x.shots.find((sh) => sh.scene === sc);
       if (s && s.enc) {
-        // VMAF dieser konkreten Szene (nicht der Mittelwert), falls vorhanden.
         const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
         tiles.push({
           src: s.enc,
           label: x.r.label || ("Q" + x.r.quality),
-          sub: `VMAF ${v.toFixed(1)}`,
+          sub: `VMAF ${Number(v).toFixed(1)}`,
           recommended: x.r.recommended,
         });
       }
     });
     if (!tiles.length) { grid.innerHTML = ""; return; }
 
+    const groupTabs = groups.length > 1
+      ? `<div class="shot-scenes">${groups.map((g) =>
+          `<button class="shot-scene ${g === ui.group ? "active" : ""}" data-group="${escapeHtml(g)}">${escapeHtml(g)}</button>`
+        ).join("")}</div>`
+      : "";
     const sceneTabs = scenes.length > 1
       ? `<div class="shot-scenes">${scenes.map((n) =>
           `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">Szene ${n + 1}</button>`
@@ -3179,9 +3241,9 @@
 
     grid.innerHTML = `
       <div class="shot-toolbar">
-        ${sceneTabs}
+        ${groupTabs}${sceneTabs}
         <span class="shot-hint">Bilder ankreuzen und vergleichen – oder anklicken zum Vergrößern.</span>
-        <button class="btn small" id="shot-compare" disabled>Auswahl vergleichen</button>
+        <button class="btn small shot-compare" disabled>Auswahl vergleichen</button>
       </div>
       <div class="shot-gallery">
         ${tiles.map((t) => {
@@ -3198,13 +3260,19 @@
         }).join("")}
       </div>`;
 
-    grid.querySelectorAll(".shot-scene").forEach((b) =>
+    grid.querySelectorAll(".shot-scene[data-scene]").forEach((b) =>
       b.addEventListener("click", () => {
-        state.shotScene = +b.dataset.scene;
-        renderScreenshots(vmaf);
+        ui.scene = +b.dataset.scene;
+        renderScreenshots(vmaf, grid);
+      }));
+    grid.querySelectorAll(".shot-scene[data-group]").forEach((b) =>
+      b.addEventListener("click", () => {
+        ui.group = b.dataset.group;
+        ui.scene = null;
+        renderScreenshots(vmaf, grid);
       }));
 
-    const cmpBtn = $("shot-compare");
+    const cmpBtn = grid.querySelector(".shot-compare");
     const selected = () => [...grid.querySelectorAll(".shot-tile")]
       .filter((t) => t.querySelector(".shot-check input").checked)
       .map((t) => ({ src: t.dataset.src, label: t.dataset.cap }));
@@ -3296,8 +3364,16 @@
 
   function syncKeepSourceBanner(vmaf) {
     const el = $("vmaf-keep-source");
-    if (!el) return;
-    el.style.display = vmaf && vmaf.keep_source ? "" : "none";
+    if (el) el.style.display = vmaf && vmaf.keep_source ? "" : "none";
+    const warn = $("vmaf-pick-warning");
+    if (!warn) return;
+    if (vmaf && vmaf.pick_warning && !vmaf.keep_source) {
+      warn.textContent = vmaf.pick_warning;
+      warn.style.display = "";
+    } else {
+      warn.textContent = "";
+      warn.style.display = "none";
+    }
   }
 
   function fillVmafTable(vmaf) {
@@ -3310,7 +3386,9 @@
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td class="vmaf-row-actions">
-          ${r.recommended ? '<span class="badge recommended">Empfohlen</span>' : ""}
+          ${r.recommended ? (vmaf.pick_warning
+            ? '<span class="badge recommended" title="' + escapeHtml(vmaf.pick_warning) + '">Empfohlen · Kompromiss</span>'
+            : '<span class="badge recommended">Empfohlen</span>') : ""}
           <button class="btn btn-ghost btn-sm" data-take="${idx}" title="Diese Einstellung ins Encoding übernehmen">→ Encoding</button>
         </td>
       </tr>`).join("");
@@ -3320,13 +3398,18 @@
   }
 
   function chartColors() {
+    const accent = cssVar("--accent");
+    const warn = cssVar("--warn") || "#fbbf24";
     return {
-      accent: cssVar("--accent"),
+      accent,
       accent2: cssVar("--accent-2"),
       good: cssVar("--good"),
+      warn,
+      p1: warn,
       text: cssVar("--text"),
       muted: cssVar("--text-muted"),
       grid: cssVar("--border"),
+      band: colorWithAlpha(accent, 0.18),
     };
   }
 
@@ -3338,41 +3421,81 @@
 
     const ctx = $("vmaf-chart");
     const col = chartColors();
-    const labels = vmaf.results.map((r) => r.label || ("Q" + r.quality));
-    const scores = vmaf.results.map((r) => r.vmaf);
-    const savings = vmaf.results.map((r) => r.savings_percent);
-    const pointColors = vmaf.results.map((r) => (r.recommended ? col.good : col.accent));
-    const pointRadius = vmaf.results.map((r) => (r.recommended ? 8 : 4));
+    const rows = vmaf.results || [];
+    const labels = rows.map((r) => r.label || ("Q" + r.quality));
+    const scores = rows.map((r) => r.vmaf);
+    const savings = rows.map((r) => r.savings_percent);
+    const lows = rows.map((r) => (r.vmaf_1pct != null ? r.vmaf_1pct : null));
+    const hasLow = lows.some((v) => v != null);
+    const mins = rows.map((r) => (r.vmaf_min != null ? r.vmaf_min : null));
+    const maxes = rows.map((r) => (r.vmaf_max != null ? r.vmaf_max : null));
+    const hasBand = mins.some((v) => v != null) && maxes.some((v) => v != null);
+    const pointColors = rows.map((r) => (r.recommended ? col.good : col.accent));
+    const pointRadius = rows.map((r) => (r.recommended ? 8 : 4));
+
+    const datasets = [];
+    if (hasBand) {
+      datasets.push({
+        label: "Szenen min", data: mins, yAxisID: "y",
+        borderColor: "transparent", backgroundColor: "transparent",
+        pointRadius: 0, pointHoverRadius: 0, tension: 0.3, borderWidth: 0,
+        fill: false, spanGaps: true,
+      });
+      datasets.push({
+        label: "Szenen (min–max)", data: maxes, yAxisID: "y",
+        borderColor: "transparent", backgroundColor: col.band,
+        pointRadius: 0, pointHoverRadius: 0, tension: 0.3, borderWidth: 0,
+        fill: "-1", spanGaps: true,
+      });
+    }
+    datasets.push({
+      label: "VMAF-Mittel", data: scores, yAxisID: "y",
+      borderColor: col.accent, backgroundColor: "transparent",
+      pointBackgroundColor: pointColors, pointRadius, pointHoverRadius: 9,
+      tension: 0.3, borderWidth: 2.5, fill: false,
+    });
+    if (hasLow) {
+      datasets.push({
+        label: "1%-Low", data: lows, yAxisID: "y",
+        borderColor: col.p1, backgroundColor: "transparent",
+        borderDash: [5, 4], pointRadius: 3, pointHoverRadius: 6,
+        tension: 0.3, borderWidth: 2, fill: false, spanGaps: true,
+      });
+    }
+    datasets.push({
+      label: "Ersparnis %", data: savings, yAxisID: "y1",
+      borderColor: col.accent2, backgroundColor: "transparent",
+      borderDash: [5, 4], pointRadius: 3, tension: 0.3, borderWidth: 1.8,
+      fill: false,
+    });
 
     if (state.vmafChart) state.vmafChart.destroy();
     state.vmafChart = new Chart(ctx, {
       type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "VMAF-Score", data: scores, yAxisID: "y",
-            borderColor: col.accent, backgroundColor: "transparent",
-            pointBackgroundColor: pointColors, pointRadius, pointHoverRadius: 9,
-            tension: 0.3, borderWidth: 2.5,
-          },
-          {
-            label: "Ersparnis %", data: savings, yAxisID: "y1",
-            borderColor: col.accent2, backgroundColor: "transparent",
-            borderDash: [5, 4], pointRadius: 3, tension: 0.3, borderWidth: 1.8,
-          },
-        ],
-      },
+      data: { labels, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: { labels: { color: col.text, font: { size: 12 } } },
+          legend: {
+            labels: {
+              color: col.text, font: { size: 12 },
+              filter: (item) => item.text !== "Szenen min",
+            },
+          },
           annotation: {},
           tooltip: { callbacks: {
             afterBody: (ctxs) => {
               const i = ctxs[0].dataIndex;
-              return vmaf.results[i].recommended ? "★ Empfohlener Sweet Spot" : "";
+              const r = rows[i];
+              if (!r) return "";
+              const lines = [];
+              if (r.vmaf_1pct != null) lines.push(`1%-Low ${Number(r.vmaf_1pct).toFixed(1)}`);
+              if (r.vmaf_hmean != null) lines.push(`H-Ø ${Number(r.vmaf_hmean).toFixed(1)}`);
+              if (r.vmaf_min != null && r.vmaf_max != null)
+                lines.push(`Szenen ${Number(r.vmaf_min).toFixed(1)}–${Number(r.vmaf_max).toFixed(1)}`);
+              if (r.recommended) lines.push("★ Empfohlener Sweet Spot");
+              return lines;
             },
           }},
         },
@@ -3403,17 +3526,31 @@
       (groups[key] = groups[key] || []).push(r);
     });
 
-    const datasets = Object.keys(groups).map((name, gi) => {
+    const datasets = [];
+    Object.keys(groups).forEach((name, gi) => {
       const color = CHART_PALETTE[gi % CHART_PALETTE.length];
       const pts = groups[name].slice().sort((a, b) => a.savings_percent - b.savings_percent);
-      return {
+      datasets.push({
         label: name,
         data: pts.map((r) => ({ x: r.savings_percent, y: r.vmaf, _r: r })),
         borderColor: color, backgroundColor: "transparent",
         pointBackgroundColor: pts.map((r) => (r.recommended ? col.good : color)),
         pointRadius: pts.map((r) => (r.recommended ? 8 : 4)),
         pointHoverRadius: 9, tension: 0.25, borderWidth: 2.4, showLine: true,
-      };
+      });
+      if (pts.some((r) => r.vmaf_1pct != null)) {
+        datasets.push({
+          label: `${name} · 1%-Low`,
+          data: pts.map((r) => ({
+            x: r.savings_percent,
+            y: r.vmaf_1pct != null ? r.vmaf_1pct : null,
+            _r: r,
+          })),
+          borderColor: color, backgroundColor: "transparent",
+          borderDash: [5, 4], pointRadius: 3, pointHoverRadius: 6,
+          tension: 0.25, borderWidth: 1.6, showLine: true, spanGaps: true,
+        });
+      }
     });
 
     if (state.vmafChart) state.vmafChart.destroy();
@@ -3426,9 +3563,15 @@
           legend: { labels: { color: col.text, font: { size: 12 } } },
           tooltip: { callbacks: {
             label: (c) => {
-              const r = c.raw._r;
-              return `${c.dataset.label} ${r.label.split("·").pop().trim()}: `
+              const r = c.raw && c.raw._r;
+              if (!r) return "";
+              const extra = [];
+              if (r.vmaf_1pct != null) extra.push(`1%-Low ${Number(r.vmaf_1pct).toFixed(1)}`);
+              if (r.vmaf_min != null && r.vmaf_max != null)
+                extra.push(`Szenen ${Number(r.vmaf_min).toFixed(1)}–${Number(r.vmaf_max).toFixed(1)}`);
+              return `${c.dataset.label} ${String(r.label || "").split("·").pop().trim()}: `
                 + `VMAF ${r.vmaf.toFixed(1)} · ${r.predicted_human} (${r.savings_percent}%)`
+                + (extra.length ? ` · ${extra.join(" · ")}` : "")
                 + (r.recommended ? "  ★" : "");
             },
           }},
@@ -3979,6 +4122,7 @@
       `<button class="btn btn-ghost btn-sm" id="modal-requeue-edit">${tt("Erneut mit …")}</button>`;
 
     const html = `
+      ${d.vmaf_warning ? `<div class="keep-source-note" style="margin:0 0 12px">${escapeHtml(d.vmaf_warning)}</div>` : ""}
       <div class="stat-grid modal-stats">${statChips}</div>
       <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
       ${playToggle}
@@ -6068,7 +6212,7 @@
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.test_values = stTestValues();
-      s.generate_screenshots = false; // Batch: keine Screenshot-Flut
+      s.generate_screenshots = true;
       if (mode === "target_vmaf") s.target_vmaf = parseInt($("st-target").value, 10);
     } else if (mode === "fixed") {
       s.rate_mode = rateMode;
@@ -6228,14 +6372,42 @@
     const body = $("st-dash-body");
     if (!body) return;
     body.innerHTML = items.length ? items.map((it) => `
-      <tr>
-        <td title="${escapeHtml(it.path)}">${escapeHtml(it.title)}</td>
+      <tr class="st-dash-row${it.id === state.stVmafId ? " is-active" : ""}" data-id="${it.id}"
+          title="${it.vmaf ? "Vergleichsbilder anzeigen" : escapeHtml(it.path)}">
+        <td title="${escapeHtml(it.path)}">${escapeHtml(it.title)}${it.vmaf_warning ? `<div class="queue-warn">${escapeHtml(it.vmaf_warning)}</div>` : ""}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
         <td>${it.duration_human || "—"}</td>
         <td class="good">${it.saved_human}</td>
       </tr>`).join("") :
       '<tr class="empty-row"><td colspan="5">Noch nichts.</td></tr>';
+    body.querySelectorAll(".st-dash-row").forEach((tr) => {
+      tr.addEventListener("click", () => {
+        state.stVmafId = tr.dataset.id;
+        body.querySelectorAll(".st-dash-row").forEach((r) =>
+          r.classList.toggle("is-active", r.dataset.id === state.stVmafId));
+        const it = items.find((i) => i.id === tr.dataset.id);
+        const shots = $("st-screenshots");
+        if (shots) shots._shotKey = "";
+        renderScreenshots((it && it.vmaf) || { results: [] }, shots);
+      });
+    });
+    const hasShots = items.some((i) => i.vmaf && (i.vmaf.results || []).some((r) =>
+      (r.screenshots && r.screenshots.length) || r.screenshot_enc));
+    const hint = $("st-shot-hint");
+    if (hint) hint.style.display = hasShots ? "" : "none";
+    const focus = items.find((i) => i.id === state.stVmafId && i.vmaf)
+      || [...items].reverse().find((i) => i.vmaf && i.vmaf.results && i.vmaf.results.length);
+    const shots = $("st-screenshots");
+    const key = focus
+      ? (focus.id + ":" + (focus.vmaf.results || []).length + ":"
+        + ((focus.vmaf.results || []).some((r) => (r.screenshots || []).length) ? "s" : ""))
+      : "";
+    if (shots && shots._shotKey !== key) {
+      shots._shotKey = key;
+      if (focus && !state.stVmafId) state.stVmafId = focus.id;
+      renderScreenshots(focus ? focus.vmaf : { results: [] }, shots);
+    }
   }
 
   /* --------------------------------------------------- AUDIO-OPTIMIERUNG */

@@ -189,6 +189,7 @@ class VmafAnalysis:
     clip_seconds: int = 30
     error: str = ""            # Grund, falls keine Ergebnisse zustande kamen
     keep_source: bool = False  # Ziel nur mit größerer Datei erreichbar
+    pick_warning: str = ""     # Floor verfehlt, Kompromiss Ersparnis/1%-Low
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -204,6 +205,7 @@ class VmafAnalysis:
             "clip_seconds": self.clip_seconds,
             "error": self.error,
             "keep_source": self.keep_source,
+            "pick_warning": self.pick_warning,
         }
 
 
@@ -629,7 +631,11 @@ def analyze(
             return
 
         avg_score = sum(scores) / len(scores)
-        predicted = int((total_size / total_dur) * info.duration)
+        # Test-Encodes sind video-only (`audio_mode=none`). Die echte Ausgabe
+        # behält Ton/Untertitel – ohne den Aufschlag wirkt CQ 24 oft „kleiner
+        # als die Quelle“, obwohl Video+Ton wächst.
+        predicted_video = int((total_size / total_dur) * info.duration)
+        predicted = predicted_video + _copied_payload_bytes(info, opts.params)
         savings = 0.0
         if info.size_bytes > 0:
             savings = (info.size_bytes - predicted) / info.size_bytes * 100.0
@@ -831,6 +837,46 @@ def sessions_for_source(abs_path: str, limit: int = 20) -> list[dict]:
     return out[:limit]
 
 
+def _copied_payload_bytes(info: VideoInfo, params: Optional[dict] = None) -> int:
+    """Geschätzte Bytes, die neben dem neuen Video in die Ausgabe wandern (Ton)."""
+    params = params or {}
+    dur = float(info.duration or 0.0)
+    if dur <= 0:
+        return 0
+    audio_mode = str(params.get("audio_mode") or "copy").lower()
+    if audio_mode in ("none", "drop", "off"):
+        return 0
+    audios = list(info.audio or [])
+    tracks = params.get("audio_tracks") or []
+    if tracks and audios:
+        sel = []
+        for idx in tracks:
+            try:
+                i = int(idx)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= i < len(audios):
+                sel.append(audios[i])
+        if sel:
+            audios = sel
+    n = max(1, len(audios)) if audios else 1
+    if audio_mode in ("encode", "transcode"):
+        kbps = int(params.get("audio_bitrate") or params.get("audio_bitrate_kbps") or 160)
+        return int(kbps * 1000 / 8.0 * dur * n)
+    # copy: Stream-Bitraten, sonst Dateigröße minus Video-Schätzung
+    copied = 0
+    for a in audios:
+        br = int(a.get("bitrate") or 0) if isinstance(a, dict) else 0
+        if br > 0:
+            copied += int(br / 8.0 * dur)
+    if copied > 0:
+        return copied
+    vb = int(info.video_bitrate or 0)
+    if vb > 0 and info.size_bytes > 0:
+        return max(0, info.size_bytes - int(vb / 8.0 * dur))
+    return 0
+
+
 def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
     if r.vmaf < lo:
         return False
@@ -862,7 +908,21 @@ def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str
                 pair = (int(a.value), int(b.value))
                 break
         if not pair:
-            continue
+            # Nichts solid: Mitte zwischen bestem 1%-Low und größter Ersparnis
+            # unter den Sparern, damit der Kompromiss nicht nur am groben Raster hängt.
+            min_sav = app_settings.vmaf_min_savings()
+            if min_sav is None:
+                continue
+            savers = [r for r in rows
+                      if r.savings_percent >= min_sav and r.vmaf >= lo]
+            if len(savers) < 2:
+                continue
+            a = max(savers, key=lambda r: (
+                r.vmaf_1pct if r.vmaf_1pct else r.vmaf, -r.predicted_size_bytes))
+            b = min(savers, key=lambda r: r.predicted_size_bytes)
+            if int(a.value) == int(b.value):
+                continue
+            pair = (int(a.value), int(b.value))
         v1, v2 = pair
         if bitrate:
             if abs(v1 - v2) < 250:
@@ -880,6 +940,54 @@ def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str
     return jobs
 
 
+def _p1_of(r: VmafResult) -> float:
+    return r.vmaf_1pct if r.vmaf_1pct else r.vmaf
+
+
+def _p1_slack(gap: float) -> float:
+    """Spielraum unter dem besten 1%-Low der Sparer, wenn der Floor verfehlt ist.
+
+    2 Punkte sind oft kaum sichtbar (außer in den schwierigsten Frames).
+    gap/3 koppelt das an den Floor-Slider (Vorgabe 6 → 2).
+    """
+    return max(2.0, float(gap or 0) / 3.0)
+
+
+def _compromise_saver(pool: list, gap: float) -> VmafResult:
+    """Unter sparenden Stufen: nahe am besten 1%-Low, dort die kleinste Datei."""
+    best_p1 = max(_p1_of(r) for r in pool)
+    limit = best_p1 - _p1_slack(gap)
+    near = [r for r in pool if _p1_of(r) + 1e-9 >= limit]
+    if not near:
+        near = list(pool)
+    return min(near, key=lambda r: (r.predicted_size_bytes, -_p1_of(r)))
+
+
+def _savings_pick_warning(best: VmafResult, lo: float, gap: float,
+                          pool: list) -> str:
+    """Hinweis: Floor verfehlt, Kompromiss aus Ersparnis-Pflicht und 1%-Low."""
+    p1 = _p1_of(best)
+    floor = lo - gap if gap > 0 else lo
+    slack = _p1_slack(gap)
+    best_p1_row = max(pool, key=lambda r: (_p1_of(r), -r.predicted_size_bytes))
+    most_save = min(pool, key=lambda r: r.predicted_size_bytes)
+    bits = [
+        f"Kompromiss: 1%-Low unter Floor {floor:.0f} (Ziel {lo:.0f}), "
+        f"Ersparnis war Pflicht. Gewählt: {best.label} · VMAF {best.vmaf:.1f} · "
+        f"1%-Low {p1:.1f} (Fenster {slack:.0f} Punkte unter bestem Sparer "
+        f"{_p1_of(best_p1_row):.1f}) · Ersparnis {best.savings_percent:+.1f} %.",
+    ]
+    if int(best_p1_row.value) != int(best.value):
+        bits.append(
+            f"Näher am 1%-Low wäre {best_p1_row.label} "
+            f"({_p1_of(best_p1_row):.1f}, {best_p1_row.savings_percent:+.1f} %).")
+    if int(most_save.value) != int(best.value):
+        bits.append(
+            f"Mehr Ersparnis wäre {most_save.label} "
+            f"({_p1_of(most_save):.1f}, {most_save.savings_percent:+.1f} %).")
+    return " ".join(bits)
+
+
 def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return
@@ -891,28 +999,51 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     gap = app_settings.vmaf_p1_gap()
     min_sav = app_settings.vmaf_min_savings()
 
-    def _p1(r: VmafResult) -> float:
-        return r.vmaf_1pct if r.vmaf_1pct else r.vmaf
+    def _most_savings(rows: list) -> VmafResult:
+        return min(rows, key=lambda r: (r.predicted_size_bytes, -_p1_of(r)))
 
     mean_ok = [r for r in analysis.results if r.vmaf >= lo]
     solid = [r for r in analysis.results if _result_solid(r, lo, gap)]
-    compact = solid if min_sav is None else [
-        r for r in solid if r.savings_percent >= min_sav
-    ]
+
+    def _saving_ok(rows: list) -> list:
+        if min_sav is None:
+            return list(rows)
+        return [r for r in rows if r.savings_percent >= min_sav]
+
+    compact = _saving_ok(solid)
     analysis.keep_source = False
+    analysis.pick_warning = ""
     if compact:
-        best = min(compact, key=lambda r: r.predicted_size_bytes)
+        best = _most_savings(compact)
     elif solid:
         # Ziel gehalten, aber jede Stufe wäre größer als die Quelle.
         analysis.keep_source = True
-        best = min(solid, key=lambda r: r.predicted_size_bytes)
+        best = _most_savings(solid)
+    elif min_sav is not None and (_saving_ok(mean_ok) or _saving_ok(analysis.results)):
+        # Floor verfehlt: Ersparnis ist Pflicht, 1%-Low bleibt ein Fenster –
+        # nicht die kleinste Datei um jeden Preis und nicht das beste Low.
+        pool = _saving_ok(mean_ok) or _saving_ok(analysis.results)
+        best = _compromise_saver(pool, gap)
+        analysis.pick_warning = _savings_pick_warning(best, lo, gap, pool)
     elif mean_ok:
-        best = max(mean_ok, key=lambda r: (_p1(r), -r.predicted_size_bytes))
+        if min_sav is not None:
+            analysis.keep_source = True
+        best = max(mean_ok, key=lambda r: (_p1_of(r), -r.predicted_size_bytes))
     else:
-        best = max(
-            analysis.results,
-            key=lambda r: (quality_score(r.vmaf, r.vmaf_1pct, r.vmaf_hmean), r.vmaf),
-        )
+        compact_any = _saving_ok(analysis.results)
+        if compact_any:
+            best = max(
+                compact_any,
+                key=lambda r: (
+                    quality_score(r.vmaf, r.vmaf_1pct, r.vmaf_hmean), r.vmaf),
+            )
+        else:
+            analysis.keep_source = True
+            best = max(
+                analysis.results,
+                key=lambda r: (
+                    quality_score(r.vmaf, r.vmaf_1pct, r.vmaf_hmean), r.vmaf),
+            )
     if not analysis.keep_source:
         best.recommended = True
     analysis.recommended_value = best.value

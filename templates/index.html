@@ -643,6 +643,7 @@
             Ziel-VMAF und Super-Tool überspringen den Encode. Du kannst eine Stufe trotzdem
             mit „→ Encoding“ übernehmen.
           </div>
+          <div id="vmaf-pick-warning" class="keep-source-note" style="display:none"></div>
           <div class="card-body vmaf-body">
             <div class="vmaf-chart-wrap">
               <canvas id="vmaf-chart"></canvas>
@@ -1207,6 +1208,8 @@
                   <tbody id="st-dash-body"></tbody>
                 </table>
               </div>
+              <p class="hint" id="st-shot-hint" style="display:none">Zeile anklicken, um die Vergleichsbilder der VMAF-Szenen zu sehen.</p>
+              <div id="st-screenshots" class="shot-wrap"></div>
             </div>
           </div>
         </section>
@@ -1302,11 +1305,13 @@
 
             <div class="divider"></div>
             <h4 class="subsection">Encoder-Test (VMAF)</h4>
-            <p class="hint">Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten
-              (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen
+            <p class="hint">Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten
+              (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen
               Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten
               encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen.
-              Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).
+              Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte
+              der Blender-Filme (Big Buck Bunny, Sintel) plus Jellyfin-Testvideos
+              (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel bleibt der Live-Action-Clip.
               <a href="#faq-enc-bench" class="faq-jump">FAQ</a></p>
 
             <div id="eb-clips" class="enc-bench-clips"></div>
@@ -1381,6 +1386,7 @@
             <p class="hint" id="eb-msg"></p>
             <div class="enc-bench-rec" id="eb-rec" style="display:none"></div>
             <div id="eb-results"></div>
+            <div id="eb-screenshots" class="shot-wrap"></div>
           </div>
         </section>
 
@@ -2480,8 +2486,8 @@
             <details class="faq-item" id="faq-enc-bench">
               <summary>Wie finde ich die passende Encoder-Speed-Stufe?</summary>
               <div class="faq-body">
-                <p>Der Encoder-Test unter Einstellungen lädt kurze Referenzclips (feste, freie Quellen: Blender Foundation CC-BY – Big Buck Bunny, Sintel, Tears of Steel – plus Intel- und Wikimedia-Clips für Bewegung und Handkamera). Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen, wenn deine Quellen anders aussehen als die Demos.</p>
-                <p>Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5, keine Screenshots). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit.</p>
+                <p>Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny und Sintel über Wikimedia, Tears of Steel für Live-Action, plus ein Jellyfin-Testvideo in UHD bei etwa 40 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos und die winzigen Intel-Clips sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.</p>
+                <p>Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).</p>
                 <p>Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.</p>
                 <p>Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.</p>
               </div>
@@ -2555,7 +2561,7 @@
               <div class="faq-body">
                 <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.</p>
                 <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
-                <p>Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.</p>
+                <p>Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei (Video plus kopierter Ton) mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Hält keine Stufe den 1%-Low-Abstand, aber mindestens eine spart, gilt Ersparnis als Pflicht – unter den Sparern bleibt ein Fenster von etwa 2 Punkten unter dem besten 1%-Low (⅓ des Floor-Abstands), dort die kleinste Datei (Kompromiss, Warnung in der Warteschlange). Wird trotzdem encodiert und die echte Datei ist zu groß, wird die Ausgabe verworfen. Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-container">

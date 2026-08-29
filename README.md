@@ -245,9 +245,10 @@ The Film/Series/Anime chips are job templates (CQ, codec, anime mode), not
 encoder speed.
 
 Under **Settings → Encoder speed** you can run an **encoder test**: download
-short free reference clips of different picture types (animation, film CGI,
-live action/VFX, motion, handheld — Blender CC-BY, Intel CC-BY and Wikimedia, allowlisted
-URLs only) and/or pick up to four files from your library. The test uses the
+free reference clips of different picture types (4K excerpts from Blender’s
+Big Buck Bunny and Sintel, Tears of Steel for live action, plus a Jellyfin
+UHD ~40 Mbps test file, CC-BY-SA — allowlisted URLs only) and/or pick up to
+four files from your library. The test uses the
 **native presets of the selected encoder** (SVT 0–13, x264/x265
 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow), not only the five
 aliases. Default comparison is fast/balanced/slow; **All tiers** tests every

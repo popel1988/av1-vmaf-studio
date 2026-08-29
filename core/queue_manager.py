@@ -148,6 +148,7 @@ class QueueItem:
     caps_failed: bool = False            # Größen-/Bitrate-Cap überschritten
     crop: str = ""                       # erkannter Auto-Crop "w:h:x:y" (leer = kein)
     message: str = ""
+    vmaf_warning: str = ""               # 1%-Low verfehlt, Ersparnis-Vorrang
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -186,6 +187,7 @@ class QueueItem:
             "caps_failed": self.caps_failed,
             "crop": self.crop,
             "output_path": self.output_path,
+            "vmaf_warning": self.vmaf_warning,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -267,6 +269,7 @@ class QueueManager:
                 "integrity_msg": it.integrity_msg or "",
                 "caps_failed": bool(it.caps_failed),
                 "crop": it.crop or "",
+                "vmaf_warning": it.vmaf_warning or "",
                 "created_at": it.created_at,
                 "started_at": it.started_at,
                 "finished_at": it.finished_at,
@@ -357,6 +360,7 @@ class QueueManager:
                     integrity_msg=str(d.get("integrity_msg") or ""),
                     caps_failed=bool(d.get("caps_failed")),
                     crop=str(d.get("crop") or ""),
+                    vmaf_warning=str(d.get("vmaf_warning") or ""),
                     created_at=float(d.get("created_at", time.time())),
                     started_at=float(d.get("started_at", 0) or 0),
                     finished_at=float(d.get("finished_at", 0) or 0),
@@ -839,6 +843,8 @@ class QueueManager:
                     self._group_skip.add(item.group_id)
                 return
 
+            item.vmaf_warning = analysis.pick_warning or ""
+
             if s.workflow == "manual":
                 item.status = STATUS_AWAITING
                 return
@@ -857,6 +863,7 @@ class QueueManager:
                         "rate_mode": s.rate_mode,
                         "codec": s.codec,
                         "platform": s.platform,
+                        "warning": item.vmaf_warning,
                     }
         else:
             with self._lock:
@@ -867,6 +874,8 @@ class QueueManager:
                 s.codec = gq.get("codec", s.codec)
                 s.platform = gq.get("platform", s.platform)
                 s.suffix = "_" + s.codec
+                if gq.get("warning"):
+                    item.vmaf_warning = gq["warning"]
 
         # --- Größenziel → ABR-Videobitrate (inkl. Tonspuren) -------------------
         if float(getattr(s, "size_target_mb", 0) or 0) > 0:
@@ -919,6 +928,10 @@ class QueueManager:
             # nur HEVC.
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
+            # Schon zu groß: Qualität nicht weiter anheben (würde noch größer).
+            if (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
+                    and self._savings_too_low(item, out_path)):
+                break
             if not do_verify:
                 break
             score = self._verify_output(item, s, info, out_path)
@@ -932,6 +945,7 @@ class QueueManager:
                 continue
             break
 
+        keep_msg = ""
         if cancelled:
             item.status = STATUS_CANCELLED
             out_path.unlink(missing_ok=True)
@@ -941,6 +955,10 @@ class QueueManager:
             logger.error("Encode fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
                          item.title, rc, " ".join(cmd), stderr)
             out_path.unlink(missing_ok=True)
+        elif (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
+              and self._savings_too_low(item, out_path)):
+            keep_msg = self._discard_keep_source(item, out_path)
+            item.progress["percent"] = 100.0
         else:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
@@ -956,7 +974,7 @@ class QueueManager:
             self._post_process(item, out_path)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
-        item.message = ""
+        item.message = keep_msg
 
     def _process_chunked(self, item: "QueueItem", info) -> None:
         """Per-Szene/Chunked Adaptive Encoding: Segmente mit adaptivem CQ."""
@@ -1004,27 +1022,34 @@ class QueueManager:
         if item.id in self._cancel_ids or (not ok and err == "Abgebrochen"):
             item.status = STATUS_CANCELLED
             out_path.unlink(missing_ok=True)
+            item.message = ""
         elif not ok:
             item.status = STATUS_FAILED
             item.error = err or "Chunked-Encode fehlgeschlagen"
             logger.error("Chunked fehlgeschlagen: %s | %s", item.title, err)
             out_path.unlink(missing_ok=True)
+            item.message = ""
         else:
             # Dolby Vision nach Chunked-Encode nur für HEVC (dovi_tool). AV1-DV
             # ist über zusammengefügte Segmente nicht zuverlässig einbettbar –
             # dort bleibt der HDR10-Basislayer erhalten.
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
-            item.output_path = str(out_path)
-            item.output_size = out_path.stat().st_size if out_path.exists() else 0
-            item.saved_bytes = max(0, item.original_size - item.output_size)
-            self._run_integrity(item, s, info, out_path)
-            self._run_caps(item, s, out_path)
-            ff.add_mkv_statistics_tags(out_path)
-            self._post_process(item, out_path)
-            item.status = STATUS_DONE
-            item.progress["percent"] = 100.0
-        item.message = ""
+            if (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
+                    and self._savings_too_low(item, out_path)):
+                item.message = self._discard_keep_source(item, out_path)
+                item.progress["percent"] = 100.0
+            else:
+                item.output_path = str(out_path)
+                item.output_size = out_path.stat().st_size if out_path.exists() else 0
+                item.saved_bytes = max(0, item.original_size - item.output_size)
+                self._run_integrity(item, s, info, out_path)
+                self._run_caps(item, s, out_path)
+                ff.add_mkv_statistics_tags(out_path)
+                self._post_process(item, out_path)
+                item.status = STATUS_DONE
+                item.progress["percent"] = 100.0
+                item.message = ""
 
     def _process_audio_remux(self, item: "QueueItem", info) -> None:
         """Nur-Audio-Optimierung: Video/Untertitel/Kapitel kopieren, aufgeblähte
@@ -1503,6 +1528,48 @@ class QueueManager:
                            item.title, msg)
 
     @staticmethod
+    def _vmaf_chose_quality(self, item: QueueItem, s: "JobSettings") -> bool:
+        """True, wenn die Qualität aus einer VMAF-Empfehlung stammt (auch Folgedateien)."""
+        if s.vmaf_check or float(s.target_vmaf or 0) > 0:
+            return True
+        with self._lock:
+            return item.group_id in self._group_quality
+
+    @staticmethod
+    def _savings_too_low(item: QueueItem, out_path: Path) -> bool:
+        from . import app_settings
+        min_sav = app_settings.vmaf_min_savings()
+        if min_sav is None:
+            return False
+        try:
+            out_size = out_path.stat().st_size if out_path.exists() else 0
+        except OSError:
+            return False
+        orig = int(item.original_size or 0)
+        if orig <= 0 or out_size <= 0:
+            return False
+        actual = (orig - out_size) / orig * 100.0
+        return actual < min_sav
+
+    def _discard_keep_source(self, item: QueueItem, out_path: Path) -> str:
+        """Ausgabe löschen, Quelle behalten. Gibt die Statusmeldung zurück."""
+        try:
+            out_sz = out_path.stat().st_size if out_path.exists() else 0
+        except OSError:
+            out_sz = 0
+        logger.info(
+            "Mindest-Ersparnis: Ausgabe verworfen (%s, %s → %s)",
+            item.title, ff.human_size(item.original_size), ff.human_size(out_sz))
+        out_path.unlink(missing_ok=True)
+        item.output_path = ""
+        item.output_size = 0
+        item.saved_bytes = 0
+        item.status = STATUS_DONE
+        msg = ("Quelle behalten: Encode erfüllt die Mindest-Ersparnis nicht.")
+        with self._lock:
+            self._group_skip.add(item.group_id)
+        return msg
+
     def _run_caps(item: QueueItem, s: "JobSettings", out_path: Path) -> None:
         """Größen-/Bitrate-Obergrenzen prüfen (Warnung, safe_replace blockieren)."""
         item.caps_failed = False

@@ -2215,6 +2215,8 @@ async def queue_details(item_id: str):
         "id": item.id, "title": item.title, "status": item.status,
         "path": item.path, "source": src, "output": out, "stats": stats,
         "settings": item.settings.__dict__ if item.settings else {},
+        "vmaf_warning": item.vmaf_warning or "",
+        "vmaf": item.vmaf,
     }
 
 
