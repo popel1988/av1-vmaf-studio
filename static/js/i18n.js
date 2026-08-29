@@ -1372,26 +1372,46 @@
       "Settings → Encoder speed includes an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "How do I find a matching encoder speed tier?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny und Sintel über Wikimedia, Tears of Steel für Live-Action, plus ein Jellyfin-Testvideo in UHD bei etwa 40 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos und die winzigen Intel-Clips sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "The encoder test under Settings downloads reference clips (fixed, free sources): ~40 s 4K excerpts of Big Buck Bunny and Sintel via Wikimedia, Tears of Steel for live action, plus a Jellyfin UHD test file at about 40 Mbps (CC-BY-SA, Gnattu). The old 10-second 1080p demos and tiny Intel clips are only fallbacks if a mirror is down. You can add up to four files from your library.",
-    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel) plus Jellyfin-Testvideos (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel bleibt der Live-Action-Clip.":
-      "Finds a matching speed tier: clips of different picture types (4K animation, film CGI, live action, motion, high bitrate) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources: 4K excerpts of the Blender films (Big Buck Bunny, Sintel) plus Jellyfin test videos (UHD, ~40 Mbps, CC-BY-SA). Tears of Steel remains the live-action clip.",
+    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "The encoder test under Settings downloads reference clips (fixed, free sources): ~40 s 4K excerpts of Big Buck Bunny, Sintel, Tears of Steel and Charge via Wikimedia, plus 4K material at 30/50/60 fps (NASA, Menger, nature) and a Jellyfin UHD test file at about 150 Mbps (CC-BY-SA, Gnattu). The old 10-second 1080p demos are only fallbacks if a mirror is down. You can add up to four files from your library.",
+    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
+      "Finds a matching speed tier: clips of different picture types (4K animation, film CGI, live action, motion, high bitrate) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources: 4K excerpts of the Blender films (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K clips at 30/50/60 fps plus Jellyfin test videos (UHD, ~150 Mbps, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animation 4K (flats, banding)",
     "Film-CGI 4K (Detail, Dunkel)": "Film CGI 4K (detail, dark)",
+    "Live-Action 4K / VFX": "Live action 4K / VFX",
     "Viel Bewegung 4K": "Lots of motion 4K",
-    "4K hohe Bitrate (Jellyfin)": "4K high bitrate (Jellyfin)",
-    "4K, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
-      "4K, ~40 s: flats and hard edges – fast presets band here.",
-    "4K, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
-      "4K, ~40 s: soft gradients and dark scenes – typical of feature film.",
-    "Echte Kamera plus Effekte, ~40 s – Korn und hohe Komplexität.":
-      "Real camera plus effects, ~40 s – grain and high complexity.",
-    "4K-Verfolgungsjagd, ~40 s – Speed-Presets sparen hier oft falsch.":
-      "4K chase, ~40 s – speed presets often save bits in the wrong place here.",
-    "Längerer Ausschnitt mit mehr Detail im Hintergrund als die alten Mini-Clips.":
-      "Longer excerpt with more background detail than the old mini clips.",
-    "UHD, ~40 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 1080p-Kurzclips.":
-      "UHD, ~40 Mbps, 10-bit HEVC, ~28 s – closer to 4K remuxes than 1080p shorts.",
+    "Kamera 4K / Zugfahrt": "Camera 4K / train ride",
+    "CGI 4K modern (Partikel)": "Modern CGI 4K (particles)",
+    "Erde 4K 30 fps": "Earth 4K 30 fps",
+    "Detail 4K 50 fps": "Detail 4K 50 fps",
+    "Detail 4K 50 fps (lang)": "Detail 4K 50 fps (long)",
+    "Natur 4K 60 fps": "Nature 4K 60 fps",
+    "Natur 4K 60 fps (lang)": "Nature 4K 60 fps (long)",
+    "4K hohe Bitrate 150 Mbit/s": "4K high bitrate 150 Mbps",
+    "4K 24 fps, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
+      "4K 24 fps, ~40 s: flats and hard edges – fast presets band here.",
+    "4K 24 fps, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
+      "4K 24 fps, ~40 s: soft gradients and dark scenes – typical of feature film.",
+    "4K 24 fps, ~40 s: echte Kamera plus VFX – Korn und hohe Komplexität.":
+      "4K 24 fps, ~40 s: real camera plus VFX – grain and high complexity.",
+    "4K-Verfolgungsjagd, 24 fps, ~40 s – Speed-Presets sparen hier oft falsch.":
+      "4K chase, 24 fps, ~40 s – speed presets often save bits in the wrong place here.",
+    "4K echte Kamera, ~40 s: viel Detail im Hintergrund, stetige Bewegung.":
+      "4K real camera, ~40 s: lots of background detail, steady motion.",
+    "4K 24 fps, ~40 s: modernes CGI mit Funken, Fell und schnellen Cuts.":
+      "4K 24 fps, ~40 s: modern CGI with sparks, fur and fast cuts.",
+    "4K ~30 fps, ~97 s: weiche Kamerafahrt, Wolken und Erde – ganzer Clip.":
+      "4K ~30 fps, ~97 s: soft camera move, clouds and Earth – full clip.",
+    "4K 50 fps, ~40 s: feine Strukturen und Kamerafahrt (PAL-Takt).":
+      "4K 50 fps, ~40 s: fine structures and a camera fly-through (PAL cadence).",
+    "4K 50 fps, ~90 s: dieselbe Quelle wie der Kurzclip, längere Kamerafahrt.":
+      "4K 50 fps, ~90 s: same source as the short clip, longer camera fly-through.",
+    "4K 60 fps, ~40 s: Tiere und Natur – hoher Framerate-Stress für Encoder.":
+      "4K 60 fps, ~40 s: animals and nature – high frame-rate stress for encoders.",
+    "4K 60 fps, ~90 s: dieselbe Quelle wie der Kurzclip, mehr Szenenwechsel.":
+      "4K 60 fps, ~90 s: same source as the short clip, more scene changes.",
+    "UHD, ~150 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 40-Mbit-Clips.":
+      "UHD, ~150 Mbps, 10-bit HEVC, ~28 s – closer to 4K remuxes than 40 Mbps clips.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Each clip × speed tier runs a mini VMAF like the VMAF Tool (one excerpt, no screenshots). You choose CQ or ABR/CBR and up to four values. The table shows VMAF, 1% low, clip size and time. The recommendation steps to the next-slower tier only when the VMAF gain is clear and time does not explode (rule of thumb: at least +0.5 VMAF and a time factor under about 3.5 – or a gain over +1.2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
@@ -2371,26 +2391,46 @@
       "En Ajustes → Encoder-Speed hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "¿Cómo encuentro el nivel de velocidad adecuado?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny und Sintel über Wikimedia, Tears of Steel für Live-Action, plus ein Jellyfin-Testvideo in UHD bei etwa 40 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos und die winzigen Intel-Clips sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "La prueba de encoder en Ajustes descarga clips de referencia (fuentes fijas y libres): extractos 4K de ~40 s de Big Buck Bunny y Sintel vía Wikimedia, Tears of Steel para acción real, más un vídeo de prueba Jellyfin en UHD a unos 40 Mbit/s (CC-BY-SA, Gnattu). Las demos antiguas de 10 s en 1080p y los clips diminutos de Intel solo son reserva si un espejo falla. Puedes añadir hasta cuatro archivos de tu biblioteca.",
-    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel) plus Jellyfin-Testvideos (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel bleibt der Live-Action-Clip.":
-      "Encuentra un nivel de velocidad adecuado: clips de distintos tipos de imagen (animación 4K, CGI de cine, acción real, movimiento, alto bitrate) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres: extractos 4K de las películas Blender (Big Buck Bunny, Sintel) más vídeos de prueba Jellyfin (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel sigue siendo el clip de acción real.",
+    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "La prueba de encoder en Ajustes descarga clips de referencia (fuentes fijas y libres): extractos 4K de ~40 s de Big Buck Bunny, Sintel, Tears of Steel y Charge vía Wikimedia, más material 4K a 30/50/60 fps (NASA, Menger, naturaleza) y un vídeo de prueba Jellyfin en UHD a unos 150 Mbit/s (CC-BY-SA, Gnattu). Las demos antiguas de 10 s en 1080p solo son reserva si un espejo falla. Puedes añadir hasta cuatro archivos de tu biblioteca.",
+    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
+      "Encuentra un nivel de velocidad adecuado: clips de distintos tipos de imagen (animación 4K, CGI de cine, acción real, movimiento, alto bitrate) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres: extractos 4K de las películas Blender (Big Buck Bunny, Sintel, Tears of Steel, Charge), clips 4K a 30/50/60 fps más vídeos de prueba Jellyfin (UHD, ~150 Mbit/s, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animación 4K (planos, banding)",
     "Film-CGI 4K (Detail, Dunkel)": "CGI de cine 4K (detalle, oscuro)",
+    "Live-Action 4K / VFX": "Acción real 4K / VFX",
     "Viel Bewegung 4K": "Mucho movimiento 4K",
-    "4K hohe Bitrate (Jellyfin)": "4K alto bitrate (Jellyfin)",
-    "4K, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
-      "4K, ~40 s: planos y bordes duros – los presets rápidos bandean aquí.",
-    "4K, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
-      "4K, ~40 s: degradados suaves y escenas oscuras – típico de cine.",
-    "Echte Kamera plus Effekte, ~40 s – Korn und hohe Komplexität.":
-      "Cámara real más efectos, ~40 s – grano y alta complejidad.",
-    "4K-Verfolgungsjagd, ~40 s – Speed-Presets sparen hier oft falsch.":
-      "Persecución 4K, ~40 s – los presets rápidos a menudo ahorran mal aquí.",
-    "Längerer Ausschnitt mit mehr Detail im Hintergrund als die alten Mini-Clips.":
-      "Extracto más largo, con más detalle de fondo que los mini-clips antiguos.",
-    "UHD, ~40 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 1080p-Kurzclips.":
-      "UHD, ~40 Mbit/s, HEVC 10 bit, ~28 s – más cerca de un remux 4K que un corto 1080p.",
+    "Kamera 4K / Zugfahrt": "Cámara 4K / tren",
+    "CGI 4K modern (Partikel)": "CGI 4K moderno (partículas)",
+    "Erde 4K 30 fps": "Tierra 4K 30 fps",
+    "Detail 4K 50 fps": "Detalle 4K 50 fps",
+    "Detail 4K 50 fps (lang)": "Detalle 4K 50 fps (largo)",
+    "Natur 4K 60 fps": "Naturaleza 4K 60 fps",
+    "Natur 4K 60 fps (lang)": "Naturaleza 4K 60 fps (largo)",
+    "4K hohe Bitrate 150 Mbit/s": "4K alto bitrate 150 Mbit/s",
+    "4K 24 fps, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
+      "4K 24 fps, ~40 s: planos y bordes duros – los presets rápidos bandean aquí.",
+    "4K 24 fps, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
+      "4K 24 fps, ~40 s: degradados suaves y escenas oscuras – típico de cine.",
+    "4K 24 fps, ~40 s: echte Kamera plus VFX – Korn und hohe Komplexität.":
+      "4K 24 fps, ~40 s: cámara real más VFX – grano y alta complejidad.",
+    "4K-Verfolgungsjagd, 24 fps, ~40 s – Speed-Presets sparen hier oft falsch.":
+      "Persecución 4K, 24 fps, ~40 s – los presets rápidos a menudo ahorran mal aquí.",
+    "4K echte Kamera, ~40 s: viel Detail im Hintergrund, stetige Bewegung.":
+      "4K cámara real, ~40 s: mucho detalle de fondo, movimiento constante.",
+    "4K 24 fps, ~40 s: modernes CGI mit Funken, Fell und schnellen Cuts.":
+      "4K 24 fps, ~40 s: CGI moderno con chispas, pelaje y cortes rápidos.",
+    "4K ~30 fps, ~97 s: weiche Kamerafahrt, Wolken und Erde – ganzer Clip.":
+      "4K ~30 fps, ~97 s: travelling suave, nubes y Tierra – clip completo.",
+    "4K 50 fps, ~40 s: feine Strukturen und Kamerafahrt (PAL-Takt).":
+      "4K 50 fps, ~40 s: estructuras finas y travelling (cadencia PAL).",
+    "4K 50 fps, ~90 s: dieselbe Quelle wie der Kurzclip, längere Kamerafahrt.":
+      "4K 50 fps, ~90 s: la misma fuente que el clip corto, travelling más largo.",
+    "4K 60 fps, ~40 s: Tiere und Natur – hoher Framerate-Stress für Encoder.":
+      "4K 60 fps, ~40 s: animales y naturaleza – estrés de alta cadencia para el encoder.",
+    "4K 60 fps, ~90 s: dieselbe Quelle wie der Kurzclip, mehr Szenenwechsel.":
+      "4K 60 fps, ~90 s: la misma fuente que el clip corto, más cambios de escena.",
+    "UHD, ~150 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 40-Mbit-Clips.":
+      "UHD, ~150 Mbit/s, HEVC 10 bit, ~28 s – más cerca de un remux 4K que clips de 40 Mbit/s.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Por cada clip y nivel de velocidad corre un mini VMAF como en la herramienta VMAF (un fragmento, sin capturas). Eliges CQ o ABR/CBR y hasta cuatro valores. La tabla muestra VMAF, 1 % low, tamaño del clip y tiempo. La recomendación pasa al nivel más lento solo si la ganancia de VMAF es clara y el tiempo no explota (regla: al menos +0,5 VMAF y factor de tiempo bajo ~3,5 – o una ganancia sobre +1,2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
@@ -3363,26 +3403,46 @@
       "Dans Paramètres → Encoder-Speed, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "Comment trouver le cran de vitesse d'encodeur adapté ?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny und Sintel über Wikimedia, Tears of Steel für Live-Action, plus ein Jellyfin-Testvideo in UHD bei etwa 40 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos und die winzigen Intel-Clips sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "Le test d'encodeur dans Paramètres télécharge des clips de référence (sources fixes et libres) : extraits 4K d'environ 40 s de Big Buck Bunny et Sintel via Wikimedia, Tears of Steel pour la prise de vue réelle, plus un fichier de test Jellyfin en UHD à environ 40 Mbit/s (CC-BY-SA, Gnattu). Les anciennes démos 1080p de 10 s et les mini-clips Intel ne servent plus que de repli si un miroir est down. Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque.",
-    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel) plus Jellyfin-Testvideos (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel bleibt der Live-Action-Clip.":
-      "Trouve un cran de vitesse adapté : des clips de types d'image différents (animation 4K, CGI film, prise de vue réelle, mouvement, haut débit) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres : extraits 4K des films Blender (Big Buck Bunny, Sintel) plus les vidéos de test Jellyfin (UHD, ~40 Mbit/s, CC-BY-SA). Tears of Steel reste le clip live-action.",
+    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "Le test d'encodeur dans Paramètres télécharge des clips de référence (sources fixes et libres) : extraits 4K d'environ 40 s de Big Buck Bunny, Sintel, Tears of Steel et Charge via Wikimedia, plus du 4K à 30/50/60 fps (NASA, Menger, nature) et un fichier de test Jellyfin en UHD à environ 150 Mbit/s (CC-BY-SA, Gnattu). Les anciennes démos 1080p de 10 s ne servent plus que de repli si un miroir est down. Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque.",
+    "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
+      "Trouve un cran de vitesse adapté : des clips de types d'image différents (animation 4K, CGI film, prise de vue réelle, mouvement, haut débit) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres : extraits 4K des films Blender (Big Buck Bunny, Sintel, Tears of Steel, Charge), clips 4K à 30/50/60 fps plus les vidéos de test Jellyfin (UHD, ~150 Mbit/s, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animation 4K (aplats, banding)",
     "Film-CGI 4K (Detail, Dunkel)": "CGI film 4K (détail, sombre)",
+    "Live-Action 4K / VFX": "Prise de vue réelle 4K / VFX",
     "Viel Bewegung 4K": "Beaucoup de mouvement 4K",
-    "4K hohe Bitrate (Jellyfin)": "4K haut débit (Jellyfin)",
-    "4K, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
-      "4K, ~40 s : aplats et bords nets – les presets rapides bandent ici.",
-    "4K, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
-      "4K, ~40 s : dégradés doux et scènes sombres – typique d'un film.",
-    "Echte Kamera plus Effekte, ~40 s – Korn und hohe Komplexität.":
-      "Caméra réelle plus effets, ~40 s – grain et forte complexité.",
-    "4K-Verfolgungsjagd, ~40 s – Speed-Presets sparen hier oft falsch.":
-      "Poursuite 4K, ~40 s – les presets rapides économisent souvent au mauvais endroit.",
-    "Längerer Ausschnitt mit mehr Detail im Hintergrund als die alten Mini-Clips.":
-      "Extrait plus long, avec plus de détail en fond que les mini-clips d'avant.",
-    "UHD, ~40 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 1080p-Kurzclips.":
-      "UHD, ~40 Mbit/s, HEVC 10 bit, ~28 s – plus proche d'un remux 4K que d'un court 1080p.",
+    "Kamera 4K / Zugfahrt": "Caméra 4K / train",
+    "CGI 4K modern (Partikel)": "CGI 4K moderne (particules)",
+    "Erde 4K 30 fps": "Terre 4K 30 fps",
+    "Detail 4K 50 fps": "Détail 4K 50 fps",
+    "Detail 4K 50 fps (lang)": "Détail 4K 50 fps (long)",
+    "Natur 4K 60 fps": "Nature 4K 60 fps",
+    "Natur 4K 60 fps (lang)": "Nature 4K 60 fps (long)",
+    "4K hohe Bitrate 150 Mbit/s": "4K haut débit 150 Mbit/s",
+    "4K 24 fps, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.":
+      "4K 24 fps, ~40 s : aplats et bords nets – les presets rapides bandent ici.",
+    "4K 24 fps, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.":
+      "4K 24 fps, ~40 s : dégradés doux et scènes sombres – typique d'un film.",
+    "4K 24 fps, ~40 s: echte Kamera plus VFX – Korn und hohe Komplexität.":
+      "4K 24 fps, ~40 s : caméra réelle plus VFX – grain et forte complexité.",
+    "4K-Verfolgungsjagd, 24 fps, ~40 s – Speed-Presets sparen hier oft falsch.":
+      "Poursuite 4K, 24 fps, ~40 s – les presets rapides économisent souvent au mauvais endroit.",
+    "4K echte Kamera, ~40 s: viel Detail im Hintergrund, stetige Bewegung.":
+      "4K caméra réelle, ~40 s : beaucoup de détail en fond, mouvement régulier.",
+    "4K 24 fps, ~40 s: modernes CGI mit Funken, Fell und schnellen Cuts.":
+      "4K 24 fps, ~40 s : CGI moderne avec étincelles, fourrure et coupes rapides.",
+    "4K ~30 fps, ~97 s: weiche Kamerafahrt, Wolken und Erde – ganzer Clip.":
+      "4K ~30 fps, ~97 s : travelling doux, nuages et Terre – clip entier.",
+    "4K 50 fps, ~40 s: feine Strukturen und Kamerafahrt (PAL-Takt).":
+      "4K 50 fps, ~40 s : structures fines et travelling (cadence PAL).",
+    "4K 50 fps, ~90 s: dieselbe Quelle wie der Kurzclip, längere Kamerafahrt.":
+      "4K 50 fps, ~90 s : même source que le clip court, travelling plus long.",
+    "4K 60 fps, ~40 s: Tiere und Natur – hoher Framerate-Stress für Encoder.":
+      "4K 60 fps, ~40 s : animaux et nature – stress haute cadence pour l'encodeur.",
+    "4K 60 fps, ~90 s: dieselbe Quelle wie der Kurzclip, mehr Szenenwechsel.":
+      "4K 60 fps, ~90 s : même source que le clip court, plus de changements de plan.",
+    "UHD, ~150 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 40-Mbit-Clips.":
+      "UHD, ~150 Mbit/s, HEVC 10 bit, ~28 s – plus proche d'un remux 4K que des clips à 40 Mbit/s.",
     "Pro Clip und Speed-Stufe läuft ein Mini-VMAF wie im VMAF-Tool (ein Ausschnitt, keine Screenshots). Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF, 1%-Low, Clip-Größe und Zeit. Die Empfehlung nimmt die nächstlangsamere Stufe nur, wenn der VMAF-Gewinn klar ist und die Zeit nicht explodiert (Faustregel: mindestens +0,5 VMAF und Zeitfaktor unter etwa 3,5 – oder ein Gewinn über +1,2).":
       "Chaque clip × cran de vitesse lance un mini VMAF comme l'outil VMAF (un extrait, pas de captures). Tu choisis CQ ou ABR/CBR et jusqu'à quatre valeurs. Le tableau montre VMAF, 1 % low, taille du clip et temps. La recommandation ne passe au cran plus lent que si le gain VMAF est clair et que le temps n'explose pas (règle : au moins +0,5 VMAF et facteur de temps sous ~3,5 – ou un gain au-delà de +1,2).",
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":

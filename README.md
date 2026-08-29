@@ -246,9 +246,9 @@ encoder speed.
 
 Under **Settings → Encoder speed** you can run an **encoder test**: download
 free reference clips of different picture types (4K excerpts from Blender’s
-Big Buck Bunny and Sintel, Tears of Steel for live action, plus a Jellyfin
-UHD ~40 Mbps test file, CC-BY-SA — allowlisted URLs only) and/or pick up to
-four files from your library. The test uses the
+Big Buck Bunny, Sintel, Tears of Steel and Charge, 4K clips at 30/50/60 fps,
+plus a Jellyfin UHD ~150 Mbps test file, CC-BY-SA — allowlisted URLs only)
+and/or pick up to four files from your library. The test uses the
 **native presets of the selected encoder** (SVT 0–13, x264/x265
 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow), not only the five
 aliases. Default comparison is fast/balanced/slow; **All tiers** tests every

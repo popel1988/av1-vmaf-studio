@@ -1691,7 +1691,7 @@
     const first = !box.querySelector(".eb-clip");
     box.innerHTML = (clips || []).map((c) => {
       const checked = first
-        ? (["anim", "live", "uhd"].includes(c.id) ? "checked" : "")
+        ? (["anim", "live", "fps60", "uhd"].includes(c.id) ? "checked" : "")
         : (prev.has(c.id) ? "checked" : "");
       const status = c.present
         ? `Geladen · ${c.human || ""}`

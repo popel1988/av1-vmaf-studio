@@ -21,7 +21,7 @@ from .ffmpeg_utils import (
 logger = logging.getLogger("vcompress.encoder_bench")
 
 BENCH_DIR = config.DATA_DIR / "encoder_bench"
-MAX_DOWNLOAD_BYTES = 450 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 1100 * 1024 * 1024
 # Browser-UA: manche Spiegel (früher GCS) blocken sonst mit 403.
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -35,6 +35,21 @@ _probe_cache: dict[str, tuple[float, int, dict]] = {}
 # Längere, höher aufgelöste Referenzclips. Nur diese HTTPS-URLs (Allowlist).
 # 4K-Filme liegen als volle Dateien bei mehreren GB – wir schneiden per ffmpeg
 # einen Ausschnitt (HTTP-Range, Copy), statt das Archiv zu laden.
+_WM = "https://upload.wikimedia.org/wikipedia/commons"
+_WM_BBB_4K = f"{_WM}/c/c0/Big_Buck_Bunny_4K.webm"
+_WM_SINTEL_4K = f"{_WM}/f/f1/Sintel_movie_4K.webm"
+_WM_TOS_4K = f"{_WM}/1/10/Tears_of_Steel_in_4k_-_Official_Blender_Foundation_release.webm"
+_WM_CHARGE = f"{_WM}/7/7a/Charge_-_Blender_Open_Movie-full_movie.webm"
+_WM_WILD60 = f"{_WM}/5/59/%284k%29_Wild_Animal_-_Ultra_HD_Video_TV_60fps_%282160p%29.webm"
+_WM_CHICAGO = f"{_WM}/0/08/Leaving_Chicago_Downtown_Train_Cab-ride_%28USA%29_4K-HD.webm"
+_WM_MENGER50 = f"{_WM}/2/2c/%284K_UHD_50_FPS%29_A_sight_into_infinity_-_a_rhomb_Menger_trip.webm"
+_WM_EARTH30 = f"{_WM}/a/a7/View_of_Planet_Earth_%284K%29.webm"
+_TOS_720 = "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov"
+_TOS_720_MIRROR = "https://mirrors.ocf.berkeley.edu/blender/demo/movies/ToS/tears_of_steel_720p.mov"
+_JF_4K_HEVC10_150M = (
+    "https://repo.jellyfin.org/files/files/test-videos/"
+    "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%20150M.mp4"
+)
 _JF_4K_HEVC10_40M = (
     "https://repo.jellyfin.org/files/files/test-videos/"
     "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4"
@@ -48,15 +63,12 @@ CLIPS: list[dict] = [
         "id": "anim",
         "title": "Animation 4K (Flächen, Banding)",
         "kind": "animation",
-        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, Wikimedia)",
+        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, 24 fps, Wikimedia)",
         "filename": "bbb_4k_40s.mkv",
         "approx_mb": 190,
-        "why": "4K, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.",
+        "why": "4K 24 fps, ~40 s: Flächen und harte Kanten – schnelle Presets banden hier.",
         "urls": [
-            {
-                "url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Big_Buck_Bunny_4K.webm",
-                "extract": {"start": 28, "seconds": 40, "copy_only": True},
-            },
+            {"url": _WM_BBB_4K, "extract": {"start": 28, "seconds": 40, "copy_only": True}},
             "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4",
         ],
     },
@@ -64,88 +76,142 @@ CLIPS: list[dict] = [
         "id": "cgi",
         "title": "Film-CGI 4K (Detail, Dunkel)",
         "kind": "cgi",
-        "license": "CC-BY · Blender Foundation · Sintel (4K, Wikimedia)",
+        "license": "CC-BY · Blender Foundation · Sintel (4K, 24 fps, Wikimedia)",
         "filename": "sintel_4k_40s.mkv",
         "approx_mb": 160,
-        "why": "4K, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.",
+        "why": "4K 24 fps, ~40 s: weiche Gradienten und dunkle Szenen – typisch Spielfilm.",
         "urls": [
-            {
-                "url": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Sintel_movie_4K.webm",
-                "extract": {"start": 95, "seconds": 40, "copy_only": True},
-            },
+            {"url": _WM_SINTEL_4K, "extract": {"start": 95, "seconds": 40, "copy_only": True}},
             "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
         ],
     },
     {
         "id": "live",
-        "title": "Live-Action / VFX",
+        "title": "Live-Action 4K / VFX",
         "kind": "live",
-        "license": "CC-BY · Blender Foundation · Tears of Steel",
-        "filename": "tos_live_40s.mp4",
-        "approx_mb": 25,
-        "why": "Echte Kamera plus Effekte, ~40 s – Korn und hohe Komplexität.",
+        "license": "CC-BY · Blender Foundation · Tears of Steel (4K, Wikimedia)",
+        "filename": "tos_4k_40s.mkv",
+        "approx_mb": 60,
+        "why": "4K 24 fps, ~40 s: echte Kamera plus VFX – Korn und hohe Komplexität.",
         "urls": [
-            {
-                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
-                "extract": {"start": 90, "seconds": 40},
-            },
-            {
-                "url": "https://mirrors.ocf.berkeley.edu/blender/demo/movies/ToS/tears_of_steel_720p.mov",
-                "extract": {"start": 90, "seconds": 40},
-            },
-            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/people-detection.mp4",
+            {"url": _WM_TOS_4K, "extract": {"start": 90, "seconds": 40, "copy_only": True}},
+            {"url": _TOS_720, "extract": {"start": 90, "seconds": 40}},
+            {"url": _TOS_720_MIRROR, "extract": {"start": 90, "seconds": 40}},
         ],
     },
     {
         "id": "motion",
         "title": "Viel Bewegung 4K",
         "kind": "motion",
-        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, Wikimedia)",
+        "license": "CC-BY · Blender Foundation · Big Buck Bunny (4K, 24 fps, Wikimedia)",
         "filename": "bbb_4k_chase_40s.mkv",
         "approx_mb": 190,
-        "why": "4K-Verfolgungsjagd, ~40 s – Speed-Presets sparen hier oft falsch.",
+        "why": "4K-Verfolgungsjagd, 24 fps, ~40 s – Speed-Presets sparen hier oft falsch.",
         "urls": [
-            {
-                "url": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Big_Buck_Bunny_4K.webm",
-                "extract": {"start": 248, "seconds": 40, "copy_only": True},
-            },
-            {
-                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
-                "extract": {"start": 200, "seconds": 40},
-            },
+            {"url": _WM_BBB_4K, "extract": {"start": 248, "seconds": 40, "copy_only": True}},
+            {"url": _TOS_720, "extract": {"start": 200, "seconds": 40}},
         ],
     },
     {
         "id": "camera",
-        "title": "Handkamera / Straße",
+        "title": "Kamera 4K / Zugfahrt",
         "kind": "camera",
-        "license": "CC-BY · Blender Foundation · Tears of Steel (Fallback: Wikimedia)",
-        "filename": "tos_street_40s.mp4",
-        "approx_mb": 22,
-        "why": "Längerer Ausschnitt mit mehr Detail im Hintergrund als die alten Mini-Clips.",
+        "license": "CC-BY · RailfansOfficial · Chicago Cab-ride (4K, Wikimedia)",
+        "filename": "chicago_4k_40s.mkv",
+        "approx_mb": 95,
+        "why": "4K echte Kamera, ~40 s: viel Detail im Hintergrund, stetige Bewegung.",
         "urls": [
-            {
-                "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
-                "extract": {"start": 12, "seconds": 40},
-            },
+            {"url": _WM_CHICAGO, "extract": {"start": 40, "seconds": 40, "copy_only": True}},
+            {"url": _TOS_720, "extract": {"start": 12, "seconds": 40}},
             "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Schlossbergbahn.webm/Schlossbergbahn.webm.720p.vp9.webm",
-            "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/face-demographics-walking.mp4",
+        ],
+    },
+    {
+        "id": "charge",
+        "title": "CGI 4K modern (Partikel)",
+        "kind": "cgi",
+        "license": "CC-BY 4.0 · Blender Studio · Charge (4K, Wikimedia)",
+        "filename": "charge_4k_40s.mkv",
+        "approx_mb": 40,
+        "why": "4K 24 fps, ~40 s: modernes CGI mit Funken, Fell und schnellen Cuts.",
+        "urls": [
+            {"url": _WM_CHARGE, "extract": {"start": 55, "seconds": 40, "copy_only": True}},
+            "https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4",
+        ],
+    },
+    {
+        "id": "fps30",
+        "title": "Erde 4K 30 fps",
+        "kind": "live",
+        "license": "Public Domain · NASA Johnson · View of Planet Earth (4K)",
+        "filename": "nasa_earth_4k.webm",
+        "approx_mb": 112,
+        "why": "4K ~30 fps, ~97 s: weiche Kamerafahrt, Wolken und Erde – ganzer Clip.",
+        "urls": [_WM_EARTH30],
+    },
+    {
+        "id": "fps50",
+        "title": "Detail 4K 50 fps",
+        "kind": "motion",
+        "license": "CC-BY · Wikimedia · Menger-Flug (4K 50 fps)",
+        "filename": "menger_4k_50fps_40s.mkv",
+        "approx_mb": 150,
+        "why": "4K 50 fps, ~40 s: feine Strukturen und Kamerafahrt (PAL-Takt).",
+        "urls": [
+            {"url": _WM_MENGER50, "extract": {"start": 10, "seconds": 40, "copy_only": True}},
+        ],
+    },
+    {
+        "id": "fps50long",
+        "title": "Detail 4K 50 fps (lang)",
+        "kind": "motion",
+        "license": "CC-BY · Wikimedia · Menger-Flug (4K 50 fps)",
+        "filename": "menger_4k_50fps_90s.mkv",
+        "approx_mb": 340,
+        "why": "4K 50 fps, ~90 s: dieselbe Quelle wie der Kurzclip, längere Kamerafahrt.",
+        "urls": [
+            {"url": _WM_MENGER50, "extract": {"start": 10, "seconds": 90, "copy_only": True}},
+        ],
+    },
+    {
+        "id": "fps60",
+        "title": "Natur 4K 60 fps",
+        "kind": "live",
+        "license": "CC-BY · 4.000 PIXELS · Wild Animal (4K 60 fps, Wikimedia)",
+        "filename": "wild_4k_60fps_40s.mkv",
+        "approx_mb": 130,
+        "why": "4K 60 fps, ~40 s: Tiere und Natur – hoher Framerate-Stress für Encoder.",
+        "urls": [
+            {"url": _WM_WILD60, "extract": {"start": 15, "seconds": 40, "copy_only": True}},
+        ],
+    },
+    {
+        "id": "fps60long",
+        "title": "Natur 4K 60 fps (lang)",
+        "kind": "live",
+        "license": "CC-BY · 4.000 PIXELS · Wild Animal (4K 60 fps, Wikimedia)",
+        "filename": "wild_4k_60fps_90s.mkv",
+        "approx_mb": 270,
+        "why": "4K 60 fps, ~90 s: dieselbe Quelle wie der Kurzclip, mehr Szenenwechsel.",
+        "urls": [
+            {"url": _WM_WILD60, "extract": {"start": 15, "seconds": 90, "copy_only": True}},
         ],
     },
     {
         "id": "uhd",
-        "title": "4K hohe Bitrate (Jellyfin)",
+        "title": "4K hohe Bitrate 150 Mbit/s",
         "kind": "uhd",
         "license": "CC-BY-SA 4.0 · Jellyfin Test Videos (Gnattu)",
-        "filename": "jellyfin_4k_hevc10_40m.mp4",
-        "approx_mb": 141,
-        "why": "UHD, ~40 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 1080p-Kurzclips.",
+        "filename": "jellyfin_4k_hevc10_150m.mp4",
+        "approx_mb": 528,
+        "why": "UHD, ~150 Mbit/s, 10-bit HEVC, ~28 s – näher an 4K-Remuxes als 40-Mbit-Clips.",
         "urls": [
-            _JF_4K_HEVC10_40M,
+            _JF_4K_HEVC10_150M,
             "https://tor1.mirror.jellyfin.org/test-videos/"
-            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4",
+            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%20150M.mp4",
             "https://lon1.mirror.jellyfin.org/files/files/test-videos/"
-            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%2040M.mp4",
+            "SDR/HEVC%2010bit/Test%20Jellyfin%204K%20HEVC%2010bit%20150M.mp4",
+            _JF_4K_HEVC10_40M,
             _JF_4K_AVC_40M,
         ],
     },
@@ -285,13 +351,18 @@ def _http_err(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
 
 
+def _part_path(dest: Path) -> Path:
+    """Temp-Datei: Endung bleibt .mkv/.mp4 (ffmpeg-Muxer), nicht .part."""
+    return dest.with_name(dest.stem + ".part" + dest.suffix)
+
+
 def _ffmpeg_extract(url: str, dest: Path, extract: dict) -> str:
     """Ausschnitt per HTTP-Range (Copy). Ganze 4K-Filme wären mehrere GB."""
     start = float((extract or {}).get("start") or 0)
     seconds = float((extract or {}).get("seconds") or 15)
     copy_only = bool((extract or {}).get("copy_only"))
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp = _part_path(dest)
     base = [
         config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
         "-user_agent", _UA,
@@ -309,12 +380,19 @@ def _ffmpeg_extract(url: str, dest: Path, extract: dict) -> str:
              "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
         )
     last = "ffmpeg-Ausschnitt fehlgeschlagen"
-    timeout = 480 if copy_only or seconds >= 30 else 180
+    timeout = 180
+    if copy_only or seconds >= 30:
+        timeout = max(480, int(seconds * 12))
+    mux = {".mkv": "matroska", ".mp4": "mp4", ".webm": "webm"}.get(dest.suffix.lower())
     for extra in variants:
         if _cancel.is_set():
             return "Abgebrochen"
+        cmd = base + extra
+        if mux:
+            cmd += ["-f", mux]
+        cmd += [str(tmp)]
         try:
-            proc = subprocess.run(base + extra + [str(tmp)],
+            proc = subprocess.run(cmd,
                                   capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as e:
             last = str(e)
@@ -374,7 +452,7 @@ def _download_one(clip: dict, on_bytes) -> str:
                         got += len(chunk)
                         if got > MAX_DOWNLOAD_BYTES:
                             too_big = True
-                            last_err = "Download über Limit (450 MB)"
+                            last_err = f"Download über Limit ({ff.human_size(MAX_DOWNLOAD_BYTES)})"
                             try:
                                 tmp.unlink()
                             except OSError:
