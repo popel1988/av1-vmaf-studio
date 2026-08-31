@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -483,6 +484,7 @@ def _run(root_rel: str, filters: dict) -> None:
 
             rel = config.rel_input(f) or f.name
             folder = str(Path(rel).parent).replace("\\", "/")
+            extras = sidecar_details(f)
             proj = project_savings(info, target_codec)
             sug = suggest_encode(info, target_codec)
             processed = False
@@ -511,6 +513,14 @@ def _run(root_rel: str, filters: dict) -> None:
                     "dv_profile": info.dv_profile,
                     "duration": round(info.duration, 2),
                     "duration_human": ff.human_duration(info.duration),
+                    "container": (info.container or "").split(",")[0],
+                    "fps": round(info.fps, 3) if info.fps else 0,
+                    "bit_depth": info.bit_depth,
+                    "profile": info.profile or "",
+                    "audio": info.audio or [],
+                    "subtitles": info.subtitles or [],
+                    "nfo": extras.get("nfo"),
+                    "sidecars": extras.get("sidecars") or [],
                     "processed": processed,
                     "already_optimized": proj["already_optimized"],
                     "est_saved_bytes": proj["est_saved_bytes"],
@@ -558,3 +568,271 @@ def export_csv(root: Optional[str] = None) -> str:
             (m.get("suggest") or {}).get("label", ""),
         ])
     return buf.getvalue()
+
+
+# --- Sidecar / NFO (Kodi, Jellyfin, Emby) -----------------------------------
+
+# Kodi/Jellyfin-NFOs liegen typisch bei wenigen KB, selten ~100 KB.
+_NFO_MAX_BYTES = 256 * 1024
+_PLOT_MAX = 2000
+_SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
+
+
+def sidecar_details(video: Path) -> dict:
+    """NFO + externe Untertitel neben der Videodatei (gleicher Ordner)."""
+    return {
+        "nfo": collect_nfo(video),
+        "sidecars": _sidecar_subs(video),
+    }
+
+
+def file_details(video: Path) -> dict:
+    """Ton/UT live per ffprobe plus NFO/Sidecars – für ältere Scan-Caches."""
+    info, err = ff.probe_with_error(video)
+    extras = sidecar_details(video)
+    if info is None:
+        return {"error": err or "ffprobe fehlgeschlagen", **extras,
+                "audio": [], "subtitles": []}
+    return {
+        "audio": info.audio or [],
+        "subtitles": info.subtitles or [],
+        "container": (info.container or "").split(",")[0],
+        "fps": round(info.fps, 3) if info.fps else 0,
+        "bit_depth": info.bit_depth,
+        "profile": info.profile or "",
+        "codec": info.codec,
+        "resolution": f"{info.width}x{info.height}",
+        **extras,
+    }
+
+
+def collect_nfo(video: Path) -> Optional[dict]:
+    """Passende .nfo lesen: Dateiname.nfo, movie.nfo, tvshow.nfo (auch Eltern)."""
+    parsed: list[dict] = []
+    for p in _nfo_paths(video):
+        data = parse_nfo(p)
+        if data:
+            parsed.append(data)
+    if not parsed:
+        return None
+    out: dict = {}
+    for item in sorted(parsed, key=lambda d: 0 if d.get("kind") == "tvshow" else 1):
+        for k, v in item.items():
+            if v in (None, "", [], {}):
+                continue
+            if k == "title" and item.get("kind") == "tvshow" and out.get("title"):
+                out["showtitle"] = v
+                continue
+            if k == "showtitle" and item.get("kind") == "tvshow" and out.get("title"):
+                out["showtitle"] = v
+                continue
+            out[k] = v
+    if len(parsed) > 1:
+        out["files"] = [p.get("file") for p in parsed if p.get("file")]
+    return out or None
+
+
+def _nfo_paths(video: Path) -> list[Path]:
+    parent = video.parent
+    stem_l = video.stem.lower()
+    found: list[Path] = []
+    seen: set[str] = set()
+
+    def add(p: Path) -> None:
+        try:
+            key = str(p.resolve())
+        except OSError:
+            key = str(p)
+        if key in seen:
+            return
+        try:
+            if not p.is_file():
+                return
+        except OSError:
+            return
+        seen.add(key)
+        found.append(p)
+
+    try:
+        files = list(parent.iterdir())
+    except OSError:
+        files = []
+    nfo_here = [p for p in files if p.is_file() and p.suffix.lower() == ".nfo"]
+    for p in nfo_here:
+        if p.stem.lower() == stem_l:
+            add(p)
+    for p in nfo_here:
+        if p.stem.lower() in {"movie", "tvshow"}:
+            add(p)
+    grand = parent.parent
+    if grand and grand != parent:
+        for name in ("tvshow.nfo", "TVShow.nfo"):
+            add(grand / name)
+    return found
+
+
+def _sidecar_subs(video: Path) -> list[dict]:
+    stem_l = video.stem.lower()
+    out: list[dict] = []
+    try:
+        for p in video.parent.iterdir():
+            if not p.is_file() or p.suffix.lower() not in _SIDECAR_SUB:
+                continue
+            if not p.name.lower().startswith(stem_l):
+                continue
+            out.append({"name": p.name, "ext": p.suffix.lower().lstrip(".")})
+    except OSError:
+        return []
+    out.sort(key=lambda x: x["name"].lower())
+    return out
+
+
+def parse_nfo(path: Path) -> Optional[dict]:
+    """Kodi/Jellyfin-NFO (movie / tvshow / episodedetails) als kompaktes Dict."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size <= 0 or size > _NFO_MAX_BYTES:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    text = text.lstrip("\ufeff")
+    if not text.strip():
+        return None
+    # Kein DTD/Entity: ElementTree löst keine XXE auf, Billion-Laughs aber schon.
+    head = text[:4000].lower()
+    if "<!doctype" in head or "<!entity" in head:
+        return None
+    data = _parse_nfo_xml(text)
+    if not data:
+        data = _parse_nfo_loose(text)
+    if not data:
+        return None
+    data["file"] = path.name
+    return data
+
+
+def _parse_nfo_xml(text: str) -> Optional[dict]:
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        start = text.find("<")
+        end = text.rfind(">")
+        if start < 0 or end <= start:
+            return None
+        try:
+            root = ET.fromstring(text[start:end + 1])
+        except ET.ParseError:
+            return None
+    tag = (root.tag or "").split("}")[-1].lower()
+    kind = {"movie": "movie", "tvshow": "tvshow",
+            "episodedetails": "episode", "musicvideo": "movie"}.get(tag, tag or "nfo")
+
+    def one(*names: str) -> str:
+        for n in names:
+            el = root.find(n)
+            val = _xml_text(el)
+            if val:
+                return val
+        return ""
+
+    genres = [_xml_text(g) for g in root.findall("genre") if _xml_text(g)]
+    studios = [_xml_text(s) for s in root.findall("studio") if _xml_text(s)]
+    plot = one("plot", "outline")
+    if len(plot) > _PLOT_MAX:
+        plot = plot[:_PLOT_MAX].rstrip() + "…"
+    rating = _nfo_rating(root)
+    year = one("year")
+    if not year:
+        prem = one("premiered", "aired")
+        if len(prem) >= 4 and prem[:4].isdigit():
+            year = prem[:4]
+    out = {
+        "kind": kind,
+        "title": one("title"),
+        "originaltitle": one("originaltitle"),
+        "showtitle": one("showtitle"),
+        "year": year,
+        "plot": plot,
+        "tagline": one("tagline"),
+        "rating": rating,
+        "mpaa": one("mpaa"),
+        "runtime": one("runtime"),
+        "season": one("season"),
+        "episode": one("episode"),
+        "aired": one("aired", "premiered"),
+        "genres": genres[:8],
+        "studio": studios[0] if studios else "",
+        "uniqueid": _nfo_unique_id(root),
+    }
+    if not any(out.get(k) for k in ("title", "plot", "year", "showtitle")):
+        return None
+    return {k: v for k, v in out.items() if v not in (None, "", [])}
+
+
+def _xml_text(el) -> str:
+    if el is None or el.text is None:
+        return ""
+    return " ".join(str(el.text).split()).strip()
+
+
+def _nfo_rating(root) -> str:
+    el = root.find("rating")
+    if el is not None:
+        raw = _xml_text(el)
+        if raw:
+            return raw
+        val = el.find("value")
+        if val is not None:
+            raw = _xml_text(val)
+            if raw:
+                return raw
+    ratings = root.find("ratings")
+    if ratings is not None:
+        for r in ratings.findall("rating"):
+            val = r.find("value")
+            raw = _xml_text(val) if val is not None else ""
+            if raw:
+                return raw
+    return ""
+
+
+def _nfo_unique_id(root) -> str:
+    for el in root.findall("uniqueid"):
+        raw = _xml_text(el)
+        if not raw:
+            continue
+        typ = str(el.attrib.get("type") or "").lower()
+        return f"{typ}:{raw}" if typ else raw
+    for name, label in (("imdbid", "imdb"), ("tmdbid", "tmdb"), ("tvdbid", "tvdb")):
+        el = root.find(name)
+        raw = _xml_text(el) if el is not None else ""
+        if raw:
+            return f"{label}:{raw}"
+    return ""
+
+
+def _parse_nfo_loose(text: str) -> Optional[dict]:
+    """Fallback, wenn das XML nicht wohlgeformt ist."""
+    def grab(tag: str) -> str:
+        m = re.search(rf"<{tag}[^>]*>([^<]+)</{tag}>", text, flags=re.I)
+        return m.group(1).strip() if m else ""
+
+    title = grab("title")
+    plot = grab("plot") or grab("outline")
+    if plot and len(plot) > _PLOT_MAX:
+        plot = plot[:_PLOT_MAX].rstrip() + "…"
+    out = {
+        "kind": "nfo",
+        "title": title,
+        "year": grab("year"),
+        "plot": plot,
+        "rating": grab("rating"),
+    }
+    if not any(out.values()):
+        return None
+    return {k: v for k, v in out.items() if v}

@@ -31,6 +31,8 @@
     libScanAll: [],    // aktueller Scan (Anzeige)
     libScanRoot: "",   // Root des aktuell angezeigten Scans
     libActiveScanRoot: "", // Root eines laufenden Scans (falls abweichend)
+    libOpen: new Set(),    // aufgeklappte Datei-Details in der Liste
+    libDetails: {},        // nachgeladene Ton/UT/NFO je Pfad
     remuxLoaded: false, // Remux-Seite initialisiert
     remuxSel: null,     // { path, name } der Remux-Quelle
     remuxInfo: null,    // ffprobe-Info der Remux-Quelle
@@ -5312,10 +5314,22 @@
       : `<span class="good" data-tip="${escapeHtml(libSavingsTip(m))}">${escapeHtml(m.est_saved_human || "—")}</span>`;
     const sug = (m.suggest && m.suggest.label) ? escapeHtml(m.suggest.label) : "—";
     const sugTip = escapeHtml(libSuggestTip(m));
+    const open = state.libOpen && state.libOpen.has(m.path);
+    const meta = libFileMetaLine(m);
     return `
-      <tr>
+      <tr class="lib-file-row${open ? " open" : ""}" data-path="${escapeHtml(m.path)}">
         <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
-        <td title="${escapeHtml(m.path)}">${escapeHtml(m.name)}</td>
+        <td title="${escapeHtml(m.path)}">
+          <div class="lib-name-cell">
+            <button type="button" class="lib-toggle" data-path="${escapeHtml(m.path)}"
+              title="${escapeHtml(tt("Ton, Untertitel und NFO anzeigen"))}"
+              aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
+            <span class="lib-name-stack">
+              <span class="lib-name">${escapeHtml(m.name)}</span>
+              ${meta ? `<span class="lib-meta-line">${meta}</span>` : ""}
+            </span>
+          </div>
+        </td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
         <td>${escapeHtml(m.resolution)}</td>
         <td><span class="dyn-badge ${dynCls}" data-tip="${escapeHtml(libDynamicTip(m))}">${escapeHtml(dyn)}</span></td>
@@ -5329,7 +5343,175 @@
           <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
           <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
         </td>
-      </tr>`;
+      </tr>
+      ${open ? libDetailRowHtml(m) : ""}`;
+  }
+
+  function libFileMetaLine(m) {
+    const d = libMergedDetails(m);
+    const parts = [];
+    if (Array.isArray(d.audio)) {
+      parts.push(`${d.audio.length} ${tt("Ton")}`);
+    }
+    if (Array.isArray(d.subtitles) || (d.sidecars && d.sidecars.length)) {
+      const n = (d.subtitles || []).length + (d.sidecars || []).length;
+      parts.push(`${n} ${tt("UT")}`);
+    }
+    if (d.nfo) parts.push(`<span class="lib-nfo-badge">NFO</span>`);
+    return parts.join(" · ");
+  }
+
+  function libMergedDetails(m) {
+    const extra = (state.libDetails && state.libDetails[m.path]) || {};
+    return {
+      audio: extra.audio || m.audio,
+      subtitles: extra.subtitles || m.subtitles,
+      nfo: extra.nfo !== undefined ? extra.nfo : m.nfo,
+      sidecars: extra.sidecars || m.sidecars,
+      container: extra.container || m.container,
+      fps: extra.fps || m.fps,
+      bit_depth: extra.bit_depth || m.bit_depth,
+      profile: extra.profile || m.profile,
+      error: extra.error,
+      loading: extra.loading,
+    };
+  }
+
+  function libTrackLabel(t, kind) {
+    const lang = String(t.language || "und").toUpperCase();
+    const codec = (t.codec || "?").toUpperCase();
+    const bits = [lang, codec];
+    if (kind === "audio") {
+      if (t.layout) bits.push(t.layout);
+      else if (t.channels) bits.push(t.channels + " ch");
+      if (t.bitrate_human && t.bitrate_human !== "—") bits.push(t.bitrate_human);
+    }
+    const flags = [t.default ? tt("Standard") : "", t.forced ? tt("Forced") : ""].filter(Boolean);
+    let s = bits.filter(Boolean).join(" · ");
+    if (flags.length) s += ` (${flags.join(", ")})`;
+    if (t.title) s += ` – ${t.title}`;
+    return s;
+  }
+
+  function libDetailRowHtml(m) {
+    const d = libMergedDetails(m);
+    let body;
+    if (d.loading) {
+      body = `<p class="muted">${tt("Lade …")}</p>`;
+    } else if (d.error) {
+      body = `<p class="bad">${escapeHtml(d.error)}</p>`;
+    } else {
+      body = libDetailBodyHtml(d);
+    }
+    return `<tr class="lib-detail-row" data-for="${escapeHtml(m.path)}"><td colspan="11">${body}</td></tr>`;
+  }
+
+  function libDetailBodyHtml(d) {
+    const audio = d.audio || [];
+    const subs = d.subtitles || [];
+    const sides = d.sidecars || [];
+    const aList = audio.length
+      ? `<ul class="lib-track-list">${audio.map((t) =>
+          `<li>${escapeHtml(libTrackLabel(t, "audio"))}</li>`).join("")}</ul>`
+      : `<p class="muted">${tt("Keine Tonspur")}</p>`;
+    const sItems = subs.map((t) => `<li>${escapeHtml(libTrackLabel(t, "sub"))}</li>`);
+    sides.forEach((s) => {
+      sItems.push(`<li>${escapeHtml(s.name)} · ${tt("extern")}</li>`);
+    });
+    const sList = sItems.length
+      ? `<ul class="lib-track-list">${sItems.join("")}</ul>`
+      : `<p class="muted">${tt("Keine Untertitel")}</p>`;
+    const tech = [];
+    if (d.container) tech.push(String(d.container).split(",")[0]);
+    if (d.profile) tech.push(d.profile);
+    if (d.bit_depth) tech.push(d.bit_depth + " bit");
+    if (d.fps) tech.push((Math.round(d.fps * 100) / 100) + " fps");
+    return `<div class="lib-detail">
+      <div class="lib-detail-col">
+        <strong>${tt("Tonspuren")} (${audio.length})</strong>
+        ${aList}
+      </div>
+      <div class="lib-detail-col">
+        <strong>${tt("Untertitel")} (${subs.length}${sides.length ? ` + ${sides.length}` : ""})</strong>
+        ${sList}
+      </div>
+      <div class="lib-detail-col lib-detail-nfo">
+        <strong>${tt("NFO / Infos")}</strong>
+        ${libNfoHtml(d.nfo, tech)}
+      </div>
+    </div>`;
+  }
+
+  function libNfoHtml(nfo, tech) {
+    const techLine = tech && tech.length
+      ? `<p class="lib-nfo-tech">${escapeHtml(tech.join(" · "))}</p>` : "";
+    if (!nfo) {
+      return `${techLine}<p class="muted">${tt("Keine .nfo im Ordner")}</p>`;
+    }
+    const title = nfo.showtitle && nfo.title && nfo.showtitle !== nfo.title
+      ? `${nfo.showtitle}: ${nfo.title}`
+      : (nfo.title || nfo.showtitle || "");
+    const ep = (nfo.season && nfo.episode)
+      ? `S${String(nfo.season).padStart(2, "0")}E${String(nfo.episode).padStart(2, "0")}`
+      : "";
+    const head = [title, nfo.year ? `(${nfo.year})` : "", ep].filter(Boolean).join(" ");
+    const bits = [];
+    if (nfo.rating) bits.push(nfo.rating + (String(nfo.rating).includes("/") ? "" : "/10"));
+    if (nfo.mpaa) bits.push(nfo.mpaa);
+    if (nfo.runtime) bits.push(nfo.runtime + (String(nfo.runtime).match(/\d$/) ? " min" : ""));
+    if (nfo.genres && nfo.genres.length) bits.push(nfo.genres.join(", "));
+    if (nfo.studio) bits.push(nfo.studio);
+    const files = nfo.files && nfo.files.length ? nfo.files.join(", ") : (nfo.file || "");
+    return `${techLine}
+      ${head ? `<p class="lib-nfo-title">${escapeHtml(head)}</p>` : ""}
+      ${nfo.tagline ? `<p class="lib-nfo-tag">${escapeHtml(nfo.tagline)}</p>` : ""}
+      ${bits.length ? `<p class="lib-nfo-bits">${escapeHtml(bits.join(" · "))}</p>` : ""}
+      ${nfo.plot ? `<p class="lib-nfo-plot">${escapeHtml(nfo.plot)}</p>` : ""}
+      ${files ? `<p class="muted lib-nfo-file">${escapeHtml(files)}</p>` : ""}`;
+  }
+
+  async function libToggleDetails(path) {
+    if (!state.libOpen) state.libOpen = new Set();
+    if (state.libOpen.has(path)) {
+      state.libOpen.delete(path);
+      renderLibrary();
+      return;
+    }
+    state.libOpen.add(path);
+    const row = (state.libScanAll || []).find((m) => m.path === path) || {};
+    const haveTracks = Array.isArray(row.audio);
+    const haveNfoKey = Object.prototype.hasOwnProperty.call(row, "nfo");
+    if (!haveTracks || !haveNfoKey) {
+      if (!state.libDetails) state.libDetails = {};
+      state.libDetails[path] = { ...(state.libDetails[path] || {}), loading: true };
+      renderLibrary();
+      await libEnsureDetails(path);
+    }
+    renderLibrary();
+  }
+
+  async function libEnsureDetails(path) {
+    if (!state.libDetails) state.libDetails = {};
+    try {
+      const r = await fetch(`/api/library/details?path=${encodeURIComponent(path)}`);
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        state.libDetails[path] = { error: d.error || tt("Analyse fehlgeschlagen"), loading: false };
+        return;
+      }
+      state.libDetails[path] = { ...d, loading: false };
+      const row = (state.libScanAll || []).find((m) => m.path === path);
+      if (row) {
+        row.audio = d.audio;
+        row.subtitles = d.subtitles;
+        row.nfo = d.nfo;
+        row.sidecars = d.sidecars;
+        if (d.container) row.container = d.container;
+        if (d.fps) row.fps = d.fps;
+      }
+    } catch (e) {
+      state.libDetails[path] = { error: String(e), loading: false };
+    }
   }
 
   function libRenderPager(totalRows) {
@@ -5422,6 +5604,13 @@
   }
 
   function onLibAction(e) {
+    const tog = e.target.closest(".lib-toggle");
+    if (tog) {
+      e.preventDefault();
+      e.stopPropagation();
+      libToggleDetails(tog.dataset.path);
+      return;
+    }
     const btn = e.target.closest(".lib-act");
     if (!btn) return;
     e.stopPropagation();

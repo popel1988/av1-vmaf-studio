@@ -976,6 +976,49 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 }
 .lib-act:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent); }
 
+.lib-name-cell { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.lib-toggle {
+  flex: 0 0 auto; width: 22px; height: 22px; padding: 0; margin-top: 1px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+  border-radius: 6px; cursor: pointer; font-size: 11px; line-height: 20px;
+}
+.lib-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.lib-file-row.open .lib-toggle { color: var(--accent); border-color: var(--accent); }
+.lib-name-stack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lib-name { word-break: break-all; }
+.lib-meta-line { font-size: 11px; color: var(--text-muted); }
+.lib-nfo-badge {
+  display: inline-block; padding: 0 5px; border-radius: 5px; font-size: 10px;
+  font-weight: 700; letter-spacing: .04em;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+}
+.lib-detail-row td {
+  background: var(--surface-2); padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.lib-detail {
+  display: grid; grid-template-columns: 1fr 1fr minmax(220px, 1.2fr);
+  gap: 16px; font-size: 12.5px; line-height: 1.45;
+}
+@media (max-width: 1100px) {
+  .lib-detail { grid-template-columns: 1fr 1fr; }
+  .lib-detail-nfo { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .lib-detail { grid-template-columns: 1fr; }
+}
+.lib-detail-col strong {
+  display: block; margin-bottom: 6px; font-size: 11px; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.lib-track-list { margin: 0; padding-left: 18px; }
+.lib-track-list li { margin: 2px 0; }
+.lib-nfo-title { margin: 0 0 4px; font-weight: 700; color: var(--text); }
+.lib-nfo-tag { margin: 0 0 4px; font-style: italic; color: var(--text-muted); }
+.lib-nfo-bits, .lib-nfo-tech { margin: 0 0 6px; color: var(--text-muted); }
+.lib-nfo-plot { margin: 0 0 6px; white-space: pre-wrap; }
+.lib-nfo-file { margin: 0; font-size: 11px; }
+
 /* Qualitäts-Guardrail: gemessener VMAF in Tabellen */
 .vmaf-verify {
   display: inline-block; padding: 1px 6px; border-radius: 6px;

@@ -1282,6 +1282,16 @@ async def library_cached(root: str = ""):
     return library.get_cached(root)
 
 
+@app.get("/api/library/details")
+async def library_details(path: str):
+    """Ton, Untertitel, NFO und Sidecars einer Bibliotheksdatei."""
+    from core import library
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    return library.file_details(target)
+
+
 @app.get("/api/library/export.csv")
 async def library_export_csv(root: str | None = None):
     """Treffer als CSV herunterladen (optional für einen Root)."""
