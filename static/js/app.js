@@ -5442,11 +5442,21 @@
     </div>`;
   }
 
+  function libNfoIsStub(nfo) {
+    if (!nfo || typeof nfo !== "object") return true;
+    return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year);
+  }
+
   function libNfoHtml(nfo, tech) {
     const techLine = tech && tech.length
       ? `<p class="lib-nfo-tech">${escapeHtml(tech.join(" · "))}</p>` : "";
     if (!nfo) {
       return `${techLine}<p class="muted">${tt("Keine .nfo im Ordner")}</p>`;
+    }
+    if (libNfoIsStub(nfo)) {
+      const files = nfo.files && nfo.files.length ? nfo.files.join(", ") : (nfo.file || "");
+      return `${techLine}<p class="muted">${tt("NFO gefunden, Inhalt konnte nicht gelesen werden.")}`
+        + (files ? ` (${escapeHtml(files)})` : "") + `</p>`;
     }
     const title = nfo.showtitle && nfo.title && nfo.showtitle !== nfo.title
       ? `${nfo.showtitle}: ${nfo.title}`
@@ -5481,7 +5491,9 @@
     const row = (state.libScanAll || []).find((m) => m.path === path) || {};
     const haveTracks = Array.isArray(row.audio);
     const haveNfoKey = Object.prototype.hasOwnProperty.call(row, "nfo");
-    if (!haveTracks || !haveNfoKey) {
+    const cached = state.libDetails && state.libDetails[path];
+    const nfoStub = libNfoIsStub(row.nfo) && !(cached && !libNfoIsStub(cached.nfo));
+    if (!haveTracks || !haveNfoKey || nfoStub) {
       if (!state.libDetails) state.libDetails = {};
       state.libDetails[path] = { ...(state.libDetails[path] || {}), loading: true };
       renderLibrary();

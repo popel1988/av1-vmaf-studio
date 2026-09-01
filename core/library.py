@@ -717,31 +717,19 @@ def parse_nfo(path: Path) -> Optional[dict]:
 
 def _parse_nfo_xml(text: str) -> Optional[dict]:
     import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
-        start = text.find("<")
-        end = text.rfind(">")
-        if start < 0 or end <= start:
-            return None
-        try:
-            root = ET.fromstring(text[start:end + 1])
-        except ET.ParseError:
-            return None
-    tag = (root.tag or "").split("}")[-1].lower()
+    root = _nfo_root(text)
+    if root is None:
+        return None
+    tag = _nfo_tag(root)
     kind = {"movie": "movie", "tvshow": "tvshow",
             "episodedetails": "episode", "musicvideo": "movie"}.get(tag, tag or "nfo")
 
     def one(*names: str) -> str:
-        for n in names:
-            el = root.find(n)
-            val = _xml_text(el)
-            if val:
-                return val
-        return ""
+        el = _nfo_child(root, *names)
+        return _xml_text(el)
 
-    genres = [_xml_text(g) for g in root.findall("genre") if _xml_text(g)]
-    studios = [_xml_text(s) for s in root.findall("studio") if _xml_text(s)]
+    genres = [_xml_text(g) for g in _nfo_children(root, "genre") if _xml_text(g)]
+    studios = [_xml_text(s) for s in _nfo_children(root, "studio") if _xml_text(s)]
     plot = one("plot", "outline")
     if len(plot) > _PLOT_MAX:
         plot = plot[:_PLOT_MAX].rstrip() + "…"
@@ -753,7 +741,7 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
             year = prem[:4]
     out = {
         "kind": kind,
-        "title": one("title"),
+        "title": one("title", "localtitle"),
         "originaltitle": one("originaltitle"),
         "showtitle": one("showtitle"),
         "year": year,
@@ -774,42 +762,83 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
     return {k: v for k, v in out.items() if v not in (None, "", [])}
 
 
-def _xml_text(el) -> str:
-    if el is None or el.text is None:
+def _nfo_root(text: str):
+    """XML-Wurzel: Encoding-Deklaration und Default-Namespace stören fromstring(str)."""
+    import xml.etree.ElementTree as ET
+    raw = re.sub(r"<\?xml[^?]*\?>", "", text, count=1, flags=re.I).lstrip()
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError:
+        pass
+    try:
+        return ET.fromstring(text.encode("utf-8"))
+    except ET.ParseError:
+        start, end = text.find("<"), text.rfind(">")
+        if start < 0 or end <= start:
+            return None
+        chunk = re.sub(r"<\?xml[^?]*\?>", "", text[start:end + 1], count=1, flags=re.I).lstrip()
+        try:
+            return ET.fromstring(chunk)
+        except ET.ParseError:
+            return None
+
+
+def _nfo_tag(el) -> str:
+    if el is None:
         return ""
-    return " ".join(str(el.text).split()).strip()
+    return (el.tag or "").split("}")[-1].lower()
+
+
+def _nfo_child(root, *names):
+    want = {n.lower() for n in names}
+    for el in list(root):
+        if _nfo_tag(el) in want:
+            return el
+    return None
+
+
+def _nfo_children(root, name: str) -> list:
+    want = name.lower()
+    return [el for el in list(root) if _nfo_tag(el) == want]
+
+
+def _xml_text(el) -> str:
+    if el is None:
+        return ""
+    parts = [t.strip() for t in el.itertext() if t and t.strip()]
+    return " ".join(parts).strip()
 
 
 def _nfo_rating(root) -> str:
-    el = root.find("rating")
+    el = _nfo_child(root, "rating")
     if el is not None:
         raw = _xml_text(el)
         if raw:
-            return raw
-        val = el.find("value")
+            return raw.split()[0]
+        val = _nfo_child(el, "value")
         if val is not None:
             raw = _xml_text(val)
             if raw:
                 return raw
-    ratings = root.find("ratings")
+    ratings = _nfo_child(root, "ratings")
     if ratings is not None:
-        for r in ratings.findall("rating"):
-            val = r.find("value")
-            raw = _xml_text(val) if val is not None else ""
+        for r in _nfo_children(ratings, "rating"):
+            val = _nfo_child(r, "value")
+            raw = _xml_text(val) if val is not None else _xml_text(r)
             if raw:
-                return raw
+                return raw.split()[0]
     return ""
 
 
 def _nfo_unique_id(root) -> str:
-    for el in root.findall("uniqueid"):
+    for el in _nfo_children(root, "uniqueid"):
         raw = _xml_text(el)
         if not raw:
             continue
         typ = str(el.attrib.get("type") or "").lower()
         return f"{typ}:{raw}" if typ else raw
     for name, label in (("imdbid", "imdb"), ("tmdbid", "tmdb"), ("tvdbid", "tvdb")):
-        el = root.find(name)
+        el = _nfo_child(root, name)
         raw = _xml_text(el) if el is not None else ""
         if raw:
             return f"{label}:{raw}"
@@ -819,20 +848,25 @@ def _nfo_unique_id(root) -> str:
 def _parse_nfo_loose(text: str) -> Optional[dict]:
     """Fallback, wenn das XML nicht wohlgeformt ist."""
     def grab(tag: str) -> str:
-        m = re.search(rf"<{tag}[^>]*>([^<]+)</{tag}>", text, flags=re.I)
-        return m.group(1).strip() if m else ""
+        m = re.search(
+            rf"<{tag}(?:\s[^>]*)?>(?:<!\[CDATA\[(.*?)\]\]>|([^<]+))</{tag}>",
+            text, flags=re.I | re.S)
+        if not m:
+            return ""
+        return " ".join((m.group(1) or m.group(2) or "").split()).strip()
 
-    title = grab("title")
+    title = grab("title") or grab("localtitle")
     plot = grab("plot") or grab("outline")
     if plot and len(plot) > _PLOT_MAX:
         plot = plot[:_PLOT_MAX].rstrip() + "…"
     out = {
-        "kind": "nfo",
         "title": title,
         "year": grab("year"),
         "plot": plot,
         "rating": grab("rating"),
+        "showtitle": grab("showtitle"),
     }
     if not any(out.values()):
         return None
+    out["kind"] = "nfo"
     return {k: v for k, v in out.items() if v}
