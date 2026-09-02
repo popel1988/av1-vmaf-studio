@@ -5317,11 +5317,11 @@
     const open = state.libOpen && state.libOpen.has(m.path);
     const meta = libFileMetaLine(m);
     return `
-      <tr class="lib-file-row${open ? " open" : ""}" data-path="${escapeHtml(m.path)}">
+      <tr class="lib-file-row${open ? " open" : ""}" data-path="${encodeURIComponent(m.path)}">
         <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
         <td title="${escapeHtml(m.path)}">
           <div class="lib-name-cell">
-            <button type="button" class="lib-toggle" data-path="${escapeHtml(m.path)}"
+            <button type="button" class="lib-toggle" data-path="${encodeURIComponent(m.path)}"
               title="${escapeHtml(tt("Ton, Untertitel und NFO anzeigen"))}"
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
@@ -5368,6 +5368,7 @@
       subtitles: extra.subtitles || m.subtitles,
       nfo: (!libNfoIsStub(extra.nfo) ? extra.nfo
         : (!libNfoIsStub(m.nfo) ? m.nfo : (extra.nfo !== undefined ? extra.nfo : m.nfo))),
+      nfoLoading: !!extra.nfoLoading,
       sidecars: extra.sidecars || m.sidecars,
       container: extra.container || m.container,
       fps: extra.fps || m.fps,
@@ -5397,14 +5398,15 @@
   function libDetailRowHtml(m) {
     const d = libMergedDetails(m);
     let body;
-    if (d.loading) {
-      body = `<p class="muted">${tt("Lade …")}</p>`;
-    } else if (d.error) {
+    const haveBody = Array.isArray(d.audio) || d.nfo || (d.sidecars && d.sidecars.length);
+    if (d.error && !haveBody) {
       body = `<p class="bad">${escapeHtml(d.error)}</p>`;
+    } else if (d.loading && !haveBody) {
+      body = `<p class="muted">${tt("Lade …")}</p>`;
     } else {
       body = libDetailBodyHtml(d);
     }
-    return `<tr class="lib-detail-row" data-for="${escapeHtml(m.path)}"><td colspan="11">${body}</td></tr>`;
+    return `<tr class="lib-detail-row" data-for="${encodeURIComponent(m.path)}"><td colspan="11">${body}</td></tr>`;
   }
 
   function libDetailBodyHtml(d) {
@@ -5438,7 +5440,7 @@
       </div>
       <div class="lib-detail-col lib-detail-nfo">
         <strong>${tt("NFO / Infos")}</strong>
-        ${libNfoHtml(d.nfo, tech)}
+        ${libNfoHtml(d.nfo, tech, !!d.nfoLoading)}
       </div>
     </div>`;
   }
@@ -5448,10 +5450,11 @@
     return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year || nfo.originaltitle);
   }
 
-  function libNfoHtml(nfo, tech) {
+  function libNfoHtml(nfo, tech, loading) {
     const techLine = tech && tech.length
       ? `<p class="lib-nfo-tech">${escapeHtml(tech.join(" · "))}</p>` : "";
     if (!nfo) {
+      if (loading) return `${techLine}<p class="muted">${tt("Lade …")}</p>`;
       return `${techLine}<p class="muted">${tt("Keine .nfo im Ordner")}</p>`;
     }
     if (libNfoIsStub(nfo)) {
@@ -5481,7 +5484,14 @@
       ${files ? `<p class="muted lib-nfo-file">${escapeHtml(files)}</p>` : ""}`;
   }
 
+  function libDataPath(el) {
+    if (!el) return "";
+    const raw = el.getAttribute("data-path") || "";
+    try { return decodeURIComponent(raw); } catch (e) { return raw; }
+  }
+
   async function libToggleDetails(path) {
+    if (!path) return;
     if (!state.libOpen) state.libOpen = new Set();
     if (state.libOpen.has(path)) {
       state.libOpen.delete(path);
@@ -5490,40 +5500,55 @@
     }
     state.libOpen.add(path);
     const row = (state.libScanAll || []).find((m) => m.path === path) || {};
-    const haveTracks = Array.isArray(row.audio);
-    const haveNfoKey = Object.prototype.hasOwnProperty.call(row, "nfo");
     const cached = state.libDetails && state.libDetails[path];
-    const nfoStub = libNfoIsStub(row.nfo) && !(cached && !libNfoIsStub(cached.nfo));
-    if (!haveTracks || !haveNfoKey || nfoStub) {
+    const haveTracks = Array.isArray(row.audio) || (cached && Array.isArray(cached.audio));
+    const haveNfo = !libNfoIsStub(row.nfo) || (cached && !libNfoIsStub(cached.nfo));
+    if (!haveTracks || !haveNfo) {
       if (!state.libDetails) state.libDetails = {};
-      state.libDetails[path] = { ...(state.libDetails[path] || {}), loading: true };
-      renderLibrary();
-      await libEnsureDetails(path);
+      state.libDetails[path] = {
+        ...(cached || {}),
+        loading: !haveTracks,
+        nfoLoading: !haveNfo,
+      };
     }
+    renderLibrary();
+    if (haveTracks && haveNfo) return;
+    await libEnsureDetails(path, { probe: !haveTracks });
     renderLibrary();
   }
 
-  async function libEnsureDetails(path) {
+  async function libEnsureDetails(path, opts) {
     if (!state.libDetails) state.libDetails = {};
+    const probe = !!(opts && opts.probe);
     try {
-      const r = await fetch(`/api/library/details?path=${encodeURIComponent(path)}`);
+      const r = await fetch(
+        `/api/library/details?path=${encodeURIComponent(path)}&probe=${probe ? "1" : "0"}`);
       const d = await r.json();
-      if (!r.ok || d.error) {
-        state.libDetails[path] = { error: d.error || tt("Analyse fehlgeschlagen"), loading: false };
+      if (!r.ok || (d.error && !d.nfo && !d.audio)) {
+        state.libDetails[path] = {
+          ...(state.libDetails[path] || {}),
+          error: d.error || tt("Analyse fehlgeschlagen"),
+          loading: false,
+          nfoLoading: false,
+        };
         return;
       }
-      state.libDetails[path] = { ...d, loading: false };
+      const prev = state.libDetails[path] || {};
+      state.libDetails[path] = { ...prev, ...d, loading: false, nfoLoading: false };
       const row = (state.libScanAll || []).find((m) => m.path === path);
       if (row) {
-        row.audio = d.audio;
-        row.subtitles = d.subtitles;
-        row.nfo = d.nfo;
-        row.sidecars = d.sidecars;
+        if (Array.isArray(d.audio)) row.audio = d.audio;
+        if (Array.isArray(d.subtitles)) row.subtitles = d.subtitles;
+        if (d.nfo !== undefined) row.nfo = d.nfo;
+        if (d.sidecars) row.sidecars = d.sidecars;
         if (d.container) row.container = d.container;
         if (d.fps) row.fps = d.fps;
       }
     } catch (e) {
-      state.libDetails[path] = { error: String(e), loading: false };
+      state.libDetails[path] = {
+        ...(state.libDetails[path] || {}),
+        error: String(e), loading: false, nfoLoading: false,
+      };
     }
   }
 
@@ -5617,22 +5642,23 @@
   }
 
   function onLibAction(e) {
-    const tog = e.target.closest(".lib-toggle");
-    if (tog) {
-      e.preventDefault();
+    const btn = e.target.closest(".lib-act");
+    if (btn) {
       e.stopPropagation();
-      libToggleDetails(tog.dataset.path);
+      const path = btn.dataset.path;
+      const name = btn.dataset.name;
+      const act = btn.dataset.act;
+      if (act === "play") { playMedia("media", path, name); return; }
+      const row = (state.libRows || []).find((m) => m.path === path);
+      libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
       return;
     }
-    const btn = e.target.closest(".lib-act");
-    if (!btn) return;
+    if (e.target.closest("input, a, select, textarea")) return;
+    const row = e.target.closest("tr.lib-file-row");
+    if (!row || e.target.closest(".lib-row-actions")) return;
+    e.preventDefault();
     e.stopPropagation();
-    const path = btn.dataset.path;
-    const name = btn.dataset.name;
-    const act = btn.dataset.act;
-    if (act === "play") { playMedia("media", path, name); return; }
-    const row = (state.libRows || []).find((m) => m.path === path);
-    libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
+    libToggleDetails(libDataPath(row));
   }
 
   // Datei aus der Bibliothek in Encoding/VMAF-Tool übernehmen (inkl. Vorschlag).

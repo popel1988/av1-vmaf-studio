@@ -976,7 +976,10 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 }
 .lib-act:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent); }
 
-.lib-name-cell { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.lib-name-cell { display: flex; align-items: flex-start; gap: 6px; min-width: 0; cursor: pointer; }
+.lib-file-row { cursor: pointer; }
+.lib-file-row td:first-child,
+.lib-file-row .lib-row-actions { cursor: default; }
 .lib-toggle {
   flex: 0 0 auto; width: 22px; height: 22px; padding: 0; margin-top: 1px;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);

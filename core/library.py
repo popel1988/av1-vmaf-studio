@@ -592,10 +592,12 @@ def sidecar_details(video: Path) -> dict:
     }
 
 
-def file_details(video: Path) -> dict:
-    """Ton/UT live per ffprobe plus NFO/Sidecars – für ältere Scan-Caches."""
-    info, err = ff.probe_with_error(video)
+def file_details(video: Path, probe: bool = True) -> dict:
+    """NFO/Sidecars sofort; ffprobe nur wenn ``probe`` (Ton/UT nachladen)."""
     extras = sidecar_details(video)
+    if not probe:
+        return extras
+    info, err = ff.probe_with_error(video)
     if info is None:
         return {"error": err or "ffprobe fehlgeschlagen", **extras,
                 "audio": [], "subtitles": []}
@@ -613,7 +615,7 @@ def file_details(video: Path) -> dict:
 
 
 def collect_nfo(video: Path) -> Optional[dict]:
-    """Passende .nfo lesen: Dateiname.nfo, movie.nfo, tvshow.nfo (auch Eltern)."""
+    """Passende .nfo lesen: Dateiname, movie/tvshow, Staffel/Episode, Ordnername."""
     parsed: list[dict] = []
     for p in _nfo_paths(video):
         data = parse_nfo(p)
@@ -638,32 +640,110 @@ def collect_nfo(video: Path) -> Optional[dict]:
     return out or None
 
 
+_NFO_QUALITY = re.compile(
+    r"(\b(720p|1080p|1440p|2160p|4320p|4k|8k|uhd|hdr10\+?|hdr|sdr|dv|dovi|"
+    r"atmos|truehd|dts-?hdma|dts-?x|dts|web-?dl|webrip|bluray|blu-ray|"
+    r"remux|repack|proper|extended|unrated|hybrid|multi|german|deutsch|"
+    r"directors?\s*cut|theatrical|complete|internal|"
+    r"x265|x264|h\.?265|h\.?264|hevc|avc|av1|vc-?1)\b)|"
+    r"[\[{(][^\]})]*[\]})]",
+    re.I,
+)
+_NFO_EP = re.compile(r"(?:s(\d{1,2})e(\d{1,3})|(\d{1,2})x(\d{1,3}))", re.I)
+_NFO_SEASON_DIR = re.compile(
+    r"(season|staffel)\s*\d+|\bs\d{1,2}\b", re.I)
+
+
+def _nfo_norm(s: str) -> str:
+    s = (s or "").lower().replace("'", "")
+    s = _NFO_QUALITY.sub(" ", s)
+    return re.sub(r"[\s._\-]+", " ", s).strip()
+
+
+def _nfo_ep_key(s: str) -> str:
+    m = _NFO_EP.search(s or "")
+    if not m:
+        return ""
+    if m.group(1) is not None:
+        return f"s{int(m.group(1)):02d}e{int(m.group(2)):02d}"
+    return f"s{int(m.group(3)):02d}e{int(m.group(4)):02d}"
+
+
 def _is_nfo_file(p: Path) -> bool:
-    try:
-        return p.is_file() and p.suffix.lower() == ".nfo"
-    except OSError:
+    if p.suffix.lower() != ".nfo":
         return False
+    try:
+        return not p.is_dir()
+    except OSError:
+        return True
 
 
 def _nfo_stem_match(video: Path, nfo: Path) -> bool:
-    """Gleiche Basis, Dateiname.mkv.nfo oder NFO als Prefix (Version im Videonamen)."""
+    """Gleiche Basis, Dateiname.mkv.nfo, Episode SxxExx oder normalisierter Prefix."""
     stem = video.stem.lower()
     nstem = nfo.stem.lower()
-    if nstem == stem:
-        return True
-    if nstem == video.name.lower():  # Film.mkv.nfo
+    if nstem == stem or nstem == video.name.lower():
         return True
     if nstem in _NFO_GENERIC:
         return True
-    if len(nstem) >= 6 and stem.startswith(nstem):
+    if nstem == video.parent.name.lower():
         return True
-    if len(stem) >= 6 and nstem.startswith(stem):
+    v_ep, n_ep = _nfo_ep_key(stem), _nfo_ep_key(nstem)
+    if v_ep and n_ep and v_ep == n_ep:
+        return True
+    vn, nn = _nfo_norm(video.stem), _nfo_norm(nfo.stem)
+    if vn and nn and vn == nn:
+        return True
+    if vn and nn and min(len(vn), len(nn)) >= 8 and (vn.startswith(nn) or nn.startswith(vn)):
         return True
     return False
 
 
+def _nfo_list_dir(folder: Path) -> list[Path]:
+    try:
+        return [p for p in folder.iterdir() if _is_nfo_file(p)]
+    except OSError:
+        return []
+
+
+def _nfo_dirs(video: Path) -> list[Path]:
+    """Ordner der Datei plus Aufloesung, falls die Datei ein Symlink ist."""
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(d: Path) -> None:
+        try:
+            key = str(d)
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(d)
+
+    _add(video.parent)
+    try:
+        if video.is_symlink():
+            _add(video.resolve().parent)
+    except OSError:
+        pass
+    return out
+
+
+def _video_count(folder: Path, limit: int = 3) -> int:
+    n = 0
+    try:
+        for p in folder.iterdir():
+            if p.is_file() and p.suffix.lower() in config.VIDEO_EXTENSIONS:
+                n += 1
+                if n >= limit:
+                    break
+    except OSError:
+        return limit
+    return n
+
+
 def _nfo_paths(video: Path) -> list[Path]:
-    parent = video.parent
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -679,29 +759,45 @@ def _nfo_paths(video: Path) -> list[Path]:
         seen.add(key)
         found.append(p)
 
-    try:
-        files = list(parent.iterdir())
-    except OSError:
-        files = []
-    nfo_here = [p for p in files if _is_nfo_file(p)]
+    dirs = _nfo_dirs(video)
+    nfo_here: list[Path] = []
+    for d in dirs:
+        nfo_here.extend(_nfo_list_dir(d))
+
     for p in nfo_here:
         if p.stem.lower() == video.stem.lower() or p.stem.lower() == video.name.lower():
             add(p)
     for p in nfo_here:
         if p.stem.lower() in _NFO_GENERIC:
             add(p)
-    if not found:
-        for p in nfo_here:
-            if _nfo_stem_match(video, p):
-                add(p)
-    if not found:
-        others = [p for p in nfo_here if p.stem.lower() != "tvshow"]
-        if len(others) == 1:
-            add(others[0])
-    grand = parent.parent
-    if grand and grand != parent:
-        for name in ("tvshow.nfo", "TVShow.nfo"):
-            add(grand / name)
+    for d in dirs:
+        add(d / f"{d.name}.nfo")
+
+    matched = [p for p in nfo_here if _nfo_stem_match(video, p)]
+    for p in matched:
+        add(p)
+
+    if not found or all(p.stem.lower() in _NFO_GENERIC for p in found):
+        seasonish = any(_NFO_SEASON_DIR.search(d.name or "") for d in dirs)
+        others = [p for p in nfo_here if p.stem.lower() not in _NFO_GENERIC]
+        videos = min((_video_count(d) for d in dirs), default=99)
+        if not seasonish and videos <= 2 and others:
+            if len(others) == 1:
+                add(others[0])
+            else:
+                for p in others:
+                    if parse_nfo(p):
+                        add(p)
+                        break
+
+    cur = video.parent
+    for _ in range(3):
+        parent = cur.parent
+        if not parent or parent == cur:
+            break
+        add(parent / "tvshow.nfo")
+        add(parent / "TVShow.nfo")
+        cur = parent
     return found
 
 
