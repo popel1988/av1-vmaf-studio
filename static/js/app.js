@@ -5366,7 +5366,8 @@
     return {
       audio: extra.audio || m.audio,
       subtitles: extra.subtitles || m.subtitles,
-      nfo: extra.nfo !== undefined ? extra.nfo : m.nfo,
+      nfo: (!libNfoIsStub(extra.nfo) ? extra.nfo
+        : (!libNfoIsStub(m.nfo) ? m.nfo : (extra.nfo !== undefined ? extra.nfo : m.nfo))),
       sidecars: extra.sidecars || m.sidecars,
       container: extra.container || m.container,
       fps: extra.fps || m.fps,
@@ -5444,7 +5445,7 @@
 
   function libNfoIsStub(nfo) {
     if (!nfo || typeof nfo !== "object") return true;
-    return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year);
+    return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year || nfo.originaltitle);
   }
 
   function libNfoHtml(nfo, tech) {
@@ -5460,7 +5461,7 @@
     }
     const title = nfo.showtitle && nfo.title && nfo.showtitle !== nfo.title
       ? `${nfo.showtitle}: ${nfo.title}`
-      : (nfo.title || nfo.showtitle || "");
+      : (nfo.title || nfo.showtitle || nfo.originaltitle || "");
     const ep = (nfo.season && nfo.episode)
       ? `S${String(nfo.season).padStart(2, "0")}E${String(nfo.episode).padStart(2, "0")}`
       : "";

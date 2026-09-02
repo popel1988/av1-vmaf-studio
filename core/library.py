@@ -484,7 +484,11 @@ def _run(root_rel: str, filters: dict) -> None:
 
             rel = config.rel_input(f) or f.name
             folder = str(Path(rel).parent).replace("\\", "/")
-            extras = sidecar_details(f)
+            try:
+                extras = sidecar_details(f)
+            except Exception:
+                logger.exception("NFO/Sidecar für %s", f)
+                extras = {"nfo": None, "sidecars": []}
             proj = project_savings(info, target_codec)
             sug = suggest_encode(info, target_codec)
             processed = False
@@ -572,10 +576,12 @@ def export_csv(root: Optional[str] = None) -> str:
 
 # --- Sidecar / NFO (Kodi, Jellyfin, Emby) -----------------------------------
 
-# Kodi/Jellyfin-NFOs liegen typisch bei wenigen KB, selten ~100 KB.
-_NFO_MAX_BYTES = 256 * 1024
+# Nur so viel lesen (DoS). Größere Dateien nicht verwerfen – Metadaten stehen vorn.
+_NFO_MAX_BYTES = 2 * 1024 * 1024
 _PLOT_MAX = 2000
 _SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
+_NFO_GENERIC = {"movie", "tvshow"}
+_NFO_ROOT_TAGS = ("movie", "tvshow", "episodedetails", "musicvideo")
 
 
 def sidecar_details(video: Path) -> dict:
@@ -632,9 +638,32 @@ def collect_nfo(video: Path) -> Optional[dict]:
     return out or None
 
 
+def _is_nfo_file(p: Path) -> bool:
+    try:
+        return p.is_file() and p.suffix.lower() == ".nfo"
+    except OSError:
+        return False
+
+
+def _nfo_stem_match(video: Path, nfo: Path) -> bool:
+    """Gleiche Basis, Dateiname.mkv.nfo oder NFO als Prefix (Version im Videonamen)."""
+    stem = video.stem.lower()
+    nstem = nfo.stem.lower()
+    if nstem == stem:
+        return True
+    if nstem == video.name.lower():  # Film.mkv.nfo
+        return True
+    if nstem in _NFO_GENERIC:
+        return True
+    if len(nstem) >= 6 and stem.startswith(nstem):
+        return True
+    if len(stem) >= 6 and nstem.startswith(stem):
+        return True
+    return False
+
+
 def _nfo_paths(video: Path) -> list[Path]:
     parent = video.parent
-    stem_l = video.stem.lower()
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -645,10 +674,7 @@ def _nfo_paths(video: Path) -> list[Path]:
             key = str(p)
         if key in seen:
             return
-        try:
-            if not p.is_file():
-                return
-        except OSError:
+        if not _is_nfo_file(p):
             return
         seen.add(key)
         found.append(p)
@@ -657,13 +683,21 @@ def _nfo_paths(video: Path) -> list[Path]:
         files = list(parent.iterdir())
     except OSError:
         files = []
-    nfo_here = [p for p in files if p.is_file() and p.suffix.lower() == ".nfo"]
+    nfo_here = [p for p in files if _is_nfo_file(p)]
     for p in nfo_here:
-        if p.stem.lower() == stem_l:
+        if p.stem.lower() == video.stem.lower() or p.stem.lower() == video.name.lower():
             add(p)
     for p in nfo_here:
-        if p.stem.lower() in {"movie", "tvshow"}:
+        if p.stem.lower() in _NFO_GENERIC:
             add(p)
+    if not found:
+        for p in nfo_here:
+            if _nfo_stem_match(video, p):
+                add(p)
+    if not found:
+        others = [p for p in nfo_here if p.stem.lower() != "tvshow"]
+        if len(others) == 1:
+            add(others[0])
     grand = parent.parent
     if grand and grand != parent:
         for name in ("tvshow.nfo", "TVShow.nfo"):
@@ -689,22 +723,8 @@ def _sidecar_subs(video: Path) -> list[dict]:
 
 def parse_nfo(path: Path) -> Optional[dict]:
     """Kodi/Jellyfin-NFO (movie / tvshow / episodedetails) als kompaktes Dict."""
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None
-    if size <= 0 or size > _NFO_MAX_BYTES:
-        return None
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    text = text.lstrip("\ufeff")
-    if not text.strip():
-        return None
-    # Kein DTD/Entity: ElementTree löst keine XXE auf, Billion-Laughs aber schon.
-    head = text[:4000].lower()
-    if "<!doctype" in head or "<!entity" in head:
+    text = _read_nfo_text(path)
+    if not text:
         return None
     data = _parse_nfo_xml(text)
     if not data:
@@ -715,12 +735,40 @@ def parse_nfo(path: Path) -> Optional[dict]:
     return data
 
 
+def _read_nfo_text(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    if not raw:
+        return ""
+    if len(raw) > _NFO_MAX_BYTES:
+        raw = raw[:_NFO_MAX_BYTES]
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="replace")
+    elif raw.startswith(b"\xef\xbb\xbf"):
+        text = raw.decode("utf-8-sig", errors="replace")
+    else:
+        head = raw[:240].decode("ascii", errors="replace")
+        enc_m = re.search(r"encoding\s*=\s*['\"]([^'\"]+)['\"]", head, re.I)
+        enc = (enc_m.group(1).strip() if enc_m else "utf-8") or "utf-8"
+        try:
+            text = raw.decode(enc, errors="replace")
+        except LookupError:
+            text = raw.decode("utf-8", errors="replace")
+    return text.lstrip("\ufeff").strip() or ""
+
+
 def _parse_nfo_xml(text: str) -> Optional[dict]:
-    import xml.etree.ElementTree as ET
     root = _nfo_root(text)
     if root is None:
         return None
     tag = _nfo_tag(root)
+    if tag not in _NFO_ROOT_TAGS:
+        nested = _nfo_child(root, *_NFO_ROOT_TAGS)
+        if nested is not None:
+            root = nested
+            tag = _nfo_tag(root)
     kind = {"movie": "movie", "tvshow": "tvshow",
             "episodedetails": "episode", "musicvideo": "movie"}.get(tag, tag or "nfo")
 
@@ -757,30 +805,59 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
         "studio": studios[0] if studios else "",
         "uniqueid": _nfo_unique_id(root),
     }
-    if not any(out.get(k) for k in ("title", "plot", "year", "showtitle")):
+    if not any(out.get(k) for k in ("title", "plot", "year", "showtitle", "originaltitle")):
         return None
+    if not out.get("title") and out.get("originaltitle"):
+        out["title"] = out["originaltitle"]
     return {k: v for k, v in out.items() if v not in (None, "", [])}
 
 
+def _nfo_sanitize(text: str) -> str:
+    """Deklaration/DOCTYPE entfernen; HTML-Entities, die XML sonst abbricht."""
+    import html as _html
+    raw = re.sub(r"<\?xml\b.*?\?>", "", text, count=1, flags=re.I | re.S)
+    raw = re.sub(
+        r"<!DOCTYPE\b[^[>]*(\[[\s\S]*?\]\s*)?>", "", raw, count=1, flags=re.I)
+    raw = re.sub(r"<!--.*?-->", "", raw, count=1, flags=re.S)
+
+    def _ent(m: re.Match) -> str:
+        name = m.group(1)
+        low = name.lower()
+        if low in {"lt", "gt", "amp", "apos", "quot"} or name.startswith("#"):
+            return m.group(0)
+        return _html.unescape(m.group(0))
+
+    return re.sub(r"&(#?\w+);", _ent, raw).strip()
+
+
+def _nfo_document(text: str) -> str:
+    m = re.search(
+        rf"<({'|'.join(_NFO_ROOT_TAGS)})\b[\s\S]*?</\1\s*>",
+        text, flags=re.I)
+    return m.group(0) if m else text
+
+
 def _nfo_root(text: str):
-    """XML-Wurzel: Encoding-Deklaration und Default-Namespace stören fromstring(str)."""
+    """XML-Wurzel: Encoding-Deklaration, DOCTYPE und Namespaces stören fromstring(str)."""
     import xml.etree.ElementTree as ET
-    raw = re.sub(r"<\?xml[^?]*\?>", "", text, count=1, flags=re.I).lstrip()
-    try:
-        return ET.fromstring(raw)
-    except ET.ParseError:
-        pass
+
+    def _try(blob: str):
+        blob = (blob or "").strip()
+        if not blob:
+            return None
+        try:
+            return ET.fromstring(blob)
+        except ET.ParseError:
+            return None
+
+    clean = _nfo_sanitize(text)
+    root = _try(clean) or _try(_nfo_document(clean))
+    if root is not None:
+        return root
     try:
         return ET.fromstring(text.encode("utf-8"))
     except ET.ParseError:
-        start, end = text.find("<"), text.rfind(">")
-        if start < 0 or end <= start:
-            return None
-        chunk = re.sub(r"<\?xml[^?]*\?>", "", text[start:end + 1], count=1, flags=re.I).lstrip()
-        try:
-            return ET.fromstring(chunk)
-        except ET.ParseError:
-            return None
+        return _try(_nfo_document(text))
 
 
 def _nfo_tag(el) -> str:
@@ -855,18 +932,26 @@ def _parse_nfo_loose(text: str) -> Optional[dict]:
             return ""
         return " ".join((m.group(1) or m.group(2) or "").split()).strip()
 
-    title = grab("title") or grab("localtitle")
+    title = grab("title") or grab("localtitle") or grab("originaltitle")
     plot = grab("plot") or grab("outline")
     if plot and len(plot) > _PLOT_MAX:
         plot = plot[:_PLOT_MAX].rstrip() + "…"
+    year = grab("year")
+    if not year:
+        prem = grab("premiered") or grab("aired")
+        if len(prem) >= 4 and prem[:4].isdigit():
+            year = prem[:4]
     out = {
         "title": title,
-        "year": grab("year"),
+        "year": year,
         "plot": plot,
         "rating": grab("rating"),
         "showtitle": grab("showtitle"),
+        "originaltitle": grab("originaltitle"),
     }
     if not any(out.values()):
         return None
+    if not out.get("title") and out.get("originaltitle"):
+        out["title"] = out["originaltitle"]
     out["kind"] = "nfo"
     return {k: v for k, v in out.items() if v}
