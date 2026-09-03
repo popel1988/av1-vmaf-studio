@@ -639,32 +639,14 @@ def collect_nfo(video: Path) -> Optional[dict]:
     return out or None
 
 
-_NFO_EP = re.compile(r"(?:s(\d{1,2})e(\d{1,3})|(\d{1,2})x(\d{1,3}))", re.I)
-_NFO_SEASON_DIR = re.compile(
-    r"(season|staffel)\s*\d+|\bs\d{1,2}\b", re.I)
-
-
-def _nfo_ep_key(s: str) -> str:
-    m = _NFO_EP.search(s or "")
-    if not m:
-        return ""
-    if m.group(1) is not None:
-        return f"s{int(m.group(1)):02d}e{int(m.group(2)):02d}"
-    return f"s{int(m.group(3)):02d}e{int(m.group(4)):02d}"
-
-
-def _is_nfo_file(p: Path) -> bool:
-    if p.suffix.lower() != ".nfo":
-        return False
-    try:
-        return not p.is_dir()
-    except OSError:
-        return True
+def _is_nfo_name(p: Path) -> bool:
+    """Nur der Name zählt – is_file/is_dir ist auf NAS/FUSE oft unzuverlässig."""
+    return p.suffix.lower() == ".nfo" and bool(p.name) and p.name.lower() != ".nfo"
 
 
 def _nfo_list_dir(folder: Path) -> list[Path]:
     try:
-        return [p for p in folder.iterdir() if _is_nfo_file(p)]
+        return [p for p in folder.iterdir() if _is_nfo_name(p)]
     except OSError:
         return []
 
@@ -694,39 +676,24 @@ def _nfo_dirs(video: Path) -> list[Path]:
 
 
 def _nfo_paths(video: Path) -> list[Path]:
-    """Im Filmordner jede .nfo. In Staffelordnern nur passende Episode + tvshow."""
+    """Jede .nfo im selben Ordner, plus tvshow.nfo weiter oben."""
     found: list[Path] = []
     seen: set[str] = set()
 
     def add(p: Path) -> None:
-        try:
-            key = str(p.resolve())
-        except OSError:
-            key = str(p)
-        if key in seen:
+        if not _is_nfo_name(p):
             return
-        if not _is_nfo_file(p):
+        try:
+            key = str(p)
+        except OSError:
+            return
+        if key in seen:
             return
         seen.add(key)
         found.append(p)
 
-    dirs = _nfo_dirs(video)
-    nfo_here: list[Path] = []
-    for d in dirs:
-        nfo_here.extend(_nfo_list_dir(d))
-
-    seasonish = any(_NFO_SEASON_DIR.search(d.name or "") for d in dirs)
-    v_ep = _nfo_ep_key(video.stem)
-    if seasonish:
-        for p in nfo_here:
-            n_ep = _nfo_ep_key(p.stem)
-            if n_ep:
-                if v_ep and n_ep == v_ep:
-                    add(p)
-            else:
-                add(p)
-    else:
-        for p in nfo_here:
+    for d in _nfo_dirs(video):
+        for p in _nfo_list_dir(d):
             add(p)
 
     cur = video.parent
@@ -757,24 +724,30 @@ def _sidecar_subs(video: Path) -> list[dict]:
 
 
 def parse_nfo(path: Path) -> Optional[dict]:
-    """Kodi/Jellyfin-NFO (movie / tvshow / episodedetails) als kompaktes Dict."""
+    """Kodi/Jellyfin/MediaInfo-NFO. Lesbare Datei gilt immer als Treffer."""
     text = _read_nfo_text(path)
-    if not text:
+    if text is None:
         return None
-    data = _parse_nfo_xml(text)
+    data = None
+    if text:
+        data = (_parse_nfo_xml(text) or _parse_nfo_loose(text)
+                or _parse_nfo_mediainfo(text))
     if not data:
-        data = _parse_nfo_loose(text)
-    if not data:
-        return None
+        data = {"kind": "nfo"}
+        if text:
+            excerpt = re.sub(r"<[^>]+>", " ", text)
+            excerpt = " ".join(excerpt.split())[:500]
+            if excerpt:
+                data["excerpt"] = excerpt
     data["file"] = path.name
     return data
 
 
-def _read_nfo_text(path: Path) -> str:
+def _read_nfo_text(path: Path) -> Optional[str]:
     try:
         raw = path.read_bytes()
     except OSError:
-        return ""
+        return None
     if not raw:
         return ""
     if len(raw) > _NFO_MAX_BYTES:
@@ -906,6 +879,11 @@ def _nfo_child(root, *names):
     for el in list(root):
         if _nfo_tag(el) in want:
             return el
+    for el in root.iter():
+        if el is root:
+            continue
+        if _nfo_tag(el) in want:
+            return el
     return None
 
 
@@ -989,4 +967,35 @@ def _parse_nfo_loose(text: str) -> Optional[dict]:
     if not out.get("title") and out.get("originaltitle"):
         out["title"] = out["originaltitle"]
     out["kind"] = "nfo"
+    return {k: v for k, v in out.items() if v}
+
+
+def _parse_nfo_mediainfo(text: str) -> Optional[dict]:
+    """Scene-/MediaInfo-Dump: 'Title : …' statt XML."""
+    if "<movie" in text[:2000].lower() or "<tvshow" in text[:2000].lower():
+        return None
+
+    def grab(*labels: str) -> str:
+        for label in labels:
+            m = re.search(
+                rf"^{re.escape(label)}\s*:\s*(.+)$", text, flags=re.I | re.M)
+            if m:
+                val = m.group(1).strip()
+                if val:
+                    return val
+        return ""
+
+    title = grab("Title", "Movie name", "Movie")
+    if title.lower() in {"general", "video", "audio"}:
+        title = ""
+    released = grab("Recorded date", "Released", "Year")
+    year = released[:4] if len(released) >= 4 and released[:4].isdigit() else ""
+    out = {
+        "title": title,
+        "year": year,
+        "plot": grab("Description", "Comment", "Synopsis"),
+        "kind": "nfo",
+    }
+    if not any(out.get(k) for k in ("title", "plot", "year")):
+        return None
     return {k: v for k, v in out.items() if v}

@@ -5317,11 +5317,11 @@
     const open = state.libOpen && state.libOpen.has(m.path);
     const meta = libFileMetaLine(m);
     return `
-      <tr class="lib-file-row${open ? " open" : ""}" data-path="${encodeURIComponent(m.path)}">
+      <tr class="lib-file-row${open ? " open" : ""}" data-path="${escapeHtml(m.path)}">
         <td><input type="checkbox" class="lib-check" value="${escapeHtml(m.path)}" ${m.already_optimized ? "" : "checked"} /></td>
         <td title="${escapeHtml(m.path)}">
           <div class="lib-name-cell">
-            <button type="button" class="lib-toggle" data-path="${encodeURIComponent(m.path)}"
+            <button type="button" class="lib-toggle" data-path="${escapeHtml(m.path)}"
               title="${escapeHtml(tt("Ton, Untertitel und NFO anzeigen"))}"
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
@@ -5347,6 +5347,14 @@
       ${open ? libDetailRowHtml(m) : ""}`;
   }
 
+  function libRowHtmlSafe(m) {
+    try {
+      return libRowHtml(m);
+    } catch (e) {
+      return `<tr class="lib-file-row"><td colspan="11" class="bad">${escapeHtml((m && m.name) || "")}: ${escapeHtml(String(e))}</td></tr>`;
+    }
+  }
+
   function libFileMetaLine(m) {
     const d = libMergedDetails(m);
     const parts = [];
@@ -5366,8 +5374,7 @@
     return {
       audio: extra.audio || m.audio,
       subtitles: extra.subtitles || m.subtitles,
-      nfo: (!libNfoIsStub(extra.nfo) ? extra.nfo
-        : (!libNfoIsStub(m.nfo) ? m.nfo : (extra.nfo !== undefined ? extra.nfo : m.nfo))),
+      nfo: libPickNfo(extra.nfo, m.nfo),
       nfoLoading: !!extra.nfoLoading,
       sidecars: extra.sidecars || m.sidecars,
       container: extra.container || m.container,
@@ -5406,13 +5413,13 @@
     } else {
       body = libDetailBodyHtml(d);
     }
-    return `<tr class="lib-detail-row" data-for="${encodeURIComponent(m.path)}"><td colspan="11">${body}</td></tr>`;
+    return `<tr class="lib-detail-row"><td colspan="11">${body}</td></tr>`;
   }
 
   function libDetailBodyHtml(d) {
-    const audio = d.audio || [];
-    const subs = d.subtitles || [];
-    const sides = d.sidecars || [];
+    const audio = Array.isArray(d.audio) ? d.audio : [];
+    const subs = Array.isArray(d.subtitles) ? d.subtitles : [];
+    const sides = Array.isArray(d.sidecars) ? d.sidecars : [];
     const aList = audio.length
       ? `<ul class="lib-track-list">${audio.map((t) =>
           `<li>${escapeHtml(libTrackLabel(t, "audio"))}</li>`).join("")}</ul>`
@@ -5447,7 +5454,20 @@
 
   function libNfoIsStub(nfo) {
     if (!nfo || typeof nfo !== "object") return true;
-    return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year || nfo.originaltitle);
+    return !(nfo.title || nfo.plot || nfo.showtitle || nfo.year
+      || nfo.originaltitle || nfo.excerpt);
+  }
+
+  function libPickNfo(a, b) {
+    if (!libNfoIsStub(a)) return a;
+    if (!libNfoIsStub(b)) return b;
+    return a || b || null;
+  }
+
+  function libNfoList(v) {
+    if (Array.isArray(v)) return v.filter(Boolean).map(String);
+    if (v) return [String(v)];
+    return [];
   }
 
   function libNfoHtml(nfo, tech, loading) {
@@ -5457,8 +5477,8 @@
       if (loading) return `${techLine}<p class="muted">${tt("Lade …")}</p>`;
       return `${techLine}<p class="muted">${tt("Keine .nfo im Ordner")}</p>`;
     }
-    if (libNfoIsStub(nfo)) {
-      const files = nfo.files && nfo.files.length ? nfo.files.join(", ") : (nfo.file || "");
+    const files = libNfoList(nfo.files).join(", ") || (nfo.file || "");
+    if (libNfoIsStub(nfo) && !nfo.excerpt) {
       return `${techLine}<p class="muted">${tt("NFO gefunden, Inhalt konnte nicht gelesen werden.")}`
         + (files ? ` (${escapeHtml(files)})` : "") + `</p>`;
     }
@@ -5473,21 +5493,21 @@
     if (nfo.rating) bits.push(nfo.rating + (String(nfo.rating).includes("/") ? "" : "/10"));
     if (nfo.mpaa) bits.push(nfo.mpaa);
     if (nfo.runtime) bits.push(nfo.runtime + (String(nfo.runtime).match(/\d$/) ? " min" : ""));
-    if (nfo.genres && nfo.genres.length) bits.push(nfo.genres.join(", "));
+    const genres = libNfoList(nfo.genres);
+    if (genres.length) bits.push(genres.join(", "));
     if (nfo.studio) bits.push(nfo.studio);
-    const files = nfo.files && nfo.files.length ? nfo.files.join(", ") : (nfo.file || "");
+    const plot = nfo.plot || nfo.excerpt || "";
     return `${techLine}
       ${head ? `<p class="lib-nfo-title">${escapeHtml(head)}</p>` : ""}
       ${nfo.tagline ? `<p class="lib-nfo-tag">${escapeHtml(nfo.tagline)}</p>` : ""}
       ${bits.length ? `<p class="lib-nfo-bits">${escapeHtml(bits.join(" · "))}</p>` : ""}
-      ${nfo.plot ? `<p class="lib-nfo-plot">${escapeHtml(nfo.plot)}</p>` : ""}
+      ${plot ? `<p class="lib-nfo-plot">${escapeHtml(plot)}</p>` : ""}
       ${files ? `<p class="muted lib-nfo-file">${escapeHtml(files)}</p>` : ""}`;
   }
 
   function libDataPath(el) {
     if (!el) return "";
-    const raw = el.getAttribute("data-path") || "";
-    try { return decodeURIComponent(raw); } catch (e) { return raw; }
+    return (el.dataset && el.dataset.path) || el.getAttribute("data-path") || "";
   }
 
   async function libToggleDetails(path) {
@@ -5539,7 +5559,7 @@
       if (row) {
         if (Array.isArray(d.audio)) row.audio = d.audio;
         if (Array.isArray(d.subtitles)) row.subtitles = d.subtitles;
-        if (d.nfo !== undefined) row.nfo = d.nfo;
+        if (d.nfo) row.nfo = d.nfo;
         if (d.sidecars) row.sidecars = d.sidecars;
         if (d.container) row.container = d.container;
         if (d.fps) row.fps = d.fps;
@@ -5623,7 +5643,7 @@
 
     const grouped = $("lib-group") && $("lib-group").checked;
     if (!grouped) {
-      body.innerHTML = pageRows.map(libRowHtml).join("");
+      body.innerHTML = pageRows.map(libRowHtmlSafe).join("");
     } else {
       const byFolder = {};
       pageRows.forEach((m) => {
@@ -5635,7 +5655,7 @@
         const saved = items.reduce((a, m) => a + (m.est_saved_bytes || 0), 0);
         return `<tr class="lib-group-row"><td colspan="11">📁 ${escapeHtml(folder)} `
           + `<span class="muted">· ${items.length} Dateien · ca. ${escapeHtml(formatBytes(saved))} einsparbar</span></td></tr>`
-          + items.map(libRowHtml).join("");
+          + items.map(libRowHtmlSafe).join("");
       }).join("");
     }
     libRenderPager(rows.length);
