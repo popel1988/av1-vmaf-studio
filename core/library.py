@@ -580,7 +580,6 @@ def export_csv(root: Optional[str] = None) -> str:
 _NFO_MAX_BYTES = 2 * 1024 * 1024
 _PLOT_MAX = 2000
 _SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
-_NFO_GENERIC = {"movie", "tvshow"}
 _NFO_ROOT_TAGS = ("movie", "tvshow", "episodedetails", "musicvideo")
 
 
@@ -615,7 +614,7 @@ def file_details(video: Path, probe: bool = True) -> dict:
 
 
 def collect_nfo(video: Path) -> Optional[dict]:
-    """Passende .nfo lesen: Dateiname, movie/tvshow, Staffel/Episode, Ordnername."""
+    """Alle lesbaren .nfo im Filmordner (plus tvshow.nfo in Elternordnern)."""
     parsed: list[dict] = []
     for p in _nfo_paths(video):
         data = parse_nfo(p)
@@ -640,24 +639,9 @@ def collect_nfo(video: Path) -> Optional[dict]:
     return out or None
 
 
-_NFO_QUALITY = re.compile(
-    r"(\b(720p|1080p|1440p|2160p|4320p|4k|8k|uhd|hdr10\+?|hdr|sdr|dv|dovi|"
-    r"atmos|truehd|dts-?hdma|dts-?x|dts|web-?dl|webrip|bluray|blu-ray|"
-    r"remux|repack|proper|extended|unrated|hybrid|multi|german|deutsch|"
-    r"directors?\s*cut|theatrical|complete|internal|"
-    r"x265|x264|h\.?265|h\.?264|hevc|avc|av1|vc-?1)\b)|"
-    r"[\[{(][^\]})]*[\]})]",
-    re.I,
-)
 _NFO_EP = re.compile(r"(?:s(\d{1,2})e(\d{1,3})|(\d{1,2})x(\d{1,3}))", re.I)
 _NFO_SEASON_DIR = re.compile(
     r"(season|staffel)\s*\d+|\bs\d{1,2}\b", re.I)
-
-
-def _nfo_norm(s: str) -> str:
-    s = (s or "").lower().replace("'", "")
-    s = _NFO_QUALITY.sub(" ", s)
-    return re.sub(r"[\s._\-]+", " ", s).strip()
 
 
 def _nfo_ep_key(s: str) -> str:
@@ -676,27 +660,6 @@ def _is_nfo_file(p: Path) -> bool:
         return not p.is_dir()
     except OSError:
         return True
-
-
-def _nfo_stem_match(video: Path, nfo: Path) -> bool:
-    """Gleiche Basis, Dateiname.mkv.nfo, Episode SxxExx oder normalisierter Prefix."""
-    stem = video.stem.lower()
-    nstem = nfo.stem.lower()
-    if nstem == stem or nstem == video.name.lower():
-        return True
-    if nstem in _NFO_GENERIC:
-        return True
-    if nstem == video.parent.name.lower():
-        return True
-    v_ep, n_ep = _nfo_ep_key(stem), _nfo_ep_key(nstem)
-    if v_ep and n_ep and v_ep == n_ep:
-        return True
-    vn, nn = _nfo_norm(video.stem), _nfo_norm(nfo.stem)
-    if vn and nn and vn == nn:
-        return True
-    if vn and nn and min(len(vn), len(nn)) >= 8 and (vn.startswith(nn) or nn.startswith(vn)):
-        return True
-    return False
 
 
 def _nfo_list_dir(folder: Path) -> list[Path]:
@@ -730,20 +693,8 @@ def _nfo_dirs(video: Path) -> list[Path]:
     return out
 
 
-def _video_count(folder: Path, limit: int = 3) -> int:
-    n = 0
-    try:
-        for p in folder.iterdir():
-            if p.is_file() and p.suffix.lower() in config.VIDEO_EXTENSIONS:
-                n += 1
-                if n >= limit:
-                    break
-    except OSError:
-        return limit
-    return n
-
-
 def _nfo_paths(video: Path) -> list[Path]:
+    """Im Filmordner jede .nfo. In Staffelordnern nur passende Episode + tvshow."""
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -764,31 +715,19 @@ def _nfo_paths(video: Path) -> list[Path]:
     for d in dirs:
         nfo_here.extend(_nfo_list_dir(d))
 
-    for p in nfo_here:
-        if p.stem.lower() == video.stem.lower() or p.stem.lower() == video.name.lower():
-            add(p)
-    for p in nfo_here:
-        if p.stem.lower() in _NFO_GENERIC:
-            add(p)
-    for d in dirs:
-        add(d / f"{d.name}.nfo")
-
-    matched = [p for p in nfo_here if _nfo_stem_match(video, p)]
-    for p in matched:
-        add(p)
-
-    if not found or all(p.stem.lower() in _NFO_GENERIC for p in found):
-        seasonish = any(_NFO_SEASON_DIR.search(d.name or "") for d in dirs)
-        others = [p for p in nfo_here if p.stem.lower() not in _NFO_GENERIC]
-        videos = min((_video_count(d) for d in dirs), default=99)
-        if not seasonish and videos <= 2 and others:
-            if len(others) == 1:
-                add(others[0])
+    seasonish = any(_NFO_SEASON_DIR.search(d.name or "") for d in dirs)
+    v_ep = _nfo_ep_key(video.stem)
+    if seasonish:
+        for p in nfo_here:
+            n_ep = _nfo_ep_key(p.stem)
+            if n_ep:
+                if v_ep and n_ep == v_ep:
+                    add(p)
             else:
-                for p in others:
-                    if parse_nfo(p):
-                        add(p)
-                        break
+                add(p)
+    else:
+        for p in nfo_here:
+            add(p)
 
     cur = video.parent
     for _ in range(3):
