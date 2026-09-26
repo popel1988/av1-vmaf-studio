@@ -3095,6 +3095,8 @@
     }
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
+    const csv = $("btn-vmaf-csv");
+    if (csv) csv.addEventListener("click", exportVmafCsv);
     refreshVmafHistory();
   }
 
@@ -3417,6 +3419,65 @@
       warn.textContent = "";
       warn.style.display = "none";
     }
+  }
+
+  function exportVmafCsv() {
+    const vmaf = state.vmafShown;
+    const rows = (vmaf && vmaf.results) || [];
+    if (!rows.length) return;
+    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const num = (v, d) => (v == null || v === "" || Number.isNaN(Number(v)))
+      ? "" : Number(v).toFixed(d);
+    const line = (cells) => cells.map(esc).join(";");
+    const lines = [];
+    lines.push(line([
+      "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
+      "H-Mittel", "PSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
+    ]));
+    rows.forEach((r) => {
+      lines.push(line([
+        r.label || ("Q" + r.quality), r.platform || "", r.codec || "",
+        r.value != null ? r.value : r.quality,
+        num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
+        num(r.psnr, 2), num(r.ssim, 4), num(r.savings_percent, 1),
+        r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
+      ]));
+    });
+    lines.push("");
+    lines.push(line(["Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "SSIM"]));
+    rows.forEach((r) => {
+      (r.scene_scores || []).forEach((sc) => {
+        lines.push(line([
+          (sc.scene != null ? sc.scene + 1 : ""),
+          r.label || ("Q" + r.quality),
+          num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
+          num(sc.psnr, 2), num(sc.ssim, 4),
+        ]));
+      });
+    });
+    lines.push("");
+    lines.push(line([
+      "Verlauf", "Einstellung", "Szene", "Abschnitt",
+      "VMAF (Tiefstwert im Abschnitt)",
+    ]));
+    rows.forEach((r) => {
+      (r.scene_scores || []).forEach((sc) => {
+        (sc.frames || []).forEach((v, i) => {
+          lines.push(line([
+            "frame", r.label || ("Q" + r.quality),
+            (sc.scene != null ? sc.scene + 1 : ""), i + 1, num(v, 2),
+          ]));
+        });
+      });
+    });
+    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    const stem = (state.vmafSource && state.vmafSource.name)
+      ? state.vmafSource.name.replace(/\.[^.]+$/, "") : "vmaf";
+    a.href = URL.createObjectURL(blob);
+    a.download = stem + "-vmaf.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   function fillVmafTable(vmaf) {

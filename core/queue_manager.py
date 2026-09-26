@@ -806,6 +806,7 @@ class QueueManager:
                 encoders=_parse_encoders(s.compare_encoders),
                 target_vmaf=s.target_vmaf,
                 anime=s.anime,
+                refine_midpoint=s.workflow != "compare_only",
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,

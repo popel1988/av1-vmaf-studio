@@ -362,8 +362,11 @@ Recommendations also require 1% low within the gap from **Settings → VMAF
 recommendation** (default 6 points below the target mean). A **minimum
 savings** filter (default 0% = file must not grow) skips auto-encode when
 every matching tier would be larger — the source is kept, not treated as a
-failure. After the coarse grid, each encoder may get **one midpoint** between
-the last hit and the first miss. VMAF is not a
+failure. After the coarse grid, an encode search (not a pure VMAF-tool
+comparison and not the encoder bench) may add **one midpoint** per encoder
+between the last hit and the first miss. That extra point is labeled
+„Zwischenwert“. The first and last 0.5 s of each sample clip are left out of
+the score, so seek and encoder-flush frames do not drag the 1% low down. VMAF is not a
 guarantee — screenshots and A/B compare still help.
 
 **MKV** is recommended (all codecs and subtitle types). **MP4** converts text
@@ -502,8 +505,10 @@ One media mount is enough — sources and encodes live in the same tree:
   (default 0%) only recommends a tier if the predicted file is at least that
   much smaller than the source (−1 disables). If the target holds but every
   matching tier would be too large, the source is kept and auto workflows skip
-  the encode. After the four-value grid, each encoder may test **one midpoint**
-  between the last hit and the first miss (not a full binary search).
+  the encode. After the four-value grid, an encode search may test **one
+  midpoint** per encoder between the last hit and the first miss (labeled in
+  the results; a pure VMAF-tool comparison keeps only the values you entered).
+  The first and last 0.5 s of each sample are excluded from the score.
 - **Size prediction**: `(test clip size / clip length) × total duration` including
   savings in %.
 - **Quality guardrail**: after encoding, the real VMAF of the output is measured

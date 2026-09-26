@@ -684,6 +684,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 source_title=job["title"],
                 source_path=str(job["path"]),
                 anime=anime,
+                refine_midpoint=False,
             )
             t0 = time.time()
             analysis = vmaf_mod.analyze(

@@ -50,6 +50,9 @@ class VmafOptions:
     target_vmaf: float = 0.0
     # Anime-Modus: NEG-Modell für die Bewertung + 10-bit-Test-Encodes.
     anime: bool = False
+    # False: nur die eingetragenen Testwerte (VMAF-Tool, Encoder-Bench).
+    # True: ein Zwischenwert zwischen Treffer und Fehlschlag (Ziel-Encode).
+    refine_midpoint: bool = True
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -306,20 +309,47 @@ def _vmaf_threads() -> int:
     return max(2, min(16, os.cpu_count() or 4))
 
 
+# Rand der Stichprobe nicht werten. Schneller Seek (vor allem CUDA) und der
+# Encoder-Flush am Clipende erzeugen oft ein paar Frames, die nicht zum Film
+# gehören. Die ziehen den 1%-Low runter, ohne die Szene wirklich zu beschreiben.
+_EDGE_SEC = 0.5
+
+
+def _edge_margin(duration: float) -> float:
+    duration = float(duration or 0)
+    if duration < 4:
+        return 0.0
+    return min(_EDGE_SEC, duration * 0.08)
+
+
+def _score_chain(duration: float, prefix: str = "") -> str:
+    """Skalieren, Rand abschneiden, Zeitstempel auf 0 setzen."""
+    parts = [p for p in (prefix,) if p]
+    margin = _edge_margin(duration)
+    if margin > 0 and duration > margin * 2 + 1:
+        end = round(duration - margin, 3)
+        parts.append(f"trim=start={margin}:end={end}")
+    parts.append("setpts=PTS-STARTPTS")
+    return ",".join(parts)
+
+
 def _run_libvmaf(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool, dims: Optional[tuple[int, int]], features: str,
+    clip_len: float = 0.0,
 ) -> Optional[dict]:
     """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None."""
     _, model_path = _model_for(info, neg)
     log = work / f"vmaf_{key}.json"
     w, h = dims if dims else (info.width, info.height)
     scale = f"scale={w}:{h}:flags=bicubic"
+    dist_dur = ff._probe_duration(distorted) or float(clip_len or 0)
+    ref_dur = ff._probe_duration(reference) or float(clip_len or 0)
     fc = (
-        f"[0:v]{scale},setpts=PTS-STARTPTS[dist];"
-        f"[1:v]setpts=PTS-STARTPTS[ref];"
+        f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
+        f"[1:v]{_score_chain(ref_dur)}[ref];"
         f"[dist][ref]libvmaf=model=path={model_path}:"
-        f"{features}log_fmt=json:log_path={log}:n_threads={_vmaf_threads()}"
+        f"{features}log_fmt=json:log_path={log}:shortest=1:n_threads={_vmaf_threads()}"
     )
     cmd = [config.FFMPEG, "-y", "-hide_banner",
            "-i", str(distorted), "-i", str(reference),
@@ -388,6 +418,7 @@ def _downsample_vmaf(vals: list[float], n: int = 80) -> list[float]:
 def _vmaf_metrics(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
+    clip_len: float = 0.0,
 ) -> Optional[dict]:
     """Vollständige Metriken (VMAF + PSNR + SSIM + 1%-Low) für einen Vergleich.
 
@@ -396,11 +427,12 @@ def _vmaf_metrics(
     VMAF-Lauf zurückgefallen – die Kern-Metrik bleibt so immer verfügbar.
     """
     data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                        features="feature=name=psnr|name=float_ssim:")
+                        features="feature=name=psnr|name=float_ssim:",
+                        clip_len=clip_len)
     metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features="")
+                            features="", clip_len=clip_len)
         metrics = _metrics_from_json(data) if data else None
     return metrics
 
@@ -564,7 +596,7 @@ def analyze(
 
     last_error = ""  # letzter Test-Encode-Fehler (für Diagnose, falls 0 Ergebnisse)
 
-    def run_value(p: str, c: str, val: int) -> None:
+    def run_value(p: str, c: str, val: int, extra: bool = False) -> None:
         """Einen Qualitäts-/Bitrate-Punkt für einen Encoder testen."""
         nonlocal last_error
         if any(r.platform == p and r.codec == c and int(r.value) == int(val)
@@ -573,6 +605,8 @@ def analyze(
         disp = _codec_disp(p, c)
         key = f"{p}_{c}_{val}"
         rate_lbl = _label(opts.rate_mode, val)
+        if extra:
+            rate_lbl += " · Zwischenwert"
         lbl = f"{disp} · {rate_lbl}" if multi else rate_lbl
         prog["step"] += 1
 
@@ -638,7 +672,7 @@ def analyze(
             emit("vmaf")
 
             metrics = _vmaf_metrics(test_file, reference, info, work, skey,
-                                    neg=opts.anime, dims=dims)
+                                    neg=opts.anime, dims=dims, clip_len=clip_len)
             prog["done"] += 1
             emit("vmaf")
 
@@ -739,7 +773,9 @@ def analyze(
                 break
 
         # Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag.
-        if not cancelled() and analysis.results:
+        # Nur wenn der Lauf eine Stufe zum Encoden sucht. Ein reiner Vergleich
+        # bleibt bei den eingetragenen Werten.
+        if opts.refine_midpoint and not cancelled() and analysis.results:
             extras = _midpoint_jobs(analysis, opts.target_vmaf)
             if extras:
                 budget["steps"] += len(extras)
@@ -749,7 +785,7 @@ def analyze(
                 for p, c, mid in extras:
                     if cancelled():
                         break
-                    run_value(p, c, mid)
+                    run_value(p, c, mid, extra=True)
 
         if analysis.results:
             if use_bitrate:
