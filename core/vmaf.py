@@ -206,6 +206,8 @@ class VmafAnalysis:
     error: str = ""            # Grund, falls keine Ergebnisse zustande kamen
     keep_source: bool = False  # Ziel nur mit größerer Datei erreichbar
     pick_warning: str = ""     # Floor verfehlt, Kompromiss Ersparnis/1%-Low
+    target_lo: float = 0.0     # Mittelwert-Ziel, mit dem die Empfehlung gerechnet wurde
+    target_gap: float = 0.0    # 1%-Low-Abstand dazu (0 = Floor aus)
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -222,6 +224,8 @@ class VmafAnalysis:
             "error": self.error,
             "keep_source": self.keep_source,
             "pick_warning": self.pick_warning,
+            **({"target_lo": self.target_lo, "target_gap": self.target_gap}
+               if self.target_lo else {}),
         }
 
 
@@ -1004,6 +1008,7 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
             vmaf_1pct=float(raw.get("vmaf_1pct") or 0),
             psnr=float(raw.get("psnr") or 0),
             ssim=float(raw.get("ssim") or 0),
+            scene_scores=list(raw.get("scene_scores") or []),
         )
         raw["recommended"] = False
         built.append((raw, result))
@@ -1024,6 +1029,8 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
     analysis["recommended_platform"] = picked.recommended_platform
     analysis["keep_source"] = picked.keep_source
     analysis["pick_warning"] = picked.pick_warning
+    analysis["target_lo"] = picked.target_lo
+    analysis["target_gap"] = picked.target_gap
     return analysis
 
 
@@ -1139,13 +1146,30 @@ def _copied_payload_bytes(info: VideoInfo, params: Optional[dict] = None) -> int
     return 0
 
 
+def floor_p1(scene_scores, overall: float = 0.0, mean: float = 0.0) -> float:
+    """1%-Low für den Floor: schwächste Szene, nicht der Schnitt der Szenen.
+
+    Ohne Szenen-1%-Low (ältere Archive) bleibt der bisherige Gesamtwert.
+    """
+    lows = []
+    for s in scene_scores or []:
+        if not isinstance(s, dict):
+            continue
+        raw = s.get("p1")
+        if raw:
+            lows.append(float(raw))
+    if lows:
+        return min(lows)
+    if overall:
+        return float(overall)
+    return float(mean or 0)
+
+
 def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
     if r.vmaf < lo:
         return False
-    if gap > 0:
-        p1 = r.vmaf_1pct if r.vmaf_1pct else r.vmaf
-        if p1 < lo - gap:
-            return False
+    if gap > 0 and floor_p1(r.scene_scores, r.vmaf_1pct, r.vmaf) < lo - gap:
+        return False
     return True
 
 
@@ -1203,7 +1227,8 @@ def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str
 
 
 def _p1_of(r: VmafResult) -> float:
-    return r.vmaf_1pct if r.vmaf_1pct else r.vmaf
+    """Vergleichswert der Empfehlung: 1%-Low der schwächsten Szene."""
+    return floor_p1(r.scene_scores, r.vmaf_1pct, r.vmaf)
 
 
 def _p1_slack(gap: float) -> float:
@@ -1234,9 +1259,10 @@ def _savings_pick_warning(best: VmafResult, lo: float, gap: float,
     best_p1_row = max(pool, key=lambda r: (_p1_of(r), -r.predicted_size_bytes))
     most_save = min(pool, key=lambda r: r.predicted_size_bytes)
     bits = [
-        f"Kompromiss: 1%-Low unter Floor {floor:.0f} (Ziel {lo:.0f}), "
-        f"Ersparnis war Pflicht. Gewählt: {best.label} · VMAF {best.vmaf:.1f} · "
-        f"1%-Low {p1:.1f} (Fenster {slack:.0f} Punkte unter bestem Sparer "
+        f"Kompromiss: 1%-Low der schwächsten Szene unter Floor {floor:.0f} "
+        f"(Ziel {lo:.0f}), Ersparnis war Pflicht. Gewählt: {best.label} · "
+        f"VMAF {best.vmaf:.1f} · 1%-Low {p1:.1f} (Fenster {slack:.0f} Punkte "
+        f"unter bestem Sparer "
         f"{_p1_of(best_p1_row):.1f}) · Ersparnis {best.savings_percent:+.1f} %.",
     ]
     if int(best_p1_row.value) != int(best.value):
@@ -1254,11 +1280,13 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     if not analysis.results:
         return
     # Ziel-VMAF (Slider / Super-Tool) bleibt der Mittelwert – so wie angegeben.
-    # 1%-Low ist ein Floor: Kandidaten mit klaffendem Low (z. B. 95 / 79)
-    # gelten nicht als „Ziel erreicht“, auch wenn das Mittel passt.
+    # Der Floor gilt für die schwächste Szene, nicht für den Schnitt der
+    # Szenen-1%-Lows. Vier ruhige Szenen dürfen eine harte Szene nicht verdecken.
     lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
     from . import app_settings
     gap = app_settings.vmaf_p1_gap()
+    analysis.target_lo = float(lo)
+    analysis.target_gap = float(gap)
     min_sav = app_settings.vmaf_min_savings()
 
     def _most_savings(rows: list) -> VmafResult:

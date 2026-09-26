@@ -679,6 +679,7 @@
             mit „→ Encoding“ übernehmen.
           </div>
           <div id="vmaf-pick-warning" class="keep-source-note" style="display:none"></div>
+          <div id="vmaf-target-miss" class="keep-source-note" style="display:none"></div>
           <div class="card-body vmaf-body">
             <div class="vmaf-charts">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
@@ -1312,7 +1313,8 @@
           <div class="card-body">
             <p class="hint">Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test –
               nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert;
-              das 1%-Low darf höchstens so viele Punkte darunter liegen. 0 schaltet den Floor aus
+              das 1%-Low der schwächsten Szene darf höchstens so viele Punkte darunter liegen.
+              Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 schaltet den Floor aus
               (nur Mittel, wie früher). Mindest-Ersparnis: Empfehlung nur, wenn die Prognose
               genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).
               <a href="#faq-vmaf" class="faq-jump">FAQ</a></p>
@@ -2688,8 +2690,8 @@
               <summary>Was ist VMAF überhaupt?</summary>
               <div class="faq-body">
                 <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.</p>
-                <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low nicht durchrutschen – den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low ≥ 88). 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
-                <p>Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei (Video plus kopierter Ton) mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Hält keine Stufe den 1%-Low-Abstand, aber mindestens eine spart, gilt Ersparnis als Pflicht – unter den Sparern bleibt ein Fenster von etwa 2 Punkten unter dem besten 1%-Low (⅓ des Floor-Abstands), dort die kleinste Datei (Kompromiss, Warnung in der Warteschlange). Wird trotzdem encodiert und die echte Datei ist zu groß, wird die Ausgabe verworfen. Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.</p>
+                <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low der schwächsten Szene nicht durchrutschen – ruhige Szenen können den Schnitt nicht retten. Den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low dieser Szene ≥ 88). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
+                <p>Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei (Video plus kopierter Ton) mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Hält keine Stufe den 1%-Low-Abstand, aber mindestens eine spart, gilt Ersparnis als Pflicht – unter den Sparern bleibt ein Fenster von etwa 2 Punkten unter dem besten 1%-Low der schwächsten Szene (⅓ des Floor-Abstands), dort die kleinste Datei (Kompromiss, Warnung in der Warteschlange). Wird trotzdem encodiert und die echte Datei ist zu groß, wird die Ausgabe verworfen. Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-container">

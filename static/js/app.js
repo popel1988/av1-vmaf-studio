@@ -1326,7 +1326,7 @@
     if (hint) {
       hint.textContent = gap <= 0
         ? "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert."
-        : `Bei Ziel 94 muss das 1%-Low ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
+        : `Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
     }
     if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Gap = gap;
   }
@@ -3394,38 +3394,15 @@
     grid.querySelectorAll(".shot-play").forEach((btn) =>
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const tile = btn.closest(".shot-tile");
-        const img = tile.querySelector("img");
-        const existing = tile.querySelector("video");
-        grid.querySelectorAll(".shot-tile video").forEach((v) => {
-          if (v !== existing) {
-            v.pause();
-            const other = v.closest(".shot-tile");
-            const otherImg = other && other.querySelector("img");
-            const otherBtn = other && other.querySelector(".shot-play");
-            if (otherImg) otherImg.hidden = false;
-            if (otherBtn) otherBtn.textContent = tt("Abspielen");
-            v.remove();
-          }
-        });
-        if (existing) {
-          existing.pause();
-          existing.remove();
-          if (img) img.hidden = false;
-          btn.textContent = tt("Abspielen");
-          return;
-        }
         const session = state.vmafSession;
-        if (!session || !img) return;
-        const video = document.createElement("video");
-        video.controls = true;
-        video.autoplay = true;
-        video.playsInline = true;
-        video.src = `/api/vmaf/clip?session=${encodeURIComponent(session)}`
-          + `&file=${encodeURIComponent(btn.dataset.clip)}`;
-        img.hidden = true;
-        img.after(video);
-        btn.textContent = tt("Stopp");
+        const file = btn.dataset.clip;
+        if (!session || !file) return;
+        const tile = btn.closest(".shot-tile");
+        const cap = (tile && tile.dataset.cap) || "Szene";
+        const src = `/api/vmaf/clip?session=${encodeURIComponent(session)}`
+          + `&file=${encodeURIComponent(file)}`;
+        openModal(cap, `<video class="vmaf-clip-video" controls autoplay playsinline src="${src}"></video>`,
+          { player: true });
       }));
     updateCmp();
   }
@@ -3463,6 +3440,53 @@
     setTimeout(() => { box.style.display = "none"; }, 150);
   }
 
+  function vmafTargetLo(vmaf) {
+    const stored = Number(vmaf && vmaf.target_lo);
+    if (stored > 0) return stored;
+    const sweet = window.APP_CONFIG && APP_CONFIG.sweetspot && APP_CONFIG.sweetspot[0];
+    return Number(sweet) > 0 ? Number(sweet) : 93;
+  }
+
+  function vmafWorstP1(r) {
+    let p1 = null;
+    let scene = null;
+    (r.scene_scores || []).forEach((sc) => {
+      const v = Number(sc.p1);
+      if (!Number.isFinite(v) || v <= 0) return;
+      if (p1 == null || v < p1) {
+        p1 = v;
+        scene = sc.scene;
+      }
+    });
+    if (p1 == null && r.vmaf_1pct != null && Number(r.vmaf_1pct) > 0) p1 = Number(r.vmaf_1pct);
+    return { p1, scene };
+  }
+
+  function vmafResultMiss(r, lo, gap) {
+    const miss = {};
+    if (Number(r.vmaf) + 1e-9 < lo) miss.mean = true;
+    if (gap > 0) {
+      const worst = vmafWorstP1(r);
+      const floor = lo - gap;
+      if (worst.p1 != null && worst.p1 + 1e-9 < floor) {
+        miss.p1 = worst.p1;
+        miss.floor = floor;
+        if (worst.scene != null) miss.scene = Number(worst.scene) + 1;
+      }
+    }
+    return (miss.mean || miss.p1 != null) ? miss : null;
+  }
+
+  function vmafMissText(r, miss, lo) {
+    const bits = [];
+    if (miss.mean) bits.push(`Mittel ${Number(r.vmaf).toFixed(1)} unter Ziel ${Math.round(lo)}`);
+    if (miss.p1 != null) {
+      const where = miss.scene ? `Szene ${miss.scene}, ` : "";
+      bits.push(`${where}1%-Low ${Number(miss.p1).toFixed(1)} unter ${Math.round(miss.floor)}`);
+    }
+    return bits.join(", ");
+  }
+
   function vmafCell(r) {
     let s = `${r.vmaf.toFixed(2)}`;
     // Mehrere Szenen: Mittelwert oben, Streuung (min–max) je Szene darunter.
@@ -3492,7 +3516,7 @@
       const gap = vmafP1GapValue();
       const rec = gap <= 0
         ? "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus)."
-        : `Empfehlung: Mittel ≥ Ziel und 1%-Low nicht mehr als ${gap} darunter.`;
+        : `Empfehlung: Mittel ≥ Ziel und das 1%-Low der schwächsten Szene nicht mehr als ${gap} darunter.`;
       s += `<br><span class="muted" title="1%-Low = Mittel der schlechtesten 1 % Frames; `
         + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
         + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
@@ -3502,6 +3526,11 @@
     if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
     if (qual.length) {
       s += `<br><span class="muted">${qual.join(" · ")}</span>`;
+    }
+    const lo = vmafTargetLo(state.vmafShown);
+    const miss = vmafResultMiss(r, lo, vmafP1GapValue());
+    if (miss) {
+      s += `<br><span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">Ziel verfehlt</span>`;
     }
     return s;
   }
@@ -3518,6 +3547,30 @@
       warn.textContent = "";
       warn.style.display = "none";
     }
+    const missBox = $("vmaf-target-miss");
+    if (!missBox) return;
+    const misses = [];
+    const lo = vmafTargetLo(vmaf);
+    const gap = vmafP1GapValue();
+    if (vmaf && vmaf.results) {
+      vmaf.results.forEach((r) => {
+        const miss = vmafResultMiss(r, lo, gap);
+        if (!miss) return;
+        const label = r.label || ("Q" + r.quality);
+        misses.push(`${label}: ${vmafMissText(r, miss, lo)}.`);
+      });
+    }
+    if (!misses.length) {
+      missBox.textContent = "";
+      missBox.style.display = "none";
+      return;
+    }
+    const lead = gap <= 0
+      ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, nur Mittel).`
+      : `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`;
+    missBox.innerHTML = `<span>${escapeHtml(lead)}</span> `
+      + misses.map((line) => `<span>${escapeHtml(line)}</span>`).join(" ");
+    missBox.style.display = "";
   }
 
   function exportVmafCsv() {
@@ -3583,7 +3636,7 @@
     syncKeepSourceBanner(vmaf);
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r, idx) => `
-      <tr class="${r.recommended ? "row-recommended" : ""}">
+      <tr class="${r.recommended ? "row-recommended" : ""} ${vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue()) ? "row-target-miss" : ""}">
         <td>${escapeHtml(r.label || ("Q" + r.quality))}</td>
         <td>${vmafCell(r)}</td>
         <td>${r.predicted_human}</td>
@@ -4351,7 +4404,10 @@
   function openModal(title, html, opts) {
     const m = ensureModal();
     const box = m.querySelector(".app-modal-box");
-    if (box) box.classList.toggle("app-modal-nfo", !!(opts && opts.nfo));
+    if (box) {
+      box.classList.toggle("app-modal-nfo", !!(opts && opts.nfo));
+      box.classList.toggle("app-modal-player", !!(opts && opts.player));
+    }
     $("app-modal-title").textContent = title || "";
     $("app-modal-body").innerHTML = html || "";
     m.style.display = "";
@@ -6084,7 +6140,8 @@
       ${nfo.tagline ? `<p class="lib-nfo-tag">${escapeHtml(nfo.tagline)}</p>` : ""}
       ${bits.length ? `<p class="lib-nfo-bits">${escapeHtml(bits.join(" · "))}</p>` : ""}
       ${plot ? `<p class="lib-nfo-plot">${escapeHtml(plot)}</p>` : ""}
-      ${files ? `<p class="muted lib-nfo-file">${escapeHtml(files)}</p>` : ""}`;
+      ${files ? `<p class="muted lib-nfo-file">${escapeHtml(files)}</p>` : ""}
+      ${nfo.text ? `<pre class="lib-nfo-raw">${escapeHtml(nfo.text)}</pre>` : ""}`;
   }
 
   function libDataPath(el) {

@@ -777,6 +777,7 @@ def _recommend(rows: list[dict], speeds: list[str], ref_value: int, enc: str) ->
             "reason": "Keine VMAF-Werte – Standard bleibt Ausgewogen.",
         }
     at_ref = [r for r in usable if r.get("value") == ref_value] or usable
+    from .vmaf import floor_p1
     stats: dict[str, dict] = {}
     for s in speeds:
         chunk = [r for r in at_ref if r["speed"] == s]
@@ -784,9 +785,14 @@ def _recommend(rows: list[dict], speeds: list[str], ref_value: int, enc: str) ->
             continue
         p1s = [r["vmaf_1pct"] for r in chunk if r.get("vmaf_1pct")]
         hms = [r["vmaf_hmean"] for r in chunk if r.get("vmaf_hmean")]
+        floors = [
+            floor_p1(r.get("scene_scores"), r.get("vmaf_1pct") or 0, r.get("vmaf") or 0)
+            for r in chunk if r.get("vmaf")
+        ]
         st = {
             "vmaf": sum(r["vmaf"] for r in chunk) / len(chunk),
             "p1": (sum(p1s) / len(p1s)) if p1s else None,
+            "p1_floor": min(floors) if floors else None,
             "hmean": (sum(hms) / len(hms)) if hms else None,
             "seconds": sum(float(r.get("seconds") or 0) for r in chunk) / len(chunk),
             "size": sum(int(r.get("size_bytes") or 0) for r in chunk) / len(chunk),
@@ -811,10 +817,13 @@ def _recommend(rows: list[dict], speeds: list[str], ref_value: int, enc: str) ->
         p1a = a["p1"] if a["p1"] is not None else a["vmaf"]
         p1b = b["p1"] if b["p1"] is not None else b["vmaf"]
         dp1 = p1b - p1a
+        floor_a = a["p1_floor"] if a.get("p1_floor") is not None else p1a
+        floor_b = b["p1_floor"] if b.get("p1_floor") is not None else p1b
+        dp1_floor = floor_b - floor_a
         t0 = max(0.05, a["seconds"])
         tr = b["seconds"] / t0
         sz = b["size"] / max(1.0, a["size"])
-        floor_bad = bool(gap > 0 and p1a < (a["vmaf"] - gap))
+        floor_bad = bool(gap > 0 and floor_a < (a["vmaf"] - gap))
         lbl_a = speed_label(enc, chosen)
         lbl_b = speed_label(enc, nxt)
         detail = (f"{lbl_b} gegen {lbl_a}: Score {b['score']:.1f} vs {a['score']:.1f} "
@@ -823,7 +832,7 @@ def _recommend(rows: list[dict], speeds: list[str], ref_value: int, enc: str) ->
         if dq >= 0.4 and (tr < 3.5 or dq >= 1.0 or dp1 >= 1.5):
             notes.append(detail + ".")
             chosen = nxt
-        elif floor_bad and dp1 >= 1.0 and tr < 5.0:
+        elif floor_bad and dp1_floor >= 1.0 and tr < 5.0:
             notes.append(detail + " – 1%-Low war zu niedrig, langsamere Stufe hebt die schlechtesten Frames.")
             chosen = nxt
         else:

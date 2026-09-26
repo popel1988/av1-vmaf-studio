@@ -588,17 +588,17 @@ _SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
 _NFO_ROOT_TAGS = ("movie", "tvshow", "episodedetails", "musicvideo")
 
 
-def sidecar_details(video: Path) -> dict:
+def sidecar_details(video: Path, include_text: bool = False) -> dict:
     """NFO + externe Untertitel neben der Videodatei (gleicher Ordner)."""
     return {
-        "nfo": collect_nfo(video),
+        "nfo": collect_nfo(video, include_text=include_text),
         "sidecars": _sidecar_subs(video),
     }
 
 
 def file_details(video: Path, probe: bool = True) -> dict:
     """NFO/Sidecars sofort; ffprobe nur wenn ``probe`` (Ton/UT nachladen)."""
-    extras = sidecar_details(video)
+    extras = sidecar_details(video, include_text=True)
     if not probe:
         return extras
     info, err = ff.probe_with_error(video)
@@ -618,17 +618,21 @@ def file_details(video: Path, probe: bool = True) -> dict:
     }
 
 
-def collect_nfo(video: Path) -> Optional[dict]:
+def collect_nfo(video: Path, include_text: bool = False) -> Optional[dict]:
     """Alle lesbaren .nfo im Filmordner (plus tvshow.nfo in Elternordnern)."""
     parsed: list[dict] = []
     for p in _nfo_paths(video):
-        data = parse_nfo(p)
+        data = parse_nfo(p, include_text=include_text)
         if data:
             parsed.append(data)
     if not parsed:
         return None
     out: dict = {}
+    texts: list[tuple[str, str]] = []
     for item in sorted(parsed, key=lambda d: 0 if d.get("kind") == "tvshow" else 1):
+        raw_text = item.pop("text", None) if include_text else None
+        if raw_text:
+            texts.append((str(item.get("file") or ""), str(raw_text)))
         for k, v in item.items():
             if v in (None, "", [], {}):
                 continue
@@ -641,6 +645,11 @@ def collect_nfo(video: Path) -> Optional[dict]:
             out[k] = v
     if len(parsed) > 1:
         out["files"] = [p.get("file") for p in parsed if p.get("file")]
+    if texts:
+        chunks = []
+        for name, body in texts:
+            chunks.append(f"── {name} ──\n{body}" if len(texts) > 1 and name else body)
+        out["text"] = "\n\n".join(chunks)
     return out or None
 
 
@@ -776,7 +785,7 @@ def _sidecar_subs(video: Path) -> list[dict]:
     return out
 
 
-def parse_nfo(path: Path) -> Optional[dict]:
+def parse_nfo(path: Path, include_text: bool = False) -> Optional[dict]:
     """Kodi/Jellyfin/MediaInfo-NFO. Lesbare Datei gilt immer als Treffer."""
     text = _read_nfo_text(path)
     if text is None:
@@ -792,6 +801,8 @@ def parse_nfo(path: Path) -> Optional[dict]:
             excerpt = " ".join(excerpt.split())[:500]
             if excerpt:
                 data["excerpt"] = excerpt
+    if include_text and text:
+        data["text"] = text
     data["file"] = path.name
     return data
 
@@ -834,8 +845,12 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
             "episodedetails": "episode", "musicvideo": "movie"}.get(tag, tag or "nfo")
 
     def one(*names: str) -> str:
-        el = _nfo_child(root, *names)
-        return _xml_text(el)
+        for name in names:
+            el = _nfo_child(root, name)
+            text = _xml_text(el)
+            if text:
+                return text
+        return ""
 
     genres = [_xml_text(g) for g in _nfo_children(root, "genre") if _xml_text(g)]
     studios = [_xml_text(s) for s in _nfo_children(root, "studio") if _xml_text(s)]
