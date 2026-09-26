@@ -578,7 +578,6 @@ def export_csv(root: Optional[str] = None) -> str:
 
 # Nur so viel lesen (DoS). Größere Dateien nicht verwerfen – Metadaten stehen vorn.
 _NFO_MAX_BYTES = 2 * 1024 * 1024
-_PLOT_MAX = 2000
 _SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
 _NFO_ROOT_TAGS = ("movie", "tvshow", "episodedetails", "musicvideo")
 
@@ -787,8 +786,6 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
     genres = [_xml_text(g) for g in _nfo_children(root, "genre") if _xml_text(g)]
     studios = [_xml_text(s) for s in _nfo_children(root, "studio") if _xml_text(s)]
     plot = one("plot", "outline")
-    if len(plot) > _PLOT_MAX:
-        plot = plot[:_PLOT_MAX].rstrip() + "…"
     rating = _nfo_rating(root)
     year = one("year")
     if not year:
@@ -947,8 +944,6 @@ def _parse_nfo_loose(text: str) -> Optional[dict]:
 
     title = grab("title") or grab("localtitle") or grab("originaltitle")
     plot = grab("plot") or grab("outline")
-    if plot and len(plot) > _PLOT_MAX:
-        plot = plot[:_PLOT_MAX].rstrip() + "…"
     year = grab("year")
     if not year:
         prem = grab("premiered") or grab("aired")

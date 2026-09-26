@@ -990,22 +990,22 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 .lib-name-stack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lib-name { word-break: break-all; }
 .lib-meta-line { font-size: 11px; color: var(--text-muted); }
-.lib-nfo-badge {
+button.lib-nfo-badge {
   display: inline-block; padding: 0 5px; border-radius: 5px; font-size: 10px;
-  font-weight: 700; letter-spacing: .04em;
+  font-weight: 700; letter-spacing: .04em; line-height: 1.6; cursor: pointer;
+  border: 0; font-family: inherit;
   background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
 }
+button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, transparent); }
+.app-modal-box.app-modal-nfo { width: min(560px, 94vw); }
+.lib-nfo-pop .lib-nfo-plot { white-space: pre-wrap; }
 .lib-detail-row td {
   background: var(--surface-2); padding: 10px 12px 12px;
   border-bottom: 1px solid var(--border);
 }
 .lib-detail {
-  display: grid; grid-template-columns: 1fr 1fr minmax(220px, 1.2fr);
+  display: grid; grid-template-columns: 1fr 1fr;
   gap: 16px; font-size: 12.5px; line-height: 1.45;
-}
-@media (max-width: 1100px) {
-  .lib-detail { grid-template-columns: 1fr 1fr; }
-  .lib-detail-nfo { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
   .lib-detail { grid-template-columns: 1fr; }
@@ -1630,7 +1630,13 @@ input[type="range"]::-moz-range-thumb {
 
 /* ------------------------------ VMAF CARD ------------------------------- */
 .vmaf-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; align-items: start; }
+.vmaf-charts { min-width: 0; }
+.vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
+.vmaf-chart-scenes:empty { display: none; }
 .vmaf-chart-wrap { position: relative; height: 300px; }
+.vmaf-chart-wrap-sm { height: 190px; }
+.vmaf-subchart { margin-top: 16px; }
+.vmaf-subchart-title { margin: 0 0 6px; font-size: 12px; color: var(--text-muted); }
 .shot-wrap { grid-column: 1 / -1; }
 @media (max-width: 1100px) { .vmaf-body { grid-template-columns: 1fr; } }
 

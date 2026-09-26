@@ -645,8 +645,23 @@
           </div>
           <div id="vmaf-pick-warning" class="keep-source-note" style="display:none"></div>
           <div class="card-body vmaf-body">
-            <div class="vmaf-chart-wrap">
-              <canvas id="vmaf-chart"></canvas>
+            <div class="vmaf-charts">
+              <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+              <div class="vmaf-chart-wrap">
+                <canvas id="vmaf-chart"></canvas>
+              </div>
+              <div id="vmaf-gap-wrap" class="vmaf-subchart" hidden>
+                <p class="vmaf-subchart-title">Abstand zum Gesamtschnitt (negativ = diese Szene liegt darunter)</p>
+                <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
+                  <canvas id="vmaf-gap-chart"></canvas>
+                </div>
+              </div>
+              <div id="vmaf-frame-wrap" class="vmaf-subchart" hidden>
+                <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
+                <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
+                  <canvas id="vmaf-frame-chart"></canvas>
+                </div>
+              </div>
             </div>
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">

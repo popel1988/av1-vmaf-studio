@@ -730,7 +730,11 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                     "screenshots": rd.get("screenshots") or [],
                     "screenshot_ref": rd.get("screenshot_ref") or "",
                     "screenshot_enc": rd.get("screenshot_enc") or "",
-                    "scene_scores": rd.get("scene_scores") or [],
+                    "scene_scores": [
+                        {k: v for k, v in s.items() if k != "frames"}
+                        for s in (rd.get("scene_scores") or [])
+                        if isinstance(s, dict)
+                    ],
                 })
             _set(rows=list(rows), percent=round(done / total * 100, 1))
 

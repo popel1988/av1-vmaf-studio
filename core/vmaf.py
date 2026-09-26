@@ -165,13 +165,24 @@ class VmafResult:
                 }
                 for s in self.screenshots
             ]
-        if self.scene_scores and len(self.scene_scores) > 1:
-            d["scene_scores"] = [
-                {"scene": s.get("scene", 0), "vmaf": round(s.get("vmaf", 0.0), 2)}
-                for s in self.scene_scores
-            ]
+        if self.scene_scores:
+            packed = []
+            for s in self.scene_scores:
+                item = {
+                    "scene": s.get("scene", 0),
+                    "vmaf": round(float(s.get("vmaf") or 0.0), 2),
+                }
+                for key, nd in (("hmean", 2), ("p1", 2), ("psnr", 2), ("ssim", 4)):
+                    raw = s.get(key)
+                    if raw:
+                        item[key] = round(float(raw), nd)
+                frames = s.get("frames") or []
+                if frames:
+                    item["frames"] = frames
+                packed.append(item)
+            d["scene_scores"] = packed
             vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
-            if vals:
+            if len(vals) > 1:
                 d["vmaf_min"] = round(min(vals), 2)
                 d["vmaf_max"] = round(max(vals), 2)
         return d
@@ -343,6 +354,10 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         p1 = sum(vals[:k]) / k
     psnr = (pooled.get("psnr_y", {}) or pooled.get("psnr", {}) or {}).get("mean") or 0.0
     ssim = (pooled.get("float_ssim", {}) or pooled.get("ssim", {}) or {}).get("mean") or 0.0
+    series = [
+        float(f["metrics"]["vmaf"]) for f in frames
+        if f.get("metrics") and f["metrics"].get("vmaf") is not None
+    ]
     return {
         "vmaf": float(mean),
         "hmean": float(vm.get("harmonic_mean") or 0.0),
@@ -350,7 +365,24 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "p1": float(p1),
         "psnr": float(psnr),
         "ssim": float(ssim),
+        "frames": _downsample_vmaf(series),
     }
+
+
+def _downsample_vmaf(vals: list[float], n: int = 80) -> list[float]:
+    """Kurze Kurve über die Stichprobe. Je Abschnitt der Tiefstwert, damit Einbrüche bleiben."""
+    if not vals:
+        return []
+    if len(vals) <= n:
+        return [round(v, 2) for v in vals]
+    out: list[float] = []
+    step = len(vals) / n
+    for i in range(n):
+        a = int(i * step)
+        b = max(a + 1, int((i + 1) * step))
+        chunk = vals[a:b] or [vals[a]]
+        out.append(round(min(chunk), 2))
+    return out
 
 
 def _vmaf_metrics(
@@ -614,7 +646,15 @@ def analyze(
                 psnrs.append(metrics["psnr"])
             if metrics.get("ssim"):
                 ssims.append(metrics["ssim"])
-            scene_scores.append({"scene": si, "vmaf": score})
+            scene_scores.append({
+                "scene": si,
+                "vmaf": score,
+                "hmean": metrics.get("hmean") or 0.0,
+                "p1": metrics.get("p1") or 0.0,
+                "psnr": metrics.get("psnr") or 0.0,
+                "ssim": metrics.get("ssim") or 0.0,
+                "frames": metrics.get("frames") or [],
+            })
             total_size += test_file.stat().st_size
             total_dur += clip_len
             if opts.generate_screenshots:
