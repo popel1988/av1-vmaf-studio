@@ -393,6 +393,10 @@
     "CSV-Export": "CSV export",
     "Auswahl mit Auto-Einstellungen": "Selection with auto settings",
     "In Treffern suchen … (Name/Ordner)": "Search in results … (name/folder)",
+    "In Treffern suchen … (Name, Titel, Ordner)": "Search in results … (name, title, folder)",
+    "Datei sortiert nach NFO-Titel, sonst nach Dateiname. Jahr sortiert das NFO-Jahr.":
+      "File sorts by NFO title, otherwise by file name. Year sorts the NFO year.",
+    "Jahr": "Year",
     "Nach Ordner gruppieren": "Group by folder",
     "Ton, Untertitel und NFO anzeigen": "Show audio, subtitles and NFO",
     "UT": "subs",
@@ -498,8 +502,8 @@
     "HDR-Behandlung": "HDR handling",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (tone mapping)",
     "HDR beibehalten (10-bit)": "Keep HDR (10-bit)",
-    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).":
-      "HDR sources only. \u201CKeep\u201D transfers HDR10/HLG metadata (no Dolby Vision layer).",
+    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
+      "HDR sources only. “Keep” transfers HDR10/HLG. With HDR10+ and an HEVC target, the studio writes the per-scene metadata back after the encode.",
     "Dolby Vision erkannt: Beim Re-Encode kann die dynamische DV-Schicht (RPU) nicht übernommen werden. Bei Profil 8.1 bleibt die HDR10-Basis erhalten; bei Profil 5 wird Tone-Mapping empfohlen.":
       "Dolby Vision detected: the dynamic DV layer (RPU) cannot be carried over on re-encode. Profile 8.1 keeps the HDR10 base; profile 5 recommends tone mapping.",
     "Dolby Vision (RPU) beibehalten – experimentell, nur HEVC/Profil 8.1":
@@ -848,6 +852,33 @@
     "Bei Fertigstellung": "On completion",
     "Bei Fehler": "On error",
     "Testnachricht senden": "Send test message",
+    "Medienserver": "Media servers",
+    "Optional. Nach einem fertigen Encode können Jellyfin, Sonarr und Radarr den neuen Pfad neu einlesen. Leer lassen, wenn du das nicht nutzt.":
+      "Optional. After a finished encode, Jellyfin, Sonarr and Radarr can rescan the new path. Leave empty if you do not use them.",
+    "Jellyfin-URL": "Jellyfin URL",
+    "Jellyfin-API-Token": "Jellyfin API token",
+    "Sonarr-URL": "Sonarr URL",
+    "Sonarr-API-Key": "Sonarr API key",
+    "Radarr-URL": "Radarr URL",
+    "Radarr-API-Key": "Radarr API key",
+    "Pfad in diesem Tool": "Path in this tool",
+    "Pfad beim Server": "Path on the server",
+    "Leer lassen, wenn Tool und Server denselben Ordner unter demselben Pfad sehen. Sonst nur das Präfix ersetzen.":
+      "Leave empty when the tool and the server see the same folder under the same path. Otherwise replace only the prefix.",
+    "Verbindung prüfen": "Check connection",
+    "Nichts konfiguriert.": "Nothing configured.",
+    "Prüfung fehlgeschlagen.": "Check failed.",
+    "Gespeichert.": "Saved.",
+    "Prüfe …": "Checking …",
+    "Deinterlace": "Deinterlace",
+    "Automatisch (nur Halbbilder)": "Automatic (interlaced only)",
+    "Immer": "Always",
+    "Schärfen": "Sharpen",
+    "Korn": "Grain",
+    "VP9 (nur CPU)": "VP9 (CPU only)",
+    "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
+      "CPU only. A usual CRF range is 30–35; this scale goes to 51.",
+    "AQ-Stärke (NVIDIA):": "AQ strength (NVIDIA):",
     "gesetzt – leer lassen zum Beibehalten": "set – leave empty to keep",
     "Bot-Token": "Bot token",
     "Gesendet ✓": "Sent ✓",
@@ -1274,8 +1305,8 @@
     "HDR & Dolby Vision": "HDR & Dolby Vision",
     "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
       "What is “dynamic range” – SDR, HDR10, HLG, HDR10+?",
-    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
-      "SDR is a normal TV/monitor picture (limited contrast). HDR10 has static metadata for the whole file (MaxCLL/MaxFALL) and 10-bit PQ. HLG is broadcast HDR, often without extra metadata, and is still watchable on many SDR TVs. HDR10+ can carry per-scene metadata – this studio treats it as HDR (no separate HDR10+ encode path).",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.":
+      "SDR is a normal TV/monitor picture (limited contrast). HDR10 has static metadata for the whole file (MaxCLL/MaxFALL) and 10-bit PQ. HLG is broadcast HDR, often without extra metadata, and is still watchable on many SDR TVs. HDR10+ adds per-scene brightness data on top of HDR10. When HDR is kept and the target is HEVC, the studio writes that data back after the encode. AV1 and H.264 keep only static HDR10.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "For HDR sources without Dolby Vision: “Keep HDR” holds 10-bit and the metadata. “Tone-mapping” converts to SDR – any display can play it, contrast is lost. VMAF tests are then tonemapped the same way so scores stay fair.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "What are Dolby Vision profiles 5, 7 and 8?",
@@ -1683,6 +1714,10 @@
     "CSV-Export": "Exportar CSV",
     "Auswahl mit Auto-Einstellungen": "Selección con ajustes automáticos",
     "In Treffern suchen … (Name/Ordner)": "Buscar en resultados … (nombre/carpeta)",
+    "In Treffern suchen … (Name, Titel, Ordner)": "Buscar en resultados … (nombre, título, carpeta)",
+    "Datei sortiert nach NFO-Titel, sonst nach Dateiname. Jahr sortiert das NFO-Jahr.":
+      "Archivo ordena por título NFO, si no por nombre. Año ordena el año del NFO.",
+    "Jahr": "Año",
     "Nach Ordner gruppieren": "Agrupar por carpeta",
     "Ton, Untertitel und NFO anzeigen": "Mostrar audio, subtítulos y NFO",
     "UT": "subs",
@@ -1730,7 +1765,8 @@
     "HDR-Behandlung": "Tratamiento de HDR",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (mapeo de tonos)",
     "HDR beibehalten (10-bit)": "Mantener HDR (10 bits)",
-    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).": "Solo para fuentes HDR. «Mantener» transfiere los metadatos HDR10/HLG (sin capa Dolby Vision).",
+    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
+      "Solo para fuentes HDR. «Mantener» transfiere HDR10/HLG. Con HDR10+ y destino HEVC, el estudio vuelve a escribir los metadatos por escena después del encode.",
     "Dolby Vision erkannt: Beim Re-Encode kann die dynamische DV-Schicht (RPU) nicht übernommen werden. Bei Profil 8.1 bleibt die HDR10-Basis erhalten; bei Profil 5 wird Tone-Mapping empfohlen.": "Dolby Vision detectado: al recodificar no se puede conservar la capa dinámica DV (RPU). El perfil 8.1 mantiene la base HDR10; para el perfil 5 se recomienda el mapeo de tonos.",
     "Dolby Vision (RPU) beibehalten – experimentell, nur HEVC/Profil 8.1": "Mantener Dolby Vision (RPU) – experimental, solo HEVC/perfil 8.1",
     "Extrahiert die DV-RPU aus der Quelle und re-injiziert sie nach dem HEVC-Encode (dovi_tool). Erzwingt „HDR beibehalten“. Bei Fehlschlag bleibt die reine HDR10-Ausgabe erhalten.": "Extrae el RPU de DV del origen y lo reinyecta tras la codificación HEVC (dovi_tool). Fuerza «Mantener HDR». Si falla, se conserva la salida HDR10 simple.",
@@ -2014,6 +2050,33 @@
     "Bei Fertigstellung": "Al completarse",
     "Bei Fehler": "En caso de error",
     "Testnachricht senden": "Enviar mensaje de prueba",
+    "Medienserver": "Servidores multimedia",
+    "Optional. Nach einem fertigen Encode können Jellyfin, Sonarr und Radarr den neuen Pfad neu einlesen. Leer lassen, wenn du das nicht nutzt.":
+      "Opcional. Tras un encode terminado, Jellyfin, Sonarr y Radarr pueden volver a leer la ruta nueva. Déjalo vacío si no los usas.",
+    "Jellyfin-URL": "URL de Jellyfin",
+    "Jellyfin-API-Token": "Token API de Jellyfin",
+    "Sonarr-URL": "URL de Sonarr",
+    "Sonarr-API-Key": "Clave API de Sonarr",
+    "Radarr-URL": "URL de Radarr",
+    "Radarr-API-Key": "Clave API de Radarr",
+    "Pfad in diesem Tool": "Ruta en esta herramienta",
+    "Pfad beim Server": "Ruta en el servidor",
+    "Leer lassen, wenn Tool und Server denselben Ordner unter demselben Pfad sehen. Sonst nur das Präfix ersetzen.":
+      "Déjalo vacío si la herramienta y el servidor ven la misma carpeta con la misma ruta. Si no, sustituye solo el prefijo.",
+    "Verbindung prüfen": "Comprobar conexión",
+    "Nichts konfiguriert.": "Nada configurado.",
+    "Prüfung fehlgeschlagen.": "La comprobación falló.",
+    "Gespeichert.": "Guardado.",
+    "Prüfe …": "Comprobando …",
+    "Deinterlace": "Desentrelazado",
+    "Automatisch (nur Halbbilder)": "Automático (solo entrelazado)",
+    "Immer": "Siempre",
+    "Schärfen": "Nitidez",
+    "Korn": "Grano",
+    "VP9 (nur CPU)": "VP9 (solo CPU)",
+    "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
+      "Solo CPU. El CRF habitual es 30–35; esta escala llega a 51.",
+    "AQ-Stärke (NVIDIA):": "Fuerza AQ (NVIDIA):",
     "gesetzt – leer lassen zum Beibehalten": "establecido – dejar vacío para conservar",
     "Bot-Token": "Token de bot",
     "Gesendet ✓": "Enviado ✓",
@@ -2304,8 +2367,8 @@
     "HDR & Dolby Vision": "HDR y Dolby Vision",
     "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
       "¿Qué es el «rango dinámico» – SDR, HDR10, HLG, HDR10+?",
-    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
-      "SDR es la imagen normal de TV/monitor (contraste limitado). HDR10 tiene metadatos estáticos para todo el archivo (MaxCLL/MaxFALL) y PQ de 10 bit. HLG es HDR de emisión, a menudo sin metadatos extra, y se ve en muchos televisores SDR. HDR10+ puede llevar metadatos por escena; este estudio lo trata como HDR (sin ruta de encode HDR10+ propia).",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.":
+      "SDR es la imagen normal de TV/monitor (contraste limitado). HDR10 tiene metadatos estáticos para todo el archivo (MaxCLL/MaxFALL) y PQ de 10 bit. HLG es HDR de emisión, a menudo sin metadatos extra, y se ve en muchos televisores SDR. HDR10+ añade datos de brillo por escena sobre HDR10. Si se mantiene el HDR y el destino es HEVC, el estudio vuelve a escribir esos datos después del encode. AV1 y H.264 conservan solo el HDR10 estático.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "En fuentes HDR sin Dolby Vision: «Mantener HDR» conserva 10 bit y los metadatos. «Tone-mapping» convierte a SDR: cualquier pantalla lo reproduce, se pierde contraste. Las pruebas VMAF se tone-mapean igual para que las puntuaciones no salgan torcidas.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "¿Qué son los perfiles Dolby Vision 5, 7 y 8?",
@@ -2702,6 +2765,10 @@
     "CSV-Export": "Export CSV",
     "Auswahl mit Auto-Einstellungen": "Sélection avec réglages automatiques",
     "In Treffern suchen … (Name/Ordner)": "Rechercher dans les résultats … (nom/dossier)",
+    "In Treffern suchen … (Name, Titel, Ordner)": "Rechercher dans les résultats … (nom, titre, dossier)",
+    "Datei sortiert nach NFO-Titel, sonst nach Dateiname. Jahr sortiert das NFO-Jahr.":
+      "Fichier trie par titre NFO, sinon par nom. Année trie l'année du NFO.",
+    "Jahr": "Année",
     "Nach Ordner gruppieren": "Grouper par dossier",
     "Ton, Untertitel und NFO anzeigen": "Afficher audio, sous-titres et NFO",
     "UT": "ST",
@@ -2749,7 +2816,8 @@
     "HDR-Behandlung": "Traitement HDR",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (mappage tonal)",
     "HDR beibehalten (10-bit)": "Conserver le HDR (10 bits)",
-    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer).": "Sources HDR uniquement. « Conserver » transfère les métadonnées HDR10/HLG (pas de couche Dolby Vision).",
+    "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
+      "Sources HDR uniquement. « Conserver » transfère HDR10/HLG. Avec HDR10+ et une cible HEVC, le studio réécrit les métadonnées par scène après l'encodage.",
     "Dolby Vision erkannt: Beim Re-Encode kann die dynamische DV-Schicht (RPU) nicht übernommen werden. Bei Profil 8.1 bleibt die HDR10-Basis erhalten; bei Profil 5 wird Tone-Mapping empfohlen.": "Dolby Vision détecté : lors du réencodage, la couche dynamique DV (RPU) ne peut pas être conservée. Le profil 8.1 conserve la base HDR10 ; pour le profil 5, le mappage tonal est recommandé.",
     "Dolby Vision (RPU) beibehalten – experimentell, nur HEVC/Profil 8.1": "Conserver Dolby Vision (RPU) – expérimental, HEVC/profil 8.1 uniquement",
     "Extrahiert die DV-RPU aus der Quelle und re-injiziert sie nach dem HEVC-Encode (dovi_tool). Erzwingt „HDR beibehalten“. Bei Fehlschlag bleibt die reine HDR10-Ausgabe erhalten.": "Extrait le RPU DV de la source et le réinjecte après l'encodage HEVC (dovi_tool). Force « Conserver le HDR ». En cas d'échec, la sortie HDR10 simple est conservée.",
@@ -3033,6 +3101,33 @@
     "Bei Fertigstellung": "À l'achèvement",
     "Bei Fehler": "En cas d'erreur",
     "Testnachricht senden": "Envoyer un message de test",
+    "Medienserver": "Serveurs média",
+    "Optional. Nach einem fertigen Encode können Jellyfin, Sonarr und Radarr den neuen Pfad neu einlesen. Leer lassen, wenn du das nicht nutzt.":
+      "Facultatif. Après un encodage terminé, Jellyfin, Sonarr et Radarr peuvent relire le nouveau chemin. Laisser vide si vous ne les utilisez pas.",
+    "Jellyfin-URL": "URL Jellyfin",
+    "Jellyfin-API-Token": "Jeton API Jellyfin",
+    "Sonarr-URL": "URL Sonarr",
+    "Sonarr-API-Key": "Clé API Sonarr",
+    "Radarr-URL": "URL Radarr",
+    "Radarr-API-Key": "Clé API Radarr",
+    "Pfad in diesem Tool": "Chemin dans cet outil",
+    "Pfad beim Server": "Chemin sur le serveur",
+    "Leer lassen, wenn Tool und Server denselben Ordner unter demselben Pfad sehen. Sonst nur das Präfix ersetzen.":
+      "Laisser vide si l'outil et le serveur voient le même dossier sous le même chemin. Sinon, ne remplacer que le préfixe.",
+    "Verbindung prüfen": "Vérifier la connexion",
+    "Nichts konfiguriert.": "Rien de configuré.",
+    "Prüfung fehlgeschlagen.": "Vérification échouée.",
+    "Gespeichert.": "Enregistré.",
+    "Prüfe …": "Vérification …",
+    "Deinterlace": "Désentrelacement",
+    "Automatisch (nur Halbbilder)": "Automatique (entrelacé seulement)",
+    "Immer": "Toujours",
+    "Schärfen": "Netteté",
+    "Korn": "Grain",
+    "VP9 (nur CPU)": "VP9 (CPU seulement)",
+    "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
+      "CPU seulement. La plage CRF habituelle est 30–35 ; cette échelle va jusqu'à 51.",
+    "AQ-Stärke (NVIDIA):": "Force AQ (NVIDIA) :",
     "gesetzt – leer lassen zum Beibehalten": "défini – laisser vide pour conserver",
     "Bot-Token": "Jeton de bot",
     "Gesendet ✓": "Envoyé ✓",
@@ -3326,8 +3421,8 @@
     "HDR & Dolby Vision": "HDR et Dolby Vision",
     "Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?":
       "Qu'est-ce que la « dynamique » – SDR, HDR10, HLG, HDR10+ ?",
-    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).":
-      "Le SDR est l'image TV/moniteur normale (contraste limité). Le HDR10 a des métadonnées statiques pour tout le fichier (MaxCLL/MaxFALL) et du PQ 10 bit. Le HLG est du HDR broadcast, souvent sans métadonnées extra, encore regardable sur beaucoup de TV SDR. Le HDR10+ peut porter des métadonnées par scène – ce studio le traite comme du HDR (pas de chemin d'encodage HDR10+ dédié).",
+    "SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.":
+      "Le SDR est l'image TV/moniteur normale (contraste limité). Le HDR10 a des métadonnées statiques pour tout le fichier (MaxCLL/MaxFALL) et du PQ 10 bit. Le HLG est du HDR broadcast, souvent sans métadonnées extra, encore regardable sur beaucoup de TV SDR. Le HDR10+ ajoute des données de luminosité par scène au HDR10. Si le HDR est conservé et que la cible est HEVC, le studio réécrit ces données après l'encodage. AV1 et H.264 ne gardent que le HDR10 statique.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "Pour les sources HDR sans Dolby Vision : « Conserver le HDR » garde le 10 bit et les métadonnées. Le « tone-mapping » convertit en SDR – tout écran peut le lire, le contraste est perdu. Les tests VMAF sont alors tone-mappés de la même façon pour que les scores restent justes.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "Que sont les profils Dolby Vision 5, 7 et 8 ?",

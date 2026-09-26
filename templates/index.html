@@ -208,6 +208,7 @@
                     <option value="av1">AV1</option>
                     <option value="hevc">HEVC / H.265</option>
                     <option value="h264">H.264</option>
+                    <option value="vp9">VP9 (nur CPU)</option>
                   </select>
                   <p class="hint" id="codec-hint"></p>
                 </div>
@@ -233,7 +234,7 @@
                       <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
                       <option value="preserve">HDR beibehalten (10-bit)</option>
                     </select>
-                    <p class="hint">Nur bei HDR-Quellen. „Beibehalten" überträgt HDR10/HLG-Metadaten (kein Dolby-Vision-Layer). <a href="#faq-hdr" class="faq-jump">FAQ: Dynamik</a></p>
+                    <p class="hint">Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein. <a href="#faq-hdr" class="faq-jump">FAQ: Dynamik</a></p>
                   </div>
                   <div id="dv-mode-wrap" style="display:none">
                     <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
@@ -273,6 +274,36 @@
                     <option value="medium">Mittel</option>
                     <option value="strong">Stark</option>
                   </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Halbbilder (altes TV/DVD) werden mit bwdif aufgelöst. Automatisch nur, wenn die Datei als interlaced erkannt ist. Vollbilder bleiben unangetastet.">Deinterlace</label>
+                  <select id="opt-deinterlace">
+                    <option value="auto">Automatisch (nur Halbbilder)</option>
+                    <option value="on">Immer</option>
+                    <option value="off">Aus</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Unsharp nach dem Denoise. Stark kann Kanten überzeichnen.">Schärfen</label>
+                  <select id="opt-sharpen">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Sichtbares Korn im Bild. Macht die Datei größer. Die AV1-Film-Grain-Synthese darunter spart dagegen Bits.">Korn</label>
+                  <select id="opt-grain">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Stärke der NVENC Spatial AQ. 8 ist die NVIDIA-Vorgabe. Wirkt nur bei NVIDIA.">AQ-Stärke (NVIDIA): <strong id="aq-strength-val">8</strong></label>
+                  <input type="range" id="opt-aq-strength" min="1" max="15" value="8" />
                 </div>
                 <div class="field">
                   <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
@@ -557,6 +588,7 @@
                     <option value="av1">AV1</option>
                     <option value="hevc">HEVC / H.265</option>
                     <option value="h264">H.264</option>
+                    <option value="vp9">VP9 (nur CPU)</option>
                   </select>
                   <p class="hint" id="vt-codec-hint"></p>
                 </div>
@@ -858,6 +890,7 @@
                 <select id="lib-target-codec">
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC/H.265</option>
+                  <option value="vp9">VP9 (nur CPU)</option>
                 </select>
               </div>
               <div class="field"><label>Dynamik-Filter (Mehrfachauswahl)</label>
@@ -882,7 +915,7 @@
             </div>
 
             <div class="lib-result-toolbar">
-              <input type="search" id="lib-result-search" placeholder="In Treffern suchen … (Name/Ordner)" autocomplete="off" />
+              <input type="search" id="lib-result-search" placeholder="In Treffern suchen … (Name, Titel, Ordner)" autocomplete="off" />
               <label class="check"><input type="checkbox" id="lib-group" /><span>Nach Ordner gruppieren</span></label>
               <span class="muted" id="lib-result-count"></span>
             </div>
@@ -893,7 +926,10 @@
                 <thead>
                   <tr>
                     <th><input type="checkbox" id="lib-check-all" /></th>
-                    <th class="sortable" data-sort="name">Datei</th>
+                    <th data-tip="Datei sortiert nach NFO-Titel, sonst nach Dateiname. Jahr sortiert das NFO-Jahr.">
+                      <span class="sortable" data-sort="nfo_title">Datei</span>
+                      <span class="sortable lib-sort-year" data-sort="nfo_year">Jahr</span>
+                    </th>
                     <th class="sortable" data-sort="codec" data-tip="Video-Codec der Quelle (nicht das Encode-Ziel).">Codec</th>
                     <th class="sortable" data-sort="height">Auflösung</th>
                     <th data-tip="SDR, HDR10/HLG/HDR10+ oder Dolby Vision (Profil). Hover auf das Badge erklärt, was Auto daraus machen würde.">Dynamik</th>
@@ -1003,6 +1039,7 @@
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC / H.265</option>
                   <option value="h264">H.264</option>
+                  <option value="vp9">VP9 (nur CPU)</option>
                 </select>
                 <p class="hint" id="st-codec-hint"></p>
               </div>
@@ -1374,6 +1411,7 @@
                   <option value="av1">AV1</option>
                   <option value="hevc">HEVC / H.265</option>
                   <option value="h264">H.264</option>
+                  <option value="vp9">VP9 (nur CPU)</option>
                 </select>
               </div>
               <div class="field">
@@ -1441,6 +1479,62 @@
               <button class="btn btn-primary btn-sm" id="btn-notify-save">Speichern</button>
               <button class="btn btn-ghost btn-sm" id="btn-notify-test">Testnachricht senden</button>
             </div>
+          </div>
+        </section>
+
+        <section class="card span-2" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">📚</span> Medienserver</h3>
+            <span class="badge" id="media-badge">Aus</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">Optional. Nach einem fertigen Encode können Jellyfin, Sonarr und Radarr den neuen Pfad neu einlesen. Leer lassen, wenn du das nicht nutzt.</p>
+            <div class="field-row">
+              <div class="field">
+                <label>Jellyfin-URL</label>
+                <input type="text" id="ms-jf-url" placeholder="http://jellyfin:8096" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>Jellyfin-API-Token</label>
+                <input type="password" id="ms-jf-token" placeholder="unverändert lassen zum Beibehalten" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Sonarr-URL</label>
+                <input type="text" id="ms-sonarr-url" placeholder="http://sonarr:8989" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>Sonarr-API-Key</label>
+                <input type="password" id="ms-sonarr-key" placeholder="unverändert lassen zum Beibehalten" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Radarr-URL</label>
+                <input type="text" id="ms-radarr-url" placeholder="http://radarr:7878" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>Radarr-API-Key</label>
+                <input type="password" id="ms-radarr-key" placeholder="unverändert lassen zum Beibehalten" autocomplete="off" />
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>Pfad in diesem Tool</label>
+                <input type="text" id="ms-path-from" placeholder="/input" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label>Pfad beim Server</label>
+                <input type="text" id="ms-path-to" placeholder="/data" autocomplete="off" />
+              </div>
+            </div>
+            <p class="hint">Leer lassen, wenn Tool und Server denselben Ordner unter demselben Pfad sehen. Sonst nur das Präfix ersetzen.</p>
+            <div class="lib-actions">
+              <button class="btn btn-primary btn-sm" id="btn-media-save" type="button">Speichern</button>
+              <button class="btn btn-ghost btn-sm" id="btn-media-test" type="button">Verbindung prüfen</button>
+            </div>
+            <p class="hint" id="ms-msg"></p>
           </div>
         </section>
 
@@ -1844,6 +1938,7 @@
                       <option value="av1">AV1</option>
                       <option value="hevc">HEVC</option>
                       <option value="h264">H.264</option>
+                      <option value="vp9">VP9 (nur CPU)</option>
                     </select>
                   </div>
                   <div class="field">
@@ -2208,6 +2303,7 @@
                     <option value="av1">AV1</option>
                     <option value="hevc">HEVC</option>
                     <option value="h264">H.264</option>
+                    <option value="vp9">VP9 (nur CPU)</option>
                   </select>
                 </div>
                 <div class="field">
@@ -2538,7 +2634,7 @@
             <details class="faq-item" id="faq-hdr">
               <summary>Was ist „Dynamik“ – SDR, HDR10, HLG, HDR10+?</summary>
               <div class="faq-body">
-                <p>SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ kann dynamische Metadaten pro Szene haben – das Studio behandelt es wie HDR (kein eigener HDR10+-Encode-Pfad).</p>
+                <p>SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.</p>
                 <p>Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.</p>
               </div>
             </details>

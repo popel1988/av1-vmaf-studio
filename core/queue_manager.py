@@ -34,7 +34,7 @@ STATUS_FAILED = "fehlgeschlagen"
 STATUS_CANCELLED = "abgebrochen"
 
 # Container-Endung je Zielcodec
-CONTAINER = {"av1": ".mkv", "hevc": ".mkv", "h264": ".mp4"}
+CONTAINER = {"av1": ".mkv", "hevc": ".mkv", "h264": ".mp4", "vp9": ".mkv"}
 
 
 @dataclass
@@ -53,6 +53,10 @@ class JobSettings:
     keep_metadata: bool = True       # Container-/Stream-Metadaten übernehmen
     film_grain: int = 0              # AV1 (SVT) Film-Grain-Synthese 0=aus..50
     denoise: str = "off"             # off | light | medium | strong
+    sharpen: str = "off"             # off | light | medium | strong
+    grain: str = "off"               # sichtbares Korn, off | light | medium | strong
+    deinterlace: str = "auto"       # auto | on | off
+    aq_strength: int = 8             # NVENC Spatial-AQ-Stärke 1–15
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
     anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
     # Audio-Optimierung: video_mode="copy" => nur Remux (Video 1:1), Tonspuren
@@ -709,6 +713,12 @@ class QueueManager:
                     logger.debug("Benachrichtigung übersprungen: %s", ne)
         except Exception as e:  # pragma: no cover
             logger.debug("Historie überspringen: %s", e)
+        if item.status == STATUS_DONE and getattr(item, "output_path", ""):
+            try:
+                from . import media_servers
+                media_servers.notify_output(item.output_path)
+            except Exception as me:  # pragma: no cover
+                logger.debug("Medienserver übersprungen: %s", me)
 
     def _process(self, item: QueueItem) -> None:
         info, probe_err = probe_with_error(Path(item.path))
@@ -716,6 +726,7 @@ class QueueManager:
             item.status = STATUS_FAILED
             item.error = f"ffprobe: {probe_err or 'kein gültiges Video'}"
             return
+        item.info = info.to_dict()
 
         s = item.settings
 
@@ -799,7 +810,9 @@ class QueueManager:
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
                 preserve_hdr=s.preserve_hdr,
-                film_grain=s.film_grain, denoise=s.denoise, crop=item.crop,
+                film_grain=s.film_grain, denoise=s.denoise,
+                sharpen=s.sharpen, grain=s.grain, deinterlace=s.deinterlace,
+                aq_strength=s.aq_strength, crop=item.crop,
                 encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
@@ -925,7 +938,9 @@ class QueueManager:
             # Dolby Vision: Bei HEVC wird die RPU nach dem Encode via dovi_tool
             # re-injiziert (Profil 8.1). AV1-DV wird bereits beim Encoden durch
             # libsvtav1 nativ eingebettet (dovi_tool kann kein AV1) – daher hier
-            # nur HEVC.
+            # nur HEVC. HDR10+ davor, damit die Szenen-NALs im Stream liegen,
+            # den dovi_tool danach weiterreicht.
+            self._reinject_hdr10plus(item, out_path)
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
             # Schon zu groß: Qualität nicht weiter anheben (würde noch größer).
@@ -972,6 +987,7 @@ class QueueManager:
             self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
+            self._copy_nfo_beside(item)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
         item.message = keep_msg
@@ -997,6 +1013,10 @@ class QueueManager:
             "preserve_hdr": s.preserve_hdr,
             "film_grain": s.film_grain,
             "denoise": s.denoise,
+            "sharpen": s.sharpen,
+            "grain": s.grain,
+            "deinterlace": s.deinterlace,
+            "aq_strength": s.aq_strength,
             "force_10bit": s.anime,
             "crop": item.crop,
             "audio_mode": s.audio_mode,
@@ -1033,6 +1053,7 @@ class QueueManager:
             # Dolby Vision nach Chunked-Encode nur für HEVC (dovi_tool). AV1-DV
             # ist über zusammengefügte Segmente nicht zuverlässig einbettbar –
             # dort bleibt der HDR10-Basislayer erhalten.
+            self._reinject_hdr10plus(item, out_path)
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
             if (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
@@ -1047,6 +1068,7 @@ class QueueManager:
                 self._run_caps(item, s, out_path)
                 ff.add_mkv_statistics_tags(out_path)
                 self._post_process(item, out_path)
+                self._copy_nfo_beside(item)
                 item.status = STATUS_DONE
                 item.progress["percent"] = 100.0
                 item.message = ""
@@ -1111,6 +1133,7 @@ class QueueManager:
             self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
+            self._copy_nfo_beside(item)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
         item.message = ""
@@ -1185,6 +1208,7 @@ class QueueManager:
             self._run_caps(item, s, out_path)
             ff.add_mkv_statistics_tags(out_path)
             self._post_process(item, out_path)
+            self._copy_nfo_beside(item)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
         item.message = ""
@@ -1374,6 +1398,10 @@ class QueueManager:
             "keep_metadata": s.keep_metadata,
             "film_grain": s.film_grain,
             "denoise": s.denoise,
+            "sharpen": s.sharpen,
+            "grain": s.grain,
+            "deinterlace": s.deinterlace,
+            "aq_strength": s.aq_strength,
             "force_10bit": s.anime,
             "container": _container_ext(s).lstrip("."),
             "preserve_dv": s.preserve_dv,
@@ -1491,6 +1519,53 @@ class QueueManager:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    def _reinject_hdr10plus(self, item: QueueItem, out_path: Path) -> None:
+        """HDR10+-Szenenmetadaten in einen HEVC-Encode zurückschreiben."""
+        import shutil
+        from . import hdr10plus
+
+        info = item.info or {}
+        hdr = bool(info.get("hdr10_plus")) or ("HDR10+" in str(info.get("hdr_type") or ""))
+        s = item.settings
+        reason = hdr10plus.applicable(
+            target_codec=s.codec,
+            source_codec=str(info.get("codec") or ""),
+            preserve_hdr=bool(s.preserve_hdr),
+            tonemap=bool(s.tonemap),
+            hdr10_plus=hdr,
+        )
+        if reason in ("keine Quelle", "nicht beibehalten"):
+            return
+        if reason:
+            self._note_hdr10plus(item, f"HDR10+ nicht übernommen ({reason}) – HDR10 bleibt.")
+            return
+        if not hdr10plus.available():
+            self._note_hdr10plus(item, "HDR10+: hdr10plus_tool nicht verfügbar – Ausgabe als HDR10 gespeichert.")
+            return
+        item.message = "HDR10+: Metadaten werden übernommen …"
+        work = config.WORK_DIR / f"hdr10plus_{item.id}"
+        fps = float(info.get("fps") or 0.0)
+        try:
+            final, err = hdr10plus.reinject(
+                Path(item.path), out_path, work, fps=fps,
+                status=lambda m: setattr(item, "message", m))
+            if final and final.exists():
+                out_path.unlink(missing_ok=True)
+                final.replace(out_path)
+                logger.info("HDR10+ übernommen: %s", item.title)
+            else:
+                self._note_hdr10plus(item, f"HDR10+ nicht übernommen ({err}) – Ausgabe als HDR10 gespeichert.")
+        except Exception as e:  # pragma: no cover
+            self._note_hdr10plus(item, f"HDR10+ Fehler: {e} – Ausgabe als HDR10 gespeichert.")
+            logger.exception("HDR10+-Reinjektion abgestürzt: %s", item.title)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    @staticmethod
+    def _note_hdr10plus(item: QueueItem, msg: str) -> None:
+        item.error = ((item.error + " ") if item.error else "") + msg
+        logger.warning("%s (%s)", msg, item.title)
+
     @staticmethod
     def _cleanup_passlog(passlog: str) -> None:
         """FFmpeg-2-Pass-Logdateien (*.log, *.log.mbtree) entfernen."""
@@ -1606,6 +1681,18 @@ class QueueManager:
             logger.warning("Cap überschritten (%s): %s", item.title, msg)
 
     # ------------------------------------------------------------ Postprocessing
+    def _copy_nfo_beside(self, item: "QueueItem") -> None:
+        """Neben der Quelle: passende .nfo unter dem neuen Dateinamen ablegen."""
+        if _effective_out_mode(item.settings) != "beside":
+            return
+        if not item.output_path:
+            return
+        from . import library
+        try:
+            library.copy_nfo_beside(Path(item.path), Path(item.output_path))
+        except OSError as e:
+            logger.warning("NFO-Kopie fehlgeschlagen (%s): %s", item.title, e)
+
     @staticmethod
     def _post_process(item: QueueItem, out_path: Path) -> None:
         s = item.settings
@@ -1660,7 +1747,7 @@ class QueueManager:
         self._wake.set()
 
 
-_VALID_CODECS = {"av1", "hevc", "h264"}
+_VALID_CODECS = {"av1", "hevc", "h264", "vp9"}
 _VALID_PLATFORMS = {"cpu", "nvidia", "intel", "amd"}
 
 
@@ -1670,6 +1757,16 @@ def _bump_quality(s: JobSettings) -> None:
         s.quality = int(round(s.quality * config.VERIFY_BITRATE_FACTOR))
     else:
         s.quality = max(1, s.quality - config.VERIFY_CQ_STEP)
+
+
+def _level(value: str) -> str:
+    v = str(value or "off").lower()
+    return v if v in ("off", "light", "medium", "strong") else "off"
+
+
+def _deint(value: str) -> str:
+    v = str(value or "auto").lower()
+    return v if v in ("auto", "on", "off") else "auto"
 
 
 def build_job_settings(d: dict) -> JobSettings:
@@ -1705,6 +1802,17 @@ def build_job_settings(d: dict) -> JobSettings:
                     "(Encoder %s kann keine DV-RPU einbetten).",
                     d.get("title") or d.get("path") or "?", platform)
 
+    if codec == "vp9" and platform != "cpu":
+        logger.info("VP9 nur mit CPU/libvpx – Plattform %s wird auf CPU gesetzt (%s).",
+                    platform, d.get("title") or d.get("path") or "?")
+        platform = "cpu"
+    if preserve_dv and codec == "vp9":
+        preserve_dv = False
+        if not tonemap:
+            preserve_hdr = True
+        logger.info("VP9 kann keine Dolby-Vision-RPU – %s: HDR10-Fallback.",
+                    d.get("title") or d.get("path") or "?")
+
     speed = d.get("encoder_speed")
     if not speed:
         from . import app_settings
@@ -1724,7 +1832,11 @@ def build_job_settings(d: dict) -> JobSettings:
         keep_chapters=bool(d.get("keep_chapters", True)),
         keep_metadata=bool(d.get("keep_metadata", True)),
         film_grain=max(0, min(50, int(d.get("film_grain", 0) or 0))),
-        denoise=d.get("denoise", "off"),
+        denoise=_level(d.get("denoise", "off")),
+        sharpen=_level(d.get("sharpen", "off")),
+        grain=_level(d.get("grain", "off")),
+        deinterlace=_deint(d.get("deinterlace", "auto")),
+        aq_strength=max(1, min(15, int(d.get("aq_strength", 8) or 8))),
         two_pass=bool(d.get("two_pass", False)),
         anime=bool(d.get("anime", False)),
         video_mode=d.get("video_mode", "encode"),
@@ -1900,6 +2012,15 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
             f"    Encoder        : {s.platform}/{s.codec} → {enc_name}  "
             f"|  Container: {_container_ext(s)}")
         lines.append(f"    Rate/Qualität  : {_quality_label(s)}{extra}")
+        if "nvenc" in enc_name:
+            aq = max(1, min(15, int(getattr(s, "aq_strength", 8) or 8)))
+            if s.rate_mode in ("bitrate", "abr"):
+                mp = "multipass fullres" if s.two_pass else "ohne Multipass"
+            else:
+                mp = "multipass qres"
+            lines.append(
+                f"    NVENC          : spatial-aq {aq}, {mp}, rc-lookahead 32"
+                + (", temporal-aq" if enc_name in ("h264_nvenc", "hevc_nvenc") else ""))
         if s.autocrop:
             crop_txt = (f"erkannt crop={item.crop}" if item.crop
                         else ("noch nicht erkannt" if item.crop == ""
@@ -1909,6 +2030,7 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
         lines.append(f"    HDR/DV         : {_describe_dynamic(s)}")
         lines.append(
             f"    Video-Extras   : Film-Grain={s.film_grain}, Denoise={s.denoise}, "
+            f"Schärfen={s.sharpen}, Korn={s.grain}, Deinterlace={s.deinterlace}, "
             f"10-bit/Anime={'ja' if s.anime else 'nein'}")
         lines.append(f"    Audio          : {_describe_audio(s)}")
         lines.append(

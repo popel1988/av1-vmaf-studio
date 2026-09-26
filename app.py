@@ -180,8 +180,8 @@ def _platform_label(p: str) -> str:
     return "CPU (Software)"
 
 
-_CODEC_LABELS = {"av1": "AV1", "hevc": "HEVC / H.265", "h264": "H.264"}
-_ALL_CODECS = ("av1", "hevc", "h264")
+_CODEC_LABELS = {"av1": "AV1", "hevc": "HEVC / H.265", "h264": "H.264", "vp9": "VP9"}
+_ALL_CODECS = ("av1", "hevc", "h264", "vp9")
 
 
 def _encoder_options() -> list[dict]:
@@ -439,6 +439,10 @@ class EnqueueRequest(BaseModel):
     keep_metadata: bool = True
     film_grain: int = 0
     denoise: str = "off"             # off | light | medium | strong
+    sharpen: str = "off"
+    grain: str = "off"
+    deinterlace: str = "auto"       # auto | on | off
+    aq_strength: int = 8
     two_pass: bool = False
     anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
     verify_vmaf: bool = False        # Guardrail: echten VMAF nach Encode messen
@@ -1672,6 +1676,41 @@ async def test_notify():
     from core import notify
     notify.send("🔔 Testbenachrichtigung", "Verbindung von Compression Studio funktioniert.")
     return {"ok": True}
+
+
+@app.get("/api/media-servers")
+async def get_media_servers():
+    from core import media_servers
+    return media_servers.public_view()
+
+
+class MediaServersRequest(BaseModel):
+    jellyfin_url: str = ""
+    jellyfin_token: str = ""
+    sonarr_url: str = ""
+    sonarr_key: str = ""
+    radarr_url: str = ""
+    radarr_key: str = ""
+    path_from: str = ""
+    path_to: str = ""
+
+
+@app.post("/api/media-servers")
+async def set_media_servers(req: MediaServersRequest):
+    from core import media_servers
+    payload = req.model_dump()
+    # Leere Secrets bedeuten „unverändert lassen".
+    for key in ("jellyfin_token", "sonarr_key", "radarr_key"):
+        if not payload.get(key):
+            payload.pop(key, None)
+    media_servers.save(payload)
+    return {"ok": True}
+
+
+@app.post("/api/media-servers/test")
+async def test_media_servers():
+    from core import media_servers
+    return {"ok": True, "results": media_servers.test_connections()}
 
 
 @app.get("/api/watch")

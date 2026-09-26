@@ -40,6 +40,9 @@ class VideoInfo:
     hdr_type: str = "SDR"
     dolby_vision: bool = False
     dv_profile: int = 0
+    hdr10_plus: bool = False
+    field_order: str = ""
+    interlaced: bool = False
     overall_bitrate: int = 0
     container: str = ""
     audio: list = field(default_factory=list)
@@ -97,6 +100,9 @@ class VideoInfo:
             "hdr_type": self.hdr_type,
             "dolby_vision": self.dolby_vision,
             "dv_profile": self.dv_profile,
+            "hdr10_plus": self.hdr10_plus,
+            "field_order": self.field_order,
+            "interlaced": self.interlaced,
             "overall_bitrate": self.overall_bitrate,
             "overall_bitrate_human": _bitrate_human(self.overall_bitrate),
             "video_bitrate": self.video_bitrate,
@@ -154,7 +160,9 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
 
     pix_fmt = video.get("pix_fmt", "?") or "?"
     transfer = (video.get("color_transfer", "") or "").lower()
-    hdr_type, dovi, dv_profile = _detect_hdr(transfer, video)
+    hdr_type, dovi, dv_profile, hdr10_plus = _detect_hdr(transfer, video)
+    field_order = str(video.get("field_order") or "").lower()
+    interlaced = field_order in {"tt", "bb", "tb", "bt"}
 
     # Audio-/Untertitel-Spuren strukturiert sammeln
     audio = [_audio_entry(s, i, duration) for i, s in
@@ -181,6 +189,9 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
         hdr_type=hdr_type,
         dolby_vision=dovi,
         dv_profile=dv_profile,
+        hdr10_plus=hdr10_plus,
+        field_order=field_order,
+        interlaced=interlaced,
         overall_bitrate=overall_bitrate,
         container=fmt.get("format_name", "") or "",
         audio=audio,
@@ -189,8 +200,8 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     return info, None
 
 
-def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int]:
-    """Bestimmt HDR-Typ, ob Dolby Vision vorliegt und ggf. das DV-Profil."""
+def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int, bool]:
+    """Bestimmt HDR-Typ, Dolby Vision, DV-Profil und ob HDR10+ vorliegt."""
     dovi = False
     dv_profile = 0
     hdr10_plus = False
@@ -217,8 +228,8 @@ def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int]:
         base = "SDR"
     if dovi:
         label = f"Dolby Vision {dv_profile}" if dv_profile else "Dolby Vision"
-        return (f"{label} + {base}" if base != "SDR" else label), True, dv_profile
-    return base, False, 0
+        return (f"{label} + {base}" if base != "SDR" else label), True, dv_profile, hdr10_plus
+    return base, False, 0, hdr10_plus
 
 
 def _bit_depth(pix_fmt: str, video: dict) -> int:
@@ -397,7 +408,7 @@ ENCODERS = {
     "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
     "intel_vaapi": {"av1": "av1_vaapi", "hevc": "hevc_vaapi", "h264": "h264_vaapi"},
     "amd": {"av1": "av1_vaapi", "hevc": "hevc_vaapi", "h264": "h264_vaapi"},
-    "cpu": {"av1": "libsvtav1", "hevc": "libx265", "h264": "libx264"},
+    "cpu": {"av1": "libsvtav1", "hevc": "libx265", "h264": "libx264", "vp9": "libvpx-vp9"},
 }
 
 # HW-Decoder-Namen (für Build-Check / explizites -c:v). VAAPI nutzt oft den
@@ -407,7 +418,7 @@ DECODERS = {
     "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
     "intel_vaapi": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
     "amd": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
-    "cpu": {"av1": "av1", "hevc": "hevc", "h264": "h264"},
+    "cpu": {"av1": "av1", "hevc": "hevc", "h264": "h264", "vp9": "vp9"},
 }
 
 
@@ -424,7 +435,14 @@ def _encoder_map(platform: str) -> dict:
 
 
 def encoder_name(platform: str, codec: str) -> str:
-    return _encoder_map(platform).get(codec, "libsvtav1")
+    mapped = _encoder_map(platform).get(codec)
+    if mapped:
+        return mapped
+    # VP9 gibt es nur als Software-Encoder. Leerer Name, damit GPU-Plattformen
+    # nicht fälschlich als verfügbar gelten.
+    if codec == "vp9":
+        return ""
+    return _encoder_map(platform).get("av1", "libsvtav1")
 
 
 def _decoder_map(platform: str) -> dict:
@@ -458,6 +476,8 @@ def normalize_video_codec(codec: str) -> str:
         return "hevc"
     if c.startswith(("av1", "av01")):
         return "av1"
+    if c.startswith(("vp9", "vp09")):
+        return "vp9"
     return ""
 
 
@@ -499,6 +519,8 @@ def available_encoders() -> frozenset:
 
 def encoder_available(platform: str, codec: str) -> bool:
     enc = encoder_name(platform, codec)
+    if not enc:
+        return False
     avail = available_encoders()
     # Wenn die Liste leer ist (ffmpeg nicht abfragbar), nicht fälschlich blocken.
     return not avail or enc in avail
@@ -584,7 +606,12 @@ _QSV_NATIVES = (
     "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow",
 )
 _SVT_NATIVES = tuple(str(i) for i in range(13, -1, -1))
-_ALL_NATIVES = set(_SVT_NATIVES) | set(_X264_NATIVES) | set(_NVENC_NATIVES) | set(_QSV_NATIVES)
+_VP9_NATIVES = ("5", "4", "3", "2", "1", "0")
+_PRESET_VP9 = {
+    "fastest": "5", "fast": "4", "balanced": "2", "slow": "1", "slowest": "0",
+}
+_ALL_NATIVES = (set(_SVT_NATIVES) | set(_X264_NATIVES) | set(_NVENC_NATIVES)
+                | set(_QSV_NATIVES) | set(_VP9_NATIVES))
 
 
 def _preset_family(enc: str) -> str:
@@ -597,6 +624,8 @@ def _preset_family(enc: str) -> str:
         return "nvenc"
     if "qsv" in name:
         return "qsv"
+    if name == "libvpx-vp9":
+        return "vp9"
     return ""
 
 
@@ -604,7 +633,7 @@ def _alias_map(enc: str) -> dict[str, str]:
     fam = _preset_family(enc)
     return {
         "svt": _PRESET_SVT, "x264": _PRESET_X264,
-        "nvenc": _PRESET_NVENC, "qsv": _PRESET_QSV,
+        "nvenc": _PRESET_NVENC, "qsv": _PRESET_QSV, "vp9": _PRESET_VP9,
     }.get(fam, {})
 
 
@@ -630,6 +659,11 @@ def native_speed_presets(enc: str) -> list[dict]:
     elif fam == "qsv":
         values = list(_QSV_NATIVES)
         labels = {n: n for n in values}
+    elif fam == "vp9":
+        values = list(_VP9_NATIVES)
+        labels = {n: n for n in values}
+        labels["5"] = "5 · schnellste"
+        labels["0"] = "0 · langsamste"
     else:
         return []
     out = []
@@ -655,6 +689,7 @@ def speed_preset_catalog() -> dict[str, list[dict]]:
         "x264": native_speed_presets("libx264"),
         "nvenc": native_speed_presets("h264_nvenc"),
         "qsv": native_speed_presets("av1_qsv"),
+        "vp9": native_speed_presets("libvpx-vp9"),
         "none": [],
     }
 
@@ -703,11 +738,40 @@ def normalize_encoder_speed(value) -> str:
 
 
 def encoder_preset_args(enc: str, speed: str = "balanced") -> list[str]:
-    """FFmpeg ``-preset`` für den Encoder; leer, wenn der Encoder keins hat (VAAPI)."""
+    """FFmpeg ``-preset`` für den Encoder; leer, wenn der Encoder keins hat (VAAPI, VP9)."""
+    if enc == "libvpx-vp9":
+        return []
     native = alias_to_native(enc, speed)
     if not native or not _preset_family(enc):
         return []
     return ["-preset", native]
+
+
+def vp9_args(speed: str = "balanced", *, cq_mode: bool = True) -> list[str]:
+    """libvpx-vp9: cpu-used aus der Speed-Stufe. Im CQ-Modus ``-b:v 0``, sonst gilt die Bitrate."""
+    cpu = alias_to_native("libvpx-vp9", speed)
+    if cpu not in _VP9_NATIVES:
+        cpu = _PRESET_VP9["balanced"]
+    args = ["-row-mt", "1", "-deadline", "good", "-cpu-used", cpu]
+    if cq_mode:
+        args = ["-b:v", "0"] + args
+    return args
+
+
+def nvenc_quality_args(enc: str, aq_strength: int = 8) -> list[str]:
+    """AQ und Lookahead für NVENC (SDK der Treiberlinie 575, FFmpeg 8.1).
+
+    Spatial AQ für alle NVENC-Codecs, Stärke 1–15 (8 ist die NVIDIA-Vorgabe).
+    Temporal AQ nur bei H.264/HEVC. Lookahead 32 Frames verbessert die
+    Verteilung bei VBR/CQ.
+    """
+    if "nvenc" not in (enc or ""):
+        return []
+    strength = max(1, min(15, int(aq_strength or 8)))
+    args = ["-spatial-aq", "1", "-aq-strength", str(strength), "-rc-lookahead", "32"]
+    if enc in ("h264_nvenc", "hevc_nvenc"):
+        args += ["-temporal-aq", "1"]
+    return args
 
 
 def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> list[str]:

@@ -499,6 +499,10 @@ def analyze(
     preserve_hdr: bool = False,
     film_grain: int = 0,
     denoise: str = "off",
+    sharpen: str = "off",
+    grain: str = "off",
+    deinterlace: str = "auto",
+    aq_strength: int = 8,
     crop: str = "",
     progress: Optional[Callable[[dict], None]] = None,
     encoder_speed: str = "balanced",
@@ -599,7 +603,9 @@ def analyze(
                     rate_mode=opts.rate_mode, bitrate_kbps=val,
                     include_progress=True, audio_mode="none",
                     preserve_hdr=preserve_hdr, film_grain=film_grain,
-                    denoise=denoise, force_10bit=opts.anime, crop=crop,
+                    denoise=denoise, sharpen=sharpen, grain=grain,
+                    deinterlace=deinterlace, aq_strength=aq_strength,
+                    force_10bit=opts.anime, crop=crop,
                     encoder_speed=encoder_speed,
                 )
             else:
@@ -609,7 +615,9 @@ def analyze(
                     duration_limit=clip_len, start_at=start,
                     include_progress=True, audio_mode="none",
                     preserve_hdr=preserve_hdr, film_grain=film_grain,
-                    denoise=denoise, force_10bit=opts.anime, crop=crop,
+                    denoise=denoise, sharpen=sharpen, grain=grain,
+                    deinterlace=deinterlace, aq_strength=aq_strength,
+                    force_10bit=opts.anime, crop=crop,
                     encoder_speed=encoder_speed,
                 )
             runner = EncodeRunner(on_progress=lambda pr: emit(

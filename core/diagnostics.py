@@ -20,7 +20,7 @@ _PLATFORM_LABELS = {
     "nvidia": "NVIDIA (NVENC)", "intel": "Intel (QSV/VAAPI)",
     "amd": "AMD (VAAPI)", "cpu": "CPU (Software)",
 }
-_CODECS = ("av1", "hevc", "h264")
+_CODECS = ("av1", "hevc", "h264", "vp9")
 
 
 def _check(name: str, status: str, detail: str = "") -> dict:
@@ -76,7 +76,25 @@ def _tools_section() -> dict:
             checks.append(_check("dovi_tool (Dolby Vision)", "warn",
                                  "nicht gefunden – DV-Erhaltung deaktiviert"))
     except Exception as e:  # pragma: no cover
-        checks.append(_check("dovi_tool (Dolby Vision)", "warn", str(e)))
+            checks.append(_check("dovi_tool (Dolby Vision)", "warn", str(e)))
+
+    try:
+        from . import hdr10plus
+        if hdr10plus.available():
+            try:
+                r = subprocess.run([config.HDR10PLUS_TOOL, "--version"],
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=10, check=False)
+                hver = (r.stdout or r.stderr or "").strip().splitlines()
+                detail = hver[0] if hver else config.HDR10PLUS_TOOL
+            except (OSError, subprocess.SubprocessError):
+                detail = config.HDR10PLUS_TOOL
+            checks.append(_check("hdr10plus_tool (HDR10+)", "ok", detail + " · nur HEVC"))
+        else:
+            checks.append(_check("hdr10plus_tool (HDR10+)", "warn",
+                                 "nicht gefunden – HDR10+ bleibt statisches HDR10"))
+    except Exception as e:  # pragma: no cover
+        checks.append(_check("hdr10plus_tool (HDR10+)", "warn", str(e)))
 
     return _section("FFmpeg & Werkzeuge", checks)
 

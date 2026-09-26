@@ -107,6 +107,18 @@ RUN wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOO
     && rm -rf /tmp/dovi /tmp/dovi_tool.tar.gz \
     && /usr/local/bin/dovi_tool --version
 
+# --------------------------------------------------------- hdr10plus_tool
+# HDR10+-Metadaten aus HEVC lesen und nach dem Encode wieder einsetzen.
+# Offizielles Binary kann kein AV1 (Stand 1.7.2).
+ARG HDR10PLUS_TOOL_VERSION=1.7.2
+RUN wget -q "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TOOL_VERSION}/hdr10plus_tool-${HDR10PLUS_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        -O /tmp/hdr10plus_tool.tar.gz \
+    && mkdir -p /tmp/hdr10plus \
+    && tar -xf /tmp/hdr10plus_tool.tar.gz -C /tmp/hdr10plus \
+    && install -m 0755 "$(find /tmp/hdr10plus -type f -name hdr10plus_tool | head -n1)" /usr/local/bin/hdr10plus_tool \
+    && rm -rf /tmp/hdr10plus /tmp/hdr10plus_tool.tar.gz \
+    && /usr/local/bin/hdr10plus_tool --version
+
 # ------------------------------------------------------------- VMAF-Modelle
 # libvmaf ist im FFmpeg-Build enthalten, die Modelle werden separat bereitgestellt.
 RUN mkdir -p ${VMAF_MODEL_DIR} \

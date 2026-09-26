@@ -939,8 +939,10 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   border-color: var(--accent); color: var(--text); font-weight: 600;
 }
 .lib-pager .lib-page-info { color: var(--text-muted); font-size: 12.5px; margin: 0 6px; }
-.lib-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-.lib-table th.sortable:hover { color: var(--accent); }
+.lib-table .sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.lib-table th.sortable:hover,
+.lib-table .sortable:hover { color: var(--accent); }
+.lib-sort-year { margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
 .lib-group-row td { background: var(--surface-3); font-weight: 700; font-size: 12px; }
 .dyn-badge { display: inline-block; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 700; background: var(--surface-3); color: var(--text-muted); }
 .dyn-badge.warn { background: color-mix(in srgb, var(--warn, #e0a83a) 25%, transparent); color: var(--text); }
@@ -989,6 +991,7 @@ label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
 .lib-file-row.open .lib-toggle { color: var(--accent); border-color: var(--accent); }
 .lib-name-stack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lib-name { word-break: break-all; }
+.lib-nfo-line { display: block; font-size: 12px; line-height: 1.3; }
 .lib-meta-line { font-size: 11px; color: var(--text-muted); }
 button.lib-nfo-badge {
   display: inline-block; padding: 0 5px; border-radius: 5px; font-size: 10px;

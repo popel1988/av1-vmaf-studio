@@ -28,6 +28,32 @@ _DENOISE = {
     "medium": "hqdn3d=3:2:6:6",
     "strong": "hqdn3d=6:4:9:9",
 }
+# Unsharp: luma-Stärke. Chroma bleibt unangetastet.
+_SHARPEN = {
+    "light": "unsharp=5:5:0.4:5:5:0.0",
+    "medium": "unsharp=5:5:0.8:5:5:0.0",
+    "strong": "unsharp=5:5:1.2:5:5:0.0",
+}
+# Sichtbares Korn. Kostet Bits, anders als die AV1-Film-Grain-Synthese.
+_GRAIN = {
+    "light": "noise=alls=4:allf=t",
+    "medium": "noise=alls=8:allf=t",
+    "strong": "noise=alls=16:allf=t",
+}
+
+
+def deinterlace_filter(mode: str, interlaced: bool) -> str:
+    """bwdif, ein Frame pro Eingabe-Frame, damit Dauer und Metadaten passen.
+
+    ``auto`` nur bei erkanntem Halbbild. ``on`` immer. ``send_frame`` verdoppelt
+    die Bildzahl nicht.
+    """
+    m = (mode or "auto").lower()
+    if m == "on":
+        return "bwdif=mode=send_frame:parity=auto:deint=all"
+    if m == "auto" and interlaced:
+        return "bwdif=mode=send_frame:parity=auto:deint=interlaced"
+    return ""
 
 
 def build_video_filters(
@@ -39,6 +65,9 @@ def build_video_filters(
     nvidia_cuda_frames: bool = False,
     preserve_hdr: bool = False,
     denoise: str = "off",
+    sharpen: str = "off",
+    grain: str = "off",
+    deinterlace: str = "auto",
     force_10bit: bool = False,
     crop: str = "",
 ) -> Optional[str]:
@@ -67,6 +96,11 @@ def build_video_filters(
 
     filters: list[str] = []
 
+    # Halbbilder zuerst auflösen, bevor Crop oder Skalierung die Kämme festschreiben.
+    deint = deinterlace_filter(deinterlace, bool(getattr(info, "interlaced", False)))
+    if deint:
+        filters.append(deint)
+
     # Auto-Crop schwarzer Balken zuerst (vor Tonemap/Scale), damit die Balken
     # gar nicht erst mitcodiert werden.
     if crop:
@@ -77,6 +111,10 @@ def build_video_filters(
 
     if denoise in _DENOISE:
         filters.append(_DENOISE[denoise])
+    if sharpen in _SHARPEN:
+        filters.append(_SHARPEN[sharpen])
+    if grain in _GRAIN:
+        filters.append(_GRAIN[grain])
 
     if downscale:
         # -2 hält das Seitenverhältnis (gerade Pixelzahl für die Encoder).
@@ -114,9 +152,7 @@ def _hdr_output_args(info: VideoInfo, codec: str, enc: str) -> list[str]:
         params = (f"colorprim={prim}:transfer={trc}:colormatrix={space}"
                   ":hdr10=1:repeat-headers=1")
         args += ["-pix_fmt", "yuv420p10le", "-x265-params", params]
-    elif enc == "libsvtav1":
-        args += ["-pix_fmt", "yuv420p10le"]
-    elif enc == "libx264":
+    elif enc in ("libsvtav1", "libx264", "libvpx-vp9"):
         args += ["-pix_fmt", "yuv420p10le"]
     elif "nvenc" in enc and codec == "hevc":
         args += ["-profile:v", "main10"]
@@ -127,7 +163,7 @@ def _hdr_output_args(info: VideoInfo, codec: str, enc: str) -> list[str]:
 def _codec_supports_10bit(platform: str, codec: str) -> bool:
     """10-bit-Ausgabe je Encoder. H.264 nur in Software (libx264 High10);
     HW-H.264 (NVENC/QSV/VAAPI) beherrscht kein 10-bit."""
-    if codec in ("hevc", "av1"):
+    if codec in ("hevc", "av1", "vp9"):
         return True
     if codec == "h264":
         return platform == "cpu"
@@ -137,7 +173,7 @@ def _codec_supports_10bit(platform: str, codec: str) -> bool:
 def _ten_bit_output_args(codec: str, enc: str) -> list[str]:
     """Output-Argumente für 10-bit SDR (Anime-Modus), analog zu HDR – aber ohne
     Farb-/HDR-Metadaten. Das Surface-Format (p010) setzt build_video_filters."""
-    if enc in ("libx265", "libsvtav1", "libx264"):
+    if enc in ("libx265", "libsvtav1", "libx264", "libvpx-vp9"):
         # x265/x264 wählen Main10/High10 automatisch anhand des Pixelformats.
         return ["-pix_fmt", "yuv420p10le"]
     if "nvenc" in enc and codec == "hevc":
@@ -178,6 +214,10 @@ def build_encode_cmd(
     keep_metadata: bool = False,
     film_grain: int = 0,
     denoise: str = "off",
+    sharpen: str = "off",
+    grain: str = "off",
+    deinterlace: str = "auto",
+    aq_strength: int = 8,
     force_10bit: bool = False,
     two_pass: bool = False,
     pass_num: Optional[int] = None,
@@ -196,6 +236,10 @@ def build_encode_cmd(
     # 10-bit erzwingen (Anime-Modus) nur, wenn der Encoder das kann; sonst 8-bit.
     ten_bit = bool(force_10bit) and _codec_supports_10bit(platform, codec)
     denoise_on = denoise in _DENOISE
+    sharpen_on = sharpen in _SHARPEN
+    grain_on = grain in _GRAIN
+    deint_on = bool(deinterlace_filter(deinterlace, bool(getattr(info, "interlaced", False))))
+    software_filters = denoise_on or sharpen_on or grain_on or deint_on or bool(crop)
     nvidia_cuda_frames = False
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
@@ -207,7 +251,7 @@ def build_encode_cmd(
         # Treiber/Quelle erzeugt. Software-Filter (Tonemapping/Denoise) und
         # Positions-Sprünge (VMAF-/Verify-Clips) brauchen ohnehin den RAM-Pfad.
         full_gpu = (config.NVENC_FULL_GPU and not (tonemap and info.is_hdr)
-                    and not denoise_on and not crop and start_at is None)
+                    and not software_filters and start_at is None)
         if full_gpu:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
             nvidia_cuda_frames = True
@@ -236,6 +280,7 @@ def build_encode_cmd(
     vf = build_video_filters(info, platform, target_height, tonemap,
                              nvidia_cuda_frames=nvidia_cuda_frames,
                              preserve_hdr=keep_hdr, denoise=denoise,
+                             sharpen=sharpen, grain=grain, deinterlace=deinterlace,
                              force_10bit=ten_bit, crop=crop)
     if vf:
         cmd += ["-vf", vf]
@@ -273,12 +318,17 @@ def build_encode_cmd(
             cmd += ["-dolbyvision", "auto"]
     elif enc.startswith("libx"):
         cmd += ff.encoder_preset_args(enc, encoder_speed)
+    elif enc == "libvpx-vp9":
+        cmd += ff.vp9_args(encoder_speed, cq_mode=not is_bitrate)
     elif "nvenc" in enc and not is_bitrate:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
         cmd += ["-rc", "vbr", "-tune", "hq"]
+        cmd += ff.nvenc_quality_args(enc, aq_strength)
+        cmd += ["-multipass", "qres"]
     elif "nvenc" in enc:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
         cmd += ["-tune", "hq"]
+        cmd += ff.nvenc_quality_args(enc, aq_strength)
         if two_pass:
             cmd += ["-multipass", "fullres"]  # NVENC-eigenes 2-Pass (1 Durchlauf)
     elif "qsv" in enc:

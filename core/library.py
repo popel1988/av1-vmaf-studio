@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -69,6 +70,8 @@ def _target_bitrate_kbps(height: int, is_hdr: bool, target_codec: str = "av1") -
         base = int(base * 1.5)
     if target_codec == "hevc":
         base = int(base * 1.25)
+    elif target_codec == "vp9":
+        base = int(base * 1.15)
     return base
 
 
@@ -101,7 +104,7 @@ def suggest_encode(info, target_codec: str = "av1") -> dict:
     Liefert Overrides, die sich mit den Basis-Einstellungen mischen lassen, sowie
     ein menschenlesbares Label für die UI.
     """
-    codec = target_codec if target_codec in ("av1", "hevc") else "av1"
+    codec = target_codec if target_codec in ("av1", "hevc", "vp9") else "av1"
     hdr_mode = ""
     dv_mode = ""
     if info.dolby_vision:
@@ -115,6 +118,9 @@ def suggest_encode(info, target_codec: str = "av1") -> dict:
     else:
         hdr_mode = "tonemap"         # SDR: no-op (nur relevant bei HDR-Quellen)
 
+    if dv_mode == "preserve" and codec == "vp9":
+        dv_mode = "hdr10"
+        hdr_mode = "preserve"
     if dv_mode == "preserve":
         label = f"{codec.upper()} · DV übernehmen"
     elif dv_mode == "tonemap":
@@ -704,6 +710,54 @@ def _nfo_paths(video: Path) -> list[Path]:
         add(parent / "TVShow.nfo")
         cur = parent
     return found
+
+
+def copy_nfo_beside(src_video: Path, dst_video: Path) -> Optional[Path]:
+    """Kopiert die passende .nfo auf den neuen Dateinamen im selben Ordner.
+
+    Nur wenn die Ausgabe neben der Quelle liegt und der Name sich ändert.
+    ``tvshow.nfo`` bleibt die Seriendatei. Eine vorhandene Zieldatei wird
+    nicht überschrieben, die Quell-.nfo bleibt liegen.
+    """
+    try:
+        if src_video.parent != dst_video.parent:
+            return None
+        if src_video.stem == dst_video.stem:
+            return None
+        dest = dst_video.with_suffix(".nfo")
+        if dest.exists():
+            return None
+    except OSError:
+        return None
+
+    stem_l = src_video.stem.lower()
+    name_l = src_video.name.lower()
+    picked: Optional[Path] = None
+    movie: Optional[Path] = None
+    for p in _nfo_paths(src_video):
+        try:
+            if p.parent != src_video.parent:
+                continue
+            low = p.stem.lower()
+        except OSError:
+            continue
+        if low in ("tvshow", "season"):
+            continue
+        if low in (stem_l, name_l):
+            picked = p
+            break
+        if low == "movie" and movie is None:
+            movie = p
+    picked = picked or movie
+    if picked is None:
+        return None
+    try:
+        shutil.copy2(picked, dest)
+    except OSError:
+        logger.warning("NFO konnte nicht kopiert werden: %s -> %s", picked, dest)
+        return None
+    logger.info("NFO kopiert: %s -> %s", picked.name, dest.name)
+    return dest
 
 
 def _sidecar_subs(video: Path) -> list[dict]:

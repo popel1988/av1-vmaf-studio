@@ -948,6 +948,11 @@
 
     const fg = $("opt-film-grain");
     if (fg) fg.addEventListener("input", () => { $("film-grain-val").textContent = fg.value; });
+    const aq = $("opt-aq-strength");
+    if (aq) aq.addEventListener("input", () => {
+      const lab = $("aq-strength-val");
+      if (lab) lab.textContent = aq.value;
+    });
 
     // Encode-Ratemodus: CQ-Slider vs. Bitrate-Feld vs. Ziel-VMAF (Test-Encodes).
     const rate = $("opt-rate-mode");
@@ -1053,8 +1058,9 @@
     "intel:av1": "AV1 (QSV)", "intel:hevc": "HEVC (QSV)", "intel:h264": "H.264 (QSV)",
     "amd:av1": "AV1 (VAAPI)", "amd:hevc": "HEVC (VAAPI)", "amd:h264": "H.264 (VAAPI)",
     "cpu:av1": "SVT-AV1 (CPU)", "cpu:hevc": "x265 (CPU)", "cpu:h264": "x264 (CPU)",
+    "cpu:vp9": "VP9 (CPU)",
   };
-  const CODEC_LABELS = { av1: "AV1", hevc: "HEVC / H.265", h264: "H.264" };
+  const CODEC_LABELS = { av1: "AV1", hevc: "HEVC / H.265", h264: "H.264", vp9: "VP9 (nur CPU)" };
 
   // Vom Server gelieferte Liste tatsächlich verfügbarer Encoder-Kombinationen.
   function encoderMatrix() {
@@ -1118,6 +1124,10 @@
     if (hint) {
       const e = encoderInfo(plat, sel.value);
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
+      if (sel.value === "vp9") {
+        hint.textContent += (hint.textContent ? " · " : "")
+          + "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.";
+      }
     }
     syncDvOption();
     fillJobSpeedSelect("opt-enc-speed", "opt-platform", "opt-codec");
@@ -1189,6 +1199,10 @@
       keep_chapters: $("opt-keep-chapters") ? $("opt-keep-chapters").checked : true,
       keep_metadata: $("opt-keep-metadata") ? $("opt-keep-metadata").checked : true,
       denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
+      sharpen: $("opt-sharpen") ? $("opt-sharpen").value : "off",
+      grain: $("opt-grain") ? $("opt-grain").value : "off",
+      deinterlace: $("opt-deinterlace") ? $("opt-deinterlace").value : "auto",
+      aq_strength: $("opt-aq-strength") ? parseInt($("opt-aq-strength").value, 10) : 8,
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
       autocrop: $("opt-autocrop") ? $("opt-autocrop").checked : false,
@@ -1457,6 +1471,7 @@
     const e = encoderInfo(platform, codec);
     const enc = (e && e.encoder) || "";
     if (enc === "libsvtav1") return "svt";
+    if (enc === "libvpx-vp9") return "vp9";
     if (enc.indexOf("libx") === 0) return "x264";
     if (enc.indexOf("nvenc") >= 0) return "nvenc";
     if (enc.indexOf("qsv") >= 0) return "qsv";
@@ -4545,6 +4560,14 @@
     set("opt-keep-chapters", s.keep_chapters);
     set("opt-keep-metadata", s.keep_metadata);
     set("opt-denoise", s.denoise, "change");
+    set("opt-sharpen", s.sharpen || "off", "change");
+    set("opt-grain", s.grain || "off", "change");
+    set("opt-deinterlace", s.deinterlace || "auto", "change");
+    if (s.aq_strength) {
+      set("opt-aq-strength", s.aq_strength);
+      const lab = $("aq-strength-val");
+      if (lab) lab.textContent = String(s.aq_strength);
+    }
     set("opt-film-grain", s.film_grain);
     set("opt-two-pass", s.two_pass);
     set("opt-anime", s.anime);
@@ -4723,13 +4746,15 @@
     const grp = $("lib-group");
     if (grp) grp.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
     initLibLibraries();
-    document.querySelectorAll(".lib-table th.sortable").forEach((th) => {
-      th.addEventListener("click", () => {
+    document.querySelectorAll(".lib-table .sortable").forEach((th) => {
+      th.addEventListener("click", (ev) => {
+        ev.stopPropagation();
         const key = th.dataset.sort;
         const cur = state.libSort || { key: "est_saved_bytes", dir: "desc" };
+        const textKey = key === "name" || key === "codec" || key === "nfo_title" || key === "nfo_year";
         state.libSort = (cur.key === key)
           ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
-          : { key, dir: (key === "name" || key === "codec") ? "asc" : "desc" };
+          : { key, dir: textKey ? "asc" : "desc" };
         state.libPage = 1;
         renderLibrary();
       });
@@ -5527,13 +5552,27 @@
     const q = ($("lib-result-search") ? $("lib-result-search").value : "").trim().toLowerCase();
     let rows = (state.libRows || []).slice();
     if (q) rows = rows.filter((m) =>
-      (m.name || "").toLowerCase().includes(q) || (m.folder || "").toLowerCase().includes(q));
+      (m.name || "").toLowerCase().includes(q)
+      || (m.folder || "").toLowerCase().includes(q)
+      || libNfoSearch(m).includes(q));
     const s = state.libSort || { key: "est_saved_bytes", dir: "desc" };
     const numeric = ["height", "video_bitrate", "duration", "size_bytes", "est_saved_bytes"];
     rows.sort((a, b) => {
-      let av = a[s.key], bv = b[s.key];
-      if (numeric.includes(s.key)) { av = av || 0; bv = bv || 0; return s.dir === "asc" ? av - bv : bv - av; }
-      av = String(av || "").toLowerCase(); bv = String(bv || "").toLowerCase();
+      if (s.key === "nfo_year") {
+        const ay = libNfoYear(a), by = libNfoYear(b);
+        if (!ay !== !by) return ay ? -1 : 1;
+        return s.dir === "asc" ? ay - by : by - ay;
+      }
+      let av, bv;
+      if (s.key === "nfo_title" || s.key === "name") {
+        av = libNfoTitleKey(a); bv = libNfoTitleKey(b);
+      } else if (numeric.includes(s.key)) {
+        av = a[s.key] || 0; bv = b[s.key] || 0;
+        return s.dir === "asc" ? av - bv : bv - av;
+      } else {
+        av = String(a[s.key] || "").toLowerCase();
+        bv = String(b[s.key] || "").toLowerCase();
+      }
       return s.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
     });
     return rows;
@@ -5559,6 +5598,7 @@
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
               <span class="lib-name">${escapeHtml(m.name)}</span>
+              ${libNfoHeadline(m) ? `<span class="lib-nfo-line">${escapeHtml(libNfoHeadline(m))}</span>` : ""}
               ${meta ? `<span class="lib-meta-line">${meta}</span>` : ""}
             </span>
           </div>
@@ -5586,6 +5626,38 @@
     } catch (e) {
       return `<tr class="lib-file-row"><td colspan="11" class="bad">${escapeHtml((m && m.name) || "")}: ${escapeHtml(String(e))}</td></tr>`;
     }
+  }
+
+  function libNfoOf(m) {
+    const extra = (state.libDetails && state.libDetails[m.path]) || {};
+    return libPickNfo(extra.nfo, m && m.nfo) || {};
+  }
+
+  function libNfoTitleKey(m) {
+    const n = libNfoOf(m);
+    const title = String(n.title || n.showtitle || n.originaltitle || "").trim();
+    return (title || (m && m.name) || "").toLowerCase();
+  }
+
+  function libNfoYear(m) {
+    const raw = String((libNfoOf(m).year) || "").replace(/\D/g, "");
+    const y = parseInt(raw.slice(0, 4), 10);
+    return Number.isFinite(y) && y > 0 ? y : 0;
+  }
+
+  function libNfoHeadline(m) {
+    const n = libNfoOf(m);
+    const title = String(n.title || n.showtitle || n.originaltitle || "").trim();
+    const year = libNfoYear(m);
+    if (title && year) return `${title} (${year})`;
+    if (title) return title;
+    return year ? String(year) : "";
+  }
+
+  function libNfoSearch(m) {
+    const n = libNfoOf(m);
+    return [n.title, n.originaltitle, n.showtitle, n.year]
+      .filter(Boolean).join(" ").toLowerCase();
   }
 
   function libFileMetaLine(m) {
@@ -8448,6 +8520,75 @@
     });
   }
 
+  async function initMediaServers() {
+    const badge = $("media-badge");
+    if (!$("btn-media-save")) return;
+    const markSecret = (id, on) => {
+      const el = $(id);
+      if (!el) return;
+      el.dataset.set = on ? "1" : "";
+      el.placeholder = on ? "gesetzt – leer lassen zum Beibehalten" : "API-Schlüssel";
+    };
+    try {
+      const d = await (await fetch("/api/media-servers")).json();
+      $("ms-jf-url").value = d.jellyfin_url || "";
+      $("ms-sonarr-url").value = d.sonarr_url || "";
+      $("ms-radarr-url").value = d.radarr_url || "";
+      $("ms-path-from").value = d.path_from || "";
+      $("ms-path-to").value = d.path_to || "";
+      markSecret("ms-jf-token", d.jellyfin_token_set);
+      markSecret("ms-sonarr-key", d.sonarr_key_set);
+      markSecret("ms-radarr-key", d.radarr_key_set);
+      const active = d.jellyfin_url || d.sonarr_url || d.radarr_url;
+      if (badge) badge.textContent = active ? "Aktiv" : "Aus";
+    } catch (e) { /* ignorieren */ }
+
+    $("btn-media-save").addEventListener("click", async () => {
+      const body = {
+        jellyfin_url: $("ms-jf-url").value.trim(),
+        jellyfin_token: $("ms-jf-token").value.trim(),
+        sonarr_url: $("ms-sonarr-url").value.trim(),
+        sonarr_key: $("ms-sonarr-key").value.trim(),
+        radarr_url: $("ms-radarr-url").value.trim(),
+        radarr_key: $("ms-radarr-key").value.trim(),
+        path_from: $("ms-path-from").value.trim(),
+        path_to: $("ms-path-to").value.trim(),
+      };
+      await fetch("/api/media-servers", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      ["ms-jf-token", "ms-sonarr-key", "ms-radarr-key"].forEach((id) => {
+        const el = $(id);
+        const typed = !!(el && el.value.trim());
+        if (el) el.value = "";
+        markSecret(id, typed || (el && el.dataset.set === "1"));
+      });
+      const msg = $("ms-msg");
+      if (msg) msg.textContent = "Gespeichert.";
+      if (badge) badge.textContent = (body.jellyfin_url || body.sonarr_url || body.radarr_url) ? "Aktiv" : "Aus";
+    });
+    $("btn-media-test").addEventListener("click", async () => {
+      const msg = $("ms-msg");
+      if (msg) msg.textContent = "Prüfe …";
+      try {
+        const d = await (await fetch("/api/media-servers/test", { method: "POST" })).json();
+        const rows = d.results || {};
+        const keys = Object.keys(rows);
+        if (!keys.length) {
+          if (msg) msg.textContent = "Nichts konfiguriert.";
+          return;
+        }
+        if (msg) msg.textContent = keys.map((k) => {
+          const r = rows[k];
+          return `${k}: ${r.ok ? "ok" : "Fehler"} ${r.detail || ""}`.trim();
+        }).join(" · ");
+      } catch (e) {
+        if (msg) msg.textContent = "Prüfung fehlgeschlagen.";
+      }
+    });
+  }
+
   /* ---------------------------------------------------------- WATCH-ORDNER */
   async function initApiKeys() {
     if (!$("btn-apikey-new")) return;
@@ -8689,6 +8830,7 @@
     initStats();
     initLibrary();
     initNotify();
+    initMediaServers();
     initWatch();
     initScheduler();
     initApiKeys();
