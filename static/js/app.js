@@ -1311,6 +1311,36 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  function vmafP1Anchor() {
+    const sel = document.getElementById("cfg-p1-anchor");
+    if (sel && (sel.value === "target" || sel.value === "mean" || sel.value === "both")) return sel.value;
+    const a = window.APP_CONFIG && APP_CONFIG.vmafP1Anchor;
+    return a === "target" || a === "mean" || a === "both" ? a : "both";
+  }
+
+  function applyVmafP1Anchor(anchor, persist) {
+    anchor = anchor === "target" || anchor === "mean" ? anchor : "both";
+    const sel = $("cfg-p1-anchor");
+    if (sel) sel.value = anchor;
+    const badge = $("vmaf-anchor-badge");
+    if (badge) {
+      badge.textContent = anchor === "target" ? "nur Ziel"
+        : (anchor === "mean" ? "nur Schnitt" : "Ziel + Schnitt");
+    }
+    const hint = $("cfg-p1-anchor-hint");
+    if (hint) {
+      hint.textContent = anchor === "target"
+        ? "Nur der Boden unter dem Ziel. Der Abstand zum Filmschnitt zählt nicht."
+        : (anchor === "mean"
+          ? "Nur der Abstand unter dem Filmschnitt der Stufe. Ein fester Boden unter dem Ziel entfällt."
+          : "Boden unter dem Ziel und höchstens der Abstand unter dem Filmschnitt der Stufe.");
+    }
+    if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Anchor = anchor;
+    const slider = $("cfg-p1-gap");
+    const live = slider ? Number(slider.value) : vmafP1GapValue();
+    applyVmafP1Gap(Number.isFinite(live) ? live : vmafP1GapValue(), false);
+  }
+
   function applyVmafP1Gap(gap, persist) {
     gap = Number(gap);
     if (!Number.isFinite(gap)) gap = 6;
@@ -1324,9 +1354,16 @@
     if (badge) badge.textContent = gap <= 0 ? "nur Mittel" : `${gap} Punkte`;
     const hint = $("cfg-p1-gap-hint");
     if (hint) {
-      hint.textContent = gap <= 0
-        ? "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert."
-        : `Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
+      const anchor = vmafP1Anchor();
+      if (gap <= 0) {
+        hint.textContent = "Floor aus: Empfehlung nur nach Mittelwert, 1%-Low zählt nicht als Mindestwert.";
+      } else if (anchor === "mean") {
+        hint.textContent = `Höchstens ${gap} Punkte unter dem Filmschnitt der Stufe.`;
+      } else if (anchor === "both") {
+        hint.textContent = `Bei Ziel 93 liegt der Boden bei ${93 - gap}. Zusätzlich höchstens ${gap} Punkte unter dem Filmschnitt.`;
+      } else {
+        hint.textContent = `Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
+      }
     }
     if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Gap = gap;
   }
@@ -1361,8 +1398,11 @@
     if (!slider) return;
     applyVmafP1Gap(vmafP1GapValue(), true);
     applyVmafMinSavings(vmafMinSavingsValue(), true);
+    applyVmafP1Anchor(vmafP1Anchor(), true);
     slider.addEventListener("input", () => applyVmafP1Gap(slider.value, false));
     if (sav) sav.addEventListener("input", () => applyVmafMinSavings(sav.value, false));
+    const anchorSel = $("cfg-p1-anchor");
+    if (anchorSel) anchorSel.addEventListener("change", () => applyVmafP1Anchor(anchorSel.value, false));
     document.querySelectorAll("[data-p1-gap]").forEach((btn) => {
       btn.addEventListener("click", () => applyVmafP1Gap(btn.getAttribute("data-p1-gap"), false));
     });
@@ -1371,6 +1411,7 @@
     });
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d && d.vmaf_p1_gap != null) applyVmafP1Gap(d.vmaf_p1_gap, true);
+      if (d && d.vmaf_p1_anchor) applyVmafP1Anchor(d.vmaf_p1_anchor, true);
       if (d && d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
       const keep = $("cfg-keep-vmaf-clips");
       if (keep && d && d.keep_vmaf_clips != null) keep.checked = !!d.keep_vmaf_clips;
@@ -1383,12 +1424,15 @@
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             vmaf_p1_gap: Number(slider.value),
+            vmaf_p1_anchor: ($("cfg-p1-anchor") && $("cfg-p1-anchor").value) || vmafP1Anchor(),
             vmaf_min_savings: sav ? Number(sav.value) : vmafMinSavingsValue(),
             keep_vmaf_clips: !!($("cfg-keep-vmaf-clips") && $("cfg-keep-vmaf-clips").checked),
           }),
         })).json();
         if (d.error) { alert(d.error); return; }
         applyVmafP1Gap(d.vmaf_p1_gap, true);
+        if (d.vmaf_p1_anchor) applyVmafP1Anchor(d.vmaf_p1_anchor, true);
+        if (state.vmafShown) fillVmafTable(state.vmafShown);
         if (d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
       } finally { save.disabled = false; }
     });
@@ -3467,11 +3511,17 @@
     if (Number(r.vmaf) + 1e-9 < lo) miss.mean = true;
     if (gap > 0) {
       const worst = vmafWorstP1(r);
-      const floor = lo - gap;
-      if (worst.p1 != null && worst.p1 + 1e-9 < floor) {
-        miss.p1 = worst.p1;
-        miss.floor = floor;
-        if (worst.scene != null) miss.scene = Number(worst.scene) + 1;
+      if (worst.p1 != null) {
+        const anchor = vmafP1Anchor();
+        const limits = [];
+        if (anchor === "both" || anchor === "target") limits.push(lo - gap);
+        if (anchor === "both" || anchor === "mean") limits.push(Number(r.vmaf) - gap);
+        const floor = limits.length ? Math.max.apply(null, limits) : null;
+        if (floor != null && worst.p1 + 1e-9 < floor) {
+          miss.p1 = worst.p1;
+          miss.floor = floor;
+          if (worst.scene != null) miss.scene = Number(worst.scene) + 1;
+        }
       }
     }
     return (miss.mean || miss.p1 != null) ? miss : null;
@@ -3487,8 +3537,44 @@
     return bits.join(", ");
   }
 
+  function vmafSpread(r) {
+    const mean = Number(r.vmaf);
+    if (!Number.isFinite(mean)) return null;
+    const worst = vmafWorstP1(r);
+    const avg = r.vmaf_1pct != null && Number(r.vmaf_1pct) > 0 ? Number(r.vmaf_1pct) : null;
+    const min = worst.p1 != null ? worst.p1 : avg;
+    if (min == null) return null;
+    const sceneCount = (r.scene_scores || []).filter((sc) => Number(sc.p1) > 0).length;
+    return {
+      avg,
+      min,
+      scene: worst.scene != null ? Number(worst.scene) + 1 : null,
+      delta: mean - min,
+      perScene: sceneCount > 0 && worst.p1 != null,
+      showMin: sceneCount > 1 && avg != null && Math.abs(avg - min) >= 0.15,
+    };
+  }
+
+  function vmafDeltaMark(delta) {
+    const d = Math.abs(delta);
+    const cls = d >= 6 ? "bad" : (d >= 4 ? "warn" : "");
+    const num = d.toFixed(1);
+    const text = delta >= 0 ? `Δ −${num}` : `Δ +${num}`;
+    return { cls, text };
+  }
+
   function vmafCell(r) {
+    const spread = vmafSpread(r);
     let s = `${r.vmaf.toFixed(2)}`;
+    if (spread) {
+      const mark = vmafDeltaMark(spread.delta);
+      const tip = spread.perScene
+        ? (spread.scene
+          ? `Mittel minus 1%-Low der schwächsten Szene. Szene ${spread.scene}: ${spread.min.toFixed(1)}.`
+          : `Mittel minus 1%-Low der schwächsten Szene. ${spread.min.toFixed(1)}.`)
+        : "Mittel minus 1%-Low. Pro Szene liegt kein 1%-Low vor.";
+      s += `<span class="vmaf-delta ${mark.cls}" title="${escapeHtml(tip)}">${mark.text}</span>`;
+    }
     // Mehrere Szenen: Mittelwert oben, Streuung (min–max) je Szene darunter.
     if (r.vmaf_min != null && r.vmaf_max != null) {
       const perScene = (r.scene_scores || [])
@@ -3509,15 +3595,22 @@
     }
     // Zusatzmetriken (falls gemessen): 1%-Low + harmon. Mittel, PSNR/SSIM.
     const extra = [];
-    if (r.vmaf_1pct != null) extra.push(`1%-Low ${r.vmaf_1pct.toFixed(1)}`);
-    if (r.vmaf_hmean != null) extra.push(`H-Ø ${r.vmaf_hmean.toFixed(1)}`);
-    if (r.vmaf_score != null && r.vmaf_1pct != null) extra.push(`Score ${Number(r.vmaf_score).toFixed(1)}`);
+    if (spread && spread.avg != null) extra.push(`<span>Ø 1% ${spread.avg.toFixed(1)}</span>`);
+    if (spread && spread.showMin) {
+      const sc = spread.scene ? ` S${spread.scene}` : "";
+      extra.push(`<span>min 1% ${spread.min.toFixed(1)}${sc}</span>`);
+    } else if (r.vmaf_1pct != null && !(spread && spread.avg != null)) {
+      extra.push(`<span>1%-Low ${r.vmaf_1pct.toFixed(1)}</span>`);
+    }
+    if (r.vmaf_hmean != null) extra.push(`<span>H-Ø ${r.vmaf_hmean.toFixed(1)}</span>`);
+    if (r.vmaf_score != null && r.vmaf_1pct != null) extra.push(`<span>Score ${Number(r.vmaf_score).toFixed(1)}</span>`);
     if (extra.length) {
       const gap = vmafP1GapValue();
       const rec = gap <= 0
         ? "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus)."
         : `Empfehlung: Mittel ≥ Ziel und das 1%-Low der schwächsten Szene nicht mehr als ${gap} darunter.`;
-      s += `<br><span class="muted" title="1%-Low = Mittel der schlechtesten 1 % Frames; `
+      s += `<br><span class="muted" title="Ø 1% = Schnitt der Szenen-1%-Lows; min 1% = schwächste Szene; `
+        + `1%-Low je Szene = Mittel der schlechtesten 1 % Frames; `
         + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
         + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
     }
@@ -3567,7 +3660,11 @@
     }
     const lead = gap <= 0
       ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, nur Mittel).`
-      : `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`;
+      : (vmafP1Anchor() === "mean"
+        ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ Filmschnitt−${Math.round(gap)}).`
+        : (vmafP1Anchor() === "both"
+          ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)} und ≥ Filmschnitt−${Math.round(gap)}).`
+          : `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`));
     missBox.innerHTML = `<span>${escapeHtml(lead)}</span> `
       + misses.map((line) => `<span>${escapeHtml(line)}</span>`).join(" ");
     missBox.style.display = "";
@@ -4174,12 +4271,13 @@
   }
 
   /* ---------------------------------------------------------- DATA BROWSER */
-  const dataState = { root: "vmaf", path: "" };
+  const dataState = { root: "vmaf", path: "", selected: new Set() };
 
   function initDataBrowser() {
     $("data-root").addEventListener("change", (e) => {
       dataState.root = e.target.value;
       dataState.path = "";
+      dataState.selected = new Set();
       loadDataDir();
     });
     $("btn-data-refresh").addEventListener("click", () => {
@@ -4187,6 +4285,21 @@
       refreshStorageBadge();
     });
     $("btn-data-delete-all").addEventListener("click", deleteAllInDataRoot);
+    const delSel = $("btn-data-delete-sel");
+    if (delSel) delSel.addEventListener("click", deleteSelectedData);
+    const selAll = $("data-select-all");
+    if (selAll) selAll.addEventListener("change", () => {
+      document.querySelectorAll("#data-browser .row-sel").forEach((box) => {
+        box.checked = selAll.checked;
+        const row = box.closest(".row-item");
+        if (row) row.classList.toggle("selected", selAll.checked);
+        const rel = box.dataset.rel;
+        if (!rel) return;
+        if (selAll.checked) dataState.selected.add(rel);
+        else dataState.selected.delete(rel);
+      });
+      syncDataSelection();
+    });
     $("btn-data-preview-close").addEventListener("click", () => {
       $("data-preview").style.display = "none";
     });
@@ -4206,6 +4319,8 @@
 
   async function loadDataDir() {
     const browser = $("data-browser");
+    dataState.selected = new Set();
+    syncDataSelection();
     browser.innerHTML = '<div class="browser-loading">Lade …</div>';
     try {
       const res = await fetch(
@@ -4266,6 +4381,7 @@
     if (!data.dirs.length && !data.files.length && data.is_root) {
       browser.innerHTML = '<div class="browser-loading">Ordner ist leer.</div>';
     }
+    syncDataSelection();
   }
 
   function dataRow(item, data, isDir) {
@@ -4276,6 +4392,21 @@
       <span class="row-icon">${icon}</span>
       <span class="row-name">${escapeHtml(item.name)}</span>
       <span class="row-size">${item.size_human || ""}</span>`;
+
+    if (item.name !== "..") {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "row-sel";
+      box.dataset.rel = item.rel;
+      box.addEventListener("click", (e) => e.stopPropagation());
+      box.addEventListener("change", () => {
+        if (box.checked) dataState.selected.add(item.rel);
+        else dataState.selected.delete(item.rel);
+        row.classList.toggle("selected", box.checked);
+        syncDataSelection();
+      });
+      row.insertBefore(box, row.firstChild);
+    }
 
     if (isDir && item.name !== "..") {
       row.addEventListener("click", () => {
@@ -4369,6 +4500,47 @@
     const data = await res.json();
     if (data.error) alert(data.error);
     dataState.path = "";
+    $("data-preview").style.display = "none";
+    loadDataDir();
+    refreshStorageBadge();
+  }
+
+  function syncDataSelection() {
+    const n = dataState.selected.size;
+    const btn = $("btn-data-delete-sel");
+    if (btn) {
+      btn.disabled = n === 0;
+      btn.textContent = n ? `Auswahl löschen (${n})` : "Auswahl löschen";
+    }
+    const all = $("data-select-all");
+    const boxes = [...document.querySelectorAll("#data-browser .row-sel")];
+    if (all) {
+      all.disabled = boxes.length === 0;
+      all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
+      all.indeterminate = n > 0 && !all.checked;
+    }
+  }
+
+  async function deleteSelectedData() {
+    const paths = [...dataState.selected];
+    if (!paths.length) return;
+    const names = paths.map((rel) => rel.split("/").pop());
+    const head = paths.length === 1
+      ? `„${names[0]}" wirklich löschen?`
+      : `${paths.length} Einträge löschen? Das kann nicht rückgängig gemacht werden.`;
+    const list = paths.length > 1 ? "\n" + names.slice(0, 12).join("\n") : "";
+    if (!confirm(tt(head) + list)) return;
+    const res = await fetch("/api/data/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: dataState.root, paths }),
+    });
+    const data = await res.json();
+    if (data.error && !data.deleted) {
+      alert(data.error);
+      return;
+    }
+    if (data.error) alert(data.error);
     $("data-preview").style.display = "none";
     loadDataDir();
     refreshStorageBadge();

@@ -130,6 +130,28 @@ def delete_item(root_key: str, rel: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def delete_many(root_key: str, rels: list[str]) -> tuple[int, str]:
+    """Mehrere Dateien oder Ordner in einer Zone löschen."""
+    deleted = 0
+    errors: list[str] = []
+    seen: set[str] = set()
+    for raw in rels:
+        rel = str(raw or "").strip().replace("\\", "/").lstrip("/")
+        if not rel or rel in seen or rel == ".":
+            continue
+        seen.add(rel)
+        ok, err = delete_item(root_key, rel)
+        if ok:
+            deleted += 1
+        else:
+            errors.append(err or rel)
+    if errors and not deleted:
+        return 0, errors[0]
+    if errors:
+        return deleted, "; ".join(errors[:5])
+    return deleted, ""
+
+
 def delete_all_in_root(root_key: str) -> tuple[int, str]:
     """Löscht alle Inhalte einer Zone (nicht die Wurzel selbst)."""
     base = _safe_resolve(root_key, "")

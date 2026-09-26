@@ -1577,8 +1577,11 @@ input[type="range"]::-moz-range-thumb {
 .data-head-actions { display: flex; align-items: center; gap: 8px; }
 .data-toolbar { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .data-toolbar .field { flex: 1; min-width: 200px; }
-.data-browser { max-height: 320px; }
+.data-toolbar .data-select-all { margin: 0 0 7px; font-size: 13px; white-space: nowrap; }
+.data-browser { max-height: 520px; }
+#btn-data-delete-all { margin-left: auto; }
 .bad-btn { color: var(--bad) !important; border-color: color-mix(in srgb, var(--bad) 40%, var(--border)) !important; }
+.bad-btn:disabled { opacity: .45; cursor: default; }
 .bad-btn:hover { background: color-mix(in srgb, var(--bad) 12%, transparent) !important; }
 
 .row-item .row-del {
@@ -1635,6 +1638,17 @@ input[type="range"]::-moz-range-thumb {
 .badge.vmaf-miss {
   background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent);
   color: var(--warn, #d97706); border: none; margin-top: 4px;
+}
+.vmaf-delta {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; vertical-align: 1px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent); color: var(--text-muted);
+}
+.vmaf-delta.warn {
+  background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent); color: var(--warn, #d97706);
+}
+.vmaf-delta.bad {
+  background: color-mix(in srgb, var(--bad, #ef4444) 18%, transparent); color: var(--bad, #ef4444);
 }
 .data-table tr.row-target-miss td:first-child { box-shadow: inset 3px 0 0 var(--warn, #f59e0b); }
 

@@ -18,6 +18,8 @@ _DEFAULTS: dict[str, Any] = {
     "encoder_speed": "balanced",
     # 1%-Low-Abstand zum Ziel-Mittel (0 = Floor aus, nur Mittelwert).
     "vmaf_p1_gap": 6.0,
+    # Woran der Abstand hängt: both | target | mean.
+    "vmaf_p1_anchor": "both",
     # Mindest-Ersparnis der Empfehlung in % (−1 = aus, 0 = Datei darf nicht wachsen).
     "vmaf_min_savings": 0.0,
     # Encodierte Szenenclips im VMAF-Archiv behalten (Abspielen unter dem Bild).
@@ -51,6 +53,8 @@ def load() -> dict:
                             raw.get("encoder_speed"))
                     if "vmaf_p1_gap" in raw:
                         data["vmaf_p1_gap"] = _normalize_p1_gap(raw.get("vmaf_p1_gap"))
+                    if "vmaf_p1_anchor" in raw:
+                        data["vmaf_p1_anchor"] = _normalize_p1_anchor(raw.get("vmaf_p1_anchor"))
                     if "vmaf_min_savings" in raw:
                         data["vmaf_min_savings"] = _normalize_min_savings(
                             raw.get("vmaf_min_savings"))
@@ -104,6 +108,8 @@ def save(updates: dict) -> dict:
             cur["encoder_speed"] = normalize_encoder_speed(updates.get("encoder_speed"))
         if "vmaf_p1_gap" in updates:
             cur["vmaf_p1_gap"] = _normalize_p1_gap(updates.get("vmaf_p1_gap"))
+        if "vmaf_p1_anchor" in updates:
+            cur["vmaf_p1_anchor"] = _normalize_p1_anchor(updates.get("vmaf_p1_anchor"))
         if "vmaf_min_savings" in updates:
             cur["vmaf_min_savings"] = _normalize_min_savings(
                 updates.get("vmaf_min_savings"))
@@ -132,6 +138,18 @@ def _normalize_p1_gap(value) -> float:
 
 def vmaf_p1_gap() -> float:
     return _normalize_p1_gap(load().get("vmaf_p1_gap", 6.0))
+
+
+def _normalize_p1_anchor(value) -> str:
+    """both = Ziel und Filmschnitt, target = nur Ziel, mean = nur Filmschnitt."""
+    v = str(value or "").strip().lower()
+    if v in ("both", "target", "mean"):
+        return v
+    return "both"
+
+
+def vmaf_p1_anchor() -> str:
+    return _normalize_p1_anchor(load().get("vmaf_p1_anchor", "both"))
 
 
 def keep_vmaf_clips() -> bool:

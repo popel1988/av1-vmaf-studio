@@ -208,6 +208,7 @@ class VmafAnalysis:
     pick_warning: str = ""     # Floor verfehlt, Kompromiss Ersparnis/1%-Low
     target_lo: float = 0.0     # Mittelwert-Ziel, mit dem die Empfehlung gerechnet wurde
     target_gap: float = 0.0    # 1%-Low-Abstand dazu (0 = Floor aus)
+    target_anchor: str = ""    # both | target | mean
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -224,7 +225,8 @@ class VmafAnalysis:
             "error": self.error,
             "keep_source": self.keep_source,
             "pick_warning": self.pick_warning,
-            **({"target_lo": self.target_lo, "target_gap": self.target_gap}
+            **({"target_lo": self.target_lo, "target_gap": self.target_gap,
+                 "target_anchor": self.target_anchor}
                if self.target_lo else {}),
         }
 
@@ -1031,6 +1033,7 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
     analysis["pick_warning"] = picked.pick_warning
     analysis["target_lo"] = picked.target_lo
     analysis["target_gap"] = picked.target_gap
+    analysis["target_anchor"] = picked.target_anchor
     return analysis
 
 
@@ -1165,12 +1168,25 @@ def floor_p1(scene_scores, overall: float = 0.0, mean: float = 0.0) -> float:
     return float(mean or 0)
 
 
+def _p1_floors(mean: float, lo: float, gap: float, anchor: str) -> list[float]:
+    """Untere Grenzen für das 1%-Low der schwächsten Szene."""
+    if gap <= 0:
+        return []
+    floors: list[float] = []
+    if anchor in ("both", "target"):
+        floors.append(float(lo) - float(gap))
+    if anchor in ("both", "mean"):
+        floors.append(float(mean) - float(gap))
+    return floors
+
+
 def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
     if r.vmaf < lo:
         return False
-    if gap > 0 and floor_p1(r.scene_scores, r.vmaf_1pct, r.vmaf) < lo - gap:
-        return False
-    return True
+    from . import app_settings
+    p1 = floor_p1(r.scene_scores, r.vmaf_1pct, r.vmaf)
+    return all(p1 + 1e-9 >= lim for lim in _p1_floors(
+        r.vmaf, lo, gap, app_settings.vmaf_p1_anchor()))
 
 
 def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str, str, int]]:
@@ -1254,13 +1270,22 @@ def _savings_pick_warning(best: VmafResult, lo: float, gap: float,
                           pool: list) -> str:
     """Hinweis: Floor verfehlt, Kompromiss aus Ersparnis-Pflicht und 1%-Low."""
     p1 = _p1_of(best)
+    from . import app_settings
+    anchor = app_settings.vmaf_p1_anchor()
     floor = lo - gap if gap > 0 else lo
     slack = _p1_slack(gap)
     best_p1_row = max(pool, key=lambda r: (_p1_of(r), -r.predicted_size_bytes))
     most_save = min(pool, key=lambda r: r.predicted_size_bytes)
+    if anchor == "mean":
+        rule = f"mehr als {gap:.0f} unter dem Filmschnitt"
+    elif anchor == "both":
+        rule = (f"unter Floor {floor:.0f} oder mehr als {gap:.0f} unter dem Filmschnitt "
+                f"(Ziel {lo:.0f})")
+    else:
+        rule = f"unter Floor {floor:.0f} (Ziel {lo:.0f})"
     bits = [
-        f"Kompromiss: 1%-Low der schwächsten Szene unter Floor {floor:.0f} "
-        f"(Ziel {lo:.0f}), Ersparnis war Pflicht. Gewählt: {best.label} · "
+        f"Kompromiss: 1%-Low der schwächsten Szene {rule}, "
+        f"Ersparnis war Pflicht. Gewählt: {best.label} · "
         f"VMAF {best.vmaf:.1f} · 1%-Low {p1:.1f} (Fenster {slack:.0f} Punkte "
         f"unter bestem Sparer "
         f"{_p1_of(best_p1_row):.1f}) · Ersparnis {best.savings_percent:+.1f} %.",
@@ -1287,6 +1312,7 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     gap = app_settings.vmaf_p1_gap()
     analysis.target_lo = float(lo)
     analysis.target_gap = float(gap)
+    analysis.target_anchor = app_settings.vmaf_p1_anchor()
     min_sav = app_settings.vmaf_min_savings()
 
     def _most_savings(rows: list) -> VmafResult:

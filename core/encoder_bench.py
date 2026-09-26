@@ -823,7 +823,9 @@ def _recommend(rows: list[dict], speeds: list[str], ref_value: int, enc: str) ->
         t0 = max(0.05, a["seconds"])
         tr = b["seconds"] / t0
         sz = b["size"] / max(1.0, a["size"])
-        floor_bad = bool(gap > 0 and floor_a < (a["vmaf"] - gap))
+        floor_bad = bool(
+            gap > 0 and app_settings.vmaf_p1_anchor() != "target"
+            and floor_a < (a["vmaf"] - gap))
         lbl_a = speed_label(enc, chosen)
         lbl_b = speed_label(enc, nxt)
         detail = (f"{lbl_b} gegen {lbl_a}: Score {b['score']:.1f} vs {a['score']:.1f} "

@@ -33,6 +33,7 @@ from core.data_browser import (
     browse as browse_data_zone,
     delete_all_in_root,
     delete_item,
+    delete_many,
     storage_summary,
 )
 from core.hardware import HardwareMonitor
@@ -234,6 +235,7 @@ async def index(request: Request):
             "default_output": app_settings.default_output_rel(),
             "encoder_speed": app_settings.encoder_speed(),
             "vmaf_p1_gap": app_settings.vmaf_p1_gap(),
+            "vmaf_p1_anchor": app_settings.vmaf_p1_anchor(),
             "vmaf_min_savings": app_settings.load().get("vmaf_min_savings", 0.0),
             "speed_presets": ff.speed_preset_catalog(),
             "sweetspot": config.VMAF_SWEETSPOT,
@@ -1870,6 +1872,7 @@ class AppSettingsRequest(BaseModel):
     default_output: Optional[str] = None
     encoder_speed: Optional[str] = None
     vmaf_p1_gap: Optional[float] = None
+    vmaf_p1_anchor: Optional[str] = None
     vmaf_min_savings: Optional[float] = None
     keep_vmaf_clips: Optional[bool] = None
 
@@ -1907,6 +1910,8 @@ async def set_app_settings(req: AppSettingsRequest):
         updates["encoder_speed"] = normalize_encoder_speed(req.encoder_speed)
     if req.vmaf_p1_gap is not None:
         updates["vmaf_p1_gap"] = req.vmaf_p1_gap
+    if req.vmaf_p1_anchor is not None:
+        updates["vmaf_p1_anchor"] = req.vmaf_p1_anchor
     if req.vmaf_min_savings is not None:
         updates["vmaf_min_savings"] = req.vmaf_min_savings
     if req.keep_vmaf_clips is not None:
@@ -2417,6 +2422,7 @@ async def config_paths():
 class DataDeleteRequest(BaseModel):
     root: str = Field(..., pattern="^(vmaf|previews|work)$")
     path: str = ""
+    paths: list[str] = Field(default_factory=list)
 
 
 @app.get("/api/data/browse")
@@ -2458,6 +2464,11 @@ def _guess_media_type(path: Path) -> str:
 
 @app.post("/api/data/delete")
 async def data_delete(req: DataDeleteRequest):
+    if req.paths:
+        count, err = delete_many(req.root, req.paths)
+        if err and not count:
+            return JSONResponse({"error": err}, status_code=400)
+        return {"ok": True, "deleted": count, **({"error": err} if err else {})}
     if not req.path:
         return JSONResponse({"error": "Pfad fehlt"}, status_code=400)
     ok, err = delete_item(req.root, req.path)

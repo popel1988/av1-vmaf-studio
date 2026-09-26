@@ -788,7 +788,12 @@
                   <option value="work">Arbeit / Temp</option>
                 </select>
               </div>
-              <button class="btn btn-ghost btn-sm bad-btn" id="btn-data-delete-all">Gesamten Bereich leeren</button>
+              <label class="check data-select-all">
+                <input type="checkbox" id="data-select-all" />
+                Alle in dieser Ansicht
+              </label>
+              <button class="btn btn-ghost btn-sm bad-btn" id="btn-data-delete-sel" type="button" disabled>Auswahl löschen</button>
+              <button class="btn btn-ghost btn-sm bad-btn" id="btn-data-delete-all" type="button">Gesamten Bereich leeren</button>
             </div>
             <div class="breadcrumb" id="data-breadcrumb"></div>
             <div class="browser data-browser" id="data-browser">
@@ -1307,14 +1312,15 @@
             <h3><span class="card-idx">★</span> VMAF-Empfehlung</h3>
             <div class="vmaf-head-right">
               <span class="badge" id="vmaf-p1-badge">6 Punkte</span>
+              <span class="badge" id="vmaf-anchor-badge">Ziel + Schnitt</span>
               <span class="badge" id="vmaf-sav-badge">≥ 0 %</span>
             </div>
           </div>
           <div class="card-body">
             <p class="hint">Gilt für VMAF-Tool, Ziel-VMAF, Super-Tool und den Encoder-Test –
               nicht in den einzelnen Tools nochmal. Der Slider „Ziel-VMAF“ bleibt der Mittelwert;
-              das 1%-Low der schwächsten Szene darf höchstens so viele Punkte darunter liegen.
-              Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 schaltet den Floor aus
+              das 1%-Low der schwächsten Szene darf höchstens so viele Punkte unter dem gewählten Bezug liegen
+              (Ziel, Filmschnitt oder beides). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 schaltet den Floor aus
               (nur Mittel, wie früher). Mindest-Ersparnis: Empfehlung nur, wenn die Prognose
               genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).
               <a href="#faq-vmaf" class="faq-jump">FAQ</a></p>
@@ -1324,6 +1330,15 @@
               <input type="range" id="cfg-p1-gap" min="0" max="12" step="1" value="6" />
               <div class="range-scale"><span>0 · nur Mittel</span><span>6 · empfohlen</span><span>12 · locker</span></div>
               <p class="hint" id="cfg-p1-gap-hint"></p>
+            </div>
+            <div class="field">
+              <label for="cfg-p1-anchor">1%-Low orientiert sich an</label>
+              <select id="cfg-p1-anchor" class="select">
+                <option value="both">Ziel und Filmschnitt</option>
+                <option value="target">nur Ziel</option>
+                <option value="mean">nur Filmschnitt</option>
+              </select>
+              <p class="hint" id="cfg-p1-anchor-hint"></p>
             </div>
             <div class="field">
               <label>Mindest-Ersparnis: <strong id="cfg-min-sav-val">0 %</strong></label>
@@ -2723,6 +2738,7 @@
       defaultOutput: {{ default_output|tojson }},
       encoderSpeed: {{ encoder_speed|tojson }},
       vmafP1Gap: {{ vmaf_p1_gap|tojson }},
+      vmafP1Anchor: {{ vmaf_p1_anchor|tojson }},
       vmafMinSavings: {{ vmaf_min_savings|tojson }},
       speedPresets: {{ speed_presets|tojson }},
     };
