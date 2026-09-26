@@ -550,6 +550,16 @@ class QueueManager:
         with self._lock:
             return next((it for it in self._items if it.id == item_id), None)
 
+    def patch_vmaf_by_session(self, session: str, analysis: dict) -> None:
+        """Lebenden Queue-Eintrag nach einer Neu-Einordnung aktualisieren."""
+        if not session or not isinstance(analysis, dict):
+            return
+        with self._lock:
+            for it in self._items:
+                if _session_name(it) == session and it.vmaf:
+                    it.vmaf = analysis
+                    break
+
     def state(self) -> dict:
         with self._lock:
             items = [it.to_dict() for it in self._items]
@@ -822,6 +832,9 @@ class QueueManager:
             )
             item.progress = {}
             item.vmaf = analysis.to_dict()
+            sess_name = _session_name(item)
+            item.vmaf["session"] = sess_name
+            vmaf_mod.annotate_clips(sess_name, item.vmaf)
             item.message = ""
 
             if item.id in self._cancel_ids:

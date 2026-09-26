@@ -664,6 +664,8 @@
               </select>
               <span class="badge" id="vmaf-model-badge"></span>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-csv" type="button">CSV exportieren</button>
+              <button class="btn btn-ghost btn-sm" id="btn-vmaf-repick" type="button" disabled>Neu einordnen</button>
+              <button class="btn btn-ghost btn-sm" id="btn-vmaf-nerd" type="button">Daten für Nerds</button>
             </div>
           </div>
           <div id="vmaf-archive-note" class="archive-note" style="display:none">
@@ -695,6 +697,13 @@
                   <canvas id="vmaf-frame-chart"></canvas>
                 </div>
               </div>
+            </div>
+            <div id="vmaf-nerd" class="vmaf-nerd" hidden>
+              <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
+              <div class="vmaf-chart-wrap">
+                <canvas id="vmaf-nerd-chart"></canvas>
+              </div>
+              <div id="vmaf-nerd-body"></div>
             </div>
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">
@@ -1321,6 +1330,11 @@
               <p class="hint" id="cfg-min-sav-hint"></p>
             </div>
             </div>
+            <label class="check">
+              <input type="checkbox" id="cfg-keep-vmaf-clips" checked />
+              Testclips der Szenen behalten
+            </label>
+            <p class="hint">Die encodierten Szenenclips bleiben im VMAF-Archiv und lassen sich unter dem Bild abspielen. Die verlustfreie Referenz wird weiter gelöscht. Aus gilt erst für den nächsten Lauf.</p>
             <div class="lib-actions">
               <button type="button" class="btn btn-ghost btn-sm" data-p1-gap="4">Streng (4)</button>
               <button type="button" class="btn btn-ghost btn-sm" data-p1-gap="6">Empfohlen (6)</button>

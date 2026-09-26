@@ -20,6 +20,8 @@ _DEFAULTS: dict[str, Any] = {
     "vmaf_p1_gap": 6.0,
     # Mindest-Ersparnis der Empfehlung in % (−1 = aus, 0 = Datei darf nicht wachsen).
     "vmaf_min_savings": 0.0,
+    # Encodierte Szenenclips im VMAF-Archiv behalten (Abspielen unter dem Bild).
+    "keep_vmaf_clips": True,
     # Benannte Unterbibliotheken: [{id, name, path}, ...]
     "libraries": [],
 }
@@ -52,6 +54,8 @@ def load() -> dict:
                     if "vmaf_min_savings" in raw:
                         data["vmaf_min_savings"] = _normalize_min_savings(
                             raw.get("vmaf_min_savings"))
+                    if "keep_vmaf_clips" in raw:
+                        data["keep_vmaf_clips"] = bool(raw.get("keep_vmaf_clips"))
                     libs = raw.get("libraries")
                     if isinstance(libs, list):
                         data["libraries"] = _normalize_libraries(libs)
@@ -103,6 +107,8 @@ def save(updates: dict) -> dict:
         if "vmaf_min_savings" in updates:
             cur["vmaf_min_savings"] = _normalize_min_savings(
                 updates.get("vmaf_min_savings"))
+        if "keep_vmaf_clips" in updates:
+            cur["keep_vmaf_clips"] = bool(updates.get("keep_vmaf_clips"))
         if "libraries" in updates:
             cur["libraries"] = _normalize_libraries(list(updates.get("libraries") or []))
         return _write(cur)
@@ -126,6 +132,10 @@ def _normalize_p1_gap(value) -> float:
 
 def vmaf_p1_gap() -> float:
     return _normalize_p1_gap(load().get("vmaf_p1_gap", 6.0))
+
+
+def keep_vmaf_clips() -> bool:
+    return bool(load().get("keep_vmaf_clips", True))
 
 
 def _normalize_min_savings(value) -> float:

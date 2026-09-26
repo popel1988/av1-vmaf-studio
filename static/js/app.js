@@ -1372,6 +1372,8 @@
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d && d.vmaf_p1_gap != null) applyVmafP1Gap(d.vmaf_p1_gap, true);
       if (d && d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
+      const keep = $("cfg-keep-vmaf-clips");
+      if (keep && d && d.keep_vmaf_clips != null) keep.checked = !!d.keep_vmaf_clips;
     }).catch(() => {});
     const save = $("btn-p1-gap-save");
     if (save) save.addEventListener("click", async () => {
@@ -1382,6 +1384,7 @@
           body: JSON.stringify({
             vmaf_p1_gap: Number(slider.value),
             vmaf_min_savings: sav ? Number(sav.value) : vmafMinSavingsValue(),
+            keep_vmaf_clips: !!($("cfg-keep-vmaf-clips") && $("cfg-keep-vmaf-clips").checked),
           }),
         })).json();
         if (d.error) { alert(d.error); return; }
@@ -3023,6 +3026,8 @@
     if (!target || !target.vmaf || !target.vmaf.results.length) {
       if (actions) actions.style.display = "none";
       syncKeepSourceBanner(null);
+      state.vmafSession = "";
+      syncVmafRepick();
       // Gibt es archivierte Vergleiche, Karte + Dropdown sichtbar lassen, damit
       // ältere Analysen auch ohne aktuelle Analyse abrufbar sind.
       if (state.hasArchive) {
@@ -3039,6 +3044,8 @@
     }
 
     const vmaf = target.vmaf;
+    state.vmafSession = vmaf.session || "";
+    syncVmafRepick();
     // Quelle des Vergleichs merken, damit „→ Encoding" genau diese Datei
     // übernimmt – unabhängig davon, was zwischendurch im Browser angeklickt wurde.
     // Wurde die Quelle beim Start (vtEnqueue) schon exakt erfasst, NICHT mit dem
@@ -3097,7 +3104,59 @@
     if (back) back.addEventListener("click", showLiveVmaf);
     const csv = $("btn-vmaf-csv");
     if (csv) csv.addEventListener("click", exportVmafCsv);
+    const repick = $("btn-vmaf-repick");
+    if (repick) repick.addEventListener("click", repickVmaf);
+    const nerd = $("btn-vmaf-nerd");
+    if (nerd) nerd.addEventListener("click", () => {
+      state.vmafNerd = !state.vmafNerd;
+      nerd.classList.toggle("active", state.vmafNerd);
+      state.nerdKey = "";
+      refreshNerdFrames();
+    });
     refreshVmafHistory();
+  }
+
+  function syncVmafRepick() {
+    const btn = $("btn-vmaf-repick");
+    if (btn) btn.disabled = !state.vmafSession;
+  }
+
+  async function repickVmaf() {
+    const session = state.vmafSession;
+    if (!session) return;
+    const btn = $("btn-vmaf-repick");
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch("/api/vmaf/repick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.analysis) {
+        alert(data.error || "Konnte nicht neu einordnen.");
+        return;
+      }
+      const vmaf = data.analysis;
+      state.vmafSession = vmaf.session || session;
+      if (state.viewSession) {
+        state.chartScene = null;
+        showVmafChart(vmaf);
+        fillVmafTable(vmaf);
+        state.shotScene = null;
+        renderScreenshots(vmaf);
+      } else {
+        const items = state.lastItems || [];
+        const hit = items.find((i) => i.vmaf && i.vmaf.session === session);
+        if (hit) hit.vmaf = vmaf;
+        state.lastVmafKey = null;
+        renderVmaf(items, state.lastActiveId);
+      }
+    } catch (e) {
+      alert("Konnte nicht neu einordnen.");
+    } finally {
+      syncVmafRepick();
+    }
   }
 
   async function refreshVmafHistory() {
@@ -3152,6 +3211,8 @@
       const vmaf = data.analysis;
       if (!vmaf || !vmaf.results) return;
       state.viewSession = name;
+      state.vmafSession = data.session || name;
+      syncVmafRepick();
       // Quelle des archivierten Vergleichs übernehmen, damit „→ Encoding" auch
       // nach einem Neustart/Rebuild direkt diese Datei encodiert.
       const srcPath = data.source_path || "";
@@ -3253,6 +3314,7 @@
           label: x.r.label || ("Q" + x.r.quality),
           sub: bits.join(" · "),
           recommended: x.r.recommended,
+          clip: (grid === $("vmaf-screenshots") && s.clip) ? s.clip : "",
         });
       }
     });
@@ -3286,6 +3348,7 @@
             </label>
             <span class="shot-badge">${escapeHtml(t.label)}<small>${escapeHtml(t.sub)}</small></span>
             <img src="${t.src}" alt="${escapeHtml(t.label)}" loading="lazy" />
+            ${t.clip ? `<button type="button" class="shot-play" data-clip="${escapeHtml(t.clip)}">${escapeHtml(tt("Abspielen"))}</button>` : ""}
           </div>`;
         }).join("")}
       </div>`;
@@ -3327,6 +3390,42 @@
       img.addEventListener("click", () => {
         const tile = img.closest(".shot-tile");
         openGallery([{ src: tile.dataset.src, label: tile.dataset.cap }]);
+      }));
+    grid.querySelectorAll(".shot-play").forEach((btn) =>
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tile = btn.closest(".shot-tile");
+        const img = tile.querySelector("img");
+        const existing = tile.querySelector("video");
+        grid.querySelectorAll(".shot-tile video").forEach((v) => {
+          if (v !== existing) {
+            v.pause();
+            const other = v.closest(".shot-tile");
+            const otherImg = other && other.querySelector("img");
+            const otherBtn = other && other.querySelector(".shot-play");
+            if (otherImg) otherImg.hidden = false;
+            if (otherBtn) otherBtn.textContent = tt("Abspielen");
+            v.remove();
+          }
+        });
+        if (existing) {
+          existing.pause();
+          existing.remove();
+          if (img) img.hidden = false;
+          btn.textContent = tt("Abspielen");
+          return;
+        }
+        const session = state.vmafSession;
+        if (!session || !img) return;
+        const video = document.createElement("video");
+        video.controls = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.src = `/api/vmaf/clip?session=${encodeURIComponent(session)}`
+          + `&file=${encodeURIComponent(btn.dataset.clip)}`;
+        img.hidden = true;
+        img.after(video);
+        btn.textContent = tt("Stopp");
       }));
     updateCmp();
   }
@@ -3551,6 +3650,7 @@
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
     drawFrameChart(vmaf);
+    refreshNerdFrames();
   }
 
   function lineChartOptions(col, yTitle) {
@@ -3657,6 +3757,115 @@
       data: { labels, datasets },
       options: opts,
     });
+  }
+
+  function refreshNerdFrames() {
+    const wrap = $("vmaf-nerd");
+    const btn = $("btn-vmaf-nerd");
+    if (btn) btn.classList.toggle("active", !!state.vmafNerd);
+    if (!wrap) return;
+    if (!state.vmafNerd) {
+      wrap.hidden = true;
+      destroyNamedChart("vmafNerdChart");
+      return;
+    }
+    wrap.hidden = false;
+    const vmaf = state.vmafShown;
+    const scenes = vmaf ? vmafSceneList(vmaf) : [];
+    const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);
+    const session = state.vmafSession;
+    const title = $("vmaf-nerd-title");
+    const body = $("vmaf-nerd-body");
+    if (title) title.textContent = `Daten für Nerds · Szene ${scene + 1} · jeder bewertete Frame`;
+    if (!session) {
+      destroyNamedChart("vmafNerdChart");
+      if (body) body.innerHTML = `<p class="hint">Rohdaten gibt es erst bei einem gespeicherten Vergleich.</p>`;
+      return;
+    }
+    const key = `${session}:${scene}`;
+    if (state.nerdKey === key && state.nerdData) {
+      drawNerdFrames(state.nerdData);
+      return;
+    }
+    state.nerdKey = key;
+    if (body) body.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
+    fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${scene}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (state.nerdKey !== key || !state.vmafNerd) return;
+        state.nerdData = data;
+        drawNerdFrames(data);
+      })
+      .catch(() => {
+        if (body) body.innerHTML = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
+      });
+  }
+
+  function drawNerdFrames(data) {
+    const body = $("vmaf-nerd-body");
+    const ctx = $("vmaf-nerd-chart");
+    destroyNamedChart("vmafNerdChart");
+    const series = (data && data.series) || [];
+    if (!series.length) {
+      if (body) {
+        body.innerHTML = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
+      }
+      return;
+    }
+    const col = chartColors();
+    const n = Math.max(...series.map((s) => (s.frames || []).length));
+    const labels = Array.from({ length: n }, (_, i) => String(i + 1));
+    const datasets = series.map((s, i) => {
+      const color = CHART_PALETTE[i % CHART_PALETTE.length];
+      return {
+        label: s.label || ("Serie " + (i + 1)),
+        data: (s.frames || []).map((f) => f.vmaf),
+        borderColor: color,
+        backgroundColor: "transparent",
+        pointRadius: 0,
+        borderWidth: 1.4,
+        tension: 0.05,
+        spanGaps: true,
+      };
+    });
+    if (ctx && typeof Chart !== "undefined") {
+      const opts = lineChartOptions(col, "VMAF");
+      opts.scales.y.suggestedMin = 70;
+      opts.scales.y.suggestedMax = 100;
+      opts.scales.x.ticks.autoSkip = true;
+      opts.scales.x.ticks.maxTicksLimit = 12;
+      opts.plugins.tooltip = {
+        callbacks: {
+          title: (items) => {
+            const i = items[0] ? items[0].dataIndex : 0;
+            const fr = series[0] && series[0].frames && series[0].frames[i];
+            return fr ? `Frame ${fr.n}` : `Frame ${i}`;
+          },
+        },
+      };
+      state.vmafNerdChart = new Chart(ctx, {
+        type: "line",
+        data: { labels, datasets },
+        options: opts,
+      });
+    }
+    if (!body) return;
+    body.innerHTML = series.map((s) => {
+      const worst = (s.worst || []).map((f) => {
+        const extra = [
+          f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
+          f.ssim != null ? `SSIM ${Number(f.ssim).toFixed(3)}` : "",
+        ].filter(Boolean).join(" · ");
+        return `<li>Frame ${f.n} · VMAF ${Number(f.vmaf).toFixed(2)}`
+          + (extra ? ` · ${extra}` : "") + `</li>`;
+      }).join("");
+      return `<div class="vmaf-nerd-col">
+        <p class="vmaf-nerd-label">${escapeHtml(s.label || "")}</p>
+        <p class="hint">${s.count} Frames · Tiefster Wert ${s.min != null ? Number(s.min).toFixed(2) : "–"}`
+          + ` bei Frame ${s.min_frame != null ? s.min_frame : "–"}</p>
+        <ol class="vmaf-nerd-worst">${worst}</ol>
+      </div>`;
+    }).join("");
   }
 
   function renderChartScenes(vmaf) {

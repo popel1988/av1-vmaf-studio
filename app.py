@@ -1780,6 +1780,48 @@ async def vmaf_session(name: str):
     return data
 
 
+class VmafRepickRequest(BaseModel):
+    session: str
+
+
+@app.post("/api/vmaf/repick")
+async def vmaf_repick(req: VmafRepickRequest):
+    """Empfehlung eines gespeicherten Vergleichs mit den aktuellen Einstellungen neu setzen."""
+    from core import vmaf as vmaf_mod
+    data = vmaf_mod.repick_session(req.session)
+    if data is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    queue.patch_vmaf_by_session(req.session, data.get("analysis") or {})
+    return data
+
+
+@app.get("/api/vmaf/clip")
+async def vmaf_clip(session: str, file: str):
+    """Encodierten Szenenclip als fragmentiertes MP4 abspielen (Video-Kopie)."""
+    from fastapi.responses import StreamingResponse
+    from core import media_stream as ms
+    from core import vmaf as vmaf_mod
+    target = vmaf_mod.clip_path(session, file)
+    if target is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    cmd = ms.build_play_cmd(target, audio_index=None)
+    return StreamingResponse(
+        ms.stream_bytes(cmd),
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/api/vmaf/frames")
+async def vmaf_frames(session: str, scene: int = 0):
+    """Jeden bewerteten Frame einer Szene aus dem libvmaf-Log."""
+    from core import vmaf as vmaf_mod
+    data = vmaf_mod.scene_frame_logs(session, scene)
+    if data is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    return data
+
+
 @app.post("/api/queue/{item_id}/cancel")
 async def cancel(item_id: str):
     return {"ok": queue.cancel(item_id)}
@@ -1829,6 +1871,7 @@ class AppSettingsRequest(BaseModel):
     encoder_speed: Optional[str] = None
     vmaf_p1_gap: Optional[float] = None
     vmaf_min_savings: Optional[float] = None
+    keep_vmaf_clips: Optional[bool] = None
 
 
 @app.get("/api/settings")
@@ -1866,6 +1909,8 @@ async def set_app_settings(req: AppSettingsRequest):
         updates["vmaf_p1_gap"] = req.vmaf_p1_gap
     if req.vmaf_min_savings is not None:
         updates["vmaf_min_savings"] = req.vmaf_min_savings
+    if req.keep_vmaf_clips is not None:
+        updates["keep_vmaf_clips"] = req.keep_vmaf_clips
     if not updates:
         cfg = app_settings.load()
     else:

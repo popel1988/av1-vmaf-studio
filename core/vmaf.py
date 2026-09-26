@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -165,6 +166,7 @@ class VmafResult:
                     "scene": s.get("scene", 0),
                     "ref": f"/api/preview/{s['ref']}" if s.get("ref") else "",
                     "enc": f"/api/preview/{s['enc']}" if s.get("enc") else "",
+                    **({"clip": s["clip"]} if s.get("clip") else {}),
                 }
                 for s in self.screenshots
             ]
@@ -707,6 +709,7 @@ def analyze(
                     "scene": si,
                     "ref": ref_shots[si] if si < len(ref_shots) else "",
                     "enc": enc_rel,
+                    "clip": f"test_{skey}.mkv",
                 })
 
         if not scores or total_dur <= 0:
@@ -871,6 +874,178 @@ def list_sessions() -> list[dict]:
     return out
 
 
+_CLIP_NAME = re.compile(r"^test_[A-Za-z0-9._-]+_s\d+\.mkv$")
+
+
+def _clip_name(platform: str, codec: str, value, scene) -> str:
+    try:
+        val = int(value)
+        sc = int(scene)
+    except (TypeError, ValueError):
+        return ""
+    name = f"test_{platform}_{codec}_{val}_s{sc}.mkv"
+    return name if _CLIP_NAME.match(name) else ""
+
+
+def annotate_clips(session: str, analysis: dict) -> None:
+    """Hängt vorhandene Testclips an die Screenshots (Dateiname, kein URL)."""
+    if not session or not isinstance(analysis, dict):
+        return
+    analysis["session"] = session
+    root = config.VMAF_SESSIONS_DIR / session
+    for raw in analysis.get("results") or []:
+        if not isinstance(raw, dict):
+            continue
+        for shot in raw.get("screenshots") or []:
+            if not isinstance(shot, dict):
+                continue
+            name = shot.get("clip") or _clip_name(
+                raw.get("platform") or "", raw.get("codec") or "",
+                raw.get("value", raw.get("quality")), shot.get("scene", 0))
+            if name and _CLIP_NAME.match(name) and (root / name).is_file():
+                shot["clip"] = name
+            else:
+                shot.pop("clip", None)
+
+
+def clip_path(session: str, filename: str) -> Optional[Path]:
+    """Testclip unter vmaf/<session>/, nur der erwartete Dateiname."""
+    if not session or "/" in session or "\\" in session or session.startswith("."):
+        return None
+    if not filename or not _CLIP_NAME.match(filename):
+        return None
+    root = (config.VMAF_SESSIONS_DIR / session).resolve()
+    target = (root / filename).resolve()
+    if target.parent != root or not target.is_file():
+        return None
+    return target
+
+
+_LOG_NAME = re.compile(r"^vmaf_[A-Za-z0-9._-]+_s\d+\.json$")
+
+
+def _frame_log_name(platform: str, codec: str, value, scene) -> str:
+    try:
+        val = int(value)
+        sc = int(scene)
+    except (TypeError, ValueError):
+        return ""
+    name = f"vmaf_{platform}_{codec}_{val}_s{sc}.json"
+    return name if _LOG_NAME.match(name) else ""
+
+
+def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
+    """Jeden bewerteten Frame einer Szene aus den libvmaf-Logs."""
+    data = load_session(session)
+    if data is None:
+        return None
+    analysis = data.get("analysis") or {}
+    root = config.VMAF_SESSIONS_DIR / session
+    series = []
+    for raw in analysis.get("results") or []:
+        if not isinstance(raw, dict):
+            continue
+        name = _frame_log_name(
+            raw.get("platform") or "", raw.get("codec") or "",
+            raw.get("value", raw.get("quality")), scene)
+        path = root / name if name else None
+        if path is None or not path.is_file():
+            continue
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        frames = []
+        for fr in blob.get("frames") or []:
+            metrics = fr.get("metrics") or {}
+            vmaf = metrics.get("vmaf")
+            if vmaf is None:
+                continue
+            item = {
+                "n": int(fr.get("frameNum") if fr.get("frameNum") is not None else len(frames)),
+                "vmaf": round(float(vmaf), 2),
+            }
+            psnr = metrics.get("psnr_y", metrics.get("psnr"))
+            ssim = metrics.get("float_ssim", metrics.get("ssim"))
+            if psnr is not None:
+                item["psnr"] = round(float(psnr), 2)
+            if ssim is not None:
+                item["ssim"] = round(float(ssim), 4)
+            frames.append(item)
+        worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
+        series.append({
+            "label": raw.get("label") or "",
+            "count": len(frames),
+            "min": worst[0]["vmaf"] if worst else None,
+            "min_frame": worst[0]["n"] if worst else None,
+            "frames": frames,
+            "worst": worst,
+        })
+    return {"scene": int(scene), "series": series}
+
+
+def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
+    """Empfehlung mit den aktuellen Einstellungen neu setzen. Werte bleiben."""
+    built: list[tuple[dict, VmafResult]] = []
+    for raw in analysis.get("results") or []:
+        if not isinstance(raw, dict):
+            continue
+        result = VmafResult(
+            value=int(raw.get("value") or raw.get("quality") or 0),
+            rate_mode=raw.get("rate_mode") or analysis.get("rate_mode") or "cq",
+            label=raw.get("label") or "",
+            vmaf=float(raw.get("vmaf") or 0),
+            clip_size_bytes=int(raw.get("clip_size_bytes") or 0),
+            predicted_size_bytes=int(raw.get("predicted_size_bytes") or 0),
+            savings_percent=float(raw.get("savings_percent") or 0),
+            codec=raw.get("codec") or "av1",
+            platform=raw.get("platform") or "cpu",
+            vmaf_hmean=float(raw.get("vmaf_hmean") or 0),
+            vmaf_1pct=float(raw.get("vmaf_1pct") or 0),
+            psnr=float(raw.get("psnr") or 0),
+            ssim=float(raw.get("ssim") or 0),
+        )
+        raw["recommended"] = False
+        built.append((raw, result))
+    picked = VmafAnalysis(
+        results=[result for _, result in built],
+        rate_mode=analysis.get("rate_mode") or "cq",
+    )
+    _pick_recommended(picked, target_vmaf)
+    flags = {
+        (r.platform, r.codec, int(r.value)): r.recommended for r in picked.results
+    }
+    for raw, result in built:
+        raw["recommended"] = bool(flags.get(
+            (result.platform, result.codec, int(result.value))))
+    analysis["recommended_value"] = picked.recommended_value
+    analysis["recommended_quality"] = picked.recommended_quality
+    analysis["recommended_codec"] = picked.recommended_codec
+    analysis["recommended_platform"] = picked.recommended_platform
+    analysis["keep_source"] = picked.keep_source
+    analysis["pick_warning"] = picked.pick_warning
+    return analysis
+
+
+def repick_session(session: str) -> Optional[dict]:
+    """Gespeicherte Session neu einordnen und zurückschreiben."""
+    data = load_session(session)
+    if data is None or not isinstance(data.get("analysis"), dict):
+        return None
+    params = data.get("params") or {}
+    try:
+        target = float(params.get("target_vmaf") or 0)
+    except (TypeError, ValueError):
+        target = 0.0
+    repick_analysis(data["analysis"], target)
+    try:
+        _session_meta_path(session).write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        logger.warning("Neu-Einordnung konnte nicht gespeichert werden: %s", e)
+    return data
+
+
 def load_session(name: str) -> Optional[dict]:
     """Gespeicherte Analyse eines Vergleichs laden (oder None)."""
     if not name or "/" in name or "\\" in name or name.startswith("."):
@@ -882,6 +1057,9 @@ def load_session(name: str) -> Optional[dict]:
         data = json.loads(meta.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    analysis = data.get("analysis")
+    if isinstance(analysis, dict):
+        annotate_clips(data.get("session") or name, analysis)
     return data
 
 
@@ -1142,10 +1320,15 @@ def _finalize_work(work: Path, item_id: str) -> None:
         return
     # Die verlustfreien Referenzen (FFV1) sind riesig (mehrere GB bei 4K/HDR)
     # und nach der Analyse wertlos – vor dem Archivieren immer entfernen.
+    # Testclips (die encodierten Szenen) bleiben, solange die Einstellung das will.
     try:
         for ref in work.glob("reference_*.mkv"):
             ref.unlink(missing_ok=True)
         (work / "reference.mkv").unlink(missing_ok=True)
+        from . import app_settings
+        if not app_settings.keep_vmaf_clips():
+            for clip in work.glob("test_*.mkv"):
+                clip.unlink(missing_ok=True)
     except OSError:
         pass
     if config.RETAIN_VMAF_SESSIONS and item_id:
