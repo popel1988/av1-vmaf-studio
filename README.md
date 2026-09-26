@@ -6,9 +6,9 @@
 A production-ready all-in-one tool for space-saving video compression with
 **VMAF-guided quality selection**, a modern dashboard, live hardware metrics, and
 hardware encoding for **Nvidia (NVENC)**, **Intel (QSV/VAAPI)**, **AMD (VAAPI)**,
-plus a CPU fallback (**SVT-AV1 / x265 / x264**).
+plus a CPU fallback (**SVT-AV1 / x265 / x264 / VP9**).
 
-![Dashboard](https://img.shields.io/badge/UI-FastAPI%20Dashboard-22d3ee) ![VMAF](https://img.shields.io/badge/VMAF-libvmaf-38bdf8) ![Codecs](https://img.shields.io/badge/Codecs-AV1%20%7C%20HEVC%20%7C%20H.264-6366f1) ![HDR](https://img.shields.io/badge/HDR-HDR10%20%7C%20HLG%20%7C%20Dolby%20Vision-f59e0b)
+![Dashboard](https://img.shields.io/badge/UI-FastAPI%20Dashboard-22d3ee) ![VMAF](https://img.shields.io/badge/VMAF-libvmaf-38bdf8) ![Codecs](https://img.shields.io/badge/Codecs-AV1%20%7C%20HEVC%20%7C%20H.264%20%7C%20VP9-6366f1) ![HDR](https://img.shields.io/badge/HDR-HDR10%2B%20%7C%20HLG%20%7C%20Dolby%20Vision-f59e0b)
 
 ---
 
@@ -53,9 +53,9 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **A/B compare** | Side-by-side original vs. encode playback in the browser. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
-| **Library** | Recursive scan with live filters, savings estimates, **sub-libraries** (each scan cached per root), codec/dynamic filters, CSV export. |
+| **Library** | Recursive scan with live filters, savings estimates (not a probe encode), **sub-libraries**, NFO title/year on each row (sort and search), NFO popup, CSV export. |
+| **Settings** | Parallel encodes, encoder speed and bench, watch folder, notifications, optional Jellyfin/Sonarr/Radarr rescan, API keys, profiles, default output folder, VMAF recommendation (1% gap, minimum savings). |
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
-| **Settings** | Parallel encodes, watch folder, notifications, API keys, profiles, default output folder. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
 | **FAQ** | In-app explanations of CQ/CBR/ABR, HDR / Dolby Vision profiles, VMAF, and containers. |
 
@@ -91,26 +91,35 @@ Other highlights:
 The combination of **platform** (CPU/GPU) and **codec** automatically selects the
 matching FFmpeg encoder:
 
-| Platform | AV1 | HEVC | H.264 |
-|----------|-----|------|-------|
-| **CPU** | `libsvtav1` (SVT-AV1) | `libx265` (x265) | `libx264` (x264) |
-| **Nvidia (NVENC)** | `av1_nvenc` | `hevc_nvenc` | `h264_nvenc` |
-| **Intel (QSV)** | `av1_qsv` | `hevc_qsv` | `h264_qsv` |
-| **Intel (VAAPI, default)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` |
-| **AMD (VAAPI)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` |
+| Platform | AV1 | HEVC | H.264 | VP9 |
+|----------|-----|------|-------|-----|
+| **CPU** | `libsvtav1` (SVT-AV1) | `libx265` (x265) | `libx264` (x264) | `libvpx-vp9` |
+| **Nvidia (NVENC)** | `av1_nvenc` | `hevc_nvenc` | `h264_nvenc` | — |
+| **Intel (QSV)** | `av1_qsv` | `hevc_qsv` | `h264_qsv` | — |
+| **Intel (VAAPI, default)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
+| **AMD (VAAPI)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
 
 - The Intel backend is switchable via `INTEL_ENCODER` (`vaapi` = default, `qsv`).
 - If an encoder is missing from the FFmpeg build, the job is rejected with a clear
   error (instead of failing silently) and available encoders are listed.
 - In the **VMAF Tool**, multiple encoders/codecs can be compared at once;
   CQ test values are shifted per codec into a comparable quality range.
+- **VP9 is CPU-only.** A GPU platform is switched to CPU for that job. Speed
+  maps to `-cpu-used` (balanced = 2). Typical CRF is about 30–35; the slider
+  still uses the same 10–51 scale. Default container is MKV.
+- **NVENC quality defaults** (this image stays on FFmpeg **n8.1**; hierarchical
+  B-frames need a newer NVIDIA driver and are not enabled): spatial AQ on, AQ
+  strength **8** (UI 1–15), lookahead **32**. Temporal AQ is added for H.264
+  and HEVC only. CQ mode uses `-multipass qres`. Bitrate mode uses
+  `-multipass fullres` only when two-pass is on.
 
 **Image toolchain (current defaults):**
 
 | Component | Version / notes |
 |-----------|-----------------|
 | Base image | CUDA **12.6.3** runtime (Ubuntu 24.04) |
-| FFmpeg | BtbN **n8.1** (GPL, with NVENC / libvmaf / …) |
+| FFmpeg | BtbN **n8.1** (GPL, with NVENC / libvmaf / …). Not FFmpeg 9 — host driver 575 cannot load the newer NVENC SDK. |
+| `hdr10plus_tool` | **1.7.2** (HEVC HDR10+ extract + inject) |
 | `dovi_tool` | **2.3.3** |
 | libva | **2.22** (Intel VAAPI) |
 
@@ -123,7 +132,7 @@ See `docker-compose.yml` for `NVIDIA_DISABLE_REQUIRE` and related notes.
 
 | UI value | Result |
 |----------|--------|
-| **Automatic** | AV1 → `.mkv`, HEVC → `.mkv`, H.264 → `.mp4` |
+| **Automatic** | AV1 → `.mkv`, HEVC → `.mkv`, VP9 → `.mkv`, H.264 → `.mp4` |
 | **MKV** | force Matroska |
 | **MP4** | force MP4 |
 
@@ -144,6 +153,12 @@ HDR handling depends on the source and is chosen per job.
 | **Keep HDR (10-bit)** | preserves HDR10/HLG metadata unchanged (no DV layer). |
 | **HDR → SDR (tone mapping)** | converts to SDR; the VMAF reference is tonemapped identically to avoid skewed scores. |
 
+**HDR10+** (dynamic per-scene metadata on HEVC): when HDR is kept and the
+target is **HEVC**, `hdr10plus_tool` extracts the JSON and writes it back into
+the encoded stream before Dolby Vision reinjection. AV1, H.264, and VP9 keep
+only the static HDR10 base; the job logs a warning and still succeeds. A
+failed HDR10+ step does not fail the job. Editor cuts do not reinject HDR10+.
+
 **Dolby Vision sources** (additional choice):
 
 | Mode | Effect |
@@ -159,6 +174,7 @@ HDR handling depends on the source and is chosen per job.
 | **HEVC** | any (HW or CPU) | **Profile 8.1** — HDR10 base + RPU via `dovi_tool` reinjection after the encode. |
 | **AV1** | **CPU (SVT-AV1)** | **Profile 10.1** — RPU embedded natively during encode via `libsvtav1 -dolbyvision`. |
 | **AV1** | Nvidia / Intel / AMD | DV not possible → **automatic HDR10 fallback** (with a log note). |
+| **VP9** | CPU only | No DV RPU. Static HDR10 can be kept when tone-map is off. |
 
 Source profiles 5, 7 (dual-layer → converted to 8.1), and 8 are supported for HEVC
 targets. `dovi_tool` does **not** process AV1 on the CLI — so AV1 DV is created only
@@ -310,7 +326,7 @@ encoders.
 | **SDR** | Standard contrast (typical PC/TV SDR). |
 | **HDR10** | Static metadata for the whole file (MaxCLL/MaxFALL), 10-bit PQ. |
 | **HLG** | Broadcast HDR; often watchable on SDR sets. |
-| **HDR10+** | Can carry per-scene metadata; this app treats it as HDR (no separate HDR10+ encode path). |
+| **HDR10+** | Per-scene metadata on HEVC. This app writes it back with `hdr10plus_tool` when the source is HEVC, HDR is kept, and the target is HEVC. Other targets keep only static HDR10. |
 | **Dolby Vision** | Dynamic RPU (per scene/frame). Profile describes how it is stored. |
 
 **HDR without DV:** *Keep HDR* = 10-bit + metadata. *Tone-map* = SDR for any
@@ -354,7 +370,12 @@ guarantee — screenshots and A/B compare still help.
 subs to `mov_text` and drops image subs (PGS/VobSub).
 
 **Anime mode** = VMAF-NEG + 10-bit. **Auto-crop** = `cropdetect` letterbox
-(same crop for VMAF/guardrail). **Film grain** = AV1/CPU/SVT only; 0 = off.
+(same crop for VMAF/guardrail). **Film grain** = AV1/CPU/SVT synthesis only
+(metadata, saves bits; 0 = off). Separate from that, optional **picture
+filters** run before the encoder: deinterlace (`bwdif`, default automatic —
+only when the source is interlaced), sharpen, and temporal grain
+(`noise`, costs bits). Any of those, or a crop, leaves the NVIDIA full-GPU
+CUDA surface path and decodes through RAM.
 
 ---
 
@@ -445,21 +466,34 @@ One media mount is enough — sources and encodes live in the same tree:
 - **Standard output** — set in **Settings → Media & output** (default: `output` →
   `/media/output`). The source folder structure is mirrored underneath.
 - **Per-job output mode** — Standard output · Next to source · Custom folder
-  (browser in the media tree).
+  (browser in the media tree). **Next to source** is the only mode that also
+  copies a matching `.nfo` when the output stem changes: same stem preferred,
+  otherwise `movie.nfo`, written as `{new stem}.nfo`. The original file stays.
+  An existing destination NFO is not overwritten. `tvshow.nfo` and `season.nfo`
+  are never copied. Standard and custom output folders do not get an NFO copy.
 - **Optional extra roots** — mount more folders and list them via `MEDIA_DIRS`
   (`Name=/path`, `;`/newline separated). The browser shows each root as a named
   virtual folder.
 - **Sub-libraries** — named subsets of the media tree for Library scans
-  (managed in the Library UI / `settings.json`).
+  (managed in the Library UI / `settings.json`). Each library row shows the NFO
+  title and year when a sidecar exists (search and sort by those fields). The
+  NFO badge opens the full text. The savings column is a bitrate estimate, not
+  a VMAF measurement.
 
 ---
 
 ## Quality assurance
 
-- **VMAF analysis**: sample clips (1–5, evenly across the movie), 4 test encodes,
+- **VMAF analysis**: sample clips (1–5, evenly across the movie), test encodes,
   interactive line chart, screenshots (original vs. encode), “sweet spot”
   recommendation (VMAF 93–95). Model choice is automatic: `vmaf_4k_v0.6.1.json`
   for 4K, otherwise `vmaf_v0.6.1.json` (NEG variants in anime mode).
+- **Per scene**: each clip stores mean VMAF, **1%-low**, harmonic mean, PSNR,
+  SSIM, and a downsampled frame curve. The chart can switch to one scene
+  (mean + that scene’s 1%-low), a gap chart (scene mean minus overall mean),
+  and the frame curve. Screenshot captions and the results table show
+  `VMAF` and `1%` for that scene when the value was stored. **Older saved
+  sessions only have the scene mean** — their 1%-low appears after a new run.
 - **Extra metrics**: besides mean VMAF, **1%-low** (mean of the worst 1% of frames),
   **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
   (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a
@@ -491,6 +525,12 @@ One media mount is enough — sources and encodes live in the same tree:
   window, configurable in the UI).
 - **Notifications**: generic webhook, **Discord**, and **Telegram**
   (via env or UI).
+- **Media servers** (optional, Settings): after a finished job, rescan the
+  matching library in **Jellyfin**, **Sonarr**, or **Radarr**. Empty URL means
+  off. An optional path prefix rewrites the container path to the path the
+  server knows. A failed rescan does not fail the encode. The inbound
+  Sonarr/Radarr webhook (`/api/v1/webhook/arr`) is the other direction: those
+  apps can start an encode.
 - **REST API + API keys**: see [REST API](#rest-api); Sonarr/Radarr webhooks
   supported.
 - **Profiles**: save/load reusable settings sets (including remux-only profiles
@@ -532,6 +572,7 @@ survive rebuilds/restarts as long as the volume is kept:
 /data/profiles.json         Saved encode/remux profiles
 /data/apikeys.json          REST API keys
 /data/notify.json           Notification config
+/data/media_servers.json    Optional Jellyfin / Sonarr / Radarr connection
 /data/watch*.json           Watch-folder state
 /data/scheduler.json        Schedule / time windows
 /data/capabilities.json     Cached encoder capability tests
@@ -636,6 +677,8 @@ core/
   encoder.py            FFmpeg command builder, filter chains, progress parser
   vmaf.py               VMAF pipeline (VMAF/PSNR/SSIM/percentiles, sessions)
   dolby_vision.py       Dolby Vision RPU preservation via dovi_tool (HEVC 8.1)
+  hdr10plus.py          HDR10+ JSON extract/inject via hdr10plus_tool (HEVC only)
+  media_servers.py      Optional Jellyfin / Sonarr / Radarr library rescan
   chunked.py            Chunked adaptive encoding
   size_target.py        Size-target → ABR bitrate preview
   job_plan.py           Naming templates, dry-run, duplicate / requeue paths
@@ -646,7 +689,7 @@ core/
   player_hls.py         Full Player: HLS sessions (audio remux, seek)
   queue_manager.py      Async queue, guardrail, post-processing, persistence
   supertool.py          Guided batch processing (target/representative VMAF)
-  library.py            Library scan + savings estimate
+  library.py            Library scan, NFO title/year, savings estimate, NFO copy beside source
   data_browser.py       Data/archive browser
   history.py            Job history (SQLite, settings_json)
   watcher.py            Watch-folder automation
@@ -661,7 +704,7 @@ static/js/app.js        Dashboard logic (WebSocket, charts, browser)
 static/js/editor.js     Timeline video editor UI
 static/js/player.js     Full Player UI (HLS)
 static/js/i18n.js       DE / EN / ES / FR translations
-Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n8.1 + dovi_tool + models)
+Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n8.1 + dovi_tool + hdr10plus_tool + models)
 docker-compose.yml      Portainer stack
 ```
 

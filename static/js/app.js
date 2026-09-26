@@ -3243,10 +3243,13 @@
       if (s && s.enc) {
         const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
+        const bits = [`VMAF ${Number(v).toFixed(1)}`];
+        if (sceneScore && sceneScore.p1 != null)
+          bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
         tiles.push({
           src: s.enc,
           label: x.r.label || ("Q" + x.r.quality),
-          sub: `VMAF ${Number(v).toFixed(1)}`,
+          sub: bits.join(" · "),
           recommended: x.r.recommended,
         });
       }
@@ -3371,9 +3374,13 @@
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
           return bits.join(" · ");
-        }).join("\n");
-      s += `<br><span class="muted" title="${escapeHtml(perScene)}">`
-        + `Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}</span>`;
+        });
+      const visible = (r.scene_scores || []).map((sc) => {
+        const p = sc.p1 != null ? ` / 1% ${Number(sc.p1).toFixed(1)}` : "";
+        return `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}`;
+      }).join(" · ");
+      s += `<br><span class="muted" title="${escapeHtml(perScene.join("\n"))}">`
+        + `${escapeHtml(visible || `Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}`)}</span>`;
     }
     // Zusatzmetriken (falls gemessen): 1%-Low + harmon. Mittel, PSNR/SSIM.
     const extra = [];
