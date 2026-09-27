@@ -108,6 +108,7 @@
     if (page === "remux" && !state.remuxLoaded) { state.remuxLoaded = true; remuxInit(); }
     if (page === "editor" && typeof window.editorInit === "function") window.editorInit();
     if (page === "diag" && !state.diagLoaded) loadDiagnostics();
+    if ((page === "encode" || page === "vmaf") && state.bitrateData) drawBitrateChart(state.bitrateData);
   }
   window.navTo = navTo;
 
@@ -703,7 +704,10 @@
       note.textContent = "";
       return;
     }
-    const bits = wins.map((w) => `${BITRATE_ROLES[w.role] || w.role} ${fmtClock(w.start)}`);
+    const bits = wins.map((w) => {
+      const br = Number(w.kbps) > 0 ? ` · ${(Number(w.kbps) / 1000).toFixed(1)} Mbit/s` : "";
+      return `${BITRATE_ROLES[w.role] || w.role} ${fmtClock(w.start)}${br}`;
+    });
     note.hidden = false;
     note.textContent = `Szenen nach Bitrate: ${bits.join(" · ")}`;
   }
@@ -719,6 +723,7 @@
     }
     wrap.hidden = false;
     const windows = data.windows || [];
+    const vmafMarks = state.currentPage === "vmaf";
     const labels = bins.map((b) => fmtClock(b.t));
     const mark = bins.map((b) => {
       const hit = windows.some((w) => b.t >= w.start && b.t < w.start + w.length);
@@ -728,46 +733,49 @@
     const opts = lineChartOptions(col, "kbit/s");
     opts.scales.x.ticks.autoSkip = true;
     opts.scales.x.ticks.maxTicksLimit = 8;
+    const datasets = [
+      {
+        label: "Bitrate",
+        data: bins.map((b) => b.kbps),
+        borderColor: col.accent || "#22d3ee",
+        backgroundColor: "transparent",
+        pointRadius: 0,
+        borderWidth: 1.4,
+        tension: 0.15,
+        spanGaps: true,
+      },
+    ];
+    if (vmafMarks) {
+      datasets.push({
+        label: "Vorschlag",
+        data: mark,
+        borderColor: "#fbbf24",
+        backgroundColor: "transparent",
+        pointRadius: 0,
+        borderWidth: 3,
+        tension: 0,
+        spanGaps: false,
+      });
+    }
     state.bitrateChart = new Chart(ctx, {
       type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Bitrate",
-            data: bins.map((b) => b.kbps),
-            borderColor: col.accent || "#22d3ee",
-            backgroundColor: "transparent",
-            pointRadius: 0,
-            borderWidth: 1.4,
-            tension: 0.15,
-            spanGaps: true,
-          },
-          {
-            label: "Vorschlag",
-            data: mark,
-            borderColor: "#fbbf24",
-            backgroundColor: "transparent",
-            pointRadius: 0,
-            borderWidth: 3,
-            tension: 0,
-            spanGaps: false,
-          },
-        ],
-      },
+      data: { labels, datasets },
       options: opts,
     });
     const avg = Number(data.avg_kbps) / 1000;
     const peak = Number(data.peak_kbps) / 1000;
+    const floor = Number(data.floor_kbps) / 1000;
     const sum = $("bitrate-summary");
     if (sum) {
-      sum.textContent = `Schnitt ${avg.toFixed(1)} Mbit/s · Spitze ${peak.toFixed(1)} Mbit/s · Faktor ${Number(data.peak_ratio).toFixed(1)}`;
+      const floorBit = vmafMarks && floor > 0 ? ` · Untergrenze ${floor.toFixed(1)} Mbit/s` : "";
+      sum.textContent = `Schnitt ${avg.toFixed(1)} Mbit/s · Spitze ${peak.toFixed(1)} Mbit/s · Faktor ${Number(data.peak_ratio).toFixed(1)}${floorBit}`;
     }
     const wins = $("bitrate-wins");
     if (wins) {
-      wins.innerHTML = windows.map((w) =>
-        `<span class="bitrate-win">${escapeHtml((BITRATE_ROLES[w.role] || w.role) + " " + fmtClock(w.start))}</span>`
-      ).join("");
+      wins.innerHTML = vmafMarks ? windows.map((w) => {
+        const br = Number(w.kbps) > 0 ? ` · ${(Number(w.kbps) / 1000).toFixed(1)} Mbit/s` : "";
+        return `<span class="bitrate-win">${escapeHtml((BITRATE_ROLES[w.role] || w.role) + " " + fmtClock(w.start) + br)}</span>`;
+      }).join("") : "";
     }
   }
 
@@ -1986,8 +1994,9 @@
       const checked = first
         ? (["anim", "live", "fps60", "uhd"].includes(c.id) ? "checked" : "")
         : (prev.has(c.id) ? "checked" : "");
+      const br = c.video_bitrate_human ? ` · ${c.video_bitrate_human}` : "";
       const status = c.present
-        ? `Geladen · ${c.human || ""}`
+        ? `Geladen · ${c.human || ""}${br}`
         : `Nicht geladen · ca. ${c.approx_mb} MB`;
       const media = c.present && c.media
         ? `<span class="why">${escapeHtml(c.media)}</span>` : "";
@@ -2089,7 +2098,8 @@
         return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="7" class="bad">${escapeHtml(r.error)}</td></tr>`;
       }
       const recCls = recSpeed && r.speed === recSpeed ? " row-recommended" : "";
-      const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
+        const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
+        const ist = measuredBitrateText(r.video_kbps, r.video_bitrate_human);
       const vmaf = r.vmaf != null ? Number(r.vmaf).toFixed(1) : "—";
       const low = r.vmaf_1pct != null ? Number(r.vmaf_1pct).toFixed(1) : "—";
       const spd = speedLabelFor(r.platform, r.codec, r.speed);
@@ -2102,7 +2112,7 @@
       return `<tr class="${recCls}">
         <td>${escapeHtml(r.clip || "")}</td>
         <td>${escapeHtml(spd)}</td>
-        <td class="num">${escapeHtml(String(val))}</td>
+        <td class="num">${escapeHtml(String(val))}${ist ? `<div class="hint">${escapeHtml(ist)}</div>` : ""}</td>
         <td class="num">${vmaf}</td>
         <td class="num">${low}</td>
         <td class="num">${escapeHtml(r.size_human || "")}</td>
@@ -2130,6 +2140,8 @@
         label: `${speedLabelFor(r.platform, r.codec, r.speed)} · `
           + (r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s")),
         vmaf: r.vmaf,
+        video_kbps: r.video_kbps,
+        video_bitrate_human: r.video_bitrate_human,
         recommended: !!(recSpeed && r.speed === recSpeed),
         screenshots: r.screenshots,
         screenshot_ref: r.screenshot_ref,
@@ -2349,7 +2361,7 @@
       chunked: vmaf ? false : ($("opt-chunked") ? $("opt-chunked").checked : false),
       chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
       chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
-      sample_mode: sampleModeValue(),
+      sample_mode: "even",
     };
     if (vmaf) {
       out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
@@ -3539,6 +3551,18 @@
 
   // Ergebnisse auf eine einheitliche Szenen-Screenshotliste normalisieren.
   // Ältere Sessions kennen nur screenshot_ref/enc (= Szene 0).
+  function fmtKbps(kbps) {
+    const n = Number(kbps);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    if (n >= 1000) return (n / 1000).toFixed(1) + " Mbit/s";
+    return Math.round(n) + " kbit/s";
+  }
+
+  function measuredBitrateText(kbps, human) {
+    const h = (human && String(human).trim()) || fmtKbps(kbps);
+    return h && h !== "—" ? `Ist ${h}` : "";
+  }
+
   function shotsOf(r) {
     if (Array.isArray(r.screenshots) && r.screenshots.length) return r.screenshots;
     if (r.screenshot_ref || r.screenshot_enc)
@@ -3587,6 +3611,10 @@
         const bits = [`VMAF ${Number(v).toFixed(1)}`];
         if (sceneScore && sceneScore.p1 != null)
           bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
+        const ist = measuredBitrateText(
+          (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps,
+          s && s.kbps ? "" : x.r.video_bitrate_human);
+        if (ist) bits.push(ist);
         tiles.push({
           src: s.enc,
           label: x.r.label || ("Q" + x.r.quality),
@@ -3967,7 +3995,7 @@
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r, idx) => `
       <tr class="${r.recommended ? "row-recommended" : ""} ${vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue()) ? "row-target-miss" : ""}">
-        <td>${escapeHtml(r.label || ("Q" + r.quality))}</td>
+        <td>${escapeHtml(r.label || ("Q" + r.quality))}${measuredBitrateText(r.video_kbps, r.video_bitrate_human) ? `<div class="hint">${escapeHtml(measuredBitrateText(r.video_kbps, r.video_bitrate_human))}</div>` : ""}</td>
         <td>${vmafCell(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
@@ -4038,7 +4066,7 @@
 
   function lineChartOptions(col, yTitle) {
     return {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { color: col.text, font: { size: 11 } } },
@@ -4423,7 +4451,7 @@
       type: "line",
       data: { labels, datasets },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false, resizeDelay: 150,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: {
@@ -4526,7 +4554,7 @@
       type: "scatter",
       data: { datasets },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false, resizeDelay: 150,
         plugins: {
           legend: { labels: { color: col.text, font: { size: 12 } } },
           tooltip: { callbacks: {

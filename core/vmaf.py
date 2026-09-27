@@ -133,6 +133,7 @@ class VmafResult:
     screenshot_enc: str = ""
     screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
     scene_scores: list = field(default_factory=list)  # [{scene, vmaf}] je Stichprobe
+    video_kbps: int = 0                 # gemessene Videobitrate der Testclips
 
     def to_dict(self) -> dict:
         d = {
@@ -151,6 +152,9 @@ class VmafResult:
             "savings_percent": round(self.savings_percent, 1),
             "recommended": self.recommended,
         }
+        if self.video_kbps:
+            d["video_kbps"] = int(self.video_kbps)
+            d["video_bitrate_human"] = ff._bitrate_human(self.video_kbps * 1000)
         if self.vmaf_hmean:
             d["vmaf_hmean"] = round(self.vmaf_hmean, 2)
         if self.vmaf_1pct:
@@ -170,6 +174,7 @@ class VmafResult:
                     "ref": f"/api/preview/{s['ref']}" if s.get("ref") else "",
                     "enc": f"/api/preview/{s['enc']}" if s.get("enc") else "",
                     **({"clip": s["clip"]} if s.get("clip") else {}),
+                    **({"kbps": int(s["kbps"])} if s.get("kbps") else {}),
                 }
                 for s in self.screenshots
             ]
@@ -187,6 +192,8 @@ class VmafResult:
                 frames = s.get("frames") or []
                 if frames:
                     item["frames"] = frames
+                if s.get("kbps"):
+                    item["kbps"] = int(s["kbps"])
                 packed.append(item)
             d["scene_scores"] = packed
             vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
@@ -724,8 +731,12 @@ def analyze(
                 "ssim": metrics.get("ssim") or 0.0,
                 "frames": metrics.get("frames") or [],
             })
-            total_size += test_file.stat().st_size
+            clip_bytes = test_file.stat().st_size
+            total_size += clip_bytes
             total_dur += clip_len
+            scene_kbps = measured_kbps(clip_bytes, clip_len)
+            if scene_scores:
+                scene_scores[-1]["kbps"] = scene_kbps
             if opts.generate_screenshots:
                 enc_rel = _extract_frame(
                     test_file, f"{sess}/{key}_s{si}_enc.jpg",
@@ -735,6 +746,7 @@ def analyze(
                     "ref": ref_shots[si] if si < len(ref_shots) else "",
                     "enc": enc_rel,
                     "clip": f"test_{skey}.mkv",
+                    "kbps": scene_kbps,
                 })
 
         if not scores or total_dur <= 0:
@@ -771,6 +783,7 @@ def analyze(
             screenshot_enc=shots[0]["enc"] if shots else "",
             screenshots=shots,
             scene_scores=scene_scores,
+            video_kbps=measured_kbps(total_size, total_dur),
         ))
 
     try:
@@ -915,25 +928,61 @@ def _clip_name(platform: str, codec: str, value, scene) -> str:
     return name if _CLIP_NAME.match(name) else ""
 
 
+def measured_kbps(size_bytes: int, seconds: float) -> int:
+    """Mittlere Videobitrate aus Dateigröße und Dauer. Testclips sind video-only."""
+    try:
+        size = int(size_bytes)
+        sec = float(seconds)
+    except (TypeError, ValueError):
+        return 0
+    if size <= 0 or sec <= 0:
+        return 0
+    return int(round(size * 8 / sec / 1000))
+
+
 def annotate_clips(session: str, analysis: dict) -> None:
-    """Hängt vorhandene Testclips an die Screenshots (Dateiname, kein URL)."""
+    """Hängt vorhandene Testclips an die Screenshots (Dateiname, kein URL).
+
+    Fehlende Bitraten kommen aus der Datei, sonst aus der gespeicherten
+    Clip-Größe. So bleibt der Vergleich zum ABR-Ziel auch bei älteren Läufen.
+    """
     if not session or not isinstance(analysis, dict):
         return
     analysis["session"] = session
     root = config.VMAF_SESSIONS_DIR / session
+    seconds = float(analysis.get("clip_seconds") or 0)
     for raw in analysis.get("results") or []:
         if not isinstance(raw, dict):
             continue
+        shot_kbps: list[int] = []
         for shot in raw.get("screenshots") or []:
             if not isinstance(shot, dict):
                 continue
             name = shot.get("clip") or _clip_name(
                 raw.get("platform") or "", raw.get("codec") or "",
                 raw.get("value", raw.get("quality")), shot.get("scene", 0))
-            if name and _CLIP_NAME.match(name) and (root / name).is_file():
+            path = root / name if name and _CLIP_NAME.match(name) else None
+            if path is not None and path.is_file():
                 shot["clip"] = name
+                if not shot.get("kbps") and seconds > 0:
+                    kbps = measured_kbps(path.stat().st_size, seconds)
+                    if kbps:
+                        shot["kbps"] = kbps
             else:
                 shot.pop("clip", None)
+            if shot.get("kbps"):
+                shot_kbps.append(int(shot["kbps"]))
+        if raw.get("video_kbps"):
+            continue
+        kbps = 0
+        if shot_kbps:
+            kbps = int(round(sum(shot_kbps) / len(shot_kbps)))
+        else:
+            n = len(raw.get("scene_scores") or []) or len(shot_kbps) or 1
+            kbps = measured_kbps(int(raw.get("clip_size_bytes") or 0), seconds * n)
+        if kbps:
+            raw["video_kbps"] = kbps
+            raw["video_bitrate_human"] = ff._bitrate_human(kbps * 1000)
 
 
 def clip_path(session: str, filename: str) -> Optional[Path]:

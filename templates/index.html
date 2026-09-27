@@ -166,14 +166,14 @@
               <div id="bitrate-panel" class="bitrate-panel" hidden>
                 <div class="lib-actions">
                   <button type="button" class="btn btn-ghost btn-sm" id="btn-bitrate">Bitrate-Verlauf</button>
-                  <label class="check">
+                  <label class="check" data-page="vmaf">
                     <input type="checkbox" id="bitrate-sample-mode" />
                     VMAF-Szenen nach Bitrate
                   </label>
                 </div>
-                <p class="hint">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.</p>
+                <p class="hint" data-page="vmaf">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.</p>
                 <p class="hint" id="bitrate-summary"></p>
-                <div class="bitrate-wins" id="bitrate-wins"></div>
+                <div class="bitrate-wins" id="bitrate-wins" data-page="vmaf"></div>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-sm" id="bitrate-chart-wrap" hidden>
                   <canvas id="bitrate-chart"></canvas>
                 </div>

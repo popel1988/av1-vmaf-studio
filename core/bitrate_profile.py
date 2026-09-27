@@ -102,6 +102,52 @@ def _stats(bins: list[dict], duration: float) -> dict:
     }
 
 
+def _picture_floor(bins: list[dict], duration: float) -> float:
+    """Untergrenze für Stichproben.
+
+    Der Median wird nur aus Abschnitten gebildet, die noch nach Film aussehen.
+    Abspann nahe 0 zieht ihn nicht nach unten. Die Grenze liegt bei 10 % davon,
+    mindestens 1,5 Mbit/s, sobald der Film deutlich darüber liegt.
+    """
+    head, tail = _body_range(duration)
+    vals = [float(b["kbps"]) for b in bins
+            if head <= float(b["t"]) < tail and float(b["kbps"]) > 0]
+    if not vals:
+        vals = [float(b["kbps"]) for b in bins if float(b["kbps"]) > 0]
+    if not vals:
+        return 0.0
+    rough = sorted(vals)[len(vals) // 2]
+    picture = [v for v in vals if v >= rough * 0.15] or vals
+    med = sorted(picture)[len(picture) // 2]
+    floor = med * 0.10
+    if med >= 8000:
+        floor = max(floor, 1500.0)
+    return floor
+
+
+def _content_range(bins: list[dict], duration: float, floor: float) -> tuple[float, float]:
+    """Lauf am Anfang und am Ende unter der Grenze abschneiden (Logo, Abspann)."""
+    head, tail = _body_range(duration)
+    if floor <= 0:
+        return head, tail
+    body = [b for b in bins if head <= float(b["t"]) < tail]
+    if len(body) < 4:
+        return head, tail
+    i = 0
+    while i < len(body) and float(body[i]["kbps"]) < floor:
+        i += 1
+    j = len(body) - 1
+    while j > i and float(body[j]["kbps"]) < floor:
+        j -= 1
+    if j <= i:
+        return head, tail
+    start = float(body[i]["t"])
+    end = float(body[j]["t"]) + BIN_SEC
+    if end - start < 60:
+        return head, tail
+    return start, end
+
+
 def _window_score(bins: list[dict], start: float, length: float) -> float:
     covered = [float(b["kbps"]) for b in bins if start <= b["t"] < start + length]
     if not covered:
@@ -131,7 +177,8 @@ def pick_windows(bins: list[dict], duration: float, clip: float, count: int) -> 
     if duration <= 0 or not bins:
         return []
     clip = min(clip, duration)
-    head, tail = _body_range(duration)
+    floor = _picture_floor(bins, duration)
+    head, tail = _content_range(bins, duration, floor)
     starts = []
     t = head
     while t + clip <= tail + 0.05:
@@ -140,9 +187,7 @@ def pick_windows(bins: list[dict], duration: float, clip: float, count: int) -> 
     if not starts:
         starts = [0.0]
     scored = [(s, _window_score(bins, s, clip)) for s in starts]
-    positive = [sc for _, sc in scored if sc > 0]
-    med = sorted(positive)[len(positive) // 2] if positive else 0.0
-    usable = [(s, sc) for s, sc in scored if med <= 0 or sc >= med * 0.2] or scored
+    usable = [(s, sc) for s, sc in scored if floor <= 0 or sc >= floor] or scored
     chosen: list[tuple[float, float, str]] = []
     pool = list(usable)
     for role in _ROLES[count]:
@@ -198,5 +243,6 @@ def profile(path: Path, duration: float, clip: float, samples: int) -> dict:
         "duration": round(span, 3),
         "bins": bins,
         "windows": pick_windows(bins, span, clip, samples),
+        "floor_kbps": round(_picture_floor(bins, span), 1),
         **stats,
     }

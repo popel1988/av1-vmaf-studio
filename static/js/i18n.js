@@ -692,8 +692,8 @@
     "Daten für Nerds": "Data for nerds",
     "Bitrate-Verlauf": "Bitrate curve",
     "VMAF-Szenen nach Bitrate": "VMAF scenes by bitrate",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
-      "Reads the video stream's packet sizes and does not decode. The first run can take a while; after that the curve comes from the cache. The marks are the suggestion: a hard, a typical and a quiet spot, skipping the opening and the credits. The checkbox uses that for the next VMAF run.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Reads the video stream's packet sizes and does not decode. The first run can take a while; after that the curve comes from the cache. The marks are the suggestion: a hard, a typical and a quiet spot. Credits and logos under the floor do not count as a quiet scene. The checkbox uses the suggestion for the next VMAF run.",
     "Bitrate wird gelesen …": "Reading bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Could not load the bitrate curve.",
     "Anteil unter": "Share under",
@@ -1981,8 +1981,8 @@
     "Daten für Nerds": "Datos para expertos",
     "Bitrate-Verlauf": "Curva de bitrate",
     "VMAF-Szenen nach Bitrate": "Escenas VMAF según bitrate",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
-      "Lee el tamaño de los paquetes del vídeo y no decodifica. La primera vez puede tardar; después la curva sale de la caché. Las marcas son la propuesta: un tramo difícil, uno típico y uno tranquilo, sin la cabecera ni los créditos. La casilla lo usa en el siguiente VMAF.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Lee el tamaño de los paquetes del vídeo y no decodifica. La primera vez puede tardar; después la curva sale de la caché. Las marcas son la propuesta: un tramo difícil, uno típico y uno tranquilo. Créditos y logos bajo el suelo no cuentan como escena tranquila. La casilla usa la propuesta en el siguiente VMAF.",
     "Bitrate wird gelesen …": "Leyendo bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "No se pudo cargar la curva de bitrate.",
     "Anteil unter": "Porcentaje bajo",
@@ -3093,8 +3093,8 @@
     "Daten für Nerds": "Données pour experts",
     "Bitrate-Verlauf": "Courbe de débit",
     "VMAF-Szenen nach Bitrate": "Scènes VMAF selon le débit",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
-      "Lit la taille des paquets vidéo et ne décode pas. Le premier passage peut prendre du temps, ensuite la courbe vient du cache. Les marques sont la proposition : un passage difficile, un typique et un calme, sans le générique de début ni de fin. La case l'utilise pour le prochain VMAF.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Lit la taille des paquets vidéo et ne décode pas. Le premier passage peut prendre du temps, ensuite la courbe vient du cache. Les marques sont la proposition : un passage difficile, un typique et un calme. Générique et logos sous le plancher ne comptent pas comme scène calme. La case utilise la proposition pour le prochain VMAF.",
     "Bitrate wird gelesen …": "Lecture du débit …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Impossible de charger la courbe de débit.",
     "Anteil unter": "Part sous",
@@ -3846,13 +3846,17 @@
     [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
       function (m) { return "At target " + m[1] + " the floor is " + m[2] + ". Also at most " + m[3] + " points below the film mean."; }],
     [/^Ziel (\d+)$/, function (m) { return "Target " + m[1]; }],
-    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
-      function (m) { return "Mean " + m[1] + " Mbit/s · peak " + m[2] + " Mbit/s · factor " + m[3]; }],
-    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)(?: · Untergrenze ([\d.]+) Mbit\/s)?$/,
+      function (m) {
+        var s = "Mean " + m[1] + " Mbit/s · peak " + m[2] + " Mbit/s · factor " + m[3];
+        return m[4] ? s + " · floor " + m[4] + " Mbit/s" : s;
+      }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})(?: · ([\d.]+) Mbit\/s)?$/,
       function (m) {
         var role = { schwer: "hard", hoch: "high", typisch: "typical", niedrig: "low", ruhig: "quiet" }[m[1]];
-        return role + " " + m[2];
+        return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
+    [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Actual " + m[1]; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Scenes by bitrate: " + m[1]
         .replace(/schwer/g, "hard").replace(/hoch/g, "high").replace(/typisch/g, "typical")
@@ -3969,13 +3973,17 @@
     [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
       function (m) { return "Con objetivo " + m[1] + " el suelo está en " + m[2] + ". Además como máximo " + m[3] + " puntos bajo la media de la película."; }],
     [/^Ziel (\d+)$/, function (m) { return "Objetivo " + m[1]; }],
-    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
-      function (m) { return "Media " + m[1] + " Mbit/s · pico " + m[2] + " Mbit/s · factor " + m[3]; }],
-    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)(?: · Untergrenze ([\d.]+) Mbit\/s)?$/,
+      function (m) {
+        var s = "Media " + m[1] + " Mbit/s · pico " + m[2] + " Mbit/s · factor " + m[3];
+        return m[4] ? s + " · suelo " + m[4] + " Mbit/s" : s;
+      }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})(?: · ([\d.]+) Mbit\/s)?$/,
       function (m) {
         var role = { schwer: "difícil", hoch: "alto", typisch: "típico", niedrig: "bajo", ruhig: "tranquilo" }[m[1]];
-        return role + " " + m[2];
+        return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
+    [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Real " + m[1]; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Escenas según bitrate: " + m[1]
         .replace(/schwer/g, "difícil").replace(/hoch/g, "alto").replace(/typisch/g, "típico")
@@ -4092,13 +4100,17 @@
     [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
       function (m) { return "À la cible " + m[1] + " le plancher est " + m[2] + ". En plus au plus " + m[3] + " points sous la moyenne du film."; }],
     [/^Ziel (\d+)$/, function (m) { return "Cible " + m[1]; }],
-    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
-      function (m) { return "Moyenne " + m[1] + " Mbit/s · pic " + m[2] + " Mbit/s · facteur " + m[3]; }],
-    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)(?: · Untergrenze ([\d.]+) Mbit\/s)?$/,
+      function (m) {
+        var s = "Moyenne " + m[1] + " Mbit/s · pic " + m[2] + " Mbit/s · facteur " + m[3];
+        return m[4] ? s + " · plancher " + m[4] + " Mbit/s" : s;
+      }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})(?: · ([\d.]+) Mbit\/s)?$/,
       function (m) {
         var role = { schwer: "difficile", hoch: "haut", typisch: "typique", niedrig: "bas", ruhig: "calme" }[m[1]];
-        return role + " " + m[2];
+        return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
+    [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Réel " + m[1]; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Scènes selon le débit : " + m[1]
         .replace(/schwer/g, "difficile").replace(/hoch/g, "haut").replace(/typisch/g, "typique")

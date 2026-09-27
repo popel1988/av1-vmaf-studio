@@ -1668,28 +1668,42 @@ input[type="range"]::-moz-range-thumb {
 
 /* ------------------------------ VMAF CARD ------------------------------- */
 .vmaf-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; align-items: start; }
-.vmaf-charts { min-width: 0; }
+.vmaf-charts { grid-column: 1; grid-row: 1; min-width: 0; }
+.vmaf-table-wrap { grid-column: 2; grid-row: 1; min-width: 0; }
 .vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
 .vmaf-chart-scenes:empty { display: none; }
-.vmaf-chart-wrap { position: relative; height: 300px; }
+.vmaf-chart-wrap { position: relative; height: 300px; min-width: 0; overflow: hidden; }
 .vmaf-chart-wrap-sm { height: 190px; }
 .vmaf-subchart { margin-top: 16px; }
 .vmaf-subchart-title { margin: 0 0 6px; font-size: 12px; color: var(--text-muted); }
 .bitrate-panel { margin-top: 12px; }
 .bitrate-wins { display: flex; flex-wrap: wrap; gap: 6px; }
 .bitrate-win { font-size: 12px; color: var(--text-muted); }
+.vmaf-nerd { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
 .vmaf-nerd-floor { display: flex; align-items: center; gap: 12px; margin-top: 10px; max-width: 440px; }
 .vmaf-nerd-floor label { font-size: 13px; white-space: nowrap; }
 .vmaf-nerd-floor input[type="range"] { flex: 1; min-width: 0; }
-.vmaf-nerd-body, #vmaf-nerd-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.vmaf-nerd-body, #vmaf-nerd-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 12px; }
 .vmaf-nerd-legend { grid-column: 1 / -1; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
 .vmaf-nerd-stat { margin: 0; }
 .vmaf-nerd-label { margin: 0; font-size: 13px; font-weight: 600; }
 .vmaf-nerd-worst { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-muted); }
 .vmaf-nerd-worst li { margin: 2px 0; }
 #btn-vmaf-nerd.active { color: var(--accent); border-color: var(--accent); }
+#vmaf-screenshots { grid-column: 1 / -1; }
+.vmaf-body > .vmaf-actions { grid-column: 1 / -1; }
 .shot-wrap { grid-column: 1 / -1; }
-@media (max-width: 1100px) { .vmaf-body { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) {
+  .vmaf-body { grid-template-columns: 1fr; }
+  .vmaf-charts,
+  .vmaf-table-wrap,
+  .vmaf-nerd,
+  #vmaf-screenshots,
+  .vmaf-body > .vmaf-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
 
 /* --------------------------- PROGRESS CARD ------------------------------ */
 .big-progress { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }

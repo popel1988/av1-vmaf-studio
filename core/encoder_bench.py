@@ -304,9 +304,32 @@ def catalog() -> list[dict]:
     return out
 
 
+def _fill_measured_bitrate(rows: list, clip_seconds) -> None:
+    """Ist-Bitrate für ältere Bench-Zeilen aus Clip-Größe oder liegenden Dateien."""
+    from . import vmaf as vmaf_mod
+    for row in rows or []:
+        if not isinstance(row, dict) or row.get("error"):
+            continue
+        if not row.get("video_kbps"):
+            n = len(row.get("scene_scores") or []) or 1
+            kbps = vmaf_mod.measured_kbps(
+                int(row.get("size_bytes") or 0), float(clip_seconds or 0) * n)
+            if kbps:
+                row["video_kbps"] = kbps
+                row["video_bitrate_human"] = ff._bitrate_human(kbps * 1000)
+        sess = f"bench_{row.get('clip_id')}_{row.get('speed')}"
+        vmaf_mod.annotate_clips(sess, {
+            "clip_seconds": clip_seconds,
+            "results": [row],
+        })
+
+
 def snapshot() -> dict:
     with _lock:
         last = _load_last()
+        if isinstance(last, dict):
+            _fill_measured_bitrate(last.get("rows"), last.get("clip_seconds"))
+        _fill_measured_bitrate(_state.get("rows"), _state.get("clip_seconds"))
         return {
             **dict(_state),
             "clips": catalog(),
@@ -728,6 +751,8 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                     "seconds_pack": elapsed,
                     "platform": platform,
                     "codec": codec,
+                    "video_kbps": rd.get("video_kbps") or 0,
+                    "video_bitrate_human": rd.get("video_bitrate_human") or "",
                     "screenshots": rd.get("screenshots") or [],
                     "screenshot_ref": rd.get("screenshot_ref") or "",
                     "screenshot_enc": rd.get("screenshot_enc") or "",
