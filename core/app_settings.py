@@ -18,6 +18,8 @@ _DEFAULTS: dict[str, Any] = {
     "encoder_speed": "balanced",
     # 1%-Low-Abstand zum Ziel-Mittel (0 = Floor aus, nur Mittelwert).
     "vmaf_p1_gap": 6.0,
+    # Ziel-Mittel für den VMAF-Vergleich, wenn der Job keinen eigenen Wert hat.
+    "vmaf_target": 93,
     # Woran der Abstand hängt: both | target | mean.
     "vmaf_p1_anchor": "both",
     # Mindest-Ersparnis der Empfehlung in % (−1 = aus, 0 = Datei darf nicht wachsen).
@@ -53,6 +55,8 @@ def load() -> dict:
                             raw.get("encoder_speed"))
                     if "vmaf_p1_gap" in raw:
                         data["vmaf_p1_gap"] = _normalize_p1_gap(raw.get("vmaf_p1_gap"))
+                    if "vmaf_target" in raw:
+                        data["vmaf_target"] = _normalize_vmaf_target(raw.get("vmaf_target"))
                     if "vmaf_p1_anchor" in raw:
                         data["vmaf_p1_anchor"] = _normalize_p1_anchor(raw.get("vmaf_p1_anchor"))
                     if "vmaf_min_savings" in raw:
@@ -108,6 +112,8 @@ def save(updates: dict) -> dict:
             cur["encoder_speed"] = normalize_encoder_speed(updates.get("encoder_speed"))
         if "vmaf_p1_gap" in updates:
             cur["vmaf_p1_gap"] = _normalize_p1_gap(updates.get("vmaf_p1_gap"))
+        if "vmaf_target" in updates:
+            cur["vmaf_target"] = _normalize_vmaf_target(updates.get("vmaf_target"))
         if "vmaf_p1_anchor" in updates:
             cur["vmaf_p1_anchor"] = _normalize_p1_anchor(updates.get("vmaf_p1_anchor"))
         if "vmaf_min_savings" in updates:
@@ -138,6 +144,19 @@ def _normalize_p1_gap(value) -> float:
 
 def vmaf_p1_gap() -> float:
     return _normalize_p1_gap(load().get("vmaf_p1_gap", 6.0))
+
+
+def _normalize_vmaf_target(value) -> int:
+    """Ziel-Mittel 80–99. Vorgabe 93, der bisherige Sweet-Spot des Vergleichs."""
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 93
+    return min(99, max(80, v))
+
+
+def vmaf_target() -> int:
+    return _normalize_vmaf_target(load().get("vmaf_target", 93))
 
 
 def _normalize_p1_anchor(value) -> str:

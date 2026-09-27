@@ -236,6 +236,7 @@ async def index(request: Request):
             "encoder_speed": app_settings.encoder_speed(),
             "vmaf_p1_gap": app_settings.vmaf_p1_gap(),
             "vmaf_p1_anchor": app_settings.vmaf_p1_anchor(),
+            "vmaf_target": app_settings.vmaf_target(),
             "vmaf_min_savings": app_settings.load().get("vmaf_min_savings", 0.0),
             "speed_presets": ff.speed_preset_catalog(),
             "sweetspot": config.VMAF_SWEETSPOT,
@@ -422,6 +423,27 @@ async def probe(path: str):
     return info.to_dict()
 
 
+@app.get("/api/bitrate")
+async def bitrate_curve(path: str, samples: int = 3, clip: int = 30):
+    """Bitrate-Verlauf aus Paketgrößen. Dekodiert nicht, Cache ab dem zweiten Mal."""
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    info, err = ff.probe_with_error(target)
+    if info is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+    from core import bitrate_profile
+    try:
+        data = await asyncio.to_thread(
+            bitrate_profile.profile, target, float(info.duration or 0),
+            max(5, min(120, int(clip or 30))), max(1, min(5, int(samples or 1))),
+        )
+    except Exception as e:
+        logging.getLogger("vcompress.bitrate").warning("Bitrate-Verlauf fehlgeschlagen: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return data
+
+
 # --------------------------------------------------------------------- Queue
 class EnqueueRequest(BaseModel):
     path: str
@@ -464,6 +486,7 @@ class EnqueueRequest(BaseModel):
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     samples: int = 1
+    sample_mode: str = "even"       # even | bitrate
     generate_screenshots: bool = True
     post_processing: str = "keep"
     container: str = "auto"          # auto | mkv | mp4 (Ausgabe-Container)
@@ -1873,6 +1896,7 @@ class AppSettingsRequest(BaseModel):
     encoder_speed: Optional[str] = None
     vmaf_p1_gap: Optional[float] = None
     vmaf_p1_anchor: Optional[str] = None
+    vmaf_target: Optional[float] = None
     vmaf_min_savings: Optional[float] = None
     keep_vmaf_clips: Optional[bool] = None
 
@@ -1910,6 +1934,8 @@ async def set_app_settings(req: AppSettingsRequest):
         updates["encoder_speed"] = normalize_encoder_speed(req.encoder_speed)
     if req.vmaf_p1_gap is not None:
         updates["vmaf_p1_gap"] = req.vmaf_p1_gap
+    if req.vmaf_target is not None:
+        updates["vmaf_target"] = req.vmaf_target
     if req.vmaf_p1_anchor is not None:
         updates["vmaf_p1_anchor"] = req.vmaf_p1_anchor
     if req.vmaf_min_savings is not None:

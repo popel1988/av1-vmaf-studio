@@ -163,6 +163,21 @@
                 Auswahl aufheben
               </button>
               <div class="selected-info" id="selected-info"></div>
+              <div id="bitrate-panel" class="bitrate-panel" hidden>
+                <div class="lib-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-bitrate">Bitrate-Verlauf</button>
+                  <label class="check">
+                    <input type="checkbox" id="bitrate-sample-mode" />
+                    VMAF-Szenen nach Bitrate
+                  </label>
+                </div>
+                <p class="hint">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.</p>
+                <p class="hint" id="bitrate-summary"></p>
+                <div class="bitrate-wins" id="bitrate-wins"></div>
+                <div class="vmaf-chart-wrap vmaf-chart-wrap-sm" id="bitrate-chart-wrap" hidden>
+                  <canvas id="bitrate-chart"></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -302,8 +317,9 @@
                   </select>
                 </div>
                 <div class="field">
-                  <label data-tip="Stärke der NVENC Spatial AQ. 8 ist die NVIDIA-Vorgabe. Wirkt nur bei NVIDIA.">AQ-Stärke (NVIDIA): <strong id="aq-strength-val">8</strong></label>
+                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die NVIDIA-Vorgabe. Nur NVIDIA.">AQ-Stärke (NVIDIA): <strong id="aq-strength-val">8</strong></label>
                   <input type="range" id="opt-aq-strength" min="1" max="15" value="8" />
+                  <p class="hint">Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker. Nur NVIDIA. <a href="#faq-aq" class="faq-jump">FAQ</a></p>
                 </div>
                 <div class="field">
                   <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
@@ -663,6 +679,7 @@
                 <option value="">Aktuelle Analyse</option>
               </select>
               <span class="badge" id="vmaf-model-badge"></span>
+              <p class="hint" id="vmaf-sample-note" hidden></p>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-csv" type="button">CSV exportieren</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-repick" type="button" disabled>Neu einordnen</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-nerd" type="button">Daten für Nerds</button>
@@ -703,6 +720,10 @@
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap">
                 <canvas id="vmaf-nerd-chart"></canvas>
+              </div>
+              <div class="vmaf-nerd-floor">
+                <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>
+                <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
               </div>
               <div id="vmaf-nerd-body"></div>
             </div>
@@ -1105,6 +1126,10 @@
                 <label>Clip-Länge (Sekunden)</label>
                 <input type="number" id="st-clip" min="5" max="120" value="20" />
               </div>
+              <label class="check">
+                <input type="checkbox" id="st-sample-mode" />
+                VMAF-Szenen nach Bitrate
+              </label>
               <div class="field">
                 <label><span id="st-test-label">Test-CQ-Werte</span>
                   <span class="hint">(Anzahl der Felder = Test-Encodes je Datei)</span></label>
@@ -1311,6 +1336,7 @@
           <div class="card-head">
             <h3><span class="card-idx">★</span> VMAF-Empfehlung</h3>
             <div class="vmaf-head-right">
+              <span class="badge" id="vmaf-target-badge">Ziel 93</span>
               <span class="badge" id="vmaf-p1-badge">6 Punkte</span>
               <span class="badge" id="vmaf-anchor-badge">Ziel + Schnitt</span>
               <span class="badge" id="vmaf-sav-badge">≥ 0 %</span>
@@ -1325,6 +1351,12 @@
               genug kleiner ist als die Quelle (0 % = Datei darf nicht wachsen).
               <a href="#faq-vmaf" class="faq-jump">FAQ</a></p>
             <div class="settings-grid vmaf-rec-fields">
+            <div class="field">
+              <label>Ziel-VMAF: <strong id="cfg-vmaf-target-val">93</strong></label>
+              <input type="range" id="cfg-vmaf-target" min="80" max="99" step="1" value="93" />
+              <div class="range-scale"><span>80</span><span>93 · Vorgabe</span><span>99</span></div>
+              <p class="hint" id="cfg-vmaf-target-hint">Mittelwert für den VMAF-Vergleich. Encoding und Super-Tool im Modus Ziel-VMAF starten damit; dort kannst du ihn pro Auftrag noch ändern. Fertige Analysen übernehmen ein neues Ziel mit Neu einordnen.</p>
+            </div>
             <div class="field">
               <label>1%-Low-Abstand: <strong id="cfg-p1-gap-val">6</strong></label>
               <input type="range" id="cfg-p1-gap" min="0" max="12" step="1" value="6" />
@@ -2701,6 +2733,29 @@
                 <p>Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.</p>
               </div>
             </details>
+            <details class="faq-item" id="faq-vmaf-scale">
+              <summary>Wie sieht VMAF von 100 bis 80 aus?</summary>
+              <div class="faq-body">
+                <p>Eine Fotoreihe derselben Szene würde täuschen. Derselbe Wert sieht bei Anime, Filmkorn und dunklen Bildern verschieden aus, und 90 in einem ruhigen Dialog ist nicht 90 in einer Actionszene. Die Skala sagt, was beim direkten Vergleich mit der Quelle typischerweise auffällt.</p>
+                <div class="vmaf-scale">
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">100</span><span class="vmaf-scale-bar s100"></span><span>Praktisch wie die Quelle. Die Datei wird dafür meist unnötig groß.</span></div>
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">95</span><span class="vmaf-scale-bar s95"></span><span>Nur im direkten A/B-Vergleich noch zu sehen, oft an feinen Kanten.</span></div>
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">93</span><span class="vmaf-scale-bar s93"></span><span>Vorgabe hier. Ruhige Bilder wirken sauber, harte Szenen haben noch Reserve.</span></div>
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">90</span><span class="vmaf-scale-bar s90"></span><span>Weichere Kanten, erste Flächenfehler. Im Vorbeischauen oft noch unauffällig.</span></div>
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">85</span><span class="vmaf-scale-bar s85"></span><span>Banding, Weichzeichnung oder Klötzchen in Himmel, Dunkel und Bewegung.</span></div>
+                  <div class="vmaf-scale-row"><span class="vmaf-scale-num">80</span><span class="vmaf-scale-bar s80"></span><span>Deutlich. Besonders Action und Kontrast leiden.</span></div>
+                </div>
+                <p>Unter 90 wird es für die meisten Zuschauer sichtbar. 93 ist hier die Vorgabe: darunter fällt die schwächste Stelle oft auf, darüber wächst die Datei stark. Die Screenshots der eigenen Szenen im VMAF-Tool bleiben der ehrliche Vergleich.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-aq">
+              <summary>Was macht die AQ-Stärke bei NVIDIA?</summary>
+              <div class="faq-body">
+                <p>AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.</p>
+                <p>Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.</p>
+                <p>Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.</p>
+              </div>
+            </details>
             <details class="faq-item" id="faq-vmaf">
               <summary>Was ist VMAF überhaupt?</summary>
               <div class="faq-body">
@@ -2739,6 +2794,7 @@
       encoderSpeed: {{ encoder_speed|tojson }},
       vmafP1Gap: {{ vmaf_p1_gap|tojson }},
       vmafP1Anchor: {{ vmaf_p1_anchor|tojson }},
+      vmafTarget: {{ vmaf_target|tojson }},
       vmafMinSavings: {{ vmaf_min_savings|tojson }},
       speedPresets: {{ speed_presets|tojson }},
     };

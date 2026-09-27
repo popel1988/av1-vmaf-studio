@@ -1675,8 +1675,15 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-chart-wrap-sm { height: 190px; }
 .vmaf-subchart { margin-top: 16px; }
 .vmaf-subchart-title { margin: 0 0 6px; font-size: 12px; color: var(--text-muted); }
-.vmaf-nerd { grid-column: 1 / -1; margin-top: 8px; }
-.vmaf-nerd-body, #vmaf-nerd-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+.bitrate-panel { margin-top: 12px; }
+.bitrate-wins { display: flex; flex-wrap: wrap; gap: 6px; }
+.bitrate-win { font-size: 12px; color: var(--text-muted); }
+.vmaf-nerd-floor { display: flex; align-items: center; gap: 12px; margin-top: 10px; max-width: 440px; }
+.vmaf-nerd-floor label { font-size: 13px; white-space: nowrap; }
+.vmaf-nerd-floor input[type="range"] { flex: 1; min-width: 0; }
+.vmaf-nerd-body, #vmaf-nerd-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.vmaf-nerd-legend { grid-column: 1 / -1; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
+.vmaf-nerd-stat { margin: 0; }
 .vmaf-nerd-label { margin: 0; font-size: 13px; font-weight: 600; }
 .vmaf-nerd-worst { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-muted); }
 .vmaf-nerd-worst li { margin: 2px 0; }
@@ -1968,6 +1975,22 @@ input[type="range"]::-moz-range-thumb {
 .faq-item[open] summary::before { transform: rotate(90deg); }
 .faq-item .faq-body { padding: 0 14px 14px 2.2em; }
 .faq-item .faq-body p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.vmaf-scale { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+.vmaf-scale-row {
+  display: grid; grid-template-columns: 36px 92px 1fr; gap: 10px; align-items: center;
+  font-size: 13px; line-height: 1.35;
+}
+.vmaf-scale-num { font-variant-numeric: tabular-nums; font-weight: 650; }
+.vmaf-scale-bar { display: block; height: 8px; border-radius: 99px; }
+.vmaf-scale-bar.s100 { background: #3dbe7a; }
+.vmaf-scale-bar.s95 { background: #7dce6a; }
+.vmaf-scale-bar.s93 { background: var(--accent); }
+.vmaf-scale-bar.s90 { background: var(--warn); }
+.vmaf-scale-bar.s85 { background: #f59a4a; }
+.vmaf-scale-bar.s80 { background: var(--bad); }
+@media (max-width: 720px) {
+  .vmaf-scale-row { grid-template-columns: 32px 56px 1fr; gap: 8px; }
+}
 .faq-item .faq-body p:last-child { margin-bottom: 0; }
 .faq-jump {
   color: var(--accent);

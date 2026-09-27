@@ -54,6 +54,9 @@ class VmafOptions:
     # False: nur die eingetragenen Testwerte (VMAF-Tool, Encoder-Bench).
     # True: ein Zwischenwert zwischen Treffer und Fehlschlag (Ziel-Encode).
     refine_midpoint: bool = True
+    # Gesetzte Stichproben [(start, sekunden)]. Leer = gleichmäßig über den Film.
+    sample_starts: list = field(default_factory=list)
+    sample_windows: list = field(default_factory=list)
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -209,6 +212,7 @@ class VmafAnalysis:
     target_lo: float = 0.0     # Mittelwert-Ziel, mit dem die Empfehlung gerechnet wurde
     target_gap: float = 0.0    # 1%-Low-Abstand dazu (0 = Floor aus)
     target_anchor: str = ""    # both | target | mean
+    sample_windows: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -228,6 +232,7 @@ class VmafAnalysis:
             **({"target_lo": self.target_lo, "target_gap": self.target_gap,
                  "target_anchor": self.target_anchor}
                if self.target_lo else {}),
+            **({"sample_windows": self.sample_windows} if self.sample_windows else {}),
         }
 
 
@@ -251,6 +256,20 @@ def _model_for(info: VideoInfo, neg: bool = False) -> tuple[str, Path]:
         logger.warning("NEG-VMAF-Modell fehlt (%s) – Standardmodell wird genutzt.", name)
     name = config.VMAF_MODEL_4K if info.is_4k else config.VMAF_MODEL_1080P
     return name, config.VMAF_MODEL_DIR / name
+
+
+def _coerce_starts(raw) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for item in raw or []:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                start = float(item[0])
+                length = float(item[1])
+            except (TypeError, ValueError):
+                continue
+            if length > 0 and start >= 0:
+                out.append((round(start, 3), round(length, 3)))
+    return out
 
 
 def _middle_start(duration: float, clip_seconds: int) -> float:
@@ -756,7 +775,10 @@ def analyze(
 
     try:
         # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
-        sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
+        sample_specs = _coerce_starts(opts.sample_starts)
+        if not sample_specs:
+            sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
+        analysis.sample_windows = list(opts.sample_windows or [])
         references: list[tuple[Path, float, float]] = []
         ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
         dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
@@ -940,12 +962,81 @@ def _frame_log_name(platform: str, codec: str, value, scene) -> str:
     return name if _LOG_NAME.match(name) else ""
 
 
+def _pct(ordered: list[float], p: float) -> float:
+    n = len(ordered)
+    if n == 1:
+        return ordered[0]
+    k = (n - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, n - 1)
+    frac = k - lo
+    return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
+
+
+def _series_stats(frames: list[dict], clip_seconds: float) -> dict:
+    """Verteilung der Frame-VMAFs. Keine neue Messung, nur die vorhandenen Logs."""
+    vals = [float(f["vmaf"]) for f in frames]
+    n = len(vals)
+    if not n:
+        return {}
+    mean = sum(vals) / n
+    stdev = (sum((v - mean) ** 2 for v in vals) / n) ** 0.5
+    ordered = sorted(vals)
+    k1 = max(1, int(n * 0.01))
+    p1 = sum(ordered[:k1]) / k1
+    longest = cur = 0
+    start_at = at = 0
+    for f in frames:
+        if float(f["vmaf"]) < 90.0:
+            if cur == 0:
+                at = int(f["n"])
+            cur += 1
+            if cur > longest:
+                longest = cur
+                start_at = at
+        else:
+            cur = 0
+    dip_sec = 0.0
+    if longest and clip_seconds > 0:
+        dip_sec = longest * float(clip_seconds) / n
+    weak_n = max(1, int(round(n * 0.05)))
+    ranked = sorted(frames, key=lambda f: float(f["vmaf"]))[:weak_n]
+    out = {
+        "mean": round(mean, 2),
+        "median": round(_pct(ordered, 50), 2),
+        "stdev": round(stdev, 2),
+        "min": round(ordered[0], 2),
+        "max": round(ordered[-1], 2),
+        "p1": round(p1, 2),
+        "p5": round(_pct(ordered, 5), 2),
+        "p95": round(_pct(ordered, 95), 2),
+        "under90": round(100.0 * sum(1 for v in vals if v < 90.0) / n, 1),
+        "dip_frames": longest,
+        "dip_at": start_at if longest else None,
+        "dip_sec": round(dip_sec, 2) if dip_sec else 0,
+    }
+    psnr_vals = [float(f["psnr"]) for f in frames if f.get("psnr") is not None]
+    psnr_weak = [float(f["psnr"]) for f in ranked if f.get("psnr") is not None]
+    if psnr_vals and psnr_weak:
+        pm = sum(psnr_vals) / len(psnr_vals)
+        pw = sum(psnr_weak) / len(psnr_weak)
+        out["psnr_mean"] = round(pm, 2)
+        out["psnr_weak"] = round(pw, 2)
+        out["psnr_delta"] = round(pm - pw, 2)
+    return out
+
+
 def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
     """Jeden bewerteten Frame einer Szene aus den libvmaf-Logs."""
     data = load_session(session)
     if data is None:
         return None
     analysis = data.get("analysis") or {}
+    params = data.get("params") or {}
+    try:
+        clip_seconds = float(params.get("clip_seconds") or 0)
+    except (TypeError, ValueError):
+        clip_seconds = 0.0
     root = config.VMAF_SESSIONS_DIR / session
     series = []
     for raw in analysis.get("results") or []:
@@ -979,13 +1070,17 @@ def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
                 item["ssim"] = round(float(ssim), 4)
             frames.append(item)
         worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
+        n_frames = len(frames)
+        frame_sec = (float(clip_seconds) / n_frames) if n_frames and clip_seconds > 0 else 0.0
         series.append({
             "label": raw.get("label") or "",
-            "count": len(frames),
+            "count": n_frames,
+            "frame_sec": round(frame_sec, 5),
             "min": worst[0]["vmaf"] if worst else None,
             "min_frame": worst[0]["n"] if worst else None,
             "frames": frames,
             "worst": worst,
+            "stats": _series_stats(frames, clip_seconds),
         })
     return {"scene": int(scene), "series": series}
 
@@ -1149,6 +1244,14 @@ def _copied_payload_bytes(info: VideoInfo, params: Optional[dict] = None) -> int
     return 0
 
 
+def _target_lo(target_vmaf: float) -> float:
+    """Job-Ziel, sonst das Ziel aus den Einstellungen."""
+    if target_vmaf and target_vmaf > 0:
+        return float(target_vmaf)
+    from . import app_settings
+    return float(app_settings.vmaf_target())
+
+
 def floor_p1(scene_scores, overall: float = 0.0, mean: float = 0.0) -> float:
     """1%-Low für den Floor: schwächste Szene, nicht der Schnitt der Szenen.
 
@@ -1192,7 +1295,7 @@ def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
 def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple[str, str, int]]:
     """Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag."""
     from . import app_settings
-    lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
+    lo = _target_lo(target_vmaf)
     gap = app_settings.vmaf_p1_gap()
     bitrate = analysis.rate_mode in ("bitrate", "abr")
     jobs: list[tuple[str, str, int]] = []
@@ -1307,7 +1410,7 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     # Ziel-VMAF (Slider / Super-Tool) bleibt der Mittelwert – so wie angegeben.
     # Der Floor gilt für die schwächste Szene, nicht für den Schnitt der
     # Szenen-1%-Lows. Vier ruhige Szenen dürfen eine harte Szene nicht verdecken.
-    lo = target_vmaf if target_vmaf and target_vmaf > 0 else config.VMAF_SWEETSPOT[0]
+    lo = _target_lo(target_vmaf)
     from . import app_settings
     gap = app_settings.vmaf_p1_gap()
     analysis.target_lo = float(lo)

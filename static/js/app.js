@@ -642,6 +642,183 @@
     });
   }
 
+  const BITRATE_ROLES = {
+    peak: "schwer", high: "hoch", typical: "typisch", low: "niedrig", quiet: "ruhig",
+  };
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const p = (n) => String(n).padStart(2, "0");
+    return `${p(h)}:${p(m)}:${p(s)}`;
+  }
+
+  function sampleModeValue(id) {
+    const el = $(id || "bitrate-sample-mode");
+    return el && el.checked ? "bitrate" : "even";
+  }
+
+  function bitrateQuery() {
+    const page = state.currentPage;
+    if (page === "vmaf") {
+      return {
+        samples: parseInt(($("vt-samples") && $("vt-samples").value) || "1", 10) || 1,
+        clip: parseInt(($("vt-clip") && $("vt-clip").value) || "30", 10) || 30,
+      };
+    }
+    if (page === "supertool") {
+      return {
+        samples: parseInt(($("st-samples") && $("st-samples").value) || "1", 10) || 1,
+        clip: parseInt(($("st-clip") && $("st-clip").value) || "20", 10) || 20,
+      };
+    }
+    return {
+      samples: parseInt(($("opt-vmaf-samples") && $("opt-vmaf-samples").value) || "1", 10) || 1,
+      clip: parseInt(($("opt-vmaf-clip") && $("opt-vmaf-clip").value) || "20", 10) || 20,
+    };
+  }
+
+  function resetBitrateView(show) {
+    const panel = $("bitrate-panel");
+    if (panel) panel.hidden = !show;
+    state.bitrateData = null;
+    state.bitrateFor = "";
+    destroyNamedChart("bitrateChart");
+    const wrap = $("bitrate-chart-wrap");
+    if (wrap) wrap.hidden = true;
+    const sum = $("bitrate-summary");
+    if (sum) sum.textContent = "";
+    const wins = $("bitrate-wins");
+    if (wins) wins.innerHTML = "";
+  }
+
+  function setSampleWindowNote(vmaf) {
+    const note = $("vmaf-sample-note");
+    if (!note) return;
+    const wins = (vmaf && vmaf.sample_windows) || [];
+    if (!wins.length) {
+      note.hidden = true;
+      note.textContent = "";
+      return;
+    }
+    const bits = wins.map((w) => `${BITRATE_ROLES[w.role] || w.role} ${fmtClock(w.start)}`);
+    note.hidden = false;
+    note.textContent = `Szenen nach Bitrate: ${bits.join(" · ")}`;
+  }
+
+  function drawBitrateChart(data) {
+    const wrap = $("bitrate-chart-wrap");
+    const ctx = $("bitrate-chart");
+    destroyNamedChart("bitrateChart");
+    const bins = (data && data.bins) || [];
+    if (!wrap || !ctx || !bins.length || typeof Chart === "undefined") {
+      if (wrap) wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    const windows = data.windows || [];
+    const labels = bins.map((b) => fmtClock(b.t));
+    const mark = bins.map((b) => {
+      const hit = windows.some((w) => b.t >= w.start && b.t < w.start + w.length);
+      return hit ? b.kbps : null;
+    });
+    const col = chartColors();
+    const opts = lineChartOptions(col, "kbit/s");
+    opts.scales.x.ticks.autoSkip = true;
+    opts.scales.x.ticks.maxTicksLimit = 8;
+    state.bitrateChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Bitrate",
+            data: bins.map((b) => b.kbps),
+            borderColor: col.accent || "#22d3ee",
+            backgroundColor: "transparent",
+            pointRadius: 0,
+            borderWidth: 1.4,
+            tension: 0.15,
+            spanGaps: true,
+          },
+          {
+            label: "Vorschlag",
+            data: mark,
+            borderColor: "#fbbf24",
+            backgroundColor: "transparent",
+            pointRadius: 0,
+            borderWidth: 3,
+            tension: 0,
+            spanGaps: false,
+          },
+        ],
+      },
+      options: opts,
+    });
+    const avg = Number(data.avg_kbps) / 1000;
+    const peak = Number(data.peak_kbps) / 1000;
+    const sum = $("bitrate-summary");
+    if (sum) {
+      sum.textContent = `Schnitt ${avg.toFixed(1)} Mbit/s · Spitze ${peak.toFixed(1)} Mbit/s · Faktor ${Number(data.peak_ratio).toFixed(1)}`;
+    }
+    const wins = $("bitrate-wins");
+    if (wins) {
+      wins.innerHTML = windows.map((w) =>
+        `<span class="bitrate-win">${escapeHtml((BITRATE_ROLES[w.role] || w.role) + " " + fmtClock(w.start))}</span>`
+      ).join("");
+    }
+  }
+
+  async function loadBitrateCurve() {
+    if (!state.selected || state.selected.isBatch) return;
+    const btn = $("btn-bitrate");
+    const sum = $("bitrate-summary");
+    const quiet = !!state.bitrateData;
+    if (btn && !quiet) btn.disabled = true;
+    if (sum && !quiet) sum.textContent = "Bitrate wird gelesen …";
+    const q = bitrateQuery();
+    const path = state.selected.path;
+    state.bitrateFor = path;
+    state.bitrateSeq = (state.bitrateSeq || 0) + 1;
+    const seq = state.bitrateSeq;
+    try {
+      const res = await fetch(
+        `/api/bitrate?path=${encodeURIComponent(path)}&samples=${q.samples}&clip=${q.clip}`);
+      const data = await res.json();
+      if (state.bitrateFor !== path || seq !== state.bitrateSeq) return;
+      if (data.error) {
+        if (sum) sum.textContent = data.error;
+        return;
+      }
+      state.bitrateData = data;
+      drawBitrateChart(data);
+    } catch (e) {
+      if (seq === state.bitrateSeq && sum) sum.textContent = "Bitrate-Verlauf konnte nicht geladen werden.";
+    } finally {
+      if (btn && seq === state.bitrateSeq) btn.disabled = false;
+    }
+  }
+
+  function initBitratePanel() {
+    const btn = $("btn-bitrate");
+    if (btn) btn.addEventListener("click", loadBitrateCurve);
+    let timer = 0;
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (state.bitrateData && state.selected && !state.selected.isBatch) loadBitrateCurve();
+      }, 400);
+    };
+    ["vt-samples", "vt-clip", "opt-vmaf-samples", "opt-vmaf-clip", "st-samples", "st-clip"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", refresh);
+      if (id.indexOf("clip") >= 0) el.addEventListener("input", refresh);
+    });
+  }
+
   // Auswahl (Datei/Ordner) auf der Quellen-Karte aufheben.
   function clearSelection() {
     state.selected = null;
@@ -650,6 +827,7 @@
     if (badge) badge.textContent = "Nichts ausgewählt";
     const info = $("selected-info");
     if (info) info.innerHTML = "";
+    resetBitrateView();
     document.querySelectorAll("#browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
     ["btn-enqueue", "btn-vmaf-start", "btn-clear-selection"].forEach((id) => {
       const b = $(id);
@@ -661,6 +839,7 @@
     state.selected = { path: f.rel, name: f.name, isBatch: false };
     $("selection-badge").textContent = "Datei ausgewählt";
     enableActionButtons();
+    resetBitrateView(true);
     $("selected-info").innerHTML = `<strong>${escapeHtml(f.name)}</strong> · analysiere …`;
     document.querySelectorAll(".row-item.selected").forEach((r) => r.classList.remove("selected"));
     try {
@@ -939,6 +1118,7 @@
     enableActionButtons();
     $("selected-info").innerHTML =
       `<strong>${escapeHtml(name)}</strong> · Batch-Modus (VMAF-Test repräsentativ für die erste Datei)`;
+    resetBitrateView();
   }
 
   /* ------------------------------------------------------------ SETTINGS */
@@ -1306,6 +1486,45 @@
     return Number.isFinite(n) ? n : 6;
   }
 
+  function vmafTargetSetting() {
+    const slider = $("cfg-vmaf-target");
+    const fromSlider = slider ? Number(slider.value) : NaN;
+    if (fromSlider >= 80 && fromSlider <= 99) return Math.round(fromSlider);
+    const n = Number(window.APP_CONFIG && APP_CONFIG.vmafTarget);
+    if (Number.isFinite(n) && n >= 80) return Math.min(99, Math.round(n));
+    return 93;
+  }
+
+  function syncJobTargetSliders(v) {
+    ["opt-vmaf-target", "st-target"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      const prev = el.dataset.fromSetting;
+      if (prev == null || prev === el.value) {
+        el.value = String(v);
+        el.dataset.fromSetting = String(v);
+        const lab = $(id + "-val");
+        if (lab) lab.textContent = String(v);
+      }
+    });
+  }
+
+  function applyVmafTarget(raw, persist) {
+    let v = Number(raw);
+    if (!Number.isFinite(v)) v = 93;
+    v = Math.min(99, Math.max(80, Math.round(v)));
+    const slider = $("cfg-vmaf-target");
+    if (slider) slider.value = String(v);
+    const valEl = $("cfg-vmaf-target-val");
+    if (valEl) valEl.textContent = String(v);
+    const badge = $("vmaf-target-badge");
+    if (badge) badge.textContent = `Ziel ${v}`;
+    if (persist && window.APP_CONFIG) APP_CONFIG.vmafTarget = v;
+    if (persist) syncJobTargetSliders(v);
+    const gap = $("cfg-p1-gap");
+    if (gap) applyVmafP1Gap(gap.value, false);
+  }
+
   function vmafMinSavingsValue() {
     const n = Number(window.APP_CONFIG && APP_CONFIG.vmafMinSavings);
     return Number.isFinite(n) ? n : 0;
@@ -1360,9 +1579,11 @@
       } else if (anchor === "mean") {
         hint.textContent = `Höchstens ${gap} Punkte unter dem Filmschnitt der Stufe.`;
       } else if (anchor === "both") {
-        hint.textContent = `Bei Ziel 93 liegt der Boden bei ${93 - gap}. Zusätzlich höchstens ${gap} Punkte unter dem Filmschnitt.`;
+        const t = vmafTargetSetting();
+        hint.textContent = `Bei Ziel ${t} liegt der Boden bei ${t - gap}. Zusätzlich höchstens ${gap} Punkte unter dem Filmschnitt.`;
       } else {
-        hint.textContent = `Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ ${94 - gap} liegen. Bei Ziel 93: ≥ ${93 - gap}.`;
+        const t = vmafTargetSetting();
+        hint.textContent = `Bei Ziel ${t} muss das 1%-Low der schwächsten Szene ≥ ${t - gap} liegen.`;
       }
     }
     if (persist && window.APP_CONFIG) APP_CONFIG.vmafP1Gap = gap;
@@ -1399,10 +1620,13 @@
     applyVmafP1Gap(vmafP1GapValue(), true);
     applyVmafMinSavings(vmafMinSavingsValue(), true);
     applyVmafP1Anchor(vmafP1Anchor(), true);
+    applyVmafTarget((window.APP_CONFIG && APP_CONFIG.vmafTarget) || 93, true);
     slider.addEventListener("input", () => applyVmafP1Gap(slider.value, false));
     if (sav) sav.addEventListener("input", () => applyVmafMinSavings(sav.value, false));
     const anchorSel = $("cfg-p1-anchor");
     if (anchorSel) anchorSel.addEventListener("change", () => applyVmafP1Anchor(anchorSel.value, false));
+    const target = $("cfg-vmaf-target");
+    if (target) target.addEventListener("input", () => applyVmafTarget(target.value, false));
     document.querySelectorAll("[data-p1-gap]").forEach((btn) => {
       btn.addEventListener("click", () => applyVmafP1Gap(btn.getAttribute("data-p1-gap"), false));
     });
@@ -1412,6 +1636,7 @@
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d && d.vmaf_p1_gap != null) applyVmafP1Gap(d.vmaf_p1_gap, true);
       if (d && d.vmaf_p1_anchor) applyVmafP1Anchor(d.vmaf_p1_anchor, true);
+      if (d && d.vmaf_target != null) applyVmafTarget(d.vmaf_target, true);
       if (d && d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
       const keep = $("cfg-keep-vmaf-clips");
       if (keep && d && d.keep_vmaf_clips != null) keep.checked = !!d.keep_vmaf_clips;
@@ -1425,6 +1650,7 @@
           body: JSON.stringify({
             vmaf_p1_gap: Number(slider.value),
             vmaf_p1_anchor: ($("cfg-p1-anchor") && $("cfg-p1-anchor").value) || vmafP1Anchor(),
+            vmaf_target: target ? Number(target.value) : vmafTargetSetting(),
             vmaf_min_savings: sav ? Number(sav.value) : vmafMinSavingsValue(),
             keep_vmaf_clips: !!($("cfg-keep-vmaf-clips") && $("cfg-keep-vmaf-clips").checked),
           }),
@@ -1432,6 +1658,7 @@
         if (d.error) { alert(d.error); return; }
         applyVmafP1Gap(d.vmaf_p1_gap, true);
         if (d.vmaf_p1_anchor) applyVmafP1Anchor(d.vmaf_p1_anchor, true);
+        if (d.vmaf_target != null) applyVmafTarget(d.vmaf_target, true);
         if (state.vmafShown) fillVmafTable(state.vmafShown);
         if (d.vmaf_min_savings != null) applyVmafMinSavings(d.vmaf_min_savings, true);
       } finally { save.disabled = false; }
@@ -2122,6 +2349,7 @@
       chunked: vmaf ? false : ($("opt-chunked") ? $("opt-chunked").checked : false),
       chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
       chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
+      sample_mode: sampleModeValue(),
     };
     if (vmaf) {
       out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
@@ -2461,6 +2689,7 @@
       test_values: vtGatherTestValues(),
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
+      sample_mode: sampleModeValue(),
       generate_screenshots: $("vt-screenshots").checked,
       suffix: "_" + $("vt-codec").value,
       encoder_speed: encoderSpeedValue("vt-enc-speed"),
@@ -3105,6 +3334,7 @@
     const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status + ":" + (vmaf.keep_source ? "1" : "0") + ":" + (vmaf.pick_warning ? "w" : "");
     showCard(card, true);
     $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+    setSampleWindowNote(vmaf);
 
     // Nur neu rendern, wenn sich wirklich etwas geändert hat – sonst flackert
     // der Graph bei jedem Queue-Poll (alle paar Sekunden).
@@ -3157,6 +3387,8 @@
       state.nerdKey = "";
       refreshNerdFrames();
     });
+    const nerdFloor = $("nerd-floor");
+    if (nerdFloor) nerdFloor.addEventListener("input", applyNerdFloor);
     refreshVmafHistory();
   }
 
@@ -3245,6 +3477,7 @@
     syncKeepSourceBanner(null);
     const badge = $("vmaf-model-badge");
     if (badge) badge.textContent = "Kein aktueller Vergleich – oben einen früheren auswählen";
+    setSampleWindowNote(null);
   }
 
   async function showArchivedSession(name) {
@@ -3285,6 +3518,7 @@
       showCard($("vmaf-card"), true);
       $("vmaf-model-badge").textContent =
         `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+      setSampleWindowNote(vmaf);
       state.chartScene = null;
       showVmafChart(vmaf);
       fillVmafTable(vmaf);
@@ -3487,8 +3721,7 @@
   function vmafTargetLo(vmaf) {
     const stored = Number(vmaf && vmaf.target_lo);
     if (stored > 0) return stored;
-    const sweet = window.APP_CONFIG && APP_CONFIG.sweetspot && APP_CONFIG.sweetspot[0];
-    return Number(sweet) > 0 ? Number(sweet) : 93;
+    return vmafTargetSetting();
   }
 
   function vmafWorstP1(r) {
@@ -3951,6 +4184,56 @@
       });
   }
 
+  function nerdFloorValue() {
+    const el = $("nerd-floor");
+    let v = el ? Number(el.value) : 90;
+    if (!Number.isFinite(v)) v = 90;
+    return Math.min(99, Math.max(80, Math.round(v)));
+  }
+
+  function nerdDipText(frames, floor, frameSec) {
+    const list = frames || [];
+    const n = list.length;
+    if (!n) return "";
+    let under = 0;
+    let longest = 0;
+    let cur = 0;
+    let startAt = 0;
+    let at = 0;
+    list.forEach((f) => {
+      if (Number(f.vmaf) < floor) {
+        under += 1;
+        if (cur === 0) at = f.n;
+        cur += 1;
+        if (cur > longest) { longest = cur; startAt = at; }
+      } else {
+        cur = 0;
+      }
+    });
+    const pct = (100 * under / n).toFixed(1);
+    if (longest > 0) {
+      let line = `${pct} % unter ${floor} · längster Einbruch ${longest} Frames ab Frame ${startAt}`;
+      const sec = frameSec > 0 ? longest * frameSec : 0;
+      if (sec) line += ` (~${sec.toFixed(2)} s)`;
+      return line;
+    }
+    return `${pct} % unter ${floor} · kein Frame unter ${floor}`;
+  }
+
+  function applyNerdFloor() {
+    const floor = nerdFloorValue();
+    const lab = $("nerd-floor-val");
+    if (lab) lab.textContent = String(floor);
+    const slider = $("nerd-floor");
+    if (slider && slider.value !== String(floor)) slider.value = String(floor);
+    const series = (state.nerdData && state.nerdData.series) || [];
+    document.querySelectorAll("#vmaf-nerd-body .vmaf-nerd-dip").forEach((el) => {
+      const s = series[Number(el.getAttribute("data-nerd-i"))];
+      if (!s) return;
+      el.textContent = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0);
+    });
+  }
+
   function drawNerdFrames(data) {
     const body = $("vmaf-nerd-body");
     const ctx = $("vmaf-nerd-chart");
@@ -4000,7 +4283,9 @@
       });
     }
     if (!body) return;
-    body.innerHTML = series.map((s) => {
+    const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.";
+    const floor = nerdFloorValue();
+    body.innerHTML = `<p class="vmaf-nerd-legend">${escapeHtml(legend)}</p>` + series.map((s, i) => {
       const worst = (s.worst || []).map((f) => {
         const extra = [
           f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
@@ -4009,13 +4294,35 @@
         return `<li>Frame ${f.n} · VMAF ${Number(f.vmaf).toFixed(2)}`
           + (extra ? ` · ${extra}` : "") + `</li>`;
       }).join("");
+      const st = s.stats || {};
+      const num = (v) => Number(v).toFixed(2);
+      const lines = [];
+      if (st.mean != null) {
+        lines.push(`Schnitt ${num(st.mean)} · Median ${num(st.median)} · σ ${num(st.stdev)}`);
+        lines.push(`1%-Low ${num(st.p1)} · P5 ${num(st.p5)} · P95 ${num(st.p95)}`);
+        lines.push(`Min ${num(st.min)} · Max ${num(st.max)}`);
+      }
+      const stats = lines.map((l) => `<p class="hint vmaf-nerd-stat">${escapeHtml(l)}</p>`).join("");
+      const dip = (s.frames || []).length
+        ? `<p class="hint vmaf-nerd-stat vmaf-nerd-dip" data-nerd-i="${i}">${escapeHtml(nerdDipText(s.frames, floor, Number(s.frame_sec) || 0))}</p>`
+        : "";
+      let psnr = "";
+      if (st.psnr_mean != null) {
+        const d = Number(st.psnr_delta);
+        const mark = d >= 0 ? "−" : "+";
+        psnr = `<p class="hint vmaf-nerd-stat">${escapeHtml(`PSNR schwache 5 % ${num(st.psnr_weak)} · Schnitt ${num(st.psnr_mean)} · ${mark}${Math.abs(d).toFixed(2)} dB`)}</p>`;
+      }
       return `<div class="vmaf-nerd-col">
         <p class="vmaf-nerd-label">${escapeHtml(s.label || "")}</p>
-        <p class="hint">${s.count} Frames · Tiefster Wert ${s.min != null ? Number(s.min).toFixed(2) : "–"}`
-          + ` bei Frame ${s.min_frame != null ? s.min_frame : "–"}</p>
+        <p class="hint">${s.count} Frames</p>
+        ${stats}
+        ${dip}
+        ${psnr}
         <ol class="vmaf-nerd-worst">${worst}</ol>
       </div>`;
     }).join("");
+    const floorLab = $("nerd-floor-val");
+    if (floorLab) floorLab.textContent = String(floor);
   }
 
   function renderChartScenes(vmaf) {
@@ -7301,6 +7608,7 @@
       s.rate_mode = $("st-vmaf-rate") ? $("st-vmaf-rate").value : "cq";
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
+      s.sample_mode = sampleModeValue("st-sample-mode");
       s.test_values = stTestValues();
       s.generate_screenshots = true;
       if (mode === "target_vmaf") s.target_vmaf = parseInt($("st-target").value, 10);
@@ -9332,6 +9640,7 @@
     initParallel();
     initVmafHistory();
     initNav();
+    initBitratePanel();
     initProfiles();
     initStats();
     initLibrary();

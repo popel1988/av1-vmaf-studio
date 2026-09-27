@@ -690,6 +690,15 @@
     "CSV exportieren": "Export CSV",
     "Neu einordnen": "Re-rank",
     "Daten für Nerds": "Data for nerds",
+    "Bitrate-Verlauf": "Bitrate curve",
+    "VMAF-Szenen nach Bitrate": "VMAF scenes by bitrate",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
+      "Reads the video stream's packet sizes and does not decode. The first run can take a while; after that the curve comes from the cache. The marks are the suggestion: a hard, a typical and a quiet spot, skipping the opening and the credits. The checkbox uses that for the next VMAF run.",
+    "Bitrate wird gelesen …": "Reading bitrate …",
+    "Bitrate-Verlauf konnte nicht geladen werden.": "Could not load the bitrate curve.",
+    "Anteil unter": "Share under",
+    "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.":
+      "σ is the spread of frame VMAFs around this scene's mean. A small value means the quality sits tightly together, not that the film scene is calm. If the median is above the mean, a bad tail is pulling the mean down. The longest dip counts consecutive frames under the slider. The seconds are clip length divided by scored frames.",
     "Abspielen": "Play",
     "Stopp": "Stop",
     "Testclips der Szenen behalten": "Keep scene test clips",
@@ -887,6 +896,37 @@
     "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
       "CPU only. A usual CRF range is 30–35; this scale goes to 51.",
     "AQ-Stärke (NVIDIA):": "AQ strength (NVIDIA):",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die NVIDIA-Vorgabe. Nur NVIDIA.":
+      "Move bits inside the frame: finer on flat areas, coarser where there is detail. 8 is NVIDIA's default. NVIDIA only.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker. Nur NVIDIA.":
+      "Spatial AQ shifts bits inside the frame. Sky, walls and gradients are quantized more finely so they band less. Detailed areas can be coarser. 8 is NVIDIA's default. Higher protects flats more. NVIDIA only.",
+    "Mittelwert für den VMAF-Vergleich. Encoding und Super-Tool im Modus Ziel-VMAF starten damit; dort kannst du ihn pro Auftrag noch ändern. Fertige Analysen übernehmen ein neues Ziel mit Neu einordnen.":
+      "Mean for the VMAF comparison. Encoding and Super-Tool in target-VMAF mode start from it; you can still change it per job. Finished analyses pick up a new target with Re-rank.",
+    "93 · Vorgabe": "93 · default",
+    "Wie sieht VMAF von 100 bis 80 aus?": "What does VMAF from 100 down to 80 look like?",
+    "Eine Fotoreihe derselben Szene würde täuschen. Derselbe Wert sieht bei Anime, Filmkorn und dunklen Bildern verschieden aus, und 90 in einem ruhigen Dialog ist nicht 90 in einer Actionszene. Die Skala sagt, was beim direkten Vergleich mit der Quelle typischerweise auffällt.":
+      "A photo strip of one scene would mislead. The same score looks different on anime, film grain and dark images, and 90 on a quiet dialogue is not 90 on an action scene. The scale says what usually shows up in a direct comparison with the source.",
+    "Praktisch wie die Quelle. Die Datei wird dafür meist unnötig groß.":
+      "Practically the source. The file is usually larger than it needs to be.",
+    "Nur im direkten A/B-Vergleich noch zu sehen, oft an feinen Kanten.":
+      "Still visible only in a direct A/B comparison, often on fine edges.",
+    "Vorgabe hier. Ruhige Bilder wirken sauber, harte Szenen haben noch Reserve.":
+      "The default here. Quiet shots look clean, hard scenes still have some margin.",
+    "Weichere Kanten, erste Flächenfehler. Im Vorbeischauen oft noch unauffällig.":
+      "Softer edges, the first flat-area errors. Often still easy to miss in passing.",
+    "Banding, Weichzeichnung oder Klötzchen in Himmel, Dunkel und Bewegung.":
+      "Banding, blur or blocks in sky, darkness and motion.",
+    "Deutlich. Besonders Action und Kontrast leiden.":
+      "Obvious. Action and contrast suffer most.",
+    "Unter 90 wird es für die meisten Zuschauer sichtbar. 93 ist hier die Vorgabe: darunter fällt die schwächste Stelle oft auf, darüber wächst die Datei stark. Die Screenshots der eigenen Szenen im VMAF-Tool bleiben der ehrliche Vergleich.":
+      "Below 90 most viewers can see it. 93 is the default here: under that the weakest spot often shows, above it the file grows fast. Screenshots of your own scenes in the VMAF tool stay the honest comparison.",
+    "Was macht die AQ-Stärke bei NVIDIA?": "What does NVIDIA AQ strength do?",
+    "AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.":
+      "AQ means adaptive quantization. Spatial AQ moves bits inside one frame: flat areas such as sky, walls and gradients are quantized more finely so they band less. Detailed areas can use coarser steps, because errors hide in the pattern.",
+    "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
+      "The slider runs from 1 to 15. 8 is NVIDIA's default and the starting value here. Higher protects flat areas more and can give up a little fine detail. Lower lets flats band more. The CQ or bitrate target stays the same; only the spread inside the frame changes.",
+    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
+      "NVIDIA only. On H.264 and HEVC, temporal AQ is also on, against flicker from frame to frame. On AV1 this studio sets spatial AQ only on this driver line.",
     "gesetzt – leer lassen zum Beibehalten": "set – leave empty to keep",
     "Bot-Token": "Bot token",
     "Gesendet ✓": "Sent ✓",
@@ -1939,6 +1979,15 @@
     "CSV exportieren": "Exportar CSV",
     "Neu einordnen": "Reordenar",
     "Daten für Nerds": "Datos para expertos",
+    "Bitrate-Verlauf": "Curva de bitrate",
+    "VMAF-Szenen nach Bitrate": "Escenas VMAF según bitrate",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
+      "Lee el tamaño de los paquetes del vídeo y no decodifica. La primera vez puede tardar; después la curva sale de la caché. Las marcas son la propuesta: un tramo difícil, uno típico y uno tranquilo, sin la cabecera ni los créditos. La casilla lo usa en el siguiente VMAF.",
+    "Bitrate wird gelesen …": "Leyendo bitrate …",
+    "Bitrate-Verlauf konnte nicht geladen werden.": "No se pudo cargar la curva de bitrate.",
+    "Anteil unter": "Porcentaje bajo",
+    "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.":
+      "σ es la dispersión de los VMAF por fotograma alrededor de la media de esta escena. Un valor bajo significa que la calidad está junta, no que la escena de la película sea tranquila. Si la mediana está sobre la media, una cola mala tira de la media hacia abajo. La caída más larga cuenta fotogramas seguidos bajo el control. Los segundos son la duración del clip dividida por los fotogramas evaluados.",
     "Abspielen": "Reproducir",
     "Stopp": "Parar",
     "Testclips der Szenen behalten": "Conservar los clips de prueba de las escenas",
@@ -2106,6 +2155,37 @@
     "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
       "Solo CPU. El CRF habitual es 30–35; esta escala llega a 51.",
     "AQ-Stärke (NVIDIA):": "Fuerza AQ (NVIDIA):",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die NVIDIA-Vorgabe. Nur NVIDIA.":
+      "Reparte bits en la imagen: más finos en zonas planas, más gruesos donde hay detalle. 8 es el valor de NVIDIA. Solo NVIDIA.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker. Nur NVIDIA.":
+      "Spatial AQ mueve bits dentro de la imagen. Cielo, paredes y degradados se cuantizan más fino para que bandeen menos. En el detalle la cuantización puede ser más gruesa. 8 es el valor de NVIDIA. Más alto protege más las zonas planas. Solo NVIDIA.",
+    "Mittelwert für den VMAF-Vergleich. Encoding und Super-Tool im Modus Ziel-VMAF starten damit; dort kannst du ihn pro Auftrag noch ändern. Fertige Analysen übernehmen ein neues Ziel mit Neu einordnen.":
+      "Media para la comparación VMAF. Codificación y Super-Tool en modo VMAF objetivo empiezan con ella; allí puedes cambiarla por trabajo. Los análisis hechos adoptan un objetivo nuevo con Reordenar.",
+    "93 · Vorgabe": "93 · predeterminado",
+    "Wie sieht VMAF von 100 bis 80 aus?": "¿Cómo se ve el VMAF de 100 a 80?",
+    "Eine Fotoreihe derselben Szene würde täuschen. Derselbe Wert sieht bei Anime, Filmkorn und dunklen Bildern verschieden aus, und 90 in einem ruhigen Dialog ist nicht 90 in einer Actionszene. Die Skala sagt, was beim direkten Vergleich mit der Quelle typischerweise auffällt.":
+      "Una tira de fotos de la misma escena engañaría. El mismo valor se ve distinto en anime, grano y imágenes oscuras, y 90 en un diálogo tranquilo no es 90 en una escena de acción. La escala dice lo que suele notarse al comparar directamente con la fuente.",
+    "Praktisch wie die Quelle. Die Datei wird dafür meist unnötig groß.":
+      "Prácticamente la fuente. El archivo suele quedar más grande de lo necesario.",
+    "Nur im direkten A/B-Vergleich noch zu sehen, oft an feinen Kanten.":
+      "Solo se ve en una comparación A/B directa, a menudo en bordes finos.",
+    "Vorgabe hier. Ruhige Bilder wirken sauber, harte Szenen haben noch Reserve.":
+      "El valor de aquí. Las imágenes tranquilas se ven limpias; las escenas duras aún tienen margen.",
+    "Weichere Kanten, erste Flächenfehler. Im Vorbeischauen oft noch unauffällig.":
+      "Bordes más suaves, primeros fallos en zonas planas. A menudo aún pasan desapercibidos.",
+    "Banding, Weichzeichnung oder Klötzchen in Himmel, Dunkel und Bewegung.":
+      "Banding, desenfoque o bloques en cielo, oscuridad y movimiento.",
+    "Deutlich. Besonders Action und Kontrast leiden.":
+      "Evidente. Sufren sobre todo la acción y el contraste.",
+    "Unter 90 wird es für die meisten Zuschauer sichtbar. 93 ist hier die Vorgabe: darunter fällt die schwächste Stelle oft auf, darüber wächst die Datei stark. Die Screenshots der eigenen Szenen im VMAF-Tool bleiben der ehrliche Vergleich.":
+      "Por debajo de 90 la mayoría lo ve. 93 es el valor de aquí: por debajo suele notarse el punto más débil, por encima el archivo crece mucho. Las capturas de tus propias escenas en la herramienta VMAF siguen siendo la comparación honesta.",
+    "Was macht die AQ-Stärke bei NVIDIA?": "¿Qué hace la fuerza AQ de NVIDIA?",
+    "AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.":
+      "AQ significa cuantización adaptativa. Spatial AQ mueve bits dentro de una imagen: las zonas planas como cielo, paredes y degradados se cuantizan más fino para que bandeen menos. En el detalle los pasos pueden ser más gruesos, porque el error se esconde en el patrón.",
+    "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
+      "El control va de 1 a 15. 8 es el valor de NVIDIA y el inicio aquí. Más alto protege más las zonas planas y puede sacrificar un poco de detalle fino. Más bajo deja que las zonas planas bandeen. El objetivo de CQ o bitrate no cambia; solo cambia el reparto en la imagen.",
+    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
+      "Solo NVIDIA. En H.264 y HEVC también está Temporal AQ, contra el parpadeo de imagen a imagen. En AV1 el estudio, en esta línea de controladores, solo activa Spatial AQ.",
     "gesetzt – leer lassen zum Beibehalten": "establecido – dejar vacío para conservar",
     "Bot-Token": "Token de bot",
     "Gesendet ✓": "Enviado ✓",
@@ -3011,6 +3091,15 @@
     "CSV exportieren": "Exporter CSV",
     "Neu einordnen": "Réordonner",
     "Daten für Nerds": "Données pour experts",
+    "Bitrate-Verlauf": "Courbe de débit",
+    "VMAF-Szenen nach Bitrate": "Scènes VMAF selon le débit",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen, ohne Vorspann und Abspann. Die Checkbox übernimmt ihn in den nächsten VMAF-Lauf.":
+      "Lit la taille des paquets vidéo et ne décode pas. Le premier passage peut prendre du temps, ensuite la courbe vient du cache. Les marques sont la proposition : un passage difficile, un typique et un calme, sans le générique de début ni de fin. La case l'utilise pour le prochain VMAF.",
+    "Bitrate wird gelesen …": "Lecture du débit …",
+    "Bitrate-Verlauf konnte nicht geladen werden.": "Impossible de charger la courbe de débit.",
+    "Anteil unter": "Part sous",
+    "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.":
+      "σ est la dispersion des VMAF par image autour de la moyenne de cette scène. Une petite valeur veut dire que la qualité est groupée, pas que la scène du film est calme. Si la médiane est au-dessus de la moyenne, une mauvaise queue tire la moyenne vers le bas. La plus longue chute compte les images consécutives sous le curseur. Les secondes sont la durée du clip divisée par les images notées.",
     "Abspielen": "Lire",
     "Stopp": "Stop",
     "Testclips der Szenen behalten": "Conserver les extraits de test des scènes",
@@ -3178,6 +3267,37 @@
     "Nur CPU. Üblicher CRF-Bereich 30–35, die Skala hier geht bis 51.":
       "CPU seulement. La plage CRF habituelle est 30–35 ; cette échelle va jusqu'à 51.",
     "AQ-Stärke (NVIDIA):": "Force AQ (NVIDIA) :",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die NVIDIA-Vorgabe. Nur NVIDIA.":
+      "Répartit les bits dans l'image : plus fins sur les aplats, plus grossiers là où il y a du détail. 8 est la valeur NVIDIA. NVIDIA seulement.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker. Nur NVIDIA.":
+      "Le Spatial AQ déplace les bits dans l'image. Ciel, murs et dégradés sont quantifiés plus finement pour moins bander. Dans le détail, la quantification peut être plus grossière. 8 est la valeur NVIDIA. Plus haut protège davantage les aplats. NVIDIA seulement.",
+    "Mittelwert für den VMAF-Vergleich. Encoding und Super-Tool im Modus Ziel-VMAF starten damit; dort kannst du ihn pro Auftrag noch ändern. Fertige Analysen übernehmen ein neues Ziel mit Neu einordnen.":
+      "Moyenne pour la comparaison VMAF. L'encodage et le Super-outil en mode VMAF cible démarrent avec ; tu peux encore la changer par tâche. Les analyses déjà faites prennent une nouvelle cible avec Réordonner.",
+    "93 · Vorgabe": "93 · défaut",
+    "Wie sieht VMAF von 100 bis 80 aus?": "À quoi ressemble un VMAF de 100 à 80 ?",
+    "Eine Fotoreihe derselben Szene würde täuschen. Derselbe Wert sieht bei Anime, Filmkorn und dunklen Bildern verschieden aus, und 90 in einem ruhigen Dialog ist nicht 90 in einer Actionszene. Die Skala sagt, was beim direkten Vergleich mit der Quelle typischerweise auffällt.":
+      "Une série de photos de la même scène tromperait. La même valeur se voit autrement sur de l'anime, du grain ou une image sombre, et 90 sur un dialogue calme n'est pas 90 sur une scène d'action. L'échelle dit ce qui se remarque d'habitude en comparant directement à la source.",
+    "Praktisch wie die Quelle. Die Datei wird dafür meist unnötig groß.":
+      "Pratiquement la source. Le fichier est en général plus gros que nécessaire.",
+    "Nur im direkten A/B-Vergleich noch zu sehen, oft an feinen Kanten.":
+      "Encore visible seulement en comparaison A/B directe, souvent sur les bords fins.",
+    "Vorgabe hier. Ruhige Bilder wirken sauber, harte Szenen haben noch Reserve.":
+      "La valeur ici. Les images calmes restent propres, les scènes dures ont encore de la marge.",
+    "Weichere Kanten, erste Flächenfehler. Im Vorbeischauen oft noch unauffällig.":
+      "Bords plus doux, premières erreurs sur les aplats. Souvent encore discret au passage.",
+    "Banding, Weichzeichnung oder Klötzchen in Himmel, Dunkel und Bewegung.":
+      "Banding, flou ou blocs dans le ciel, le noir et le mouvement.",
+    "Deutlich. Besonders Action und Kontrast leiden.":
+      "Nettement visible. L'action et le contraste souffrent le plus.",
+    "Unter 90 wird es für die meisten Zuschauer sichtbar. 93 ist hier die Vorgabe: darunter fällt die schwächste Stelle oft auf, darüber wächst die Datei stark. Die Screenshots der eigenen Szenen im VMAF-Tool bleiben der ehrliche Vergleich.":
+      "Sous 90, la plupart des spectateurs le voient. 93 est la valeur ici : en dessous, l'endroit le plus faible se voit souvent, au-dessus le fichier grossit vite. Les captures de tes propres scènes dans l'outil VMAF restent la comparaison honnête.",
+    "Was macht die AQ-Stärke bei NVIDIA?": "Que fait la force AQ NVIDIA ?",
+    "AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.":
+      "AQ signifie quantification adaptative. Le Spatial AQ déplace les bits dans une image : les aplats comme le ciel, les murs et les dégradés sont quantifiés plus finement pour moins bander. Dans le détail, les pas peuvent être plus grossiers, parce que l'erreur se cache dans le motif.",
+    "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
+      "Le curseur va de 1 à 15. 8 est la valeur NVIDIA et le départ ici. Plus haut protège davantage les aplats et peut sacrifier un peu de détail fin. Plus bas laisse les aplats bander. La cible CQ ou débit ne change pas, seulement la répartition dans l'image.",
+    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
+      "NVIDIA seulement. En H.264 et HEVC, le Temporal AQ est aussi actif, contre le scintillement d'image en image. En AV1, sur cette ligne de pilotes, le studio ne règle que le Spatial AQ.",
     "gesetzt – leer lassen zum Beibehalten": "défini – laisser vide pour conserver",
     "Bot-Token": "Jeton de bot",
     "Gesendet ✓": "Envoyé ✓",
@@ -3721,10 +3841,40 @@
     [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + "%"; }],
     [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
       function (m) { return "At least " + m[1] + "% smaller than the source, otherwise keep the source."; }],
-    [/^Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
-      function (m) { return "At target 94, the weakest scene's 1% low must be ≥ " + m[1] + ". At target 93: ≥ " + m[2] + "."; }],
-    [/^Bei Ziel 93 liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
-      function (m) { return "At target 93 the floor is " + m[1] + ". Also at most " + m[2] + " points below the film mean."; }],
+    [/^Bei Ziel (\d+) muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\.$/,
+      function (m) { return "At target " + m[1] + ", the weakest scene's 1% low must be ≥ " + m[2] + "."; }],
+    [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
+      function (m) { return "At target " + m[1] + " the floor is " + m[2] + ". Also at most " + m[3] + " points below the film mean."; }],
+    [/^Ziel (\d+)$/, function (m) { return "Target " + m[1]; }],
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
+      function (m) { return "Mean " + m[1] + " Mbit/s · peak " + m[2] + " Mbit/s · factor " + m[3]; }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+      function (m) {
+        var role = { schwer: "hard", hoch: "high", typisch: "typical", niedrig: "low", ruhig: "quiet" }[m[1]];
+        return role + " " + m[2];
+      }],
+    [/^Szenen nach Bitrate: (.+)$/, function (m) {
+      return "Scenes by bitrate: " + m[1]
+        .replace(/schwer/g, "hard").replace(/hoch/g, "high").replace(/typisch/g, "typical")
+        .replace(/niedrig/g, "low").replace(/ruhig/g, "quiet");
+    }],
+    [/^(\d+) Frames$/, function (m) { return m[1] + " frames"; }],
+    [/^Schnitt ([\d.]+) · Median ([\d.]+) · σ ([\d.]+)$/,
+      function (m) { return "Mean " + m[1] + " · median " + m[2] + " · σ " + m[3]; }],
+    [/^1%-Low ([\d.]+) · P5 ([\d.]+) · P95 ([\d.]+)$/,
+      function (m) { return "1% low " + m[1] + " · P5 " + m[2] + " · P95 " + m[3]; }],
+    [/^Min ([\d.]+) · Max ([\d.]+)$/,
+      function (m) { return "Min " + m[1] + " · max " + m[2]; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+) \(~([\d.]+) s\)$/,
+      function (m) { return m[1] + "% under " + m[2] + " · longest dip " + m[3] + " frames from frame " + m[4] + " (~" + m[5] + " s)"; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+)$/,
+      function (m) { return m[1] + "% under " + m[2] + " · longest dip " + m[3] + " frames from frame " + m[4]; }],
+    [/^([\d.]+) % unter (\d+) · kein Frame unter (\d+)$/,
+      function (m) { return m[1] + "% under " + m[2] + " · no frame under " + m[3]; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · −([\d.]+) dB$/,
+      function (m) { return "PSNR weak 5% " + m[1] + " · mean " + m[2] + " · −" + m[3] + " dB"; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · \+([\d.]+) dB$/,
+      function (m) { return "PSNR weak 5% " + m[1] + " · mean " + m[2] + " · +" + m[3] + " dB"; }],
     [/^Höchstens (\d+) Punkte unter dem Filmschnitt der Stufe\.$/,
       function (m) { return "At most " + m[1] + " points below that tier's film mean."; }],
     [/^Ziel nicht erreicht \(Ziel (\d+), schwächste Szene ≥ Filmschnitt−(\d+)\)\.$/,
@@ -3814,10 +3964,40 @@
     [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + " %"; }],
     [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
       function (m) { return "Al menos un " + m[1] + " % más pequeño que la fuente; si no, conservar la fuente."; }],
-    [/^Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
-      function (m) { return "Con objetivo 94, el 1 % low de la escena más débil debe ser ≥ " + m[1] + ". Con objetivo 93: ≥ " + m[2] + "."; }],
-    [/^Bei Ziel 93 liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
-      function (m) { return "Con objetivo 93 el suelo está en " + m[1] + ". Además como máximo " + m[2] + " puntos bajo la media de la película."; }],
+    [/^Bei Ziel (\d+) muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\.$/,
+      function (m) { return "Con objetivo " + m[1] + ", el 1 % low de la escena más débil debe ser ≥ " + m[2] + "."; }],
+    [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
+      function (m) { return "Con objetivo " + m[1] + " el suelo está en " + m[2] + ". Además como máximo " + m[3] + " puntos bajo la media de la película."; }],
+    [/^Ziel (\d+)$/, function (m) { return "Objetivo " + m[1]; }],
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
+      function (m) { return "Media " + m[1] + " Mbit/s · pico " + m[2] + " Mbit/s · factor " + m[3]; }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+      function (m) {
+        var role = { schwer: "difícil", hoch: "alto", typisch: "típico", niedrig: "bajo", ruhig: "tranquilo" }[m[1]];
+        return role + " " + m[2];
+      }],
+    [/^Szenen nach Bitrate: (.+)$/, function (m) {
+      return "Escenas según bitrate: " + m[1]
+        .replace(/schwer/g, "difícil").replace(/hoch/g, "alto").replace(/typisch/g, "típico")
+        .replace(/niedrig/g, "bajo").replace(/ruhig/g, "tranquilo");
+    }],
+    [/^(\d+) Frames$/, function (m) { return m[1] + " fotogramas"; }],
+    [/^Schnitt ([\d.]+) · Median ([\d.]+) · σ ([\d.]+)$/,
+      function (m) { return "Media " + m[1] + " · mediana " + m[2] + " · σ " + m[3]; }],
+    [/^1%-Low ([\d.]+) · P5 ([\d.]+) · P95 ([\d.]+)$/,
+      function (m) { return "1 % low " + m[1] + " · P5 " + m[2] + " · P95 " + m[3]; }],
+    [/^Min ([\d.]+) · Max ([\d.]+)$/,
+      function (m) { return "Mín " + m[1] + " · máx " + m[2]; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+) \(~([\d.]+) s\)$/,
+      function (m) { return m[1] + " % bajo " + m[2] + " · caída más larga " + m[3] + " fotogramas desde el fotograma " + m[4] + " (~" + m[5] + " s)"; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+)$/,
+      function (m) { return m[1] + " % bajo " + m[2] + " · caída más larga " + m[3] + " fotogramas desde el fotograma " + m[4]; }],
+    [/^([\d.]+) % unter (\d+) · kein Frame unter (\d+)$/,
+      function (m) { return m[1] + " % bajo " + m[2] + " · ningún fotograma bajo " + m[3]; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · −([\d.]+) dB$/,
+      function (m) { return "PSNR del 5 % más débil " + m[1] + " · media " + m[2] + " · −" + m[3] + " dB"; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · \+([\d.]+) dB$/,
+      function (m) { return "PSNR del 5 % más débil " + m[1] + " · media " + m[2] + " · +" + m[3] + " dB"; }],
     [/^Höchstens (\d+) Punkte unter dem Filmschnitt der Stufe\.$/,
       function (m) { return "Como máximo " + m[1] + " puntos bajo la media de esa etapa."; }],
     [/^Ziel nicht erreicht \(Ziel (\d+), schwächste Szene ≥ Filmschnitt−(\d+)\)\.$/,
@@ -3907,10 +4087,40 @@
     [/^(\d+(?:\.\d+)?) %$/, function (m) { return m[1] + " %"; }],
     [/^Mindestens (\d+(?:\.\d+)?) % kleiner als die Quelle, sonst Quelle behalten\.$/,
       function (m) { return "Au moins " + m[1] + " % plus petit que la source, sinon garder la source."; }],
-    [/^Bei Ziel 94 muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\. Bei Ziel 93: ≥ (\d+)\.$/,
-      function (m) { return "À la cible 94, le 1 % low de la scène la plus faible doit être ≥ " + m[1] + ". À la cible 93 : ≥ " + m[2] + "."; }],
-    [/^Bei Ziel 93 liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
-      function (m) { return "À la cible 93 le plancher est " + m[1] + ". En plus au plus " + m[2] + " points sous la moyenne du film."; }],
+    [/^Bei Ziel (\d+) muss das 1%-Low der schwächsten Szene ≥ (\d+) liegen\.$/,
+      function (m) { return "À la cible " + m[1] + ", le 1 % low de la scène la plus faible doit être ≥ " + m[2] + "."; }],
+    [/^Bei Ziel (\d+) liegt der Boden bei (\d+)\. Zusätzlich höchstens (\d+) Punkte unter dem Filmschnitt\.$/,
+      function (m) { return "À la cible " + m[1] + " le plancher est " + m[2] + ". En plus au plus " + m[3] + " points sous la moyenne du film."; }],
+    [/^Ziel (\d+)$/, function (m) { return "Cible " + m[1]; }],
+    [/^Schnitt ([\d.]+) Mbit\/s · Spitze ([\d.]+) Mbit\/s · Faktor ([\d.]+)$/,
+      function (m) { return "Moyenne " + m[1] + " Mbit/s · pic " + m[2] + " Mbit/s · facteur " + m[3]; }],
+    [/^(schwer|hoch|typisch|niedrig|ruhig) (\d{2}:\d{2}:\d{2})$/,
+      function (m) {
+        var role = { schwer: "difficile", hoch: "haut", typisch: "typique", niedrig: "bas", ruhig: "calme" }[m[1]];
+        return role + " " + m[2];
+      }],
+    [/^Szenen nach Bitrate: (.+)$/, function (m) {
+      return "Scènes selon le débit : " + m[1]
+        .replace(/schwer/g, "difficile").replace(/hoch/g, "haut").replace(/typisch/g, "typique")
+        .replace(/niedrig/g, "bas").replace(/ruhig/g, "calme");
+    }],
+    [/^(\d+) Frames$/, function (m) { return m[1] + " images"; }],
+    [/^Schnitt ([\d.]+) · Median ([\d.]+) · σ ([\d.]+)$/,
+      function (m) { return "Moyenne " + m[1] + " · médiane " + m[2] + " · σ " + m[3]; }],
+    [/^1%-Low ([\d.]+) · P5 ([\d.]+) · P95 ([\d.]+)$/,
+      function (m) { return "1 % low " + m[1] + " · P5 " + m[2] + " · P95 " + m[3]; }],
+    [/^Min ([\d.]+) · Max ([\d.]+)$/,
+      function (m) { return "Min " + m[1] + " · max " + m[2]; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+) \(~([\d.]+) s\)$/,
+      function (m) { return m[1] + " % sous " + m[2] + " · plus longue chute " + m[3] + " images depuis l'image " + m[4] + " (~" + m[5] + " s)"; }],
+    [/^([\d.]+) % unter (\d+) · längster Einbruch (\d+) Frames ab Frame (\d+)$/,
+      function (m) { return m[1] + " % sous " + m[2] + " · plus longue chute " + m[3] + " images depuis l'image " + m[4]; }],
+    [/^([\d.]+) % unter (\d+) · kein Frame unter (\d+)$/,
+      function (m) { return m[1] + " % sous " + m[2] + " · aucune image sous " + m[3]; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · −([\d.]+) dB$/,
+      function (m) { return "PSNR 5 % faibles " + m[1] + " · moyenne " + m[2] + " · −" + m[3] + " dB"; }],
+    [/^PSNR schwache 5 % ([\d.]+) · Schnitt ([\d.]+) · \+([\d.]+) dB$/,
+      function (m) { return "PSNR 5 % faibles " + m[1] + " · moyenne " + m[2] + " · +" + m[3] + " dB"; }],
     [/^Höchstens (\d+) Punkte unter dem Filmschnitt der Stufe\.$/,
       function (m) { return "Au plus " + m[1] + " points sous la moyenne de ce palier."; }],
     [/^Ziel nicht erreicht \(Ziel (\d+), schwächste Szene ≥ Filmschnitt−(\d+)\)\.$/,

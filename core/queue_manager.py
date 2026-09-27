@@ -84,13 +84,14 @@ class JobSettings:
     autocrop: bool = False
     vmaf_check: bool = True
     workflow: str = "auto"         # auto | manual | compare_only
-    target_vmaf: float = 0.0       # >0: Ziel-VMAF (Super-Tool), sonst Sweetspot
+    target_vmaf: float = 0.0       # >0: Ziel des Jobs, sonst Ziel aus den Einstellungen
     rate_mode: str = "cq"          # cq | bitrate | abr
     # Zusätzliche Vergleichs-Encoder als "plattform:codec"-Strings (z. B. "cpu:hevc")
     compare_encoders: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
+    sample_mode: str = "even"     # even | bitrate
     generate_screenshots: bool = True
     post_processing: str = "keep"
     container: str = "auto"        # auto | mkv | mp4 (Ausgabe-Container)
@@ -801,6 +802,24 @@ class QueueManager:
         if do_vmaf:
             item.status = STATUS_ANALYZING
             item.message = "VMAF-Analyse läuft …"
+            sample_starts = []
+            sample_windows = []
+            if s.sample_mode == "bitrate":
+                item.message = "Bitrate-Verlauf der Quelle …"
+                self._refresh_global_msg()
+                try:
+                    from . import bitrate_profile
+                    prof = bitrate_profile.profile(
+                        Path(info.path), float(info.duration or 0),
+                        s.clip_seconds, s.samples)
+                    sample_windows = list(prof.get("windows") or [])
+                    sample_starts = [
+                        (w["start"], w["length"]) for w in sample_windows
+                        if w.get("length")
+                    ]
+                except Exception as e:
+                    logger.warning("Bitrate-Szenen nicht möglich (%s): %s", item.title, e)
+                    item.message = "VMAF-Analyse läuft …"
             self._refresh_global_msg()
             vmaf_opts = vmaf_mod.VmafOptions(
                 rate_mode=s.rate_mode,
@@ -817,6 +836,8 @@ class QueueManager:
                 target_vmaf=s.target_vmaf,
                 anime=s.anime,
                 refine_midpoint=s.workflow != "compare_only",
+                sample_starts=sample_starts,
+                sample_windows=sample_windows,
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,
@@ -1873,6 +1894,7 @@ def build_job_settings(d: dict) -> JobSettings:
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
+        sample_mode="bitrate" if d.get("sample_mode") == "bitrate" else "even",
         generate_screenshots=bool(d.get("generate_screenshots", True)),
         post_processing=d.get("post_processing", "keep"),
         container=d.get("container", "auto") if d.get("container") in ("mkv", "mp4") else "auto",
