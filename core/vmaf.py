@@ -196,13 +196,25 @@ class VmafResult:
                     item["frames"] = frames
                 if s.get("kbps"):
                     item["kbps"] = int(s["kbps"])
+                if s.get("bitrate_sec"):
+                    item["bitrate_sec"] = round(float(s["bitrate_sec"]), 3)
+                if s.get("bitrate_align"):
+                    item["bitrate_align"] = s.get("bitrate_align")
                 curve = s.get("bitrate") or []
                 if curve:
-                    item["bitrate"] = [
-                        {"t": round(float(b.get("t") or 0), 3),
-                         "kbps": round(float(b.get("kbps") or 0), 1)}
-                        for b in curve if isinstance(b, dict)
-                    ]
+                    packed_curve = []
+                    for b in curve:
+                        if not isinstance(b, dict):
+                            continue
+                        point = {
+                            "t": round(float(b.get("t") or 0), 4),
+                            "kbps": round(float(b.get("kbps") or 0), 1),
+                        }
+                        if b.get("n") is not None:
+                            point["n"] = int(b["n"])
+                        packed_curve.append(point)
+                    if packed_curve:
+                        item["bitrate"] = packed_curve
                 packed.append(item)
             d["scene_scores"] = packed
             vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
@@ -774,12 +786,14 @@ def analyze(
             if scene_scores:
                 scene_scores[-1]["kbps"] = scene_kbps
                 try:
-                    from . import bitrate_profile
-                    curve = bitrate_profile.clip_bins(test_file, 0.5)
+                    dur = ff._probe_duration(test_file) or float(clip_len)
+                    curve = scored_bitrate(test_file, dur, float(info.fps or 0))
                 except Exception:
-                    curve = []
-                if curve:
-                    scene_scores[-1]["bitrate"] = curve
+                    curve = {}
+                if curve.get("bins"):
+                    scene_scores[-1]["bitrate"] = curve["bins"]
+                    scene_scores[-1]["bitrate_sec"] = curve.get("scored_sec") or 0
+                    scene_scores[-1]["bitrate_align"] = curve.get("align") or ""
             if opts.generate_screenshots:
                 enc_rel = _extract_frame(
                     test_file, f"{sess}/{key}_s{si}_enc.jpg",
@@ -1063,6 +1077,51 @@ def _pct(ordered: list[float], p: float) -> float:
     hi = min(lo + 1, n - 1)
     frac = k - lo
     return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
+
+
+def _scored_window(duration: float) -> tuple[float, float]:
+    """Gleicher Rand wie bei der VMAF-Bewertung, in Sekunden der Datei."""
+    margin = _edge_margin(duration)
+    if margin > 0 and duration > margin * 2 + 1:
+        return margin, round(duration - margin, 3)
+    return 0.0, float(duration or 0)
+
+
+def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
+    """Bitrate je Videopaket, Zeitachse wie die bewerteten VMAF-Frames.
+
+    t = 0 ist das erste bewertete Bild. n ist der Frame-Index dazu.
+    """
+    from . import bitrate_profile
+    packets = bitrate_profile.clip_packets(path)
+    if not packets:
+        return {"bins": [], "scored_sec": 0, "frame": True}
+    if fps <= 0:
+        deltas = [
+            packets[i + 1]["t"] - packets[i]["t"]
+            for i in range(len(packets) - 1)
+            if packets[i + 1]["t"] > packets[i]["t"] + 0.001
+        ]
+        fps = (1.0 / sorted(deltas)[len(deltas) // 2]) if deltas else 24.0
+    frame_dt = 1.0 / max(fps, 1.0)
+    if duration <= 0:
+        duration = packets[-1]["t"] + frame_dt
+    start, end = _scored_window(duration)
+    kept = [pkt for pkt in packets if start <= float(pkt["t"]) < end]
+    bins = []
+    for n, pkt in enumerate(kept):
+        rel = float(pkt["t"]) - start
+        bins.append({
+            "n": n,
+            "t": round(max(0.0, rel), 4),
+            "kbps": round(int(pkt["bytes"]) * 8 / frame_dt / 1000, 1),
+        })
+    return {
+        "bins": bins,
+        "scored_sec": round(max(0.0, end - start), 3),
+        "frame": True,
+        "align": "seq",
+    }
 
 
 def _series_stats(frames: list[dict], clip_seconds: float) -> dict:

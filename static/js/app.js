@@ -4041,14 +4041,15 @@
             brRows.push(line([
               r.label || ("Q" + r.quality),
               (sc.scene != null ? sc.scene + 1 : ""),
-              num(b.t, 3), num(b.kbps, 1),
+              b.n != null ? b.n : "",
+              num(b.t, 4), num(b.kbps, 1),
             ]));
           });
         });
       });
       if (brRows.length) {
         lines.push("");
-        lines.push(line(["Einstellung", "Szene", "Zeit s", "kbit/s"]));
+        lines.push(line(["Einstellung", "Szene", "Frame", "Zeit s", "kbit/s"]));
         brRows.forEach((row) => lines.push(row));
       }
       const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
@@ -4134,7 +4135,9 @@
     drawGapChart(vmaf);
     drawFrameChart(vmaf);
     loadSceneBitrate(vmaf).then(() => {
-      if (state.vmafShown === vmaf) drawFrameChart(vmaf);
+      if (state.vmafShown !== vmaf) return;
+      drawFrameChart(vmaf);
+      if (state.vmafNerd && state.nerdData) drawNerdFrames(state.nerdData);
     });
     refreshNerdFrames();
   }
@@ -4197,25 +4200,56 @@
     return shot ? shot.clip : "";
   }
 
+  function bitrateIsFrame(sc) {
+    const bins = sc && sc.bitrate;
+    return !!(bins && bins.length && bins[0] && bins[0].n != null
+      && sc.bitrate_align === "seq");
+  }
+
+  function scoredSpan(clipSec, sc) {
+    const stored = Number(sc && sc.bitrate_sec);
+    if (stored > 0) return stored;
+    const sec = Number(clipSec) || 0;
+    if (!(sec >= 4)) return sec;
+    const margin = Math.min(0.5, sec * 0.08);
+    if (margin > 0 && sec > margin * 2 + 1) return sec - 2 * margin;
+    return sec;
+  }
+
+  function bitratePointX(b) {
+    if (b && b.n != null) return Number(b.t) || 0;
+    return (Number(b && b.t) || 0) + 0.25;
+  }
+
   function loadSceneBitrate(vmaf) {
     const session = state.vmafSession;
     if (!vmaf || !session) return Promise.resolve();
     const jobs = [];
     (vmaf.results || []).forEach((r) => {
       (r.scene_scores || []).forEach((sc) => {
-        if (!sc || Array.isArray(sc.bitrate)) return;
+        if (!sc || sc._brTried || bitrateIsFrame(sc)) return;
         const file = sceneClipFile(r, sc.scene);
         if (!file) {
-          sc.bitrate = [];
+          if (!Array.isArray(sc.bitrate)) sc.bitrate = [];
+          sc._brTried = true;
           return;
         }
+        sc._brTried = true;
         jobs.push(fetch(
           `/api/vmaf/clip-bitrate?session=${encodeURIComponent(session)}&file=${encodeURIComponent(file)}`)
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
-            sc.bitrate = (data && data.bins) || [];
+            if (data && data.bins && data.bins.length) {
+              sc.bitrate = data.bins;
+              if (data.scored_sec) sc.bitrate_sec = data.scored_sec;
+              if (data.align) sc.bitrate_align = data.align;
+            } else if (!Array.isArray(sc.bitrate)) {
+              sc.bitrate = [];
+            }
           })
-          .catch(() => { sc.bitrate = []; }));
+          .catch(() => {
+            if (!Array.isArray(sc.bitrate)) sc.bitrate = [];
+          }));
       });
     });
     return Promise.all(jobs);
@@ -4256,11 +4290,12 @@
       const color = r.recommended ? col.good : CHART_PALETTE[i % CHART_PALETTE.length];
       const label = r.label || ("Q" + r.quality);
       const n = sc.frames.length;
+      const span = scoredSpan(clipSec, sc);
       datasets.push({
         label,
         yAxisID: "y",
         data: hasBr
-          ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * clipSec, y: v }))
+          ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * span, y: v }))
           : sc.frames,
         borderColor: color,
         backgroundColor: "transparent",
@@ -4273,7 +4308,7 @@
         datasets.push({
           label: label + " · Bitrate",
           yAxisID: "y1",
-          data: sc.bitrate.map((b) => ({ x: Number(b.t) + 0.25, y: Number(b.kbps) })),
+          data: sc.bitrate.map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
           borderColor: color,
           backgroundColor: "transparent",
           borderDash: [5, 4],
@@ -4450,6 +4485,30 @@
         spanGaps: true,
       };
     });
+    const nerdScene = data && data.scene;
+    if (state.vmafShown && nerdScene != null) {
+      series.forEach((s, i) => {
+        const result = (state.vmafShown.results || []).find(
+          (r) => (r.label || "") === (s.label || ""));
+        const sc = result && sceneEntry(result, nerdScene);
+        if (!bitrateIsFrame(sc)) return;
+        const byN = {};
+        sc.bitrate.forEach((b) => { byN[b.n] = Number(b.kbps); });
+        const color = CHART_PALETTE[i % CHART_PALETTE.length];
+        datasets.push({
+          label: (s.label || ("Serie " + (i + 1))) + " · Bitrate",
+          yAxisID: "y1",
+          data: (s.frames || []).map((f) => (byN[f.n] == null ? null : byN[f.n])),
+          borderColor: color,
+          backgroundColor: "transparent",
+          borderDash: [5, 4],
+          pointRadius: 0,
+          borderWidth: 1.2,
+          tension: 0.05,
+          spanGaps: true,
+        });
+      });
+    }
     const floor = nerdFloorValue();
     datasets.push({
       label: tt("Schwelle " + floor),
@@ -4468,6 +4527,14 @@
       const opts = lineChartOptions(col, "VMAF");
       opts.scales.y.suggestedMin = 70;
       opts.scales.y.suggestedMax = 100;
+      if (datasets.some((d) => d.yAxisID === "y1")) {
+        opts.scales.y1 = {
+          position: "right",
+          title: { display: true, text: "kbit/s", color: col.muted },
+          grid: { drawOnChartArea: false },
+          ticks: { color: col.muted },
+        };
+      }
       opts.scales.x.ticks.autoSkip = true;
       opts.scales.x.ticks.maxTicksLimit = 12;
       opts.plugins.tooltip = {

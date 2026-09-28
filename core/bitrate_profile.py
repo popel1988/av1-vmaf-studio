@@ -130,6 +130,42 @@ def clip_bins(path: Path, bin_sec: float = 0.5) -> list[dict]:
     ]
 
 
+def clip_packets(path: Path) -> list[dict]:
+    """Ein Eintrag je angezeigtem Videopaket: Zeitpunkt und Größe in Bytes."""
+    cmd = [
+        config.FFPROBE, "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time,size",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError:
+        return []
+    sizes: dict[float, int] = {}
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        parts = line.strip().split(",")
+        if len(parts) < 2:
+            continue
+        try:
+            pts = float(parts[0])
+            size = int(float(parts[1]))
+        except ValueError:
+            continue
+        if pts < 0 or size <= 0:
+            continue
+        key = round(pts, 4)
+        sizes[key] = sizes.get(key, 0) + size
+    if proc.wait() != 0 or not sizes:
+        return []
+    return [{"t": t, "bytes": sizes[t]} for t in sorted(sizes)]
+
+
 def _stats(bins: list[dict], duration: float) -> dict:
     head, tail = _body_range(duration)
     vals = [float(b["kbps"]) for b in bins if head <= b["t"] < tail]

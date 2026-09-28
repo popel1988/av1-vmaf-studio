@@ -1849,14 +1849,20 @@ async def vmaf_frames(session: str, scene: int = 0):
 
 @app.get("/api/vmaf/clip-bitrate")
 async def vmaf_clip_bitrate(session: str, file: str):
-    """Bitrate-Verlauf eines behaltenen Testclips, halbsekündlich."""
-    from core import bitrate_profile
+    """Bitrate je Frame eines behaltenen Testclips, auf die VMAF-Zeitachse gelegt."""
+    from core import ffmpeg_utils as ff
     from core import vmaf as vmaf_mod
     path = vmaf_mod.clip_path(session, file)
     if path is None:
         return JSONResponse({"error": "Clip nicht vorhanden"}, status_code=404)
-    bins = await asyncio.to_thread(bitrate_profile.clip_bins, path, 0.5)
-    return {"bin_sec": 0.5, "bins": bins}
+
+    def _measure():
+        info = ff.ffprobe(path)
+        dur = float(info.duration or 0) if info else 0
+        fps = float(info.fps or 0) if info else 0
+        return vmaf_mod.scored_bitrate(path, dur, fps)
+
+    return await asyncio.to_thread(_measure)
 
 
 @app.post("/api/queue/{item_id}/cancel")
