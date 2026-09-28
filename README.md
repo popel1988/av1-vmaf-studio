@@ -193,8 +193,11 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
 - **Size target (MB)**: optional total output budget including audio — the app
   derives an ABR video bitrate before encode (distinct from the post-encode
   size cap below).
-- **Two-pass** (CPU encoders in bitrate mode) for more consistent quality;
-  NVENC uses `-multipass` instead.
+- **Two-pass** (bitrate modes only): CPU encoders run FFmpeg `-pass 1` then
+  `-pass 2`. NVENC uses `-multipass fullres` in one run. The same switch covers
+  the final encode and, on the VMAF tool, Super Tool and Encoding target-VMAF,
+  the test clips. CQ ignores it. On a 12–30 s SVT clip, one-pass often misses
+  the requested average; two-pass is what makes that ladder comparable.
 - **Chunked adaptive encoding** (CQ mode): segments with complexity-based CQ —
   demanding scenes get more bits, calm scenes fewer.
 - **Auto-crop** (`cropdetect`): black letterbox/pillarbox bars are detected and
@@ -317,7 +320,11 @@ cap).
 
 On **CPU/SVT-AV1**, CBR and ABR are technically the same (`-b:v` only, no real
 CBR). The CBR vs ABR split mainly applies to **NVENC** and other hardware
-encoders.
+encoders. SVT has no maxrate and no VBV buffer in this mode, so a short clip
+can park a large share of the target in a few reference frames. NVENC ABR
+(`-maxrate` 1.5×, `-bufsize` 2×, lookahead 32) has to keep spending inside
+that buffer window, so a hard stretch raises many frames together. The VMAF
+scene curve shows the split; see [Quality assurance](#quality-assurance).
 
 ### Dynamic range (SDR / HDR / Dolby Vision)
 
@@ -511,6 +518,38 @@ One media mount is enough — sources and encodes live in the same tree:
   The first and last 0.5 s of each sample are excluded from the score.
 - **Size prediction**: `(test clip size / clip length) × total duration` including
   savings in %.
+- **Test-clip bitrate**: each scene stores one rate per displayed frame on the
+  same timeline as the scored VMAF frames (same edge trim, frame index in
+  packet order). The scene chart draws it on a second axis; the nerd frame
+  view uses that index. Screenshot tiles, the results table and the encoder
+  bench show the measured average (`Ist`) from video-only file size ÷ duration.
+  The CSV download lists every scored frame (VMAF, PSNR, SSIM) and that
+  per-frame rate. A kept clip file refills the curve when an older session is
+  opened again; a new VMAF run is not required.
+  The plotted rate is not the raw packet size. An AV1 `show_existing_frame`
+  is a few bytes and shares its bits with the coded frame before it. A frame
+  above **2.5×** the median of the three frames on each side is a lone
+  reference spike and is set to that median. A stretch whose neighbours are
+  high as well is left as it is. There is no moving average, so a hard passage
+  stays on the frames that actually carry it. Because the lone reference bits
+  are not painted back onto the neighbours, the curve mean sits below the
+  scene `kbit/s` column. That column stays file size ÷ duration.
+- **SVT-AV1 vs NVENC on short clips**: both use the same AV1 tools (a large
+  reference about once per mini-GOP, predicted frames that store only the
+  residual, and show-existing display frames). The rate control here does not.
+  SVT ABR/CBR is `-b:v` only. One-pass SVT may put about a megabyte into one
+  intra frame and leave the surrounding frames near empty, so dropping lone
+  spikes pulls the curve mean down hard (on a 14 Mbit test scene, from about
+  11 Mbit/s file average to about 3 Mbit/s of body). A higher SVT target can
+  even produce a smaller 15 s file than a lower one: the controller overshoots
+  the first keyframe, then starves the rest of the clip. On a full movie it
+  converges. NVENC ABR adds maxrate 1.5×, bufsize 2×, `-rc vbr`, spatial AQ
+  and lookahead 32. The buffer has to be refilled inside that window, and
+  lookahead raises the frames it can see ahead, so a hard stretch stays high
+  across neighbours and the spike rule barely moves the mean. Two-pass on the
+  test clips (CPU: two FFmpeg passes; NVENC: multipass fullres) makes SVT’s
+  short-clip average track the target. It does not remove the split between
+  reference frames and predicted frames.
 - **Quality guardrail**: after encoding, the real VMAF of the output is measured
   on sample clips. If it is below target, it can optionally re-encode at higher
   quality — otherwise it is flagged as a warning.

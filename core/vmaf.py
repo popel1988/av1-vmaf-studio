@@ -1116,11 +1116,40 @@ def _shown_share(packets: list[dict]) -> list[float]:
     return out
 
 
+# Drei Frames links und rechts. Ein einzelnes Referenzbild fällt darüber auf,
+# eine Stelle, an der die Nachbarn selbst hoch sind, bleibt stehen.
+_PEAK_HALF = 3
+_PEAK_FACTOR = 2.5
+
+
+def _body_kbps(values: list[float]) -> list[float]:
+    """Einzelne Spitzen auf den Median der Nachbarframes setzen.
+
+    Ein Frame über dem 2,5-fachen dieses Medians ist ein Referenzbild, das
+    allein aus der Reihe tanzt. Liegen die Nachbarn genauso hoch, bleibt der
+    Wert. Es wird nicht über die Zeit gemittelt, der Szenenschnitt der Kurve
+    sinkt deshalb unter die Dateigröße.
+    """
+    n = len(values)
+    if n < 3:
+        return list(values)
+    out = list(values)
+    for i in range(n):
+        lo = max(0, i - _PEAK_HALF)
+        hi = min(n, i + _PEAK_HALF + 1)
+        ordered = sorted(values[lo:hi])
+        med = ordered[len(ordered) // 2]
+        if med > 0 and values[i] > med * _PEAK_FACTOR:
+            out[i] = med
+    return out
+
+
 def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
     """Bitrate je angezeigtem Frame, Zeitachse wie die bewerteten VMAF-Frames.
 
     t = 0 ist das erste bewertete Bild. n ist der Frame-Index dazu.
     Leere AV1-Anzeige-Frames teilen sich die Bits mit dem codierten Bild davor.
+    Einzelne Referenz-Spitzen werden auf das Niveau der Nachbarframes gesetzt.
     """
     from . import bitrate_profile
     packets = bitrate_profile.clip_packets(path)
@@ -1139,19 +1168,21 @@ def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
     start, end = _scored_window(duration)
     kept = [pkt for pkt in packets if start <= float(pkt["t"]) < end]
     shares = _shown_share(kept)
+    raw = [share * 8 / frame_dt / 1000 for share in shares]
+    body = _body_kbps(raw)
     bins = []
     for n, pkt in enumerate(kept):
         rel = float(pkt["t"]) - start
         bins.append({
             "n": n,
             "t": round(max(0.0, rel), 4),
-            "kbps": round(shares[n] * 8 / frame_dt / 1000, 1),
+            "kbps": round(body[n], 1),
         })
     return {
         "bins": bins,
         "scored_sec": round(max(0.0, end - start), 3),
         "frame": True,
-        "align": "shown",
+        "align": "body",
     }
 
 

@@ -4203,7 +4203,7 @@
   function bitrateIsFrame(sc) {
     const bins = sc && sc.bitrate;
     return !!(bins && bins.length && bins[0] && bins[0].n != null
-      && sc.bitrate_align === "shown");
+      && sc.bitrate_align === "body");
   }
 
   function scoredSpan(clipSec, sc) {
