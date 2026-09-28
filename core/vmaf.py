@@ -1087,10 +1087,40 @@ def _scored_window(duration: float) -> tuple[float, float]:
     return 0.0, float(duration or 0)
 
 
+# show_existing_frame: ein paar Byte, das Bild wurde schon vorher codiert.
+_SHOW_BYTES = 64
+
+
+def _shown_share(packets: list[dict]) -> list[float]:
+    """Bytes eines codierten Pakets auf dieses und folgende leere Anzeige-Frames teilen.
+
+    Der Mittelwert über die Szene bleibt gleich. Ein leeres Paket am Anfang,
+    dessen codiertes Bild vor dem Bewertungsfenster liegt, behält seine eigene Größe.
+    """
+    n = len(packets)
+    out = [0.0] * n
+    i = 0
+    while i < n:
+        if int(packets[i]["bytes"]) < _SHOW_BYTES:
+            out[i] = float(packets[i]["bytes"])
+            i += 1
+            continue
+        j = i + 1
+        while j < n and int(packets[j]["bytes"]) < _SHOW_BYTES:
+            j += 1
+        total = sum(int(packets[k]["bytes"]) for k in range(i, j))
+        share = total / (j - i)
+        for k in range(i, j):
+            out[k] = share
+        i = j
+    return out
+
+
 def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
-    """Bitrate je Videopaket, Zeitachse wie die bewerteten VMAF-Frames.
+    """Bitrate je angezeigtem Frame, Zeitachse wie die bewerteten VMAF-Frames.
 
     t = 0 ist das erste bewertete Bild. n ist der Frame-Index dazu.
+    Leere AV1-Anzeige-Frames teilen sich die Bits mit dem codierten Bild davor.
     """
     from . import bitrate_profile
     packets = bitrate_profile.clip_packets(path)
@@ -1108,19 +1138,20 @@ def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
         duration = packets[-1]["t"] + frame_dt
     start, end = _scored_window(duration)
     kept = [pkt for pkt in packets if start <= float(pkt["t"]) < end]
+    shares = _shown_share(kept)
     bins = []
     for n, pkt in enumerate(kept):
         rel = float(pkt["t"]) - start
         bins.append({
             "n": n,
             "t": round(max(0.0, rel), 4),
-            "kbps": round(int(pkt["bytes"]) * 8 / frame_dt / 1000, 1),
+            "kbps": round(shares[n] * 8 / frame_dt / 1000, 1),
         })
     return {
         "bins": bins,
         "scored_sec": round(max(0.0, end - start), 3),
         "frame": True,
-        "align": "seq",
+        "align": "shown",
     }
 
 
