@@ -525,6 +525,13 @@
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)":
       "Two-pass (bitrate mode only – more consistent quality)",
     "Zwei-Pass (nur Bitraten-Modus)": "Two-pass (bitrate mode only)",
+    "Gilt für den Encode und für die VMAF-Testclips, sobald ABR oder CBR gewählt ist. Die CPU macht zwei Durchläufe, NVIDIA Multipass.":
+      "Applies to the encode and to the VMAF test clips when ABR or CBR is selected. The CPU runs two passes, NVIDIA uses multipass.",
+    "Zwei-Pass für die Testclips": "Two-pass for the test clips",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.":
+      "ABR and CBR only. The CPU encodes each test clip twice so the bitrate target is hit on the short clip. NVIDIA uses multipass in one run. The comparison takes longer.",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
+      "ABR and CBR only. The CPU encodes each test clip twice, NVIDIA uses multipass. The comparison takes longer.",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)":
       "Anime mode (VMAF-NEG scoring + 10-bit against banding)",
     "Anime-Modus (VMAF-NEG + 10-bit)": "Anime mode (VMAF-NEG + 10-bit)",
@@ -1843,6 +1850,13 @@
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "Solo AV1 (CPU/SVT). 0 = desactivado. Ahorra bits en material con grano.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Dos pasadas (solo en modo bitrate – calidad más uniforme)",
     "Zwei-Pass (nur Bitraten-Modus)": "Dos pasadas (solo modo bitrate)",
+    "Gilt für den Encode und für die VMAF-Testclips, sobald ABR oder CBR gewählt ist. Die CPU macht zwei Durchläufe, NVIDIA Multipass.":
+      "Vale para el encode y para los clips de prueba VMAF cuando se elige ABR o CBR. La CPU hace dos pasadas, NVIDIA usa multipass.",
+    "Zwei-Pass für die Testclips": "Dos pasadas para los clips de prueba",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.":
+      "Solo ABR y CBR. La CPU codifica cada clip de prueba dos veces para alcanzar el bitrate en el clip corto. NVIDIA usa multipass en una pasada. La comparación tarda más.",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
+      "Solo ABR y CBR. La CPU codifica cada clip de prueba dos veces, NVIDIA usa multipass. La comparación tarda más.",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Modo anime (puntuación VMAF-NEG + 10 bits contra el banding)",
     "Anime-Modus (VMAF-NEG + 10-bit)": "Modo anime (VMAF-NEG + 10 bits)",
     "Optionen": "Opciones",
@@ -2955,6 +2969,13 @@
     "Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.": "AV1 uniquement (CPU/SVT). 0 = désactivé. Économise des bits sur les images granuleuses.",
     "Zwei-Pass (nur im Bitraten-Modus – gleichmäßigere Qualität)": "Deux passes (mode bitrate uniquement – qualité plus régulière)",
     "Zwei-Pass (nur Bitraten-Modus)": "Deux passes (mode bitrate uniquement)",
+    "Gilt für den Encode und für die VMAF-Testclips, sobald ABR oder CBR gewählt ist. Die CPU macht zwei Durchläufe, NVIDIA Multipass.":
+      "Vaut pour l'encodage et pour les clips de test VMAF quand ABR ou CBR est choisi. Le CPU fait deux passes, NVIDIA utilise le multipass.",
+    "Zwei-Pass für die Testclips": "Deux passes pour les clips de test",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.":
+      "ABR et CBR seulement. Le CPU encode chaque clip de test deux fois pour atteindre le débit sur le clip court. NVIDIA utilise le multipass en un passage. La comparaison dure plus longtemps.",
+    "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
+      "ABR et CBR seulement. Le CPU encode chaque clip de test deux fois, NVIDIA utilise le multipass. La comparaison dure plus longtemps.",
     "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Mode anime (notation VMAF-NEG + 10 bits contre le banding)",
     "Anime-Modus (VMAF-NEG + 10-bit)": "Mode anime (VMAF-NEG + 10 bits)",
     "Optionen": "Options",
@@ -3857,6 +3878,9 @@
         return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
     [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Actual " + m[1]; }],
+    [/^Schwelle (\d+)$/, function (m) { return "Threshold " + m[1]; }],
+    [/^Verlauf Szene (\d+) · Tiefstwert je Abschnitt$/, function (m) { return "Course scene " + m[1] + " · lowest value per section"; }],
+    [/^Verlauf Szene (\d+) · VMAF und Bitrate der Testclips$/, function (m) { return "Course scene " + m[1] + " · VMAF and bitrate of the test clips"; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Scenes by bitrate: " + m[1]
         .replace(/schwer/g, "hard").replace(/hoch/g, "high").replace(/typisch/g, "typical")
@@ -3984,6 +4008,9 @@
         return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
     [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Real " + m[1]; }],
+    [/^Schwelle (\d+)$/, function (m) { return "Umbral " + m[1]; }],
+    [/^Verlauf Szene (\d+) · Tiefstwert je Abschnitt$/, function (m) { return "Curso escena " + m[1] + " · valor más bajo por tramo"; }],
+    [/^Verlauf Szene (\d+) · VMAF und Bitrate der Testclips$/, function (m) { return "Curso escena " + m[1] + " · VMAF y bitrate de los clips de prueba"; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Escenas según bitrate: " + m[1]
         .replace(/schwer/g, "difícil").replace(/hoch/g, "alto").replace(/typisch/g, "típico")
@@ -4111,6 +4138,9 @@
         return role + " " + m[2] + (m[3] ? " · " + m[3] + " Mbit/s" : "");
       }],
     [/^Ist ([\d.]+ (?:Mbit\/s|kbit\/s))$/, function (m) { return "Réel " + m[1]; }],
+    [/^Schwelle (\d+)$/, function (m) { return "Seuil " + m[1]; }],
+    [/^Verlauf Szene (\d+) · Tiefstwert je Abschnitt$/, function (m) { return "Déroulement scène " + m[1] + " · valeur la plus basse par tronçon"; }],
+    [/^Verlauf Szene (\d+) · VMAF und Bitrate der Testclips$/, function (m) { return "Déroulement scène " + m[1] + " · VMAF et débit des clips de test"; }],
     [/^Szenen nach Bitrate: (.+)$/, function (m) {
       return "Scènes selon le débit : " + m[1]
         .replace(/schwer/g, "difficile").replace(/hoch/g, "haut").replace(/typisch/g, "typique")

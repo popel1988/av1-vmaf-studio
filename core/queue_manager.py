@@ -838,6 +838,7 @@ class QueueManager:
                 refine_midpoint=s.workflow != "compare_only",
                 sample_starts=sample_starts,
                 sample_windows=sample_windows,
+                two_pass=bool(s.two_pass) and s.rate_mode in ("bitrate", "abr"),
             )
             analysis = vmaf_mod.analyze(
                 info, s.platform, s.codec, s.target_height, s.tonemap,

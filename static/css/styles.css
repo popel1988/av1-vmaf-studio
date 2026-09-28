@@ -1651,6 +1651,12 @@ input[type="range"]::-moz-range-thumb {
   background: color-mix(in srgb, var(--bad, #ef4444) 18%, transparent); color: var(--bad, #ef4444);
 }
 .data-table tr.row-target-miss td:first-child { box-shadow: inset 3px 0 0 var(--warn, #f59e0b); }
+.vmaf-scenes .vmaf-scene-miss {
+  background: color-mix(in srgb, var(--warn, #f59e0b) 28%, transparent);
+  color: var(--warn, #d97706);
+  border-radius: 4px;
+  padding: 0 4px;
+}
 
 /* ------------------------------- TABLES --------------------------------- */
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }

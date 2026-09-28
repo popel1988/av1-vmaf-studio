@@ -2702,6 +2702,8 @@
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
       sample_mode: sampleModeValue(),
+      two_pass: !!($("vt-two-pass") && $("vt-two-pass").checked
+        && ($("vt-rate-mode").value === "abr" || $("vt-rate-mode").value === "bitrate")),
       generate_screenshots: $("vt-screenshots").checked,
       suffix: "_" + $("vt-codec").value,
       encoder_speed: encoderSpeedValue("vt-enc-speed"),
@@ -3788,6 +3790,20 @@
     return (miss.mean || miss.p1 != null) ? miss : null;
   }
 
+  function vmafSceneFloor(r, lo, gap) {
+    if (!(gap > 0)) return null;
+    const anchor = vmafP1Anchor();
+    const limits = [];
+    if (anchor === "both" || anchor === "target") limits.push(lo - gap);
+    if (anchor === "both" || anchor === "mean") limits.push(Number(r.vmaf) - gap);
+    return limits.length ? Math.max.apply(null, limits) : null;
+  }
+
+  function vmafSceneP1Miss(sc, floor) {
+    const p1 = Number(sc && sc.p1);
+    return floor != null && Number.isFinite(p1) && p1 > 0 && p1 + 1e-9 < floor;
+  }
+
   function vmafMissText(r, miss, lo) {
     const bits = [];
     if (miss.mean) bits.push(`Mittel ${Number(r.vmaf).toFixed(1)} unter Ziel ${Math.round(lo)}`);
@@ -3847,12 +3863,17 @@
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
           return bits.join(" · ");
         });
+      const lo = vmafTargetLo(state.vmafShown);
+      const floor = vmafSceneFloor(r, lo, vmafP1GapValue());
       const visible = (r.scene_scores || []).map((sc) => {
         const p = sc.p1 != null ? ` / 1% ${Number(sc.p1).toFixed(1)}` : "";
-        return `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}`;
+        const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}`;
+        if (!vmafSceneP1Miss(sc, floor)) return escapeHtml(text);
+        const tip = `1%-Low ${Number(sc.p1).toFixed(1)} unter ${Math.round(floor)}`;
+        return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
-      s += `<br><span class="muted" title="${escapeHtml(perScene.join("\n"))}">`
-        + `${escapeHtml(visible || `Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}`)}</span>`;
+      s += `<br><span class="muted vmaf-scenes" title="${escapeHtml(perScene.join("\n"))}">`
+        + `${visible || escapeHtml(`Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}`)}</span>`;
     }
     // Zusatzmetriken (falls gemessen): 1%-Low + harmon. Mittel, PSNR/SSIM.
     const extra = [];
@@ -3939,55 +3960,106 @@
     const num = (v, d) => (v == null || v === "" || Number.isNaN(Number(v)))
       ? "" : Number(v).toFixed(d);
     const line = (cells) => cells.map(esc).join(";");
-    const lines = [];
-    lines.push(line([
-      "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
-      "H-Mittel", "PSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
-    ]));
-    rows.forEach((r) => {
+    const scenes = vmafSceneList(vmaf);
+    const session = state.vmafSession;
+    Promise.all([
+      loadSceneBitrate(vmaf),
+      session
+        ? Promise.all(scenes.map((sc) =>
+          fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)))
+        : Promise.resolve([]),
+    ]).then(([, logs]) => {
+      const lines = [];
       lines.push(line([
-        r.label || ("Q" + r.quality), r.platform || "", r.codec || "",
-        r.value != null ? r.value : r.quality,
-        num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
-        num(r.psnr, 2), num(r.ssim, 4), num(r.savings_percent, 1),
-        r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
+        "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
+        "H-Mittel", "PSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
       ]));
-    });
-    lines.push("");
-    lines.push(line(["Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "SSIM"]));
-    rows.forEach((r) => {
-      (r.scene_scores || []).forEach((sc) => {
+      rows.forEach((r) => {
         lines.push(line([
-          (sc.scene != null ? sc.scene + 1 : ""),
-          r.label || ("Q" + r.quality),
-          num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
-          num(sc.psnr, 2), num(sc.ssim, 4),
+          r.label || ("Q" + r.quality), r.platform || "", r.codec || "",
+          r.value != null ? r.value : r.quality,
+          num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
+          num(r.psnr, 2), num(r.ssim, 4), num(r.savings_percent, 1),
+          r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
         ]));
       });
-    });
-    lines.push("");
-    lines.push(line([
-      "Verlauf", "Einstellung", "Szene", "Abschnitt",
-      "VMAF (Tiefstwert im Abschnitt)",
-    ]));
-    rows.forEach((r) => {
-      (r.scene_scores || []).forEach((sc) => {
-        (sc.frames || []).forEach((v, i) => {
+      lines.push("");
+      lines.push(line(["Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "SSIM", "kbit/s"]));
+      rows.forEach((r) => {
+        (r.scene_scores || []).forEach((sc) => {
           lines.push(line([
-            "frame", r.label || ("Q" + r.quality),
-            (sc.scene != null ? sc.scene + 1 : ""), i + 1, num(v, 2),
+            (sc.scene != null ? sc.scene + 1 : ""),
+            r.label || ("Q" + r.quality),
+            num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
+            num(sc.psnr, 2), num(sc.ssim, 4),
+            sc.kbps ? Math.round(sc.kbps) : "",
           ]));
         });
       });
+      const frameRows = [];
+      (logs || []).forEach((pack, idx) => {
+        if (!pack || !pack.series) return;
+        const sceneNo = (scenes[idx] != null ? scenes[idx] : idx) + 1;
+        const frameSec = Number(pack.series[0] && pack.series[0].frame_sec) || 0;
+        pack.series.forEach((s) => {
+          const sec = Number(s.frame_sec) || frameSec;
+          (s.frames || []).forEach((f) => {
+            const t = sec > 0 ? (Number(f.n) || 0) * sec : "";
+            frameRows.push(line([
+              s.label || "", sceneNo, f.n, num(t, 3),
+              num(f.vmaf, 2), num(f.psnr, 2), num(f.ssim, 4),
+            ]));
+          });
+        });
+      });
+      lines.push("");
+      if (frameRows.length) {
+        lines.push(line(["Einstellung", "Szene", "Frame", "Zeit s", "VMAF", "PSNR", "SSIM"]));
+        frameRows.forEach((row) => lines.push(row));
+      } else {
+        lines.push(line([
+          "Verlauf", "Einstellung", "Szene", "Abschnitt",
+          "VMAF (Tiefstwert im Abschnitt)",
+        ]));
+        rows.forEach((r) => {
+          (r.scene_scores || []).forEach((sc) => {
+            (sc.frames || []).forEach((v, i) => {
+              lines.push(line([
+                "frame", r.label || ("Q" + r.quality),
+                (sc.scene != null ? sc.scene + 1 : ""), i + 1, num(v, 2),
+              ]));
+            });
+          });
+        });
+      }
+      const brRows = [];
+      rows.forEach((r) => {
+        (r.scene_scores || []).forEach((sc) => {
+          (sc.bitrate || []).forEach((b) => {
+            brRows.push(line([
+              r.label || ("Q" + r.quality),
+              (sc.scene != null ? sc.scene + 1 : ""),
+              num(b.t, 3), num(b.kbps, 1),
+            ]));
+          });
+        });
+      });
+      if (brRows.length) {
+        lines.push("");
+        lines.push(line(["Einstellung", "Szene", "Zeit s", "kbit/s"]));
+        brRows.forEach((row) => lines.push(row));
+      }
+      const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      const stem = (state.vmafSource && state.vmafSource.name)
+        ? state.vmafSource.name.replace(/\.[^.]+$/, "") : "vmaf";
+      a.href = URL.createObjectURL(blob);
+      a.download = stem + "-vmaf.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
     });
-    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    const a = document.createElement("a");
-    const stem = (state.vmafSource && state.vmafSource.name)
-      ? state.vmafSource.name.replace(/\.[^.]+$/, "") : "vmaf";
-    a.href = URL.createObjectURL(blob);
-    a.download = stem + "-vmaf.csv";
-    a.click();
-    URL.revokeObjectURL(a.href);
   }
 
   function fillVmafTable(vmaf) {
@@ -4061,6 +4133,9 @@
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
     drawFrameChart(vmaf);
+    loadSceneBitrate(vmaf).then(() => {
+      if (state.vmafShown === vmaf) drawFrameChart(vmaf);
+    });
     refreshNerdFrames();
   }
 
@@ -4117,6 +4192,35 @@
     });
   }
 
+  function sceneClipFile(r, scene) {
+    const shot = shotsOf(r).find((sh) => sh.scene === scene && sh.clip);
+    return shot ? shot.clip : "";
+  }
+
+  function loadSceneBitrate(vmaf) {
+    const session = state.vmafSession;
+    if (!vmaf || !session) return Promise.resolve();
+    const jobs = [];
+    (vmaf.results || []).forEach((r) => {
+      (r.scene_scores || []).forEach((sc) => {
+        if (!sc || Array.isArray(sc.bitrate)) return;
+        const file = sceneClipFile(r, sc.scene);
+        if (!file) {
+          sc.bitrate = [];
+          return;
+        }
+        jobs.push(fetch(
+          `/api/vmaf/clip-bitrate?session=${encodeURIComponent(session)}&file=${encodeURIComponent(file)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            sc.bitrate = (data && data.bins) || [];
+          })
+          .catch(() => { sc.bitrate = []; }));
+      });
+    });
+    return Promise.all(jobs);
+  }
+
   function drawFrameChart(vmaf) {
     const wrap = $("vmaf-frame-wrap");
     const ctx = $("vmaf-frame-chart");
@@ -4135,37 +4239,87 @@
       return;
     }
     wrap.hidden = false;
+    const clipSec = Number(vmaf.clip_seconds) || 0;
+    const hasBr = clipSec > 0 && rows.some((r) => {
+      const sc = sceneEntry(r, scene);
+      return sc && sc.bitrate && sc.bitrate.length;
+    });
     if (title) {
-      title.textContent = `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt`;
+      title.textContent = hasBr
+        ? `Verlauf Szene ${scene + 1} · VMAF und Bitrate der Testclips`
+        : `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt`;
     }
     const col = chartColors();
-    const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
-    const labels = Array.from({ length: n }, (_, i) => {
-      if (i === 0) return "Anfang";
-      if (i === n - 1) return "Ende";
-      if (i === Math.floor(n / 2)) return "Mitte";
-      return "";
-    });
-    const datasets = rows.map((r, i) => {
+    const datasets = [];
+    rows.forEach((r, i) => {
+      const sc = sceneEntry(r, scene);
       const color = r.recommended ? col.good : CHART_PALETTE[i % CHART_PALETTE.length];
-      return {
-        label: r.label || ("Q" + r.quality),
-        data: sceneEntry(r, scene).frames,
+      const label = r.label || ("Q" + r.quality);
+      const n = sc.frames.length;
+      datasets.push({
+        label,
+        yAxisID: "y",
+        data: hasBr
+          ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * clipSec, y: v }))
+          : sc.frames,
         borderColor: color,
         backgroundColor: "transparent",
         pointRadius: 0,
         borderWidth: r.recommended ? 2.4 : 1.5,
         tension: 0.2,
         spanGaps: true,
-      };
+      });
+      if (hasBr) {
+        datasets.push({
+          label: label + " · Bitrate",
+          yAxisID: "y1",
+          data: sc.bitrate.map((b) => ({ x: Number(b.t) + 0.25, y: Number(b.kbps) })),
+          borderColor: color,
+          backgroundColor: "transparent",
+          borderDash: [5, 4],
+          pointRadius: 0,
+          borderWidth: 1.3,
+          tension: 0.15,
+          spanGaps: true,
+        });
+      }
     });
     const opts = lineChartOptions(col, "VMAF");
-    opts.scales.x.ticks.autoSkip = false;
     opts.scales.y.suggestedMin = 80;
     opts.scales.y.suggestedMax = 100;
+    if (hasBr) {
+      opts.scales.x.type = "linear";
+      opts.scales.x.title = { display: true, text: "Sekunden", color: col.muted };
+      opts.scales.x.ticks.autoSkip = true;
+      opts.scales.x.ticks.maxTicksLimit = 8;
+      opts.scales.y1 = {
+        position: "right",
+        title: { display: true, text: "kbit/s", color: col.muted },
+        grid: { drawOnChartArea: false },
+        ticks: { color: col.muted },
+      };
+      opts.interaction = { mode: "nearest", intersect: false, axis: "x" };
+    } else {
+      const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
+      opts.scales.x.ticks.autoSkip = false;
+      state.vmafFrameChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: Array.from({ length: n }, (_, i) => {
+            if (i === 0) return "Anfang";
+            if (i === n - 1) return "Ende";
+            if (i === Math.floor(n / 2)) return "Mitte";
+            return "";
+          }),
+          datasets,
+        },
+        options: opts,
+      });
+      return;
+    }
     state.vmafFrameChart = new Chart(ctx, {
       type: "line",
-      data: { labels, datasets },
+      data: { datasets },
       options: opts,
     });
   }
@@ -4260,6 +4414,13 @@
       if (!s) return;
       el.textContent = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0);
     });
+    const chart = state.vmafNerdChart;
+    if (!chart) return;
+    const ds = (chart.data.datasets || []).find((d) => d.floorLine);
+    if (!ds) return;
+    ds.data = ds.data.map(() => floor);
+    ds.label = tt("Schwelle " + floor);
+    chart.update("none");
   }
 
   function drawNerdFrames(data) {
@@ -4289,6 +4450,20 @@
         spanGaps: true,
       };
     });
+    const floor = nerdFloorValue();
+    datasets.push({
+      label: tt("Schwelle " + floor),
+      floorLine: true,
+      data: Array.from({ length: Math.max(n, 1) }, () => floor),
+      borderColor: col.warn || "#fbbf24",
+      backgroundColor: "transparent",
+      borderDash: [6, 4],
+      borderWidth: 1.6,
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      tension: 0,
+      order: -1,
+    });
     if (ctx && typeof Chart !== "undefined") {
       const opts = lineChartOptions(col, "VMAF");
       opts.scales.y.suggestedMin = 70;
@@ -4296,6 +4471,7 @@
       opts.scales.x.ticks.autoSkip = true;
       opts.scales.x.ticks.maxTicksLimit = 12;
       opts.plugins.tooltip = {
+        filter: (item) => !(item.dataset && item.dataset.floorLine),
         callbacks: {
           title: (items) => {
             const i = items[0] ? items[0].dataIndex : 0;
@@ -4312,7 +4488,6 @@
     }
     if (!body) return;
     const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.";
-    const floor = nerdFloorValue();
     body.innerHTML = `<p class="vmaf-nerd-legend">${escapeHtml(legend)}</p>` + series.map((s, i) => {
       const worst = (s.worst || []).map((f) => {
         const extra = [
@@ -7637,6 +7812,8 @@
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.sample_mode = sampleModeValue("st-sample-mode");
+      s.two_pass = !!($("st-two-pass") && $("st-two-pass").checked
+        && (s.rate_mode === "abr" || s.rate_mode === "bitrate"));
       s.test_values = stTestValues();
       s.generate_screenshots = true;
       if (mode === "target_vmaf") s.target_vmaf = parseInt($("st-target").value, 10);

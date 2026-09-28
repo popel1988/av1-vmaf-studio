@@ -57,6 +57,8 @@ class VmafOptions:
     # Gesetzte Stichproben [(start, sekunden)]. Leer = gleichmäßig über den Film.
     sample_starts: list = field(default_factory=list)
     sample_windows: list = field(default_factory=list)
+    # Nur Bitraten-Modus. CPU: zwei FFmpeg-Durchläufe. NVIDIA: Multipass.
+    two_pass: bool = False
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -194,6 +196,13 @@ class VmafResult:
                     item["frames"] = frames
                 if s.get("kbps"):
                     item["kbps"] = int(s["kbps"])
+                curve = s.get("bitrate") or []
+                if curve:
+                    item["bitrate"] = [
+                        {"t": round(float(b.get("t") or 0), 3),
+                         "kbps": round(float(b.get("kbps") or 0), 1)}
+                        for b in curve if isinstance(b, dict)
+                    ]
                 packed.append(item)
             d["scene_scores"] = packed
             vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
@@ -609,10 +618,14 @@ def analyze(
 
     # --- Fortschritts-Tracking --------------------------------------------
     n_samples = len(_sample_starts(info.duration, opts.clip_seconds, opts.samples))
-    # „Einheiten" = pro (Encoder,Wert,Sample): 1 Encode + 1 VMAF-Vergleich.
+    # Einheiten je Sample: Encode + VMAF. CPU-Zwei-Pass zählt den ersten Lauf extra.
+    extra_pass = 1 if (use_bitrate and opts.two_pass) else 0
+    units = 0
+    for p, _c in enc_list:
+        units += n_samples * (2 + (extra_pass if p == "cpu" else 0))
     budget = {
         "steps": max(1, len(enc_list) * len(values)),
-        "units": max(1, len(enc_list) * len(values) * n_samples * 2),
+        "units": max(1, units * len(values)),
     }
     prog = {"done": 0, "step": 0}
 
@@ -659,27 +672,13 @@ def analyze(
                 break
             skey = f"{key}_s{si}"
             smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
-            if status:
-                status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
-            emit("encode")
             test_file = work / f"test_{skey}.mkv"
-            if use_bitrate:
-                cmd = build_encode_cmd(
-                    info, test_file, p, c, 28,
-                    target_height, tonemap,
-                    duration_limit=clip_len, start_at=start,
-                    rate_mode=opts.rate_mode, bitrate_kbps=val,
-                    include_progress=True, audio_mode="none",
-                    preserve_hdr=preserve_hdr, film_grain=film_grain,
-                    denoise=denoise, sharpen=sharpen, grain=grain,
-                    deinterlace=deinterlace, aq_strength=aq_strength,
-                    force_10bit=opts.anime, crop=crop,
-                    encoder_speed=encoder_speed,
-                )
-            else:
-                cmd = build_encode_cmd(
-                    info, test_file, p, c, val,
-                    target_height, tonemap,
+            passlog = str(work / f"pass_{skey}")
+            cpu_two = bool(use_bitrate and opts.two_pass and p == "cpu")
+            nv_two = bool(use_bitrate and opts.two_pass and p == "nvidia")
+
+            def _test_cmd(pass_num: Optional[int] = None) -> list[str]:
+                kw = dict(
                     duration_limit=clip_len, start_at=start,
                     include_progress=True, audio_mode="none",
                     preserve_hdr=preserve_hdr, film_grain=film_grain,
@@ -688,8 +687,45 @@ def analyze(
                     force_10bit=opts.anime, crop=crop,
                     encoder_speed=encoder_speed,
                 )
+                if use_bitrate:
+                    kw["rate_mode"] = opts.rate_mode
+                    kw["bitrate_kbps"] = val
+                    quality = 28
+                else:
+                    quality = val
+                if cpu_two and pass_num in (1, 2):
+                    kw["two_pass"] = True
+                    kw["pass_num"] = pass_num
+                    kw["passlog"] = passlog
+                elif nv_two:
+                    kw["two_pass"] = True
+                return build_encode_cmd(
+                    info, test_file, p, c, quality, target_height, tonemap, **kw)
+
             runner = EncodeRunner(on_progress=lambda pr: emit(
                 "encode", fps=pr.fps, sub=pr.percent))
+            if cpu_two:
+                if status:
+                    status(f"Test-Encode {disp} @ {rate_lbl}{smp} · Pass 1/2 …")
+                emit("encode")
+                rc1, err1 = runner.run(_test_cmd(1), clip_len)
+                prog["done"] += 1
+                if cancelled():
+                    break
+                if rc1 != 0:
+                    tail = (err1 or "").strip().splitlines()
+                    last_error = (
+                        f"Test-Encode Pass 1 fehlgeschlagen ({disp} @ {rate_lbl}): "
+                        f"{tail[-1] if tail else 'keine Ausgabe'}"
+                    )
+                    logger.warning("%s", last_error)
+                    continue
+                if status:
+                    status(f"Test-Encode {disp} @ {rate_lbl}{smp} · Pass 2/2 …")
+            elif status:
+                status(f"Test-Encode {disp} @ {rate_lbl}{smp} …")
+            emit("encode")
+            cmd = _test_cmd(2 if cpu_two else None)
             rc, enc_err = runner.run(cmd, clip_len)
             prog["done"] += 1
             if not test_file.exists() or test_file.stat().st_size == 0:
@@ -737,6 +773,13 @@ def analyze(
             scene_kbps = measured_kbps(clip_bytes, clip_len)
             if scene_scores:
                 scene_scores[-1]["kbps"] = scene_kbps
+                try:
+                    from . import bitrate_profile
+                    curve = bitrate_profile.clip_bins(test_file, 0.5)
+                except Exception:
+                    curve = []
+                if curve:
+                    scene_scores[-1]["bitrate"] = curve
             if opts.generate_screenshots:
                 enc_rel = _extract_frame(
                     test_file, f"{sess}/{key}_s{si}_enc.jpg",

@@ -393,7 +393,7 @@
                 </label>
                 <label class="check">
                   <input type="checkbox" id="opt-two-pass" />
-                  <span>Zwei-Pass (nur Bitraten-Modus)</span>
+                  <span data-tip="Gilt für den Encode und für die VMAF-Testclips, sobald ABR oder CBR gewählt ist. Die CPU macht zwei Durchläufe, NVIDIA Multipass.">Zwei-Pass (nur Bitraten-Modus)</span>
                 </label>
                 <label class="check">
                   <input type="checkbox" id="opt-anime" />
@@ -661,7 +661,12 @@
                   <input type="checkbox" id="vt-anime" />
                   <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
                 </label>
+                <label class="check">
+                  <input type="checkbox" id="vt-two-pass" />
+                  <span>Zwei-Pass für die Testclips</span>
+                </label>
               </div>
+              <p class="hint">Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.</p>
             </div>
 
             <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
@@ -1130,6 +1135,11 @@
                 <input type="checkbox" id="st-sample-mode" />
                 VMAF-Szenen nach Bitrate
               </label>
+              <label class="check">
+                <input type="checkbox" id="st-two-pass" />
+                <span>Zwei-Pass für die Testclips</span>
+              </label>
+              <p class="hint">Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.</p>
               <div class="field">
                 <label><span id="st-test-label">Test-CQ-Werte</span>
                   <span class="hint">(Anzahl der Felder = Test-Encodes je Datei)</span></label>
