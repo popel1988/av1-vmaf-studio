@@ -25,25 +25,33 @@ def _u32(buf: bytes, off: int) -> int:
     return int.from_bytes(buf[off:off + 4], "big")
 
 
+_DISC_PARTS = {
+    "BDMV", "PLAYLIST", "STREAM", "CLIPINF", "BACKUP", "CERTIFICATE", "JAR", "AUXDATA",
+}
+
+
 def disc_root(folder: Path) -> Optional[Path]:
-    """Ordner, der BDMV enthält. Sucht im Ordner, eine Ebene tiefer und nach oben."""
+    """Ordner, dessen BDMV direkt hier liegt.
+
+    Ein Sammelordner mit vielen Filmen darunter zählt nicht. Nach oben wird
+    nur gegangen, solange man schon in der Disc steht (BDMV, STREAM, …).
+    """
     start = folder if folder.is_dir() else folder.parent
+    if (start / "BDMV" / "PLAYLIST").is_dir():
+        return start
     cur = start
     for _ in range(6):
-        if (cur / "BDMV" / "PLAYLIST").is_dir():
-            return cur
-        if cur.name.upper() == "BDMV" and (cur / "PLAYLIST").is_dir():
+        name = cur.name.upper()
+        if name == "BDMV" and (cur / "PLAYLIST").is_dir():
             return cur.parent
+        if name not in _DISC_PARTS:
+            return None
         parent = cur.parent
         if parent == cur:
-            break
+            return None
+        if (parent / "BDMV" / "PLAYLIST").is_dir():
+            return parent
         cur = parent
-    try:
-        for child in start.iterdir():
-            if child.is_dir() and (child / "BDMV" / "PLAYLIST").is_dir():
-                return child
-    except OSError:
-        return None
     return None
 
 

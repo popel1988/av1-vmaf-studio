@@ -220,14 +220,20 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); align-items: start; }
 
 /* Encoding/VMAF: Quelle als schmale Spalte, Einstellungen daneben (wie Super-Tool-Blöcke) */
+.source-card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
 .source-card .card-body {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 .source-card .browser {
   flex: 1 1 auto;
-  max-height: min(58vh, 620px);
+  max-height: none;
   min-height: 240px;
 }
 .card {
@@ -1071,7 +1077,17 @@ button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, t
 .badge.diag-fail { color: var(--bad, #e74c3c); }
 
 /* Super-Tool: Ordnerwahl + Live-Dateiliste nebeneinander */
-.st-folder-area { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+.st-folder-area { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; align-items: stretch; }
+.st-folder-area > .field:has(> .browser) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.st-folder-area > .field > .browser {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 280px;
+}
 @media (max-width: 900px) { .st-folder-area { grid-template-columns: 1fr; } }
 .st-file-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 12px;
