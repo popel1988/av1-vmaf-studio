@@ -244,6 +244,19 @@
     "Encode schneidet framegenau und vereinheitlicht inkompatible Quellen.":
       "Encode cuts frame-accurately and unifies incompatible sources.",
     "Keine Datei": "No file",
+    "Blu-ray": "Blu-ray",
+    "Hauptfilm": "Main feature",
+    "Weiterer Titel": "Other title",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Darunter liegen die einzelnen M2TS.":
+      "The longest playlist is the main feature. The other titles stay selectable. The individual M2TS files are listed below.",
+    "Eine Playlist aus mehreren M2TS ersetzt nicht die einzelne Datei. Bitte einen Zielordner wählen.":
+      "A playlist of several M2TS files does not replace the single file. Choose an output folder.",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar.":
+      "The longest playlist is the main feature. The other titles stay selectable.",
+    "Zum Remuxen unter Remux & Bearbeiten öffnen.":
+      "Open this under Remux & edit to remux it.",
+    "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "An ISO image is not replaced. Choose an output folder.",
     "Tonspuren": "Audio tracks",
     "Untertitel": "Subtitles",
     "Externe Spuren hinzufügen": "Add external tracks",
@@ -1638,6 +1651,19 @@
     "Vorschau Timeline": "Vista previa de la línea de tiempo",
     "In Warteschlange": "Añadir a la cola",
     "Keine Datei": "Sin archivo",
+    "Blu-ray": "Blu-ray",
+    "Hauptfilm": "Película principal",
+    "Weiterer Titel": "Otro título",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Darunter liegen die einzelnen M2TS.":
+      "La playlist más larga es la película principal. Los demás títulos siguen siendo elegibles. Abajo están los M2TS sueltos.",
+    "Eine Playlist aus mehreren M2TS ersetzt nicht die einzelne Datei. Bitte einen Zielordner wählen.":
+      "Una playlist de varios M2TS no sustituye el archivo suelto. Elige una carpeta de destino.",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar.":
+      "La lista más larga es la película principal. Los demás títulos siguen siendo elegibles.",
+    "Zum Remuxen unter Remux & Bearbeiten öffnen.":
+      "Para el remux, ábrelo en Remux y editar.",
+    "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "Una imagen ISO no se sustituye. Elige una carpeta de destino.",
     "Tonspuren": "Pistas de audio",
     "Untertitel": "Subtítulos",
     "Externe Spuren hinzufügen": "Añadir pistas externas",
@@ -2757,6 +2783,19 @@
     "Audio-Optimierung": "Optimisation audio",
     "Remux & Bearbeiten": "Remux et édition",
     "Keine Datei": "Aucun fichier",
+    "Blu-ray": "Blu-ray",
+    "Hauptfilm": "Film principal",
+    "Weiterer Titel": "Autre titre",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Darunter liegen die einzelnen M2TS.":
+      "La playlist la plus longue est le film principal. Les autres titres restent sélectionnables. Les M2TS séparés sont en dessous.",
+    "Eine Playlist aus mehreren M2TS ersetzt nicht die einzelne Datei. Bitte einen Zielordner wählen.":
+      "Une playlist de plusieurs M2TS ne remplace pas le fichier seul. Choisis un dossier de destination.",
+    "Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar.":
+      "La playlist la plus longue est le film principal. Les autres titres restent sélectionnables.",
+    "Zum Remuxen unter Remux & Bearbeiten öffnen.":
+      "Pour le remux, ouvrez-le sous Remux et édition.",
+    "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "Une image ISO n'est pas remplacée. Choisissez un dossier de sortie.",
     "Tonspuren": "Pistes audio",
     "Untertitel": "Sous-titres",
     "Externe Spuren hinzufügen": "Ajouter des pistes externes",

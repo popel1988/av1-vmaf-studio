@@ -326,13 +326,21 @@
 
     // Datei-Zeile: einfacher Klick wählt aus, im Multi-Modus hakt er an.
     function fileRow(f, label) {
+      if (f.disc) {
+        return makeRow("iso", label, f.size_human, () => go(f.rel), null);
+      }
+      const isoTitle = f.bluray && f.bluray.iso;
+      if (isoTitle && !opts.discPick) {
+        return makeRow("file", label, f.size_human, null, null);
+      }
+      const playRel = isoTitle ? null : (opts.playFile ? f.rel : null);
       if (!multi) {
         return makeRow("file", label, f.size_human, null,
           opts.pickFile ? () => opts.pickFile(f) : null,
-          opts.playFile ? f.rel : null, opts.playRoot || "media");
+          playRel, opts.playRoot || "media");
       }
       const row = makeRow("file", label, f.size_human, null, null,
-        opts.playFile ? f.rel : null, opts.playRoot || "media");
+        playRel, opts.playRoot || "media");
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.className = "row-sel";
@@ -372,13 +380,36 @@
       const match = (n) => !q || n.toLowerCase().includes(q);
       const dirs = (data.dirs || []).filter((d) => match(d.name));
       const files = showFiles ? (data.files || []).filter((f) => match(f.name)) : [];
+      const titles = (!q && data.bluray && data.bluray.titles) ? data.bluray.titles : [];
       S.visible = files;
       if (!data.roots && !data.is_root && !q) {
         listEl.appendChild(makeRow("dir", "..", "", () => go(data.parent || ""), null));
       }
+      if (titles.length && showFiles) {
+        const head = document.createElement("div");
+        head.className = "browser-section";
+        head.textContent = tt("Blu-ray");
+        listEl.appendChild(head);
+        const hint = document.createElement("div");
+        hint.className = "browser-section-hint";
+        hint.textContent = data.bluray.iso
+          ? (opts.discPick
+            ? tt("Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar.")
+            : tt("Zum Remuxen unter Remux & Bearbeiten öffnen."))
+          : tt("Die längste Playlist ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Darunter liegen die einzelnen M2TS.");
+        listEl.appendChild(hint);
+        titles.forEach((t) => {
+          const role = tt(t.role === "main" ? "Hauptfilm" : "Weiterer Titel");
+          const label = `${role} · ${t.playlist} · ${t.duration_human} · ${t.clips.length}×`;
+          const f = {
+            rel: t.clips[0], name: label, size_human: t.size_human || "", bluray: t,
+          };
+          listEl.appendChild(fileRow(f, label));
+        });
+      }
       dirs.forEach((d) => listEl.appendChild(makeRow("dir", d.name, "", () => go(d.rel), null)));
       files.forEach((f) => listEl.appendChild(fileRow(f, f.name)));
-      if (!dirs.length && !files.length) {
+      if (!dirs.length && !files.length && !titles.length) {
         listEl.innerHTML = q
           ? '<div class="browser-loading">Keine Treffer in diesem Ordner.</div>'
           : ((!showFiles && (data.files || []).length)
@@ -455,7 +486,7 @@
   function makeRow(type, name, size, onOpen, onPick, playRel, playRoot) {
     const row = document.createElement("div");
     row.className = "row-item";
-    const icon = type === "dir" ? "📁" : "🎬";
+    const icon = type === "dir" ? "📁" : type === "iso" ? "💿" : "🎬";
     row.innerHTML = `
       <span class="row-icon ${type}">${icon}</span>
       <span class="row-name">${escapeHtml(name)}</span>
@@ -8322,8 +8353,12 @@
     if (!remuxBrowser) {
       remuxBrowser = makeFolderBrowser({
         listId: "remux-browser", crumbId: "remux-breadcrumb", kind: "video",
-        showFiles: true, playFile: true, pickFile: remuxSelectFile,
-        onNavigate: (data, p) => { state.currentRemuxPath = p; },
+        showFiles: true, playFile: true, discPick: true, pickFile: remuxSelectFile,
+        onNavigate: (data, p) => {
+          state.currentRemuxPath = p;
+          const main = ((data.bluray && data.bluray.titles) || []).find((t) => t.role === "main");
+          if (main && !state.remuxSel) remuxSelectTitle(main);
+        },
       });
     }
     return remuxBrowser ? remuxBrowser.go(path) : undefined;
@@ -8348,23 +8383,42 @@
     remuxRenderSplitRanges();
   }
 
+  function remuxSelectTitle(t) {
+    const role = tt(t.role === "main" ? "Hauptfilm" : "Weiterer Titel");
+    const label = `${role} · ${t.playlist} · ${t.duration_human} · ${t.clips.length}×`;
+    return remuxSelectFile({
+      rel: t.clips[0], name: label, size_human: t.size_human || "", bluray: t,
+    });
+  }
+
   async function remuxSelectFile(f) {
-    state.remuxSel = { path: f.rel, name: f.name };
+    const iso = f.bluray && f.bluray.iso;
+    state.remuxSel = {
+      path: iso || f.rel, name: f.name,
+      bluray: f.bluray || null,
+    };
     state.remuxExt = [];
     state.remuxAtt = [];
     state.remuxChapters = null;
     $("remux-chapters-wrap").style.display = "none";
     $("remux-chapters-info").textContent = "";
     const splitBtn = $("btn-split-start");
-    if (splitBtn) splitBtn.disabled = false;
+    if (splitBtn) splitBtn.disabled = !!iso;
     const clr = $("btn-remux-clear");
     if (clr) clr.disabled = false;
     $("remux-badge").textContent = `${f.name} · analysiere …`;
     document.querySelectorAll("#remux-browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
     try {
-      const info = await (await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
+      const probeUrl = iso
+        ? `/api/probe?path=${encodeURIComponent(iso)}&disc_clip=${encodeURIComponent((f.bluray.clips || [])[0] || "")}`
+        : `/api/probe?path=${encodeURIComponent(f.rel)}`;
+      const info = await (await fetch(probeUrl)).json();
       if (info.error) { $("remux-badge").textContent = info.error; return; }
       state.remuxInfo = info;
+      if (state.remuxSel.bluray && state.remuxSel.bluray.chapters
+          && state.remuxSel.bluray.chapters.length) {
+        state.remuxChapters = state.remuxSel.bluray.chapters.map((c) => ({ ...c }));
+      }
       $("remux-badge").textContent = f.name;
       $("remux-editor").style.display = "";
       remuxRenderEditor();
@@ -9066,6 +9120,13 @@
         title: (document.querySelector(`.rx-ch-title[data-i="${i}"]`) || {}).value || c.title,
       }));
     }
+    if (state.remuxSel && state.remuxSel.bluray && state.remuxSel.bluray.iso) {
+      spec.playlist_clips = (state.remuxSel.bluray.clips || []).slice();
+      spec.playlist_duration = state.remuxSel.bluray.duration;
+    } else if (state.remuxSel && state.remuxSel.bluray
+        && (state.remuxSel.bluray.clips || []).length > 1) {
+      spec.playlist_clips = state.remuxSel.bluray.clips.slice();
+    }
     return spec;
   }
 
@@ -9289,6 +9350,18 @@
       return;
     }
     // Original ersetzen: nur nach ausdrücklicher Bestätigung.
+    if (state.remuxSel.bluray && state.remuxSel.bluray.iso
+        && $("remux-post").value === "inplace") {
+      $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(tt(
+        "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen."))}</span>`;
+      return;
+    }
+    if (state.remuxSel.bluray && (state.remuxSel.bluray.clips || []).length > 1
+        && $("remux-post").value === "inplace") {
+      $("remux-start-info").innerHTML = `<span class="bad">${escapeHtml(tt(
+        "Eine Playlist aus mehreren M2TS ersetzt nicht die einzelne Datei. Bitte einen Zielordner wählen."))}</span>`;
+      return;
+    }
     if ($("remux-post").value === "inplace" &&
         !window.confirm("Original ersetzen?\n\n\"" + state.remuxSel.name +
           "\" wird nach erfolgreichem Remux durch die neue Datei ersetzt. " +

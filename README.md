@@ -437,6 +437,7 @@ through the normal queue.
 
 | Capability | Details |
 |------------|---------|
+| **Blu-ray folder or ISO** | A `BDMV` tree, or an unencrypted `.iso`, lists its playlists. The longest playlist is the main feature and is selected on the Remux page. Shorter playlists stay selectable. A playlist of several M2TS files is copied in that order, with chapter marks from the playlist. An ISO is mounted read-only for the title list and again for the remux (UDF, then ISO9660); the container needs permission to mount, which the compose file grants with `privileged`. Encrypted images stay closed. Opening one ISO does not mount every image in the folder. |
 | **Track selection** | Keep/remove individual audio & subtitle tracks. |
 | **Reorder** | Move tracks up/down; the order defines the output order (internal and external tracks share the same tables). |
 | **Track metadata** | Edit `default`/`forced` disposition, language, and title per track. |

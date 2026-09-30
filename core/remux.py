@@ -242,8 +242,23 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
     is_mp4 = container == "mp4"
 
     # --- Inputs: Quelle + externe Dateien (mit optionalem Delay) ---------------
-    # Mehrere Spuren aus derselben Datei (gleicher Delay) teilen sich EINEN Input.
-    inputs: list[str] = ["-i", str(info.path)]
+    # Eine Blu-ray-Playlist aus mehreren M2TS wird als eine Quelle verkettet.
+    inputs: list[str] = []
+    playlist = [str(p) for p in (spec.get("playlist_clips") or []) if p]
+    if len(playlist) > 1:
+        try:
+            config.WORK_DIR.mkdir(parents=True, exist_ok=True)
+            concat = config.WORK_DIR / f"bluray_{uuid.uuid4().hex[:8]}.txt"
+            lines = []
+            for clip in playlist:
+                escaped = clip.replace("'", "'\\''")
+                lines.append(f"file '{escaped}'")
+            concat.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            return [], f"Playlist konnte nicht geschrieben werden: {exc}"
+        inputs = ["-f", "concat", "-safe", "0", "-i", str(concat)]
+    else:
+        inputs = ["-i", str(info.path)]
     externals: list[dict] = []
     input_map: dict[tuple[str, float], int] = {}
     for e in spec.get("external", []) or []:
@@ -285,7 +300,10 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
             chapter_input = 1 + len(input_map)
             input_map[("__chapters__", 0.0)] = chapter_input
 
-    cmd = [config.FFMPEG, "-y", "-hide_banner"] + inputs
+    cmd = [config.FFMPEG, "-y", "-hide_banner"]
+    if len(playlist) > 1:
+        cmd += ["-fflags", "+genpts"]
+    cmd += inputs
 
     # --- Video immer 1:1 kopieren ---------------------------------------------
     cmd += ["-map", "0:v", "-c:v", "copy"]

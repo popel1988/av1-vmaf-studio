@@ -275,6 +275,16 @@ def _safe_resolve(rel: str) -> Optional[Path]:
     return config.resolve_input(rel)
 
 
+def _disc_clip_ok(rel: str) -> bool:
+    """Relativer Clip im Abbild: BDMV/STREAM/*.m2ts, ohne .. ."""
+    raw = Path(str(rel).replace("\\", "/"))
+    if raw.is_absolute() or ".." in raw.parts or len(raw.parts) < 3:
+        return False
+    if raw.parts[0].upper() != "BDMV" or raw.parts[1].upper() != "STREAM":
+        return False
+    return raw.name.lower().endswith((".m2ts", ".mts"))
+
+
 @app.get("/api/browse")
 async def browse_input(path: str = "", kind: str = "video"):
     # Virtuelle Wurzel bei mehreren Roots: die Roots als "Ordner" auflisten.
@@ -287,6 +297,8 @@ async def browse_input(path: str = "", kind: str = "video"):
     target = _safe_resolve(path)
     if target is None or not target.exists():
         return JSONResponse({"error": "Pfad nicht gefunden"}, status_code=404)
+    if target.is_file() and target.suffix.lower() == ".iso" and kind == "video":
+        return await _browse_iso(target, path)
     if not target.is_dir():
         return JSONResponse({"error": "Kein Verzeichnis"}, status_code=400)
 
@@ -310,7 +322,8 @@ async def browse_input(path: str = "", kind: str = "video"):
                 continue
             if entry.is_dir():
                 dirs.append({"name": entry.name, "rel": rel})
-            elif entry.suffix.lower() in allowed:
+            elif entry.suffix.lower() in allowed or (
+                    kind == "video" and entry.suffix.lower() == ".iso"):
                 try:
                     size = entry.stat().st_size
                 except OSError:
@@ -318,9 +331,18 @@ async def browse_input(path: str = "", kind: str = "video"):
                 files.append({
                     "name": entry.name, "rel": rel,
                     "size": size, "size_human": ff.human_size(size),
+                    "disc": entry.suffix.lower() == ".iso",
                 })
     except OSError as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+    bluray = None
+    if kind == "video":
+        try:
+            from core import bluray as bluray_mod
+            bluray = bluray_mod.describe(target)
+        except Exception:
+            bluray = None
 
     rel_here = config.rel_input(target) or ""
     # Elternpfad: leer, wenn wir auf einem Root-Top stehen (dann zur Root-Liste
@@ -337,6 +359,29 @@ async def browse_input(path: str = "", kind: str = "video"):
         "is_root": is_root_top and not config.MULTI_MEDIA,
         "dirs": dirs,
         "files": files,
+        "bluray": bluray,
+    }
+
+
+async def _browse_iso(target: Path, path: str):
+    """Unverschlüsseltes Abbild einmal einhängen, Titel listen, wieder aushängen."""
+    from core import bluray as bluray_mod
+
+    try:
+        data = await asyncio.to_thread(bluray_mod.inspect_image, target)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    rel_here = config.rel_input(target) or path
+    data["iso"] = rel_here
+    for title in data.get("titles") or []:
+        title["iso"] = rel_here
+    return {
+        "path": rel_here,
+        "parent": config.rel_input(target.parent),
+        "is_root": False,
+        "dirs": [],
+        "files": [],
+        "bluray": data,
     }
 
 
@@ -379,12 +424,14 @@ async def search_input(path: str = "", q: str = "", limit: int = 500,
 
     files: list[dict] = []
     truncated = False
+    disc_ext = {".iso"} if kind == "video" else set()
     for start in search_dirs:
         for root, dirnames, filenames in os.walk(start):
             # Versteckte Ordner (.archiv, .previews …) überspringen.
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             for fn in sorted(filenames, key=str.lower):
-                if fn.startswith(".") or Path(fn).suffix.lower() not in allowed:
+                suffix = Path(fn).suffix.lower()
+                if fn.startswith(".") or (suffix not in allowed and suffix not in disc_ext):
                     continue
                 if query not in fn.lower():
                     continue
@@ -401,6 +448,7 @@ async def search_input(path: str = "", q: str = "", limit: int = 500,
                     "name": fn, "rel": rel, "size": size,
                     "size_human": ff.human_size(size),
                     "folder": "" if folder == "." else folder,
+                    "disc": suffix in disc_ext,
                 })
                 if len(files) >= max(1, min(2000, limit)):
                     truncated = True
@@ -413,11 +461,28 @@ async def search_input(path: str = "", q: str = "", limit: int = 500,
 
 
 @app.get("/api/probe")
-async def probe(path: str):
+async def probe(path: str, disc_clip: str = ""):
     target = _safe_resolve(path)
     if target is None or not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
-    info, err = ff.probe_with_error(target)
+    if disc_clip:
+        if target.suffix.lower() != ".iso":
+            return JSONResponse({"error": "Kein ISO-Abbild"}, status_code=400)
+
+        def _run():
+            from core import bluray as bluray_mod
+            mount = bluray_mod.mount_iso(target)
+            try:
+                return ff.probe_with_error(bluray_mod.clip_path(mount, disc_clip))
+            finally:
+                bluray_mod.unmount_iso(mount)
+
+        try:
+            info, err = await asyncio.to_thread(_run)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+    else:
+        info, err = ff.probe_with_error(target)
     if info is None:
         return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
     return info.to_dict()
@@ -608,6 +673,10 @@ async def remux_chapters(path: str):
     target = _safe_resolve(path)
     if target is None or not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    if target.suffix.lower() == ".iso":
+        return JSONResponse(
+            {"error": "Kapitel eines Abbilds kommen aus der gewählten Playlist."},
+            status_code=400)
     from core import remux
     return {"chapters": remux.probe_chapters(target)}
 
@@ -627,6 +696,10 @@ async def remux_extract(req: RemuxExtractRequest):
     target = _safe_resolve(req.path)
     if target is None or not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    if target.suffix.lower() == ".iso":
+        return JSONResponse(
+            {"error": "Spuren eines Abbilds exportiert der Remux des Titels in die Zieldatei."},
+            status_code=400)
     if not req.tracks:
         return JSONResponse({"error": "Keine Spuren gewählt"}, status_code=400)
     info, err = ff.probe_with_error(target)
@@ -771,6 +844,10 @@ def remux_cut(req: RemuxCutRequest):
     target = _safe_resolve(req.path)
     if target is None or not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    if target.suffix.lower() == ".iso":
+        return JSONResponse(
+            {"error": "Ein Ausschnitt kommt aus dem Remux des Titels, nicht aus der ISO-Datei."},
+            status_code=400)
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
     ext = "." + container
     dl_dir = config.WORK_DIR / "downloads"
@@ -1067,6 +1144,33 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
     spec = dict(req.spec or {})
     spec["container"] = container
+    if target.suffix.lower() == ".iso":
+        clips = [str(c) for c in (spec.get("playlist_clips") or []) if c]
+        if not clips or any(not _disc_clip_ok(c) for c in clips):
+            return JSONResponse(
+                {"error": "Keine gültige Playlist im Abbild"}, status_code=400)
+        spec["playlist_clips"] = clips
+        if (req.post_processing or "") == "inplace":
+            return JSONResponse(
+                {"error": "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen."},
+                status_code=400)
+    else:
+        resolved_clips = []
+        for rel in spec.get("playlist_clips") or []:
+            clip = _safe_resolve(str(rel))
+            if clip is None or not clip.is_file():
+                return JSONResponse(
+                    {"error": f"Playlist-Teil nicht gefunden: {rel}"}, status_code=404)
+            resolved_clips.append(str(clip))
+        if len(resolved_clips) > 1:
+            spec["playlist_clips"] = resolved_clips
+            if (req.post_processing or "") == "inplace":
+                return JSONResponse(
+                    {"error": "Eine Playlist aus mehreren M2TS ersetzt nicht die einzelne Datei. "
+                     "Bitte einen Zielordner wählen."},
+                    status_code=400)
+        else:
+            spec.pop("playlist_clips", None)
     d = {
         "video_mode": "edit",
         "remux_only": True,

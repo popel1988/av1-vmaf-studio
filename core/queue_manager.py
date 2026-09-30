@@ -704,6 +704,11 @@ class QueueManager:
             item.error = f"Interner Fehler: {e}"
             logger.exception("Job abgestürzt: %s", item.title)
         finally:
+            mount = getattr(item, "_iso_mount", None)
+            if mount is not None:
+                from .bluray import unmount_iso
+                unmount_iso(mount)
+                item._iso_mount = None
             item.finished_at = time.time()
             item.duration = item.finished_at - started
             self._record_history(item, item.duration)
@@ -731,8 +736,39 @@ class QueueManager:
             except Exception as me:  # pragma: no cover
                 logger.debug("Medienserver übersprungen: %s", me)
 
+    def _open_source(self, item: QueueItem):
+        """ffprobe der Quelle. Eine ISO wird dafür lesend eingehängt."""
+        spec = item.settings.edit_spec or {}
+        clips = [str(c) for c in (spec.get("playlist_clips") or []) if c]
+        if Path(item.path).suffix.lower() == ".iso" and clips:
+            from . import bluray
+            mount = bluray.mount_iso(Path(item.path))
+            item._iso_mount = mount
+            try:
+                abs_clips = [str(bluray.clip_path(mount, c)) for c in clips]
+            except Exception as e:
+                return None, str(e)
+            info, err = probe_with_error(Path(abs_clips[0]))
+            if info is None:
+                return None, err or "ISO nicht lesbar"
+            try:
+                info.duration = float(spec.get("playlist_duration") or info.duration or 0)
+            except (TypeError, ValueError):
+                pass
+            size = 0
+            for clip in abs_clips:
+                try:
+                    size += Path(clip).stat().st_size
+                except OSError:
+                    pass
+            if size:
+                item.original_size = size
+            item._mounted_clips = abs_clips
+            return info, None
+        return probe_with_error(Path(item.path))
+
     def _process(self, item: QueueItem) -> None:
-        info, probe_err = probe_with_error(Path(item.path))
+        info, probe_err = self._open_source(item)
         if info is None:
             item.status = STATUS_FAILED
             item.error = f"ffprobe: {probe_err or 'kein gültiges Video'}"
@@ -1182,6 +1218,13 @@ class QueueManager:
         spec = dict(s.edit_spec or {})
         # Container aus dem Spec zieht (mkv/mp4) – für Ausgabe-Pfad & Kompatibilität.
         spec.setdefault("container", "mkv")
+        mounted = getattr(item, "_mounted_clips", None)
+        if mounted:
+            if len(mounted) > 1:
+                spec["playlist_clips"] = mounted
+            else:
+                spec.pop("playlist_clips", None)
+                info.path = mounted[0]
 
         conflicts = remux.check_conflicts(info, spec)
         if conflicts:
