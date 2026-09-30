@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -758,19 +759,180 @@ def vp9_args(speed: str = "balanced", *, cq_mode: bool = True) -> list[str]:
     return args
 
 
-def nvenc_quality_args(enc: str, aq_strength: int = 8) -> list[str]:
-    """AQ und Lookahead für NVENC (SDK der Treiberlinie 575, FFmpeg 8.1).
+def scaled_frame_size(width: int, height: int,
+                      target_height: Optional[int] = None) -> tuple[int, int]:
+    """Ausgabegröße nach optionalem Downscale. Breite bleibt gerade."""
+    w, h = int(width or 0), int(height or 0)
+    th = int(target_height or 0)
+    if th > 0 and h > 0 and th < h:
+        tw = int(round(w * th / h / 2.0) * 2) if w else 0
+        return max(0, tw), th
+    return max(0, w), max(0, h)
 
-    Spatial AQ für alle NVENC-Codecs, Stärke 1–15 (8 ist die NVIDIA-Vorgabe).
-    Temporal AQ nur bei H.264/HEVC. Lookahead 32 Frames verbessert die
-    Verteilung bei VBR/CQ.
+
+def nvenc_quality_args(enc: str, aq_strength: int = 8, lookahead: int = 31) -> list[str]:
+    """Spatial AQ und Lookahead für NVENC.
+
+    Temporal AQ bleibt aus: NVIDIA rät davon ab, es zusammen mit Spatial AQ
+    zu setzen. Lookahead ist höchstens 31 abzüglich der B-Frame-Zahl.
     """
     if "nvenc" not in (enc or ""):
         return []
     strength = max(1, min(15, int(aq_strength or 8)))
-    args = ["-spatial-aq", "1", "-aq-strength", str(strength), "-rc-lookahead", "32"]
-    if enc in ("h264_nvenc", "hevc_nvenc"):
-        args += ["-temporal-aq", "1"]
+    la = max(0, min(31, int(lookahead)))
+    return ["-spatial-aq", "1", "-aq-strength", str(strength), "-rc-lookahead", str(la)]
+
+
+_nvenc_lock = threading.Lock()
+_nvenc_help: dict[str, str] = {}
+_nvenc_probe: dict[tuple[str, tuple[str, ...]], bool] = {}
+_nvenc_engines_cache: Optional[int] = None
+
+
+def _nvenc_help_text(enc: str) -> str:
+    """Encoder-Hilfe. Leer, wenn FFmpeg fehlt. Sagt, welche Flags das Binary kennt."""
+    with _nvenc_lock:
+        cached = _nvenc_help.get(enc)
+    if cached is not None:
+        return cached
+    text = ""
+    try:
+        from . import config
+        proc = subprocess.run(
+            [config.FFMPEG, "-hide_banner", "-h", f"encoder={enc}"],
+            capture_output=True, text=True, timeout=20,
+        )
+        text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        text = ""
+    with _nvenc_lock:
+        _nvenc_help[enc] = text
+    return text
+
+
+def _nvenc_accepts(enc: str, extra: list[str]) -> bool:
+    """Kurzer Null-Encode. False, wenn Treiber oder Karte das Flag ablehnen."""
+    key = (enc, tuple(extra))
+    with _nvenc_lock:
+        if key in _nvenc_probe:
+            return _nvenc_probe[key]
+    ok = False
+    err = ""
+    try:
+        from . import config
+        cmd = [
+            config.FFMPEG, "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=256x256:r=24:d=0.5",
+            "-c:v", enc, *extra,
+            "-f", "null", "-",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
+        ok = proc.returncode == 0
+        tail = (proc.stderr or "").strip().splitlines()
+        err = tail[-1] if tail else ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        ok = False
+        err = str(exc)
+    if not ok:
+        logger.info("NVENC-Probe verworfen %s %s (%s)", enc, " ".join(extra), err[:240])
+    with _nvenc_lock:
+        _nvenc_probe[key] = ok
+    return ok
+
+
+def _nvenc_engine_count() -> int:
+    """Geschätzte NVENC-Engines (dieselbe Tabelle wie die Parallel-Empfehlung)."""
+    global _nvenc_engines_cache
+    with _nvenc_lock:
+        if _nvenc_engines_cache is not None:
+            return _nvenc_engines_cache
+    count = 1
+    try:
+        from .hardware import Hardware
+        count = int(Hardware().encode_capacity().get("nvenc_engines") or 1)
+    except Exception:
+        count = 1
+    with _nvenc_lock:
+        _nvenc_engines_cache = count
+    return count
+
+
+def nvenc_archive_args(
+    enc: str,
+    aq_strength: int = 8,
+    *,
+    anime: bool = False,
+    width: int = 0,
+    height: int = 0,
+    multipass: Optional[str] = None,
+    engines: Optional[int] = None,
+) -> list[str]:
+    """Archiv-NVENC: AQ, Tune, B-Frames, Split.
+
+    Der Player nutzt das nicht. Jede Gruppe wird einmal gegen die Karte
+    probiert. Was der Treiber ablehnt, fällt weg, der Encode startet trotzdem.
+
+    AV1 auf latest probiert ``-bf 7 -b_ref_mode hierarchical``, danach ``middle``.
+    H.264, HEVC und AV1 auf legacy probieren ``-bf 4 -b_ref_mode middle``.
+    Realfilm auf HEVC/AV1 probiert ``-tune uhq`` (Lookahead und Temporalfilter).
+    Anime bleibt bei ``hq`` ohne Temporalfilter. 4K-HEVC/AV1 setzt
+    ``-split_encode_mode forced``, wenn mindestens zwei NVENC-Engines bekannt sind.
+    ``weighted_pred`` bleibt aus, es verträgt sich nicht mit B-Frames.
+    """
+    if "nvenc" not in (enc or ""):
+        return []
+    help_txt = _nvenc_help_text(enc)
+
+    def has(token: str) -> bool:
+        return bool(help_txt) and token in help_txt
+
+    chosen: list[str] = []
+    hier = ["-bf", "7", "-b_ref_mode", "hierarchical"]
+    middle = ["-bf", "4", "-b_ref_mode", "middle"]
+    if has("b_ref_mode"):
+        from . import config
+        channel = getattr(config, "IMAGE_CHANNEL", "latest")
+        if enc == "av1_nvenc" and channel != "legacy" and has("hierarchical"):
+            if _nvenc_accepts(enc, hier):
+                chosen += hier
+            elif _nvenc_accepts(enc, middle):
+                chosen += middle
+        elif _nvenc_accepts(enc, middle):
+            chosen += middle
+
+    bf = 0
+    if "-bf" in chosen:
+        bf = int(chosen[chosen.index("-bf") + 1])
+
+    uhq_on = False
+    if not anime and enc in ("hevc_nvenc", "av1_nvenc") and has("uhq"):
+        if _nvenc_accepts(enc, chosen + ["-tune", "uhq"]):
+            chosen += ["-tune", "uhq"]
+            uhq_on = True
+    if not anime and not uhq_on and bf >= 4 and has("tf_level"):
+        if _nvenc_accepts(enc, chosen + ["-tf_level", "4"]):
+            chosen += ["-tf_level", "4"]
+
+    eng = _nvenc_engine_count() if engines is None else int(engines)
+    wide = int(width or 0) >= 3840 or int(height or 0) >= 2160
+    if (eng >= 2 and wide and enc in ("hevc_nvenc", "av1_nvenc")
+            and has("split_encode_mode")):
+        if _nvenc_accepts(enc, chosen + ["-split_encode_mode", "forced"]):
+            chosen += ["-split_encode_mode", "forced"]
+
+    args: list[str] = []
+    if "-tune" in chosen:
+        i = chosen.index("-tune")
+        args += [chosen[i], chosen[i + 1]]
+    else:
+        args += ["-tune", "hq"]
+    args += nvenc_quality_args(enc, aq_strength, lookahead=max(0, 31 - bf))
+    for flag in ("-bf", "-b_ref_mode", "-tf_level", "-split_encode_mode"):
+        if flag in chosen:
+            i = chosen.index(flag)
+            args += [chosen[i], chosen[i + 1]]
+    if multipass in ("qres", "fullres"):
+        args += ["-multipass", multipass]
     return args
 
 

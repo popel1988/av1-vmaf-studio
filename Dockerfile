@@ -11,8 +11,8 @@
 #  dem Quelltext (2.22) gebaut – sonst crasht jeder Intel/AMD-HW-Encode.
 #  Hinweis: CUDA-Images für ubuntu24.04 gibt es erst ab CUDA 12.6.
 # =============================================================================
-# Basis-Image überschreibbar – z. B. andere CUDA-Version, falls der (auf QNAP
-# gemountete) Nvidia-Treiber nicht zur Default-CUDA-Version passt:
+# Basis-Image überschreibbar – z. B. andere CUDA-Version, falls der
+# Host-Treiber nicht zur Default-CUDA-Version passt:
 #   docker build --build-arg CUDA_IMAGE=nvidia/cuda:12.6.3-runtime-ubuntu24.04 .
 # WICHTIG: Bei einem Downgrade eine ubuntu24.04-Variante wählen (>= 12.6),
 # sonst ist libva zu alt (siehe oben).
@@ -78,9 +78,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ------------------------------------------------------ Moderner FFmpeg (BtbN)
 # Statischer GPL-Build inkl. libvmaf, NVENC, VAAPI, QSV (libvpl).
-# n8.1 enthält av1_nvenc (der ältere n7.1-Build NICHT!). Verifiziert per
-# strings-Check des Binaries; nicht ohne Grund zurückstufen.
-ARG FFMPEG_BUILD=ffmpeg-n8.1-latest-linux64-gpl-8.1
+# Default ist die aktuelle Linie (Tag latest): FFmpeg 9.0, NVENC-API 13.1,
+# Host-Treiber 610 oder neuer. latest-legacy übergibt
+# ffmpeg-n8.1-latest-linux64-gpl-8.1 und IMAGE_CHANNEL=legacy
+# (NVENC-Treiber vor 610). Beide Varianten prüfen av1_nvenc im Binary.
+ARG FFMPEG_BUILD=ffmpeg-n9.0-latest-linux64-gpl-9.0
+ARG IMAGE_CHANNEL=latest
 RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FFMPEG_BUILD}.tar.xz" \
         -O /tmp/ffmpeg.tar.xz \
     && tar -xf /tmp/ffmpeg.tar.xz -C /tmp \
@@ -120,17 +123,32 @@ RUN wget -q "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR
     && /usr/local/bin/hdr10plus_tool --version
 
 # ------------------------------------------------------------- VMAF-Modelle
-# libvmaf ist im FFmpeg-Build enthalten, die Modelle werden separat bereitgestellt.
+# libvmaf liegt im FFmpeg-Build. Die JSON-Dateien kommen extra.
+# Default ist VMAF v1 (Tag latest). latest-legacy setzt die v0.6.1-Dateinamen
+# per --build-arg. In v1 steckt NEG im Modell, daher zeigen die NEG-Variablen
+# dort auf dieselbe Datei. Beide Generationen liegen im Image.
+ARG VMAF_MODEL_1080P=vmaf_v1.0.16_3d0h.json
+ARG VMAF_MODEL_4K=vmaf_v1.0.16_1d5h_2160.json
+ARG VMAF_MODEL_1080P_NEG=vmaf_v1.0.16_3d0h.json
+ARG VMAF_MODEL_4K_NEG=vmaf_v1.0.16_1d5h_2160.json
+ENV IMAGE_CHANNEL=${IMAGE_CHANNEL} \
+    VMAF_MODEL_1080P=${VMAF_MODEL_1080P} \
+    VMAF_MODEL_4K=${VMAF_MODEL_4K} \
+    VMAF_MODEL_1080P_NEG=${VMAF_MODEL_1080P_NEG} \
+    VMAF_MODEL_4K_NEG=${VMAF_MODEL_4K_NEG}
 RUN mkdir -p ${VMAF_MODEL_DIR} \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v0.6.1.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_v0.6.1.json \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_4k_v0.6.1.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1.json \
-    # NEG-Modelle (für Anime-Modus – realistischeres Urteil bei Animation)
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v0.6.1neg.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_v0.6.1neg.json \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_4k_v0.6.1neg.json" \
-        -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1neg.json
+        -O ${VMAF_MODEL_DIR}/vmaf_4k_v0.6.1neg.json \
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json" \
+        -O ${VMAF_MODEL_DIR}/vmaf_v1.0.16_3d0h.json \
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v1.0.16/vmaf_v1.0.16_1d5h_2160.json" \
+        -O ${VMAF_MODEL_DIR}/vmaf_v1.0.16_1d5h_2160.json
 
 # --------------------------------------------------------------- Python-App
 WORKDIR /app

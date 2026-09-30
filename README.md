@@ -1,7 +1,8 @@
 # Video Studio — VMAF-guided compression & editing
 
 **Repository:** [github.com/popel1988/av1-vmaf-studio](https://github.com/popel1988/av1-vmaf-studio)  
-**Container image (GHCR):** `ghcr.io/popel1988/av1-vmaf-studio:latest`
+**Container image (GHCR):** `ghcr.io/popel1988/av1-vmaf-studio:latest`  
+NVIDIA NVENC on `:latest` needs driver **610** or newer. Older drivers use [`latest-legacy`](#image-channels).
 
 A production-ready all-in-one tool for space-saving video compression with
 **VMAF-guided quality selection**, a modern dashboard, live hardware metrics, and
@@ -16,6 +17,7 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264 / VP9**).
 
 - [Feature overview](#feature-overview)
 - [Codecs & encoders](#codecs--encoders)
+- [Image channels](#image-channels)
 - [Containers](#containers)
 - [HDR & Dolby Vision](#hdr--dolby-vision)
 - [Rate control & quality](#rate-control--quality)
@@ -107,24 +109,48 @@ matching FFmpeg encoder:
 - **VP9 is CPU-only.** A GPU platform is switched to CPU for that job. Speed
   maps to `-cpu-used` (balanced = 2). Typical CRF is about 30–35; the slider
   still uses the same 10–51 scale. Default container is MKV.
-- **NVENC quality defaults** (this image stays on FFmpeg **n8.1**; hierarchical
-  B-frames need a newer NVIDIA driver and are not enabled): spatial AQ on, AQ
-  strength **8** (UI 1–15), lookahead **32**. Temporal AQ is added for H.264
-  and HEVC only. CQ mode uses `-multipass qres`. Bitrate mode uses
-  `-multipass fullres` only when two-pass is on.
+- **NVENC quality defaults** (spatial AQ on, AQ strength **8**, UI 1–15).
+  Temporal AQ stays off so it does not fight spatial AQ. Lookahead is
+  **31 minus the B-frame count**. CQ mode uses `-multipass qres`. Bitrate
+  mode uses `-multipass fullres` only when two-pass is on. H.264 and HEVC
+  add `-bf 4 -b_ref_mode middle` when the GPU accepts a short probe. Film on
+  HEVC and AV1 uses `-tune uhq` when the binary and the GPU accept it; anime
+  stays on `-tune hq` without the temporal filter. **latest** AV1 sends
+  `-bf 7 -b_ref_mode hierarchical` when the probe accepts it, and falls back
+  to `middle` or to no B-frames. **latest-legacy** never sends `hierarchical`.
+  4K HEVC/AV1 adds `-split_encode_mode forced` when the GPU is known to have
+  two or more NVENC engines. A rejected flag is dropped and the encode still
+  starts. The player does not use this set. See [Image channels](#image-channels).
 
 **Image toolchain (current defaults):**
 
 | Component | Version / notes |
 |-----------|-----------------|
 | Base image | CUDA **12.6.3** runtime (Ubuntu 24.04) |
-| FFmpeg | BtbN **n8.1** (GPL, with NVENC / libvmaf / …). Not FFmpeg 9 — host driver 575 cannot load the newer NVENC SDK. |
+| FFmpeg | **latest:** BtbN **n9.0** (NVENC API 13.1). **latest-legacy:** BtbN **n8.1**. |
 | `hdr10plus_tool` | **1.7.2** (HEVC HDR10+ extract + inject) |
 | `dovi_tool` | **2.3.3** |
 | libva | **2.22** (Intel VAAPI) |
 
-Older Nvidia host drivers may refuse to start the container (CUDA version check).
-See `docker-compose.yml` for `NVIDIA_DISABLE_REQUIRE` and related notes.
+## Image channels
+
+GitHub Actions publishes two tags from the same source. `docker compose up --build` without build args follows **latest**.
+
+| | `latest` | `latest-legacy` |
+|---|---|---|
+| Tag | `ghcr.io/popel1988/av1-vmaf-studio:latest` | `:latest-legacy` |
+| Who it is for | Hosts that can run current NVENC | Hosts whose NVIDIA driver is older than **610** |
+| FFmpeg | BtbN **n9.0** | BtbN **n8.1** |
+| NVIDIA driver for NVENC | **610** or newer (NVENC API 13.1). A GPU that cannot install that driver, including Pascal cards on the 580 branch, stays on legacy. | Older than 610 (NVENC API 13.0 and below, including the 550, 570 and 575 branches) |
+| VMAF 1080p | `vmaf_v1.0.16_3d0h.json` (0–100) | `vmaf_v0.6.1.json` |
+| VMAF 4K | `vmaf_v1.0.16_1d5h_2160.json` (0–100) | `vmaf_4k_v0.6.1.json` |
+| Anime | same v1 file (NEG is inside the model) | separate NEG model files |
+| AV1 hierarchical B-frames | archive encode sends `-bf 7 -b_ref_mode hierarchical` when a probe accepts it | not in this FFmpeg build. `middle` is used only if a probe accepts it |
+| H.264 / HEVC hierarchical B-frames | no (SDK 13.1 adds the mode for AV1 only) | no |
+
+Both images still include SVT-AV1, x265, x264, VP9, VAAPI, QSV, and CPU `libvmaf`. Neither includes `libvmaf_cuda`. `dovi_tool` 2.3.3 still does not inject AV1. CPU encode, remux and the player work on either tag. A score of 93 on **latest** is not a 93 on **latest-legacy**.
+
+FFmpeg 9 refuses to open NVENC when the driver is older than 610 (`The minimum required Nvidia driver for nvenc is 610.00 or newer`). Pull `:latest-legacy` in that case. `NVIDIA_DISABLE_REQUIRE` in `docker-compose.yml` only skips the CUDA runtime check at container start. It does not raise the NVENC API the driver exposes.
 
 ---
 
@@ -322,7 +348,7 @@ On **CPU/SVT-AV1**, CBR and ABR are technically the same (`-b:v` only, no real
 CBR). The CBR vs ABR split mainly applies to **NVENC** and other hardware
 encoders. SVT has no maxrate and no VBV buffer in this mode, so a short clip
 can park a large share of the target in a few reference frames. NVENC ABR
-(`-maxrate` 1.5×, `-bufsize` 2×, lookahead 32) has to keep spending inside
+(`-maxrate` 1.5×, `-bufsize` 2×, lookahead 31 minus B-frames) has to keep spending inside
 that buffer window, so a hard stretch raises many frames together. The VMAF
 scene curve shows the split; see [Quality assurance](#quality-assurance).
 
@@ -496,8 +522,11 @@ One media mount is enough — sources and encodes live in the same tree:
 
 - **VMAF analysis**: sample clips (1–5, evenly across the movie), test encodes,
   interactive line chart, screenshots (original vs. encode), “sweet spot”
-  recommendation (VMAF 93–95). Model choice is automatic: `vmaf_4k_v0.6.1.json`
-  for 4K, otherwise `vmaf_v0.6.1.json` (NEG variants in anime mode).
+  recommendation (VMAF 93–95). The **latest** image scores with VMAF v1:
+  `vmaf_v1.0.16_3d0h.json` for 1080p and `vmaf_v1.0.16_1d5h_2160.json` for 4K
+  (both scale 0–100; NEG is inside the v1 model, including anime mode).
+  **latest-legacy** scores with `vmaf_v0.6.1.json` (4K: `vmaf_4k_v0.6.1.json`,
+  NEG variants in anime mode). A 93 on v1 is not a 93 on v0.6.1.
 - **Per scene**: each clip stores mean VMAF, **1%-low**, harmonic mean, PSNR,
   SSIM, and a downsampled frame curve. The chart can switch to one scene
   (mean + that scene’s 1%-low), a gap chart (scene mean minus overall mean),
@@ -544,7 +573,7 @@ One media mount is enough — sources and encodes live in the same tree:
   even produce a smaller 15 s file than a lower one: the controller overshoots
   the first keyframe, then starves the rest of the clip. On a full movie it
   converges. NVENC ABR adds maxrate 1.5×, bufsize 2×, `-rc vbr`, spatial AQ
-  and lookahead 32. The buffer has to be refilled inside that window, and
+  and lookahead (31 minus B-frames). The buffer has to be refilled inside that window, and
   lookahead raises the frames it can see ahead, so a hard stretch stays high
   across neighbours and the spike rule barely moves the mean. Two-pass on the
   test clips (CPU: two FFmpeg passes; NVENC: multipass fullres) makes SVT’s
@@ -669,18 +698,30 @@ Open the dashboard: <http://SERVER-IP:8080>
 ```bash
 git clone https://github.com/popel1988/av1-vmaf-studio.git
 cd av1-vmaf-studio
+# latest: FFmpeg 9.0 + VMAF v1 (NVIDIA driver 610+ for NVENC)
 docker build -t ghcr.io/popel1988/av1-vmaf-studio:latest .
 docker push ghcr.io/popel1988/av1-vmaf-studio:latest
+
+# latest-legacy: FFmpeg n8.1 + VMAF v0.6.1 (NVENC drivers older than 610)
+docker build -t ghcr.io/popel1988/av1-vmaf-studio:latest-legacy \
+  --build-arg IMAGE_CHANNEL=legacy \
+  --build-arg FFMPEG_BUILD=ffmpeg-n8.1-latest-linux64-gpl-8.1 \
+  --build-arg VMAF_MODEL_1080P=vmaf_v0.6.1.json \
+  --build-arg VMAF_MODEL_4K=vmaf_4k_v0.6.1.json \
+  --build-arg VMAF_MODEL_1080P_NEG=vmaf_v0.6.1neg.json \
+  --build-arg VMAF_MODEL_4K_NEG=vmaf_4k_v0.6.1neg.json \
+  .
+docker push ghcr.io/popel1988/av1-vmaf-studio:latest-legacy
 ```
 
 Then replace `build: .` in `docker-compose.yml` with
-`image: ghcr.io/popel1988/av1-vmaf-studio:latest`. On push to `main`, GitHub Actions
-builds the image automatically and publishes it under
+`image: ghcr.io/popel1988/av1-vmaf-studio:latest` (or `:latest-legacy`).
+On push to `main`, GitHub Actions builds both images and publishes them under
 `ghcr.io/popel1988/av1-vmaf-studio` (see `.github/workflows/docker-build.yml`).
 
 ### Hardware notes
 
-- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`). Image is based on **CUDA 12.6**; older host drivers may need `NVIDIA_DISABLE_REQUIRE=true` (see compose comments).
+- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`). `:latest` needs driver **610** or newer for NVENC. Older drivers use `:latest-legacy`. The image is based on **CUDA 12.6**; a driver older than that runtime may need `NVIDIA_DISABLE_REQUIRE=true` (see compose comments). That switch does not change the NVENC API.
 - **Intel/AMD**: `/dev/dri` is passed through. On pure Intel/AMD hosts without
   Nvidia, remove the `runtime: nvidia` and `deploy:` blocks. Set
   `LIBVA_DRIVER_NAME=iHD` (Intel) and `VAAPI_DEVICE` as needed.
@@ -748,7 +789,7 @@ static/js/app.js        Dashboard logic (WebSocket, charts, browser)
 static/js/editor.js     Timeline video editor UI
 static/js/player.js     Full Player UI (HLS)
 static/js/i18n.js       DE / EN / ES / FR translations
-Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n8.1 + dovi_tool + hdr10plus_tool + models)
+Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n9.0 by default, n8.1 for latest-legacy)
 docker-compose.yml      Portainer stack
 ```
 

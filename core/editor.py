@@ -684,9 +684,9 @@ def build_editor_encode_cmd(
     if enc == "libvpx-vp9":
         cmd += ff.vp9_args(encoder_speed, cq_mode=rm not in ("bitrate", "abr"))
     elif "nvenc" in enc:
-        cmd += ff.nvenc_quality_args(enc)
-        if rm not in ("bitrate", "abr"):
-            cmd += ["-multipass", "qres"]
+        cmd += ff.nvenc_archive_args(
+            enc, width=int(tw or 0), height=int(th or 0),
+            multipass=None if rm in ("bitrate", "abr") else "qres")
 
     first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
     audio_sel = list(next((s.get("audio_indexes") or [] for s in segments), []))

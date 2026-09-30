@@ -19,6 +19,26 @@ jobs:
     permissions:
       contents: read
       packages: write   # nötig zum Push nach GHCR (nutzt GITHUB_TOKEN)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Aktuelle Linie: FFmpeg 9.0, VMAF v1, NVENC-API 13.1 (Treiber 610+).
+          - id: latest
+            floating_tag: latest
+            ffmpeg_build: ffmpeg-n9.0-latest-linux64-gpl-9.0
+            vmaf_1080p: vmaf_v1.0.16_3d0h.json
+            vmaf_4k: vmaf_v1.0.16_1d5h_2160.json
+            vmaf_1080p_neg: vmaf_v1.0.16_3d0h.json
+            vmaf_4k_neg: vmaf_v1.0.16_1d5h_2160.json
+          # Ältere Linie: FFmpeg n8.1, VMAF v0.6.1. Für NVENC-Treiber vor 610.
+          - id: legacy
+            floating_tag: latest-legacy
+            ffmpeg_build: ffmpeg-n8.1-latest-linux64-gpl-8.1
+            vmaf_1080p: vmaf_v0.6.1.json
+            vmaf_4k: vmaf_4k_v0.6.1.json
+            vmaf_1080p_neg: vmaf_v0.6.1neg.json
+            vmaf_4k_neg: vmaf_4k_v0.6.1neg.json
 
     steps:
       - name: Checkout
@@ -40,10 +60,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha,format=short
+            type=raw,value=${{ matrix.floating_tag }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ matrix.id == 'latest' }}
+            type=ref,event=branch,prefix=legacy-,enable=${{ matrix.id == 'legacy' }}
+            type=semver,pattern={{version}},enable=${{ matrix.id == 'latest' }}
+            type=semver,pattern={{version}},prefix=legacy-,enable=${{ matrix.id == 'legacy' }}
+            type=sha,format=short,prefix=${{ matrix.id }}-
 
       # Shell-Retry statt wretry.action: mehrzeilige tags/labels von metadata
       # zerlegen sonst die YAML-Übergabe („multiline key may not be an implicit key“).
@@ -69,8 +91,14 @@ jobs:
             docker buildx build \
               --platform linux/amd64 \
               --push \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
+              --build-arg IMAGE_CHANNEL=${{ matrix.id }} \
+              --build-arg FFMPEG_BUILD=${{ matrix.ffmpeg_build }} \
+              --build-arg VMAF_MODEL_1080P=${{ matrix.vmaf_1080p }} \
+              --build-arg VMAF_MODEL_4K=${{ matrix.vmaf_4k }} \
+              --build-arg VMAF_MODEL_1080P_NEG=${{ matrix.vmaf_1080p_neg }} \
+              --build-arg VMAF_MODEL_4K_NEG=${{ matrix.vmaf_4k_neg }} \
+              --cache-from type=gha,scope=${{ matrix.id }} \
+              --cache-to type=gha,mode=max,scope=${{ matrix.id }} \
               "${TAG_ARGS[@]}" \
               "${LABEL_ARGS[@]}" \
               .

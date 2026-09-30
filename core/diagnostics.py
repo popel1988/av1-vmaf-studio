@@ -50,7 +50,7 @@ def _tools_section() -> dict:
     ver = ff.ffmpeg_version()
     checks.append(_check(
         "FFmpeg", "ok" if ver != "unbekannt" else "fail",
-        f"{ver} · {config.FFMPEG}"))
+        f"{ver} · Linie {config.IMAGE_CHANNEL} · {config.FFMPEG}"))
 
     probe_ok = bool(Path(config.FFPROBE).exists() or config.FFPROBE)
     checks.append(_check("ffprobe", "ok" if probe_ok else "fail", config.FFPROBE))

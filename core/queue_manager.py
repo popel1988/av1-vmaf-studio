@@ -2052,12 +2052,16 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
         if "nvenc" in enc_name:
             aq = max(1, min(15, int(getattr(s, "aq_strength", 8) or 8)))
             if s.rate_mode in ("bitrate", "abr"):
-                mp = "multipass fullres" if s.two_pass else "ohne Multipass"
+                mp = "fullres" if s.two_pass else None
             else:
-                mp = "multipass qres"
-            lines.append(
-                f"    NVENC          : spatial-aq {aq}, {mp}, rc-lookahead 32"
-                + (", temporal-aq" if enc_name in ("h264_nvenc", "hevc_nvenc") else ""))
+                mp = "qres"
+            fw, fh = (0, 0)
+            if info is not None:
+                fw, fh = ff.scaled_frame_size(info.width, info.height, s.target_height)
+            nv = ff.nvenc_archive_args(
+                enc_name, aq, anime=bool(s.anime),
+                width=fw, height=fh, multipass=mp)
+            lines.append("    NVENC          : " + " ".join(nv))
         if s.autocrop:
             crop_txt = (f"erkannt crop={item.crop}" if item.crop
                         else ("noch nicht erkannt" if item.crop == ""

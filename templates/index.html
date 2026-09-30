@@ -2763,7 +2763,7 @@
               <div class="faq-body">
                 <p>AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.</p>
                 <p>Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.</p>
-                <p>Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.</p>
+                <p>Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der edge-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-vmaf">

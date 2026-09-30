@@ -932,8 +932,8 @@
       "AQ means adaptive quantization. Spatial AQ moves bits inside one frame: flat areas such as sky, walls and gradients are quantized more finely so they band less. Detailed areas can use coarser steps, because errors hide in the pattern.",
     "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
       "The slider runs from 1 to 15. 8 is NVIDIA's default and the starting value here. Higher protects flat areas more and can give up a little fine detail. Lower lets flats band more. The CQ or bitrate target stays the same; only the spread inside the frame changes.",
-    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
-      "NVIDIA only. On H.264 and HEVC, temporal AQ is also on, against flicker from frame to frame. On AV1 this studio sets spatial AQ only on this driver line.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der edge-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt.":
+      "NVIDIA only. Temporal AQ stays off so it does not fight spatial AQ. Film on HEVC and AV1 uses the UHQ tune (lookahead and temporal filter). Anime stays on HQ without that filter. H.264 and HEVC use four B-frames as references. AV1 on the edge line uses the hierarchical pyramid with seven B-frames when the card accepts it.",
     "gesetzt – leer lassen zum Beibehalten": "set – leave empty to keep",
     "Bot-Token": "Bot token",
     "Gesendet ✓": "Sent ✓",
@@ -2198,8 +2198,8 @@
       "AQ significa cuantización adaptativa. Spatial AQ mueve bits dentro de una imagen: las zonas planas como cielo, paredes y degradados se cuantizan más fino para que bandeen menos. En el detalle los pasos pueden ser más gruesos, porque el error se esconde en el patrón.",
     "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
       "El control va de 1 a 15. 8 es el valor de NVIDIA y el inicio aquí. Más alto protege más las zonas planas y puede sacrificar un poco de detalle fino. Más bajo deja que las zonas planas bandeen. El objetivo de CQ o bitrate no cambia; solo cambia el reparto en la imagen.",
-    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
-      "Solo NVIDIA. En H.264 y HEVC también está Temporal AQ, contra el parpadeo de imagen a imagen. En AV1 el estudio, en esta línea de controladores, solo activa Spatial AQ.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der edge-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt.":
+      "Solo NVIDIA. Temporal AQ queda apagado para que no choque con Spatial AQ. El cine en HEVC y AV1 usa el tune UHQ (lookahead y filtro temporal). El anime se queda en HQ sin ese filtro. H.264 y HEVC usan cuatro B-frames como referencia. AV1 en la línea edge usa la pirámide jerárquica con siete B-frames cuando la tarjeta la acepta.",
     "gesetzt – leer lassen zum Beibehalten": "establecido – dejar vacío para conservar",
     "Bot-Token": "Token de bot",
     "Gesendet ✓": "Enviado ✓",
@@ -3317,8 +3317,8 @@
       "AQ signifie quantification adaptative. Le Spatial AQ déplace les bits dans une image : les aplats comme le ciel, les murs et les dégradés sont quantifiés plus finement pour moins bander. Dans le détail, les pas peuvent être plus grossiers, parce que l'erreur se cache dans le motif.",
     "Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.":
       "Le curseur va de 1 à 15. 8 est la valeur NVIDIA et le départ ici. Plus haut protège davantage les aplats et peut sacrifier un peu de détail fin. Plus bas laisse les aplats bander. La cible CQ ou débit ne change pas, seulement la répartition dans l'image.",
-    "Wirkt nur bei NVIDIA. Bei H.264 und HEVC ist zusätzlich Temporal AQ an, gegen Flackern von Bild zu Bild. Bei AV1 setzt das Studio auf dieser Treiberlinie nur Spatial AQ.":
-      "NVIDIA seulement. En H.264 et HEVC, le Temporal AQ est aussi actif, contre le scintillement d'image en image. En AV1, sur cette ligne de pilotes, le studio ne règle que le Spatial AQ.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der edge-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt.":
+      "NVIDIA seulement. Le Temporal AQ reste coupé pour ne pas contredire le Spatial AQ. Le film en HEVC et AV1 utilise le tune UHQ (lookahead et filtre temporel). L'anime reste en HQ sans ce filtre. H.264 et HEVC utilisent quatre B-frames comme références. L'AV1 sur la ligne edge utilise la pyramide hiérarchique à sept B-frames quand la carte l'accepte.",
     "gesetzt – leer lassen zum Beibehalten": "défini – laisser vide pour conserver",
     "Bot-Token": "Jeton de bot",
     "Gesendet ✓": "Envoyé ✓",

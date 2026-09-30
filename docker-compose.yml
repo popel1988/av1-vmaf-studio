@@ -8,6 +8,9 @@
 services:
   av1-vmaf-studio:
     build: .
+    # Default image is :latest (FFmpeg 9, VMAF v1, NVIDIA driver 610+ for NVENC).
+    # Hosts whose driver is older than 610 pull the previous line instead:
+    # image: ghcr.io/popel1988/av1-vmaf-studio:latest-legacy
     # Or use the GHCR image directly (no local build):
     # image: ghcr.io/popel1988/av1-vmaf-studio:latest
     container_name: av1-vmaf-studio
@@ -47,10 +50,10 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       # This image is based on CUDA 12.6 (Ubuntu 24.04). If the host Nvidia
-      # driver is older (e.g. manually mounted on QNAP), the
-      # nvidia-container-toolkit may refuse to start with a CUDA version
-      # error. Uncomment the next line to skip that check (safe with a
-      # manual driver mount + privileged):
+      # driver is older than that runtime, the nvidia-container-toolkit may
+      # refuse to start with a CUDA version error. Uncomment the next line to
+      # skip that check. It does not raise the NVENC API version: drivers
+      # older than 610 still need the latest-legacy image for NVENC.
       # - NVIDIA_DISABLE_REQUIRE=true
       - PUID=0
       - PGID=0

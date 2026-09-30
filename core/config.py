@@ -240,7 +240,11 @@ VMAF_SESSIONS_DIR = Path(os.getenv("VMAF_SESSIONS_DIR", str(DATA_DIR / "vmaf")))
 # VMAF-Artefakte nach Analyse behalten (statt work-Ordner zu löschen)
 RETAIN_VMAF_SESSIONS = _env_bool("RETAIN_VMAF_SESSIONS", True)
 
-# VMAF-Modelle (im Docker-Image unter /usr/local/share/model/)
+# VMAF-Modelle (im Docker-Image unter /usr/local/share/model/).
+# Das Image setzt die Dateinamen per ENV. Ohne ENV gelten die v0.6.1-Namen,
+# damit ein lokaler Lauf ohne die v1-Dateien nicht ins Leere zeigt.
+# IMAGE_CHANNEL=legacy schaltet hierarchische AV1-B-Frames ab.
+IMAGE_CHANNEL = os.getenv("IMAGE_CHANNEL", "latest")
 VMAF_MODEL_DIR = Path(os.getenv("VMAF_MODEL_DIR", "/usr/local/share/model"))
 VMAF_MODEL_1080P = os.getenv("VMAF_MODEL_1080P", "vmaf_v0.6.1.json")
 VMAF_MODEL_4K = os.getenv("VMAF_MODEL_4K", "vmaf_4k_v0.6.1.json")

@@ -321,16 +321,19 @@ def build_encode_cmd(
     elif enc == "libvpx-vp9":
         cmd += ff.vp9_args(encoder_speed, cq_mode=not is_bitrate)
     elif "nvenc" in enc and not is_bitrate:
+        out_w, out_h = ff.scaled_frame_size(info.width, info.height, target_height)
         cmd += ff.encoder_preset_args(enc, encoder_speed)
-        cmd += ["-rc", "vbr", "-tune", "hq"]
-        cmd += ff.nvenc_quality_args(enc, aq_strength)
-        cmd += ["-multipass", "qres"]
+        cmd += ["-rc", "vbr"]
+        cmd += ff.nvenc_archive_args(
+            enc, aq_strength, anime=bool(force_10bit),
+            width=out_w, height=out_h, multipass="qres")
     elif "nvenc" in enc:
+        out_w, out_h = ff.scaled_frame_size(info.width, info.height, target_height)
         cmd += ff.encoder_preset_args(enc, encoder_speed)
-        cmd += ["-tune", "hq"]
-        cmd += ff.nvenc_quality_args(enc, aq_strength)
-        if two_pass:
-            cmd += ["-multipass", "fullres"]  # NVENC-eigenes 2-Pass (1 Durchlauf)
+        cmd += ff.nvenc_archive_args(
+            enc, aq_strength, anime=bool(force_10bit),
+            width=out_w, height=out_h,
+            multipass="fullres" if two_pass else None)
     elif "qsv" in enc:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
 

@@ -632,6 +632,7 @@ def build_concat_reencode_cmd(files: list, output: Path, platform: str,
     if backend == "nvenc":
         cmd += ["-rc", "vbr", "-cq", str(cq)]
         cmd += ff.encoder_preset_args(enc, "balanced")
+        cmd += ff.nvenc_archive_args(enc, multipass="qres")
     elif backend == "qsv":
         cmd += ["-global_quality", str(cq)]
         cmd += ff.encoder_preset_args(enc, "balanced")
