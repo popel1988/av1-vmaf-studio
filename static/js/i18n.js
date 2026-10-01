@@ -1770,6 +1770,14 @@
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 is the encoder default, which is strength 1.0. Higher protects flats and dark areas more; fine detail can give way a little. CPU H.264 and CPU HEVC only.",
 
+    "Dieselbe Zeile, anderes Setting": "Same row, different setting",
+    "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
+      "Extra runs only for the base encoder above. Each mark changes exactly one thing: the speed preset or the B-frames. The other setting stays as it is in the form.",
+    "Weitere B-Frames": "More B-frames",
+    "Weitere Speed-Stufen": "More speed presets",
+    "Nur NVIDIA. Die anderen Encoder ignorieren B-Frames.": "NVIDIA only. The other encoders ignore B-frames.",
+    "Keine weitere Speed-Stufe.": "No other speed preset.",
+
     // --- Sprachumschalter (bleibt zweisprachig) ---
     "Sprache / Language": "Sprache / Language"
   };
@@ -3091,6 +3099,13 @@
     "AQ-Stärke (x264/x265):": "Fuerza AQ (x264/x265):",
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 es el valor del codificador, equivale a fuerza 1,0. Más alto protege más las áreas planas y las zonas oscuras; el detalle fino puede ceder un poco. Solo H.264 y HEVC en CPU.",
+    "Dieselbe Zeile, anderes Setting": "La misma fila, otro ajuste",
+    "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
+      "Pasadas extra solo para el codificador base de arriba. Cada marca cambia exactamente una cosa: el preset de velocidad o los B-frames. El otro ajuste se queda como está en el formulario.",
+    "Weitere B-Frames": "Más B-frames",
+    "Weitere Speed-Stufen": "Más presets de velocidad",
+    "Nur NVIDIA. Die anderen Encoder ignorieren B-Frames.": "Solo NVIDIA. Los demás codificadores ignoran los B-frames.",
+    "Keine weitere Speed-Stufe.": "No hay otro preset de velocidad.",
 
     "Sprache / Language": "Sprache / Language"
   };
@@ -4408,6 +4423,13 @@
     "AQ-Stärke (x264/x265):": "Force AQ (x264/x265) :",
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 est la valeur de l'encodeur, soit une force de 1,0. Plus haut protège davantage les aplats et les zones sombres ; le détail fin peut céder un peu. H.264 et HEVC CPU seulement.",
+    "Dieselbe Zeile, anderes Setting": "La même ligne, un autre réglage",
+    "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
+      "Passes en plus seulement pour l'encodeur de base ci-dessus. Chaque coche ne change qu'une chose : le palier de vitesse ou les B-frames. L'autre réglage reste celui du formulaire.",
+    "Weitere B-Frames": "Autres B-frames",
+    "Weitere Speed-Stufen": "Autres paliers de vitesse",
+    "Nur NVIDIA. Die anderen Encoder ignorieren B-Frames.": "NVIDIA seulement. Les autres encodeurs ignorent les B-frames.",
+    "Keine weitere Speed-Stufe.": "Pas d'autre palier de vitesse.",
 
     "Sprache / Language": "Sprache / Language"
   };

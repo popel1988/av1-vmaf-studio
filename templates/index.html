@@ -662,6 +662,19 @@
                     <option value="deep">Tief, 7 hierarchisch</option>
                   </select>
                 </div>
+                <div class="field" id="vt-aq-field">
+                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="vt-aq-val">8</strong></label>
+                  <input type="range" id="vt-aq-strength" min="1" max="15" value="8" />
+                </div>
+                <div class="field">
+                  <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                  <select id="vt-keyint">
+                    <option value="0">Automatisch</option>
+                    <option value="2">Kurz, etwa 2 Sekunden</option>
+                    <option value="5">Mittel, etwa 5 Sekunden</option>
+                    <option value="10">Lang, etwa 10 Sekunden</option>
+                  </select>
+                </div>
                 <div class="field">
                   <label>Steuerungsmodus</label>
                   <select id="vt-rate-mode">
@@ -700,6 +713,18 @@
                 <label>Zusätzlich vergleichen mit</label>
                 <div id="vt-compare" class="compare-encoders"></div>
                 <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.</p>
+              </div>
+              <div class="field">
+                <label>Dieselbe Zeile, anderes Setting</label>
+                <p class="hint">Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.</p>
+                <div class="cmp-group">
+                  <span class="cmp-title">Weitere B-Frames</span>
+                  <div id="vt-var-bf" class="compare-encoders"></div>
+                </div>
+                <div class="cmp-group">
+                  <span class="cmp-title">Weitere Speed-Stufen</span>
+                  <div id="vt-var-speed" class="compare-encoders"></div>
+                </div>
               </div>
               <div class="fmt-checks" style="margin-top:10px">
                 <label class="check">
@@ -1555,6 +1580,19 @@
                   <option value="short">Kurz, 2 B-Frames</option>
                   <option value="medium">Mittel, 4 B-Frames</option>
                   <option value="deep">Tief, 7 hierarchisch</option>
+                </select>
+              </div>
+              <div class="field" id="eb-aq-field">
+                <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="eb-aq-val">8</strong></label>
+                <input type="range" id="eb-aq-strength" min="1" max="15" value="8" />
+              </div>
+              <div class="field">
+                <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                <select id="eb-keyint">
+                  <option value="0">Automatisch</option>
+                  <option value="2">Kurz, etwa 2 Sekunden</option>
+                  <option value="5">Mittel, etwa 5 Sekunden</option>
+                  <option value="10">Lang, etwa 10 Sekunden</option>
                 </select>
               </div>
               <div class="field">

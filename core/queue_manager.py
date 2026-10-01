@@ -94,6 +94,8 @@ class JobSettings:
     rate_mode: str = "cq"          # cq | bitrate | abr
     # Zusätzliche Vergleichs-Encoder als "plattform:codec"-Strings (z. B. "cpu:hevc")
     compare_encoders: list = field(default_factory=list)
+    # Zusätzliche Läufe nur des Basis-Encoders: {"kind","value"}.
+    compare_variants: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
@@ -911,6 +913,7 @@ class QueueManager:
                 source_path=item.path,
                 params=asdict(s),
                 encoders=_parse_encoders(s.compare_encoders),
+                variants=list(getattr(s, "compare_variants", None) or []),
                 target_vmaf=s.target_vmaf,
                 anime=s.anime,
                 refine_midpoint=s.workflow != "compare_only",
@@ -2012,6 +2015,7 @@ def build_job_settings(d: dict) -> JobSettings:
         target_vmaf=float(d.get("target_vmaf", 0) or 0),
         rate_mode=d.get("rate_mode", "cq"),
         compare_encoders=list(d.get("compare_encoders", [])),
+        compare_variants=_parse_variants(d.get("compare_variants")),
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
@@ -2048,6 +2052,32 @@ def _session_name(item: QueueItem) -> str:
     stem = Path(item.title).stem
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:60] or "clip"
     return f"{safe}_{item.id[:6]}"
+
+
+def _parse_variants(entries) -> list:
+    """Nur Speed oder B-Frames, höchstens zwölf, ohne Dubletten."""
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in entries or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "")
+        if kind == "b_frames":
+            val = ff.normalize_b_frames(raw.get("value"))
+        elif kind == "speed":
+            val = ff.normalize_encoder_speed(raw.get("value"))
+            if not val:
+                continue
+        else:
+            continue
+        item = (kind, val)
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append({"kind": kind, "value": val})
+        if len(out) >= 12:
+            break
+    return out
 
 
 def _parse_encoders(entries: list) -> list:

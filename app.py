@@ -583,6 +583,7 @@ class EnqueueRequest(BaseModel):
     target_vmaf: float = 0.0         # >0: Ziel-VMAF (Super-Tool)
     rate_mode: str = "cq"            # cq | bitrate | abr
     compare_encoders: list[str] = []  # zusätzliche "plattform:codec"-Vergleiche
+    compare_variants: list[dict] = []  # Basis-Encoder, je Eintrag nur Speed oder B-Frames
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     samples: int = 1
@@ -2658,6 +2659,8 @@ class EncoderBenchStartRequest(BaseModel):
     platform: str = "cpu"
     codec: str = "av1"
     b_frames: str = "auto"
+    aq_strength: int = 8
+    keyint_sec: int = 0
     clip_seconds: int = 12
     samples: int = 3
     anime: bool = False

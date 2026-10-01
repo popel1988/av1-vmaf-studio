@@ -1249,7 +1249,8 @@
       const lab = $("aq-strength-val");
       if (lab) lab.textContent = aq.value;
     });
-    [["ed-aq-strength", "ed-aq-val"], ["st-aq-strength", "st-aq-val"]].forEach(([id, labId]) => {
+    [["ed-aq-strength", "ed-aq-val"], ["st-aq-strength", "st-aq-val"],
+     ["vt-aq-strength", "vt-aq-val"], ["eb-aq-strength", "eb-aq-val"]].forEach(([id, labId]) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("input", () => {
@@ -1482,6 +1483,53 @@
 
   function getCompareEncoders() {
     return [...document.querySelectorAll(".compare-enc:checked")].map((b) => b.value);
+  }
+
+  function buildVariantOptions() {
+    const bfBox = $("vt-var-bf");
+    const spBox = $("vt-var-speed");
+    if (!bfBox || !spBox) return;
+    const plat = $("vt-platform").value;
+    const codec = $("vt-codec").value;
+    const curBf = ($("vt-b-frames") && $("vt-b-frames").value) || "auto";
+    const curSp = ($("vt-enc-speed") && $("vt-enc-speed").value) || "";
+    const prevBf = new Set([...bfBox.querySelectorAll(".vt-var-bf:checked")].map((b) => b.value));
+    const prevSp = new Set([...spBox.querySelectorAll(".vt-var-speed:checked")].map((b) => b.value));
+    const bfChoices = [
+      ["auto", "Automatisch (empfohlen)"],
+      ["off", "Aus, Lookahead 31"],
+      ["short", "Kurz, 2 B-Frames"],
+      ["medium", "Mittel, 4 B-Frames"],
+      ["deep", "Tief, 7 hierarchisch"],
+    ];
+    if (plat !== "nvidia") {
+      bfBox.innerHTML = '<span class="empty">Nur NVIDIA. Die anderen Encoder ignorieren B-Frames.</span>';
+    } else {
+      bfBox.innerHTML = bfChoices.filter(([v]) => v !== curBf).map(([v, label]) =>
+        `<label><input type="checkbox" class="vt-var-bf" value="${v}" ` +
+        `${prevBf.has(v) ? "checked" : ""}/><span>${escapeHtml(label)}</span></label>`
+      ).join("");
+    }
+    const presets = speedPresetsFor(plat, codec).filter((p) => p.value !== curSp);
+    if (!presets.length) {
+      spBox.innerHTML = '<span class="empty">Keine weitere Speed-Stufe.</span>';
+    } else {
+      spBox.innerHTML = presets.map((p) =>
+        `<label><input type="checkbox" class="vt-var-speed" value="${escapeHtml(p.value)}" ` +
+        `${prevSp.has(p.value) ? "checked" : ""}/><span>${escapeHtml(p.label)}</span></label>`
+      ).join("");
+    }
+  }
+
+  function getCompareVariants() {
+    const out = [];
+    document.querySelectorAll(".vt-var-bf:checked").forEach((b) => {
+      out.push({ kind: "b_frames", value: b.value });
+    });
+    document.querySelectorAll(".vt-var-speed:checked").forEach((b) => {
+      out.push({ kind: "speed", value: b.value });
+    });
+    return out.slice(0, 12);
   }
 
   function gatherAudioTracks() {
@@ -1963,6 +2011,7 @@
       sel.innerHTML = '<option value="balanced">Kein Speed-Preset (VAAPI)</option>';
       sel.value = "balanced";
       refreshEncSpeedWarn(sel);
+      if (selId === "vt-enc-speed") buildVariantOptions();
       return;
     }
     sel.innerHTML = presets.map((p) =>
@@ -1971,6 +2020,7 @@
       ? want
       : nativeForAlias(platEl.value, codecEl.value, "balanced");
     refreshEncSpeedWarn(sel);
+    if (selId === "vt-enc-speed") buildVariantOptions();
   }
   function refreshAllJobSpeedSelects(preferred) {
     ENC_SPEED_JOB_IDS.forEach(([sid, pid, cid]) => fillJobSpeedSelect(sid, pid, cid, preferred));
@@ -2126,6 +2176,7 @@
       sel.value = firstAvail;
     }
     fillBenchSpeeds("default");
+    syncAqField("eb");
   }
   function fillBenchSpeeds(mode) {
     const box = $("eb-speeds");
@@ -2463,6 +2514,8 @@
           values,
           platform, codec,
           b_frames: ($("eb-b-frames") && $("eb-b-frames").value) || "auto",
+          aq_strength: ($("eb-aq-strength") && parseInt($("eb-aq-strength").value, 10)) || 8,
+          keyint_sec: ($("eb-keyint") && parseInt($("eb-keyint").value, 10)) || 0,
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
           anime: !!($("eb-anime") && $("eb-anime").checked),
@@ -2805,6 +2858,11 @@
     });
     vtUpdateCodecAvailability();
     buildCompareOptions();
+    const vtBf = $("vt-b-frames");
+    if (vtBf) vtBf.addEventListener("change", buildVariantOptions);
+    const vtSp = $("vt-enc-speed");
+    if (vtSp) vtSp.addEventListener("change", buildVariantOptions);
+    buildVariantOptions();
 
     $("btn-vmaf-start").addEventListener("click", vtEnqueue);
   }
@@ -2878,6 +2936,9 @@
       ...gatherOutputCommon(),
       anime: $("vt-anime") ? $("vt-anime").checked : false,
       b_frames: ($("vt-b-frames") && $("vt-b-frames").value) || "auto",
+      aq_strength: $("vt-aq-strength") ? parseInt($("vt-aq-strength").value, 10) : 8,
+      keyint_sec: $("vt-keyint") ? (parseInt($("vt-keyint").value, 10) || 0) : 0,
+      compare_variants: getCompareVariants(),
     };
   }
 
@@ -2960,6 +3021,15 @@
       optAnime.dispatchEvent(new Event("change"));
     }
     updateCodecAvailability();
+    if (r.encoder_speed) setSel("opt-enc-speed", r.encoder_speed);
+    setSel("opt-b-frames", r.b_frames || (($("vt-b-frames") && $("vt-b-frames").value) || "auto"));
+    setSel("opt-keyint", ($("vt-keyint") && $("vt-keyint").value) || "0");
+    const vtAq = $("vt-aq-strength");
+    if (vtAq) {
+      setSel("opt-aq-strength", vtAq.value);
+      const lab = $("aq-strength-val");
+      if (lab) lab.textContent = vtAq.value;
+    }
   }
 
   /* ------------------------------------------------------------ WEBSOCKET */
@@ -4858,9 +4928,32 @@
     });
   }
 
+  function resultSeriesName(r, results) {
+    const base = r.codec_disp || r.codec || "";
+    const same = (results || []).filter((x) =>
+      (x.platform || "") === (r.platform || "") && (x.codec || "") === (r.codec || ""));
+    const speeds = new Set(same.map((x) => x.encoder_speed || ""));
+    const bfs = new Set(same.map((x) => x.b_frames || ""));
+    const tags = {
+      auto: "Automatisch", off: "Aus", short: "Kurz", medium: "Mittel", deep: "Tief",
+    };
+    const extra = [];
+    if (speeds.size > 1 && r.encoder_speed) extra.push(r.encoder_speed);
+    if (bfs.size > 1 && r.b_frames) extra.push(tags[r.b_frames] || r.b_frames);
+    return extra.length ? `${base} · ${extra.join(" · ")}` : base;
+  }
+
+  function resultHasSettingVariants(results) {
+    const rows = results || [];
+    const keys = new Set(rows.map((r) =>
+      [r.platform, r.codec, r.encoder_speed || "", r.b_frames || ""].join("|")));
+    const pcs = new Set(rows.map((r) => [r.platform, r.codec].join("|")));
+    return keys.size > pcs.size;
+  }
+
   function drawChart(vmaf) {
     if (typeof Chart === "undefined") return;
-    if (vmaf.multi_codec) return drawChartMultiCodec(vmaf);
+    if (vmaf.multi_codec || resultHasSettingVariants(vmaf.results)) return drawChartMultiCodec(vmaf);
 
     const ctx = $("vmaf-chart");
     const col = chartColors();
@@ -5001,7 +5094,7 @@
     const sceneMode = scene != null;
     const groups = {};
     vmaf.results.forEach((r) => {
-      const key = r.codec_disp || r.codec;
+      const key = resultSeriesName(r, vmaf.results);
       (groups[key] = groups[key] || []).push(r);
     });
 

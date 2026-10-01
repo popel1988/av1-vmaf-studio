@@ -639,6 +639,11 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
     samples = max(1, min(5, int(cfg.get("samples") or 3)))
     anime = bool(cfg.get("anime"))
     b_frames = ff.normalize_b_frames(cfg.get("b_frames", "auto"))
+    try:
+        aq_strength = max(1, min(15, int(cfg.get("aq_strength") or 8)))
+    except (TypeError, ValueError):
+        aq_strength = 8
+    keyint_sec = ff.normalize_keyint_sec(cfg.get("keyint_sec", 0))
 
     jobs: list[dict] = []
     for cid in cfg.get("clip_ids") or []:
@@ -716,6 +721,8 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 opts=opts,
                 encoder_speed=speed,
                 b_frames=b_frames,
+                aq_strength=aq_strength,
+                keyint_sec=keyint_sec,
                 cancelled=lambda: _cancel.is_set(),
             )
             elapsed = round(time.time() - t0, 1)

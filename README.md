@@ -106,6 +106,9 @@ matching FFmpeg encoder:
   error (instead of failing silently) and available encoders are listed.
 - In the **VMAF Tool**, multiple encoders/codecs can be compared at once;
   CQ test values are shifted per codec into a comparable quality range.
+  The same base encoder can also be run again with only a different speed
+  preset or only a different B-frame mode. Those extra runs are not crossed
+  with each other.
 - **VP9 is CPU-only.** A GPU platform is switched to CPU for that job. Speed
   maps to `-cpu-used` (balanced = 2). Typical CRF is about 30–35; the slider
   still uses the same 10–51 scale. Default container is MKV.
@@ -338,11 +341,12 @@ presets. The studio aliases follow that: balanced (6), slow (4) and slowest
 58 frames on every preset. VP9 stays at 25 frames; its speed preset does
 not change that. QSV and VAAPI have no frame lookahead the studio sets.
 
-**Keyframe interval** on the encode page, in the editor and in the Super Tool
-is Automatic, or a cap of about 2, 5 or 10 seconds (`-g` only). Scene cuts
-may still insert their own keyframe. Automatic leaves the encoder default
-(SVT about 5 s, x264 about 10 s). Shorter seeks more finely and costs a few
-bits; longer leaves more of the group to prediction.
+**Keyframe interval** on the encode page, in the VMAF tool, in the editor,
+in the Super Tool and in the encoder test is Automatic, or a cap of about
+2, 5 or 10 seconds (`-g` only). Scene cuts may still insert their own
+keyframe. Automatic leaves the encoder default (SVT about 5 s, x264 about
+10 s). Shorter seeks more finely and costs a few bits; longer leaves more
+of the group to prediction.
 
 **AQ strength** for CPU H.264 and HEVC uses the same 1–15 slider. 8 is the
 encoder default and maps to `aq-strength` 1.0 (`aq-mode` 1 for x264, 2 for
