@@ -1249,6 +1249,14 @@
       const lab = $("aq-strength-val");
       if (lab) lab.textContent = aq.value;
     });
+    [["ed-aq-strength", "ed-aq-val"], ["st-aq-strength", "st-aq-val"]].forEach(([id, labId]) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        const lab = $(labId);
+        if (lab) lab.textContent = el.value;
+      });
+    });
 
     // Encode-Ratemodus: CQ-Slider vs. Bitrate-Feld vs. Ziel-VMAF (Test-Encodes).
     const rate = $("opt-rate-mode");
@@ -1434,6 +1442,7 @@
     }
     syncDvOption();
     fillJobSpeedSelect("opt-enc-speed", "opt-platform", "opt-codec");
+    syncAqField("opt");
   }
 
   function compareLabel(v, info) {
@@ -1506,6 +1515,8 @@
       grain: $("opt-grain") ? $("opt-grain").value : "off",
       deinterlace: $("opt-deinterlace") ? $("opt-deinterlace").value : "auto",
       aq_strength: $("opt-aq-strength") ? parseInt($("opt-aq-strength").value, 10) : 8,
+      b_frames: $("opt-b-frames") ? $("opt-b-frames").value : "auto",
+      keyint_sec: $("opt-keyint") ? (parseInt($("opt-keyint").value, 10) || 0) : 0,
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
       mobile_copy: $("opt-mobile-copy") ? $("opt-mobile-copy").checked : false,
@@ -1866,6 +1877,39 @@
     slow: "Langsam", slowest: "Sehr langsam",
   };
 
+  function aqMode(platform, codec) {
+    if (platform === "nvidia") return "nv";
+    if (platform === "cpu" && (codec === "h264" || codec === "hevc")) return "cpu";
+    return "";
+  }
+  function syncAqField(prefix) {
+    const plat = $(prefix + "-platform");
+    const codec = $(prefix + "-codec");
+    const field = $(prefix + "-aq-field");
+    if (!plat || !codec || !field) return;
+    const mode = aqMode(plat.value, codec.value);
+    field.style.display = mode ? "" : "none";
+    const label = prefix === "opt"
+      ? document.querySelector("#aq-label")
+      : field.querySelector("label");
+    if (label) {
+      const strong = label.querySelector("strong");
+      const name = mode === "cpu" ? "AQ-Stärke (x264/x265)" : "AQ-Stärke (NVIDIA)";
+      const val = strong ? strong.textContent : "8";
+      label.innerHTML = "";
+      label.append(document.createTextNode(name + ": "));
+      const s = document.createElement("strong");
+      s.id = prefix === "opt" ? "aq-strength-val" : prefix + "-aq-val";
+      s.textContent = val;
+      label.append(s);
+    }
+    const hint = $("aq-hint-text");
+    if (hint && prefix === "opt") {
+      hint.textContent = mode === "cpu"
+        ? "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC."
+        : "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker.";
+    }
+  }
   function speedFamily(platform, codec) {
     const e = encoderInfo(platform, codec);
     const enc = (e && e.encoder) || "";
@@ -2003,8 +2047,14 @@
      ["st-platform", "st-codec", "st-enc-speed"],
      ["ed-platform", "ed-codec", "ed-enc-speed"]].forEach(([p, c, s]) => {
       const pe = $(p); const ce = $(c);
-      if (pe) pe.addEventListener("change", () => fillJobSpeedSelect(s, p, c));
-      if (ce) ce.addEventListener("change", () => fillJobSpeedSelect(s, p, c));
+      const prefix = p.slice(0, p.indexOf("-"));
+      const refresh = () => {
+        fillJobSpeedSelect(s, p, c);
+        syncAqField(prefix);
+      };
+      if (pe) pe.addEventListener("change", refresh);
+      if (ce) ce.addEventListener("change", refresh);
+      syncAqField(prefix);
     });
     const saved = (window.APP_CONFIG && APP_CONFIG.encoderSpeed) || "balanced";
     applyEncoderSpeed(saved);
@@ -3611,6 +3661,7 @@
     destroyNamedChart("vmafFrameChart");
     const gap = $("vmaf-gap-wrap"); if (gap) gap.hidden = true;
     const fr = $("vmaf-frame-wrap"); if (fr) fr.hidden = true;
+    const curveHint = $("vmaf-curve-hint"); if (curveHint) curveHint.hidden = true;
     const tb = $("vmaf-table") && $("vmaf-table").querySelector("tbody");
     if (tb) tb.innerHTML = "";
     const sc = $("vmaf-screenshots"); if (sc) sc.innerHTML = "";
@@ -4307,6 +4358,8 @@
 
   function showVmafChart(vmaf) {
     state.vmafShown = vmaf;
+    const curveHint = $("vmaf-curve-hint");
+    if (curveHint) curveHint.hidden = false;
     drawChart(vmaf);
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
@@ -5840,6 +5893,10 @@
       set("opt-aq-strength", s.aq_strength);
       const lab = $("aq-strength-val");
       if (lab) lab.textContent = String(s.aq_strength);
+    }
+    if (s.b_frames) set("opt-b-frames", s.b_frames);
+    if (s.keyint_sec !== undefined && s.keyint_sec !== null) {
+      set("opt-keyint", String(s.keyint_sec));
     }
     set("opt-film-grain", s.film_grain);
     set("opt-two-pass", s.two_pass);
@@ -7484,6 +7541,7 @@
       hint.textContent = e ? `FFmpeg-Encoder: ${e.encoder}` : "";
     }
     fillJobSpeedSelect("st-enc-speed", "st-platform", "st-codec");
+    syncAqField("st");
   }
 
   function stBuildFormats() {
@@ -8049,6 +8107,8 @@
       codec: $("st-codec").value,
       suffix: "_" + $("st-codec").value,
       encoder_speed: encoderSpeedValue("st-enc-speed"),
+      aq_strength: $("st-aq-strength") ? parseInt($("st-aq-strength").value, 10) : 8,
+      keyint_sec: $("st-keyint") ? (parseInt($("st-keyint").value, 10) || 0) : 0,
       post_processing: $("st-post").value,
       audio_mode: $("st-audio-mode").value,
       rate_mode: "cq",

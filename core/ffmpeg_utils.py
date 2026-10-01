@@ -780,6 +780,46 @@ def scaled_frame_size(width: int, height: int,
     return max(0, w), max(0, h)
 
 
+# B-Frame-Stufen für NVENC. Lookahead und B-Frames teilen sich 31 Frames.
+B_FRAME_MODES = ("auto", "off", "short", "medium", "deep")
+
+
+def normalize_b_frames(value) -> str:
+    """auto | off | short | medium | deep. Unbekanntes wird auto."""
+    v = str(value or "auto").strip().lower()
+    v = {"0": "off", "2": "short", "4": "medium", "7": "deep",
+         "none": "off", "aus": "off", "hier": "deep", "hierarchical": "deep"}.get(v, v)
+    return v if v in B_FRAME_MODES else "auto"
+
+
+def resolve_b_frames(mode: str, rate_mode: str, enc: str, channel: str) -> str:
+    """Konkrete Stufe. auto: ABR/CBR kurz, CQ auf latest-AV1 tief, sonst mittel.
+
+    Tief gibt es nur für AV1 auf latest. Sonst wird mittel daraus.
+    """
+    mode = normalize_b_frames(mode)
+    if mode == "deep" and (enc != "av1_nvenc" or channel == "legacy"):
+        return "medium"
+    if mode != "auto":
+        return mode
+    if rate_mode in ("bitrate", "abr"):
+        return "short"
+    if enc == "av1_nvenc" and channel != "legacy":
+        return "deep"
+    return "medium"
+
+
+def b_frame_spec(resolved: str) -> list[str]:
+    """Gewünschte Flags vor dem Probe gegen die Karte."""
+    if resolved == "off":
+        return ["-bf", "0"]
+    if resolved == "short":
+        return ["-bf", "2", "-b_ref_mode", "middle"]
+    if resolved == "medium":
+        return ["-bf", "4", "-b_ref_mode", "middle"]
+    return ["-bf", "7", "-b_ref_mode", "hierarchical"]
+
+
 def nvenc_quality_args(enc: str, aq_strength: int = 8, lookahead: int = 31) -> list[str]:
     """Spatial AQ und Lookahead für NVENC.
 
@@ -876,14 +916,18 @@ def nvenc_archive_args(
     height: int = 0,
     multipass: Optional[str] = None,
     engines: Optional[int] = None,
+    b_frames: str = "auto",
+    rate_mode: str = "cq",
 ) -> list[str]:
     """Archiv-NVENC: AQ, Tune, B-Frames, Split.
 
     Der Player nutzt das nicht. Jede Gruppe wird einmal gegen die Karte
     probiert. Was der Treiber ablehnt, fällt weg, der Encode startet trotzdem.
 
-    AV1 auf latest probiert ``-bf 7 -b_ref_mode hierarchical``, danach ``middle``.
-    H.264, HEVC und AV1 auf legacy probieren ``-bf 4 -b_ref_mode middle``.
+    ``b_frames``: auto | off | short | medium | deep. auto nimmt bei ABR/CBR
+    zwei B-Frames (Lookahead 29) und bei CQ die Pyramide der Linie (latest-AV1
+    sieben hierarchisch, sonst vier). Tief fällt auf mittel zurück, wenn die
+    Karte oder die Linie keine hierarchische AV1-Pyramide hat.
     Realfilm auf HEVC/AV1 probiert ``-tune uhq`` (Lookahead und Temporalfilter).
     Anime bleibt bei ``hq`` ohne Temporalfilter. 4K-HEVC/AV1 setzt
     ``-split_encode_mode forced``, wenn mindestens zwei NVENC-Engines bekannt sind.
@@ -896,19 +940,25 @@ def nvenc_archive_args(
     def has(token: str) -> bool:
         return bool(help_txt) and token in help_txt
 
+    from . import config
+    channel = getattr(config, "IMAGE_CHANNEL", "latest")
+    resolved = resolve_b_frames(b_frames, rate_mode, enc, channel)
+    spec = b_frame_spec(resolved)
+    # Hierarchisch zuerst, bei Ablehnung die mittlere Stufe, dann nur -bf.
+    fallbacks = [spec]
+    if resolved == "deep":
+        fallbacks.append(b_frame_spec("medium"))
+    if len(spec) > 2:
+        fallbacks.append(spec[:2])
     chosen: list[str] = []
-    hier = ["-bf", "7", "-b_ref_mode", "hierarchical"]
-    middle = ["-bf", "4", "-b_ref_mode", "middle"]
-    if has("b_ref_mode"):
-        from . import config
-        channel = getattr(config, "IMAGE_CHANNEL", "latest")
-        if enc == "av1_nvenc" and channel != "legacy" and has("hierarchical"):
-            if _nvenc_accepts(enc, hier):
-                chosen += hier
-            elif _nvenc_accepts(enc, middle):
-                chosen += middle
-        elif _nvenc_accepts(enc, middle):
-            chosen += middle
+    for cand in fallbacks:
+        if "-b_ref_mode" in cand and not has("b_ref_mode"):
+            continue
+        if "hierarchical" in cand and not has("hierarchical"):
+            continue
+        if _nvenc_accepts(enc, cand):
+            chosen += cand
+            break
 
     bf = 0
     if "-bf" in chosen:
@@ -944,6 +994,59 @@ def nvenc_archive_args(
     if multipass in ("qres", "fullres"):
         args += ["-multipass", multipass]
     return args
+
+
+# 0 = Encoder-Vorgabe. Sonst der maximale Abstand zwischen Keyframes, in Sekunden.
+KEYINT_CHOICES = (0, 2, 5, 10)
+
+
+def normalize_keyint_sec(value) -> int:
+    try:
+        v = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return v if v in KEYINT_CHOICES else 0
+
+
+def gop_args(fps: float, keyint_sec: int) -> list[str]:
+    """``-g`` in Frames. 0 lässt die Vorgabe des Encoders.
+
+    Nur die Obergrenze. Szenenschnitte dürfen weiter ein eigenes Keyframe
+    setzen, ``-keyint_min`` bleibt unangetastet.
+    """
+    sec = normalize_keyint_sec(keyint_sec)
+    if sec <= 0:
+        return []
+    rate = float(fps or 0)
+    if rate < 1:
+        rate = 24.0
+    return ["-g", str(max(1, int(round(rate * sec))))]
+
+
+def apply_cpu_aq(cmd: list[str], enc: str, aq_strength: int) -> None:
+    """AQ-Stärke für libx264 und libx265. 8 ist die Encoder-Vorgabe (1,0).
+
+    Hängt an ein schon gesetztes ``-x26x-params`` an, damit HDR-Parameter
+    nicht überschrieben werden. NVIDIA nutzt diesen Weg nicht.
+    """
+    strength = max(1, min(15, int(aq_strength or 8)))
+    if strength == 8:
+        return
+    if enc == "libx264":
+        flag, mode = "-x264-params", "1"
+    elif enc == "libx265":
+        flag, mode = "-x265-params", "2"
+    else:
+        return
+    aq = f"{strength / 8:.3f}".rstrip("0").rstrip(".")
+    extra = f"aq-mode={mode}:aq-strength={aq}"
+    if flag in cmd:
+        i = cmd.index(flag)
+        if i + 1 < len(cmd):
+            cur = cmd[i + 1]
+            cmd[i + 1] = f"{cur}:{extra}" if cur else extra
+            return
+    cmd.extend([flag, extra])
 
 
 def bitrate_args(platform: str, codec: str, kbps: int, abr: bool = False) -> list[str]:

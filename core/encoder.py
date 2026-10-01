@@ -226,6 +226,8 @@ def build_encode_cmd(
     preserve_dv: bool = False,
     crop: str = "",
     encoder_speed: str = "balanced",
+    b_frames: str = "auto",
+    keyint_sec: int = 0,
     mobile: Optional[dict] = None,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
@@ -335,20 +337,25 @@ def build_encode_cmd(
         cmd += ["-rc", "vbr"]
         cmd += ff.nvenc_archive_args(
             enc, aq_strength, anime=bool(force_10bit),
-            width=out_w, height=out_h, multipass="qres")
+            width=out_w, height=out_h, multipass="qres",
+            b_frames=b_frames, rate_mode=rate_mode)
     elif "nvenc" in enc:
         out_w, out_h = ff.scaled_frame_size(info.width, info.height, target_height)
         cmd += ff.encoder_preset_args(enc, encoder_speed)
         cmd += ff.nvenc_archive_args(
             enc, aq_strength, anime=bool(force_10bit),
             width=out_w, height=out_h,
-            multipass="fullres" if two_pass else None)
+            multipass="fullres" if two_pass else None,
+            b_frames=b_frames, rate_mode=rate_mode)
     elif "qsv" in enc:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
 
     # Echtes Zwei-Pass (zwei Durchläufe) nur für CPU-Encoder im Bitraten-Modus.
     if two_pass and pass_num in (1, 2) and passlog:
         cmd += ["-pass", str(pass_num), "-passlogfile", passlog]
+
+    ff.apply_cpu_aq(cmd, enc, aq_strength)
+    cmd += ff.gop_args(float(getattr(info, "fps", 0) or 0), keyint_sec)
 
     # Erster Durchlauf beim Zwei-Pass: nur Statistik erzeugen, kein Output.
     if pass_num == 1:

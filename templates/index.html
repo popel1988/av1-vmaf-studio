@@ -25,8 +25,14 @@
   <div class="app">
     <!-- ============================= SIDEBAR ============================= -->
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-logo">VS</div>
+        <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M6.5 8.5h12.5a4 4 0 0 1 4 4V16" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/>
+            <path d="M6.5 8.5v6.5" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/>
+            <path d="M4 25.2c2.6-7.4 4.4-9.4 6.8-9.4 2.7 0 3.4 6.6 6 6.6 2.3 0 3.2-5.8 5.4-5.8 1.7 0 2.9 2.3 5.6 1.2" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
         <div class="brand-text">
           <h1 data-no-i18n>Video Studio</h1>
           <span data-no-i18n>VMAF-guided compression &amp; editing</span>
@@ -320,10 +326,31 @@
                     <option value="strong">Stark</option>
                   </select>
                 </div>
-                <div class="field">
-                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die NVIDIA-Vorgabe. Nur NVIDIA.">AQ-Stärke (NVIDIA): <strong id="aq-strength-val">8</strong></label>
+                <div class="field" id="aq-field">
+                  <label id="aq-label" data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="aq-strength-val">8</strong></label>
                   <input type="range" id="opt-aq-strength" min="1" max="15" value="8" />
-                  <p class="hint">Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker. Nur NVIDIA. <a href="#faq-aq" class="faq-jump">FAQ</a></p>
+                  <p class="hint"><span id="aq-hint-text">Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker.</span> <a href="#faq-aq" class="faq-jump">FAQ</a></p>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.">B-Frames (NVIDIA)</label>
+                  <select id="opt-b-frames">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="short">Kurz, 2 B-Frames</option>
+                    <option value="medium">Mittel, 4 B-Frames</option>
+                    <option value="deep">Tief, 7 hierarchisch</option>
+                  </select>
+                  <p class="hint">Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg. <a href="#faq-bframes" class="faq-jump">FAQ</a></p>
+                </div>
+                <div class="field">
+                  <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult im Player schneller, lang spart Bits. Automatisch lässt den Encoder entscheiden.">Keyframe-Abstand</label>
+                  <select id="opt-keyint">
+                    <option value="0">Automatisch</option>
+                    <option value="2">Kurz, etwa 2 Sekunden</option>
+                    <option value="5">Mittel, etwa 5 Sekunden</option>
+                    <option value="10">Lang, etwa 10 Sekunden</option>
+                  </select>
+                  <p class="hint">Kurz setzt öfter ein volles Bild, das Springen wird feiner und die Datei etwas größer. Lang lässt den Encoder länger vorhersagen. Automatisch ist bei SVT etwa 5 Sekunden, bei x264 etwa 10. <a href="#faq-keyint" class="faq-jump">FAQ</a></p>
                 </div>
                 <div class="field">
                   <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
@@ -720,6 +747,7 @@
               <div class="vmaf-chart-wrap">
                 <canvas id="vmaf-chart"></canvas>
               </div>
+              <p class="hint vmaf-curve-hint" id="vmaf-curve-hint" hidden>Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               <div id="vmaf-gap-wrap" class="vmaf-subchart" hidden>
                 <p class="vmaf-subchart-title">Abstand zum Gesamtschnitt (negativ = diese Szene liegt darunter)</p>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
@@ -731,6 +759,7 @@
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
                   <canvas id="vmaf-frame-chart"></canvas>
                 </div>
+                <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               </div>
             </div>
             <div id="vmaf-nerd" class="vmaf-nerd" hidden>
@@ -1102,6 +1131,21 @@
               <label data-tip="Wie gründlich der Encoder sucht. Langsamer = meist kleinere Datei, nicht automatisch schärfer.">Encoder-Speed</label>
               <select id="st-enc-speed">{{ enc_speed_options() }}</select>
               <p class="hint enc-speed-warn" style="display:none"></p>
+            </div>
+            <div class="field-row">
+              <div class="field" id="st-aq-field">
+                <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="st-aq-val">8</strong></label>
+                <input type="range" id="st-aq-strength" min="1" max="15" value="8" />
+              </div>
+              <div class="field">
+                <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                <select id="st-keyint">
+                  <option value="0">Automatisch</option>
+                  <option value="2">Kurz, etwa 2 Sekunden</option>
+                  <option value="5">Mittel, etwa 5 Sekunden</option>
+                  <option value="10">Lang, etwa 10 Sekunden</option>
+                </select>
+              </div>
             </div>
 
             <div class="field">
@@ -2398,6 +2442,29 @@
                   <p class="hint enc-speed-warn" style="display:none"></p>
                 </div>
                 <div class="field">
+                  <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames</label>
+                  <select id="ed-b-frames">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="short">Kurz, 2 B-Frames</option>
+                    <option value="medium">Mittel, 4 B-Frames</option>
+                    <option value="deep">Tief, 7 hierarchisch</option>
+                  </select>
+                </div>
+                <div class="field" id="ed-aq-field">
+                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="ed-aq-val">8</strong></label>
+                  <input type="range" id="ed-aq-strength" min="1" max="15" value="8" />
+                </div>
+                <div class="field">
+                  <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                  <select id="ed-keyint">
+                    <option value="0">Automatisch</option>
+                    <option value="2">Kurz, etwa 2 Sekunden</option>
+                    <option value="5">Mittel, etwa 5 Sekunden</option>
+                    <option value="10">Lang, etwa 10 Sekunden</option>
+                  </select>
+                </div>
+                <div class="field">
                   <label>Ratensteuerung</label>
                   <select id="ed-rate-mode">
                     <option value="cq">Qualität (CQ/CRF)</option>
@@ -2699,6 +2766,7 @@
                 <p>Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.</p>
                 <p>Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.</p>
                 <p>Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.</p>
+                <p>Langsamer schaut auf der CPU weiter voraus. x264 geht von etwa 10 Frames bei Sehr schnell auf etwa 60 bei Sehr langsam, x265 von etwa 15 auf etwa 40. SVT bleibt bei CQ und Preset 6 bei etwa 73 Frames und fällt erst bei den schnellen Presets auf etwa 41. Der Lookahead ist Teil der Stufe, kein eigener Regler. Bei NVIDIA bleibt er an den B-Frames gebunden, höchstens 31 Frames.</p>
                 <p>Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.</p>
               </div>
             </details>
@@ -2795,7 +2863,43 @@
               <div class="faq-body">
                 <p>AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.</p>
                 <p>Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.</p>
-                <p>Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der latest-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt; latest-legacy bleibt bei vier B-Frames.</p>
+                <p>Wirkt bei NVIDIA und bei CPU-H.264 sowie CPU-HEVC. Temporal AQ bleibt bei NVIDIA aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.</p>
+                <p>Bei CPU-H.264 und CPU-HEVC ist 8 die Encoder-Vorgabe und entspricht der Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. SVT, VP9 und die übrigen Hardware-Encoder ignorieren den Regler.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-bframes">
+              <summary>Was machen die B-Frames bei NVIDIA?</summary>
+              <div class="faq-body">
+                <p>Ein B-Frame wird aus Bildern davor und danach vorhergesagt und braucht deshalb weniger Bits als ein normales Bild. NVIDIA hat dafür ein festes Fenster von 31 Frames, das sich Lookahead und B-Frames teilen. Mehr B-Frames kürzen den Lookahead.</p>
+                <p>Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 31) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.</p>
+                <p>Wie das in der Bitraten- und in der VMAF-Kurve aussieht: <a href="#faq-curves" class="faq-jump">Kurven lesen</a>.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-keyint">
+              <summary>Wie weit liegen die Keyframes auseinander?</summary>
+              <div class="faq-body">
+                <p>Ein Keyframe ist ein volles Bild, von dem die Bilder danach abhängen. Der Abstand ist die längste Strecke bis zum nächsten. Kürzer heißt: der Player findet beim Spulen schneller ein Bild, die Datei wird etwas größer. Länger heißt: mehr Vorhersage, etwas kleinere Datei, gröbere Sprünge.</p>
+                <p>Automatisch lässt die Vorgabe des Encoders. SVT liegt bei etwa 5 Sekunden, x264 bei etwa 10. Die Encoder-Speed ändert diesen Abstand nicht, sie ändert den Lookahead. Ein Szenenschnitt darf weiterhin sein eigenes Keyframe bekommen. Der Regler setzt nur die Obergrenze.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-curves">
+              <summary>Warum zackt die Bitrate, und warum liegt VMAF nicht flach?</summary>
+              <div class="faq-body">
+                <p>Jedes angezeigte Bild bekommt nicht dieselbe Datenmenge. CQ ist ein Qualitätsziel, ABR ein Schnitt über die Zeit, CBR eine Grenze. Ein ruhiger Dialog ist billig. Action, Korn, Dunkel und harte Kanten brauchen mehr, wenn die Qualität halten soll. Dazu kommt die Bildgruppe: ein Referenzbild speichert das Bild, die Bilder dazwischen speichern nur den Unterschied und bleiben klein. Die Kurve zeigt diese Verteilung. Sie ist kein Fehler der Messung.</p>
+                <p><strong>Säge, Zahn auf Zahn.</strong> Die B-Frame-Pyramide, vor allem bei NVIDIA mit vier oder sieben B-Frames. Ein B-Frame wird aus Bildern davor und danach vorhergesagt. Die Referenzbilder bleiben groß, die B-Frames dazwischen klein: hoch, dann mittel, dann niedrig, dann wieder hoch. Die Glättung im Studio lässt das stehen. Sie zieht einen Frame nur dann auf den Median der drei Bilder links und rechts, wenn er mehr als das 2,5-fache dieses Medians ist. In der Säge sind die Nachbarn auch hoch, der Zahn bleibt. Aus oder Kurz (zwei B-Frames) macht die Linie ruhiger. Tief macht sie am schärfsten. Sieben hierarchische B-Frames gibt es nur für AV1 auf der Linie latest.</p>
+                <p><strong>Paare auf gleicher Höhe.</strong> AV1 kann ein Bild mit wenigen Byte noch einmal anzeigen, weil es schon kodiert wurde. Diese Bits werden auf das kodierte Bild und die leeren Anzeigen danach verteilt. Der Schnitt der Szene bleibt gleich, die Linie wirkt stufig statt spitz.</p>
+                <p><strong>Eine einzelne Spitze.</strong> Ein Referenz- oder Intra-Bild, dessen Nachbarn niedrig sind. So eine Spitze setzt die Glättung auf den Median der Nachbarn und schreibt die Bits nicht auf die Nachbarn zurück. Der Mittelwert der gezeichneten Linie kann deshalb unter der kbit/s-Spalte der Szene liegen. Die Spalte ist Dateigröße geteilt durch Dauer und bleibt die echte Rate. Häufig bei SVT auf einem kurzen Testclip: ein großes Intra-Bild, der Rest fast leer. Auf dem ganzen Film gleicht sich das aus. Zwei-Pass zieht den Schnitt des Testclips näher ans Ziel, die Aufteilung zwischen Referenz und Vorhersage bleibt.</p>
+                <p><strong>Eine Sekunde deutlich niedriger.</strong> Der Rest der Szene ist normal, nur ein kurzes Stück liegt weit unten. Die Ratensteuerung hat die schwere Stelle kaum gesehen. Bei NVIDIA teilen sich Lookahead und B-Frames ein Fenster von 31 Frames. Viele B-Frames kürzen den Lookahead, die Stelle bekommt insgesamt weniger Rate, nicht nur umsortiert innerhalb dieser Sekunde. Genau dort fällt der 1%-Low, der Mittelwert der Szene bleibt. Weniger B-Frames, bei ABR und CBR also Kurz oder Aus, geben der Stelle den Vorausblick zurück.</p>
+                <p><strong>Eine ganze Szene weit darüber.</strong> Action, Korn oder hartes Detail. CQ gibt ihr so viele Bits, wie die Qualität braucht. ABR darf hier typisch bis zum 1,5-fachen des Ziels. Eine ruhige Szene bleibt weit darunter. Das ist die Verteilung, die CQ und ABR leisten sollen.</p>
+                <p><strong>Fast eine Gerade.</strong> CBR, oder eine so leichte Stelle, dass der Encoder kaum noch Bits ausgeben muss. Bei CPU und SVT sind CBR und ABR technisch dasselbe, eine echte Gerade ist dort seltener. Feste QP, etwa bei VAAPI, hält die Quantisierungsstufe. Schwere Bilder brauchen dann trotzdem mehr Bits, die Qualität schwankt aber stärker mit, weil die Stufe nicht nachgibt.</p>
+                <p><strong>VMAF glatt, Bitrate eine Säge.</strong> Die kleinen B-Frames leihen sich das Bild von den großen Referenzen. Die Paketgröße zappelt, die Ähnlichkeit zur Quelle kann gleichmäßig bleiben. Sichtbar wird es, wenn die Vorhersage die Bewegung nicht trifft. Dann sind die kleinen Frames auch die schlechten, und VMAF geht mit ihnen nach unten.</p>
+                <p><strong>Mittel hoch, 1%-Low tiefer.</strong> Der Mittelwert ist der Schnitt aller bewerteten Frames. Der 1%-Low ist der Schnitt des schlechtesten Prozents. Wenige Frames in einem kurzen Tal ziehen den Low, der Schnitt bleibt. Eine Szene kann bei 98 liegen und im Low zwei Punkte verlieren. Die Empfehlung lässt den 1%-Low der schwächsten Szene nicht durchrutschen. Den Abstand stellst du unter Einstellungen ein, Vorgabe 6 Punkte.</p>
+                <p><strong>Ein kurzes Tal, dann wieder oben.</strong> Eine harte Stelle unter einer Sekunde: Schnitt, Blitz, schnelle Bewegung. Der Rest der Szene ist in Ordnung. Der 1%-Low zeigt genau dieses Tal. In der Bitrate fehlt dort oft die Anhebung, die ein längerer Lookahead gesetzt hätte.</p>
+                <p><strong>Eine Szene unter den anderen.</strong> Das ist die schwache Szene. Mehr Bits oder weniger B-Frames heben dort den Low stärker als den Schnitt der leichten Szenen. Eine Szene, die bei 100 klebt, hat Reserve. Weiter oben wächst vor allem die Datei.</p>
+                <p><strong>Bitrate und VMAF laufen nicht mit.</strong> Bekommen schwere Frames mehr Bits, bleibt VMAF dort oben. Die Kurven laufen dann gegeneinander. Liegt die Größe nur an der Bildgruppe, Referenz groß und B-Frame klein, egal wie schwer das Bild ist, sagt die Zackenhöhe nichts mehr über die Schwierigkeit. Ein Tal im VMAF ohne entsprechendes Tal in der Bitrate heißt: die Stelle war schwer und hat trotzdem wenig bekommen.</p>
+                <p><strong>Abstand zum Gesamtschnitt.</strong> Der Graph unter dem Hauptgraphen. Negativ: diese Szene ist härter als der Film im Mittel. Nahe null: typisch. Positiv: leichter. Die Spanne von der schwächsten bis zur stärksten Szene im oberen Graphen sagt dasselbe. Ein hoher Mittelwert kann eine schwache Szene verdecken.</p>
+                <p><strong>Ein Encoder zackig, der andere ruhig.</strong> VMAF kann trotzdem fast gleich sein. Das ist oft die Bildgruppe, nicht die Qualität. Ein einzelner Intra-Spike wird geglättet, die Linie wirkt ruhig. Eine B-Frame-Säge bleibt stehen. Der VMAF-Wert kommt von den Bildern selbst, nicht von der gezeichneten Rate.</p>
+                <p>Die gestrichelte Linie im Szenenverlauf ist diese Rate je angezeigtem Bild, auf derselben Zeitachse wie die bewerteten VMAF-Frames. Die Zahl in der Tabelle ist der Schnitt der Datei. Beides darf auseinanderliegen. Die Stufen, die die Säge auslösen, stehen unter <a href="#faq-bframes" class="faq-jump">B-Frames</a>.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-vmaf">

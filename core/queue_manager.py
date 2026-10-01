@@ -56,7 +56,10 @@ class JobSettings:
     sharpen: str = "off"             # off | light | medium | strong
     grain: str = "off"               # sichtbares Korn, off | light | medium | strong
     deinterlace: str = "auto"       # auto | on | off
-    aq_strength: int = 8             # NVENC Spatial-AQ-Stärke 1–15
+    aq_strength: int = 8             # 1–15. NVIDIA direkt, x264/x265 als Stärke/8 (8 = 1,0)
+    # NVENC-B-Frames: auto | off | short | medium | deep
+    b_frames: str = "auto"
+    keyint_sec: int = 0              # 0 = Encoder-Vorgabe, sonst 2/5/10 Sekunden
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
     # Zweite Ausgabe aus demselben Decode: H.264 MP4 fürs Handy (0 = aus).
     mobile_copy: bool = False
@@ -922,6 +925,8 @@ class QueueManager:
                 sharpen=s.sharpen, grain=s.grain, deinterlace=s.deinterlace,
                 aq_strength=s.aq_strength, crop=item.crop,
                 encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
+                b_frames=getattr(s, "b_frames", "auto") or "auto",
+                keyint_sec=getattr(s, "keyint_sec", 0) or 0,
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
@@ -1140,6 +1145,8 @@ class QueueManager:
             "grain": s.grain,
             "deinterlace": s.deinterlace,
             "aq_strength": s.aq_strength,
+            "b_frames": getattr(s, "b_frames", "auto") or "auto",
+            "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
             "force_10bit": s.anime,
             "crop": item.crop,
             "audio_mode": s.audio_mode,
@@ -1405,6 +1412,11 @@ class QueueManager:
                 work_dir=config.WORK_DIR,
                 container=spec.get("container") or s.container or "mkv",
                 encoder_speed=spec.get("encoder_speed") or getattr(s, "encoder_speed", "balanced") or "balanced",
+                b_frames=spec.get("b_frames") or getattr(s, "b_frames", "auto") or "auto",
+                keyint_sec=ff.normalize_keyint_sec(
+                    spec.get("keyint_sec", getattr(s, "keyint_sec", 0))),
+                aq_strength=max(1, min(15, int(
+                    spec.get("aq_strength", getattr(s, "aq_strength", 8)) or 8))),
             )
             label = "Editor-Export (Re-Encode)"
         else:
@@ -1537,6 +1549,8 @@ class QueueManager:
             "preserve_dv": s.preserve_dv,
             "crop": item.crop,
             "encoder_speed": getattr(s, "encoder_speed", "balanced") or "balanced",
+            "b_frames": getattr(s, "b_frames", "auto") or "auto",
+            "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
         }
         mobile_path = _mobile_output_path(item, out_path)
         if mobile_path is not None:
@@ -1975,6 +1989,8 @@ def build_job_settings(d: dict) -> JobSettings:
         grain=_level(d.get("grain", "off")),
         deinterlace=_deint(d.get("deinterlace", "auto")),
         aq_strength=max(1, min(15, int(d.get("aq_strength", 8) or 8))),
+        b_frames=ff.normalize_b_frames(d.get("b_frames", "auto")),
+        keyint_sec=ff.normalize_keyint_sec(d.get("keyint_sec", 0)),
         two_pass=bool(d.get("two_pass", False)),
         mobile_copy=bool(d.get("mobile_copy", False)),
         mobile_height=1080 if int(d.get("mobile_height", 720) or 720) >= 1080 else 720,
@@ -2206,8 +2222,17 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
                 fw, fh = ff.scaled_frame_size(info.width, info.height, s.target_height)
             nv = ff.nvenc_archive_args(
                 enc_name, aq, anime=bool(s.anime),
-                width=fw, height=fh, multipass=mp)
+                width=fw, height=fh, multipass=mp,
+                b_frames=getattr(s, "b_frames", "auto") or "auto",
+                rate_mode=s.rate_mode)
             lines.append("    NVENC          : " + " ".join(nv))
+        elif s.platform == "cpu" and s.codec in ("h264", "hevc"):
+            aq = max(1, min(15, int(getattr(s, "aq_strength", 8) or 8)))
+            if aq != 8:
+                lines.append(f"    AQ             : {aq} (Stärke {aq / 8:.3g})")
+        ki = ff.normalize_keyint_sec(getattr(s, "keyint_sec", 0))
+        if ki:
+            lines.append(f"    Keyframes      : höchstens alle {ki} s")
         if s.autocrop:
             crop_txt = (f"erkannt crop={item.crop}" if item.crop
                         else ("noch nicht erkannt" if item.crop == ""

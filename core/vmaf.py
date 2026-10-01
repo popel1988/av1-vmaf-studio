@@ -687,6 +687,8 @@ def analyze(
     crop: str = "",
     progress: Optional[Callable[[dict], None]] = None,
     encoder_speed: str = "balanced",
+    b_frames: str = "auto",
+    keyint_sec: int = 0,
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -793,6 +795,8 @@ def analyze(
                     deinterlace=deinterlace, aq_strength=aq_strength,
                     force_10bit=opts.anime, crop=crop,
                     encoder_speed=encoder_speed,
+                    b_frames=b_frames,
+                    keyint_sec=keyint_sec,
                 )
                 if use_bitrate:
                     kw["rate_mode"] = opts.rate_mode

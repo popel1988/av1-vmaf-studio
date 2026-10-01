@@ -1644,6 +1644,119 @@
     "Viel Bewegung": "Lots of motion",
     "Handkamera / Straße": "Handheld / street",
 
+    // --- NVENC B-Frames ---
+    "B-Frames (NVIDIA)":
+      "B-frames (NVIDIA)",
+    "B-Frames":
+      "B-frames",
+    "Automatisch (empfohlen)":
+      "Automatic (recommended)",
+    "Aus, Lookahead 31":
+      "Off, lookahead 31",
+    "Kurz, 2 B-Frames":
+      "Short, 2 B-frames",
+    "Mittel, 4 B-Frames":
+      "Medium, 4 B-frames",
+    "Tief, 7 hierarchisch":
+      "Deep, 7 hierarchical",
+    "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
+      "NVIDIA only. Lookahead and B-frames share 31 frames. More B-frames save bits on average but shorten the lookahead. In ABR/CBR a short hard passage can then get less rate, the 1% low falls, and the bitrate graph becomes a saw.",
+    "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
+      "Automatic: in CQ the channel pyramid (latest, AV1: 7 hierarchical, otherwise 4), in ABR and CBR only 2, so hard passages keep their bits. Deep saves the most on average and puts the bits on a few reference frames. Off keeps the rate the most even; the file is usually a bit larger. Whatever the GPU rejects is dropped.",
+    "Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.":
+      "NVIDIA only. Automatic uses the channel pyramid in CQ and two B-frames for bitrate.",
+    "Was machen die B-Frames bei NVIDIA?":
+      "What do the NVIDIA B-frames do?",
+    "Ein B-Frame wird aus Bildern davor und danach vorhergesagt und braucht deshalb weniger Bits als ein normales Bild. NVIDIA hat dafür ein festes Fenster von 31 Frames, das sich Lookahead und B-Frames teilen. Mehr B-Frames kürzen den Lookahead.":
+      "A B-frame is predicted from pictures before and after it, so it needs fewer bits than a normal picture. NVIDIA has a fixed window of 31 frames shared by lookahead and B-frames. More B-frames shorten the lookahead.",
+    "Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 31) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.":
+      "Automatic uses the image-channel pyramid in CQ: latest and AV1 seven hierarchical B-frames (lookahead 24), otherwise four (lookahead 27). In ABR and CBR only two (lookahead 29). Deep saves the most on average but puts the bits on a few reference frames. The bitrate graph becomes a saw, and a short hard passage can get much less rate than the rest. That is where the 1% low falls while the mean stays put. Off (lookahead 31) keeps the rate the most even; the file is usually a bit larger. Short is the compromise when the 1% low matters. Medium is the previous tier with four B-frames. Whatever the GPU or the channel cannot do is dropped: hierarchical exists only for AV1 on latest. CPU encoders ignore the choice.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "NVIDIA only. Temporal AQ stays off so it does not fight spatial AQ. Film on HEVC and AV1 uses the UHQ tune (lookahead and temporal filter). Anime stays on HQ without that filter. How many B-frames are set is chosen under B-frames.",
+    "Wie das in der Bitraten- und in der VMAF-Kurve aussieht:":
+      "How that looks on the bitrate and VMAF curves:",
+    "Kurven lesen": "Reading the curves",
+    "Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander.":
+      "Each frame does not get the same amount of data. That is why the mean and the 1% low sit apart.",
+    "Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames.":
+      "The dashed line is the amount of data per frame. Tall teeth are reference frames, the small ones between them are B-frames.",
+    "FAQ: Kurven": "FAQ: Curves",
+    "Warum zackt die Bitrate, und warum liegt VMAF nicht flach?":
+      "Why does the bitrate zigzag, and why is VMAF not flat?",
+    "Jedes angezeigte Bild bekommt nicht dieselbe Datenmenge. CQ ist ein Qualitätsziel, ABR ein Schnitt über die Zeit, CBR eine Grenze. Ein ruhiger Dialog ist billig. Action, Korn, Dunkel und harte Kanten brauchen mehr, wenn die Qualität halten soll. Dazu kommt die Bildgruppe: ein Referenzbild speichert das Bild, die Bilder dazwischen speichern nur den Unterschied und bleiben klein. Die Kurve zeigt diese Verteilung. Sie ist kein Fehler der Messung.":
+      "Each displayed frame does not get the same amount of data. CQ is a quality target, ABR an average over time, CBR a cap. A quiet dialogue is cheap. Action, grain, darkness and hard edges need more if quality is to hold. On top of that comes the picture group: a reference frame stores the picture, the frames in between store only the difference and stay small. The curve shows that distribution. It is not a measurement error.",
+    "Säge, Zahn auf Zahn.": "Saw, tooth after tooth.",
+    "Die B-Frame-Pyramide, vor allem bei NVIDIA mit vier oder sieben B-Frames. Ein B-Frame wird aus Bildern davor und danach vorhergesagt. Die Referenzbilder bleiben groß, die B-Frames dazwischen klein: hoch, dann mittel, dann niedrig, dann wieder hoch. Die Glättung im Studio lässt das stehen. Sie zieht einen Frame nur dann auf den Median der drei Bilder links und rechts, wenn er mehr als das 2,5-fache dieses Medians ist. In der Säge sind die Nachbarn auch hoch, der Zahn bleibt. Aus oder Kurz (zwei B-Frames) macht die Linie ruhiger. Tief macht sie am schärfsten. Sieben hierarchische B-Frames gibt es nur für AV1 auf der Linie latest.":
+      "The B-frame pyramid, especially on NVIDIA with four or seven B-frames. A B-frame is predicted from pictures before and after it. The reference frames stay large, the B-frames between them stay small: high, then medium, then low, then high again. The studio's smoothing leaves this in place. It pulls a frame down to the median of the three frames on each side only when it is more than 2.5 times that median. In a saw the neighbours are high too, so the tooth stays. Off or Short (two B-frames) makes the line calmer. Deep makes it the sharpest. Seven hierarchical B-frames exist only for AV1 on the latest channel.",
+    "Paare auf gleicher Höhe.": "Pairs at the same height.",
+    "AV1 kann ein Bild mit wenigen Byte noch einmal anzeigen, weil es schon kodiert wurde. Diese Bits werden auf das kodierte Bild und die leeren Anzeigen danach verteilt. Der Schnitt der Szene bleibt gleich, die Linie wirkt stufig statt spitz.":
+      "AV1 can display a picture again with a few bytes, because it was already coded. Those bits are shared across the coded picture and the empty displays after it. The scene average stays the same; the line looks stepped rather than pointed.",
+    "Eine einzelne Spitze.": "A single spike.",
+    "Ein Referenz- oder Intra-Bild, dessen Nachbarn niedrig sind. So eine Spitze setzt die Glättung auf den Median der Nachbarn und schreibt die Bits nicht auf die Nachbarn zurück. Der Mittelwert der gezeichneten Linie kann deshalb unter der kbit/s-Spalte der Szene liegen. Die Spalte ist Dateigröße geteilt durch Dauer und bleibt die echte Rate. Häufig bei SVT auf einem kurzen Testclip: ein großes Intra-Bild, der Rest fast leer. Auf dem ganzen Film gleicht sich das aus. Zwei-Pass zieht den Schnitt des Testclips näher ans Ziel, die Aufteilung zwischen Referenz und Vorhersage bleibt.":
+      "A reference or intra frame whose neighbours are low. Smoothing sets such a spike to the median of the neighbours and does not paint those bits back onto them. The mean of the drawn line can therefore sit below the scene's kbit/s column. That column is file size divided by duration and stays the real rate. Common with SVT on a short test clip: one large intra frame, the rest almost empty. On a full movie this evens out. Two-pass pulls the test clip's average closer to the target; the split between reference and prediction remains.",
+    "Eine Sekunde deutlich niedriger.": "One second much lower.",
+    "Der Rest der Szene ist normal, nur ein kurzes Stück liegt weit unten. Die Ratensteuerung hat die schwere Stelle kaum gesehen. Bei NVIDIA teilen sich Lookahead und B-Frames ein Fenster von 31 Frames. Viele B-Frames kürzen den Lookahead, die Stelle bekommt insgesamt weniger Rate, nicht nur umsortiert innerhalb dieser Sekunde. Genau dort fällt der 1%-Low, der Mittelwert der Szene bleibt. Weniger B-Frames, bei ABR und CBR also Kurz oder Aus, geben der Stelle den Vorausblick zurück.":
+      "The rest of the scene is normal, only a short stretch sits far below. Rate control barely saw the hard passage. On NVIDIA, lookahead and B-frames share a window of 31 frames. Many B-frames shorten the lookahead, so the passage gets less rate overall, not merely rearranged inside that second. That is where the 1% low falls while the scene mean stays. Fewer B-frames, Short or Off in ABR and CBR, give the passage its look-ahead back.",
+    "Eine ganze Szene weit darüber.": "A whole scene far above.",
+    "Action, Korn oder hartes Detail. CQ gibt ihr so viele Bits, wie die Qualität braucht. ABR darf hier typisch bis zum 1,5-fachen des Ziels. Eine ruhige Szene bleibt weit darunter. Das ist die Verteilung, die CQ und ABR leisten sollen.":
+      "Action, grain or hard detail. CQ gives it as many bits as the quality needs. ABR may go up to about 1.5 times the target here. A quiet scene stays far below. That is the distribution CQ and ABR are meant to produce.",
+    "Fast eine Gerade.": "Almost a straight line.",
+    "CBR, oder eine so leichte Stelle, dass der Encoder kaum noch Bits ausgeben muss. Bei CPU und SVT sind CBR und ABR technisch dasselbe, eine echte Gerade ist dort seltener. Feste QP, etwa bei VAAPI, hält die Quantisierungsstufe. Schwere Bilder brauchen dann trotzdem mehr Bits, die Qualität schwankt aber stärker mit, weil die Stufe nicht nachgibt.":
+      "CBR, or a passage so easy that the encoder hardly has to spend bits. On CPU and SVT, CBR and ABR are technically the same, so a true straight line is rarer there. Fixed QP, as with VAAPI, holds the quantizer step. Hard pictures still need more bits, but quality swings more with them, because the step does not give way.",
+    "VMAF glatt, Bitrate eine Säge.": "VMAF smooth, bitrate a saw.",
+    "Die kleinen B-Frames leihen sich das Bild von den großen Referenzen. Die Paketgröße zappelt, die Ähnlichkeit zur Quelle kann gleichmäßig bleiben. Sichtbar wird es, wenn die Vorhersage die Bewegung nicht trifft. Dann sind die kleinen Frames auch die schlechten, und VMAF geht mit ihnen nach unten.":
+      "The small B-frames borrow the picture from the large references. Packet size jitters, while similarity to the source can stay even. It becomes visible when prediction misses the motion. Then the small frames are also the bad ones, and VMAF drops with them.",
+    "Mittel hoch, 1%-Low tiefer.": "Mean high, 1% low lower.",
+    "Der Mittelwert ist der Schnitt aller bewerteten Frames. Der 1%-Low ist der Schnitt des schlechtesten Prozents. Wenige Frames in einem kurzen Tal ziehen den Low, der Schnitt bleibt. Eine Szene kann bei 98 liegen und im Low zwei Punkte verlieren. Die Empfehlung lässt den 1%-Low der schwächsten Szene nicht durchrutschen. Den Abstand stellst du unter Einstellungen ein, Vorgabe 6 Punkte.":
+      "The mean is the average of all scored frames. The 1% low is the average of the worst percent. A few frames in a short dip pull the low while the average stays. A scene can sit at 98 and lose two points in the low. The recommendation does not let the 1% low of the weakest scene slip through. You set the gap under Settings, default 6 points.",
+    "Ein kurzes Tal, dann wieder oben.": "A short dip, then back up.",
+    "Eine harte Stelle unter einer Sekunde: Schnitt, Blitz, schnelle Bewegung. Der Rest der Szene ist in Ordnung. Der 1%-Low zeigt genau dieses Tal. In der Bitrate fehlt dort oft die Anhebung, die ein längerer Lookahead gesetzt hätte.":
+      "A hard passage under one second: a cut, a flash, fast motion. The rest of the scene is fine. The 1% low shows exactly that dip. The bitrate there often lacks the lift a longer lookahead would have set.",
+    "Eine Szene unter den anderen.": "One scene below the others.",
+    "Das ist die schwache Szene. Mehr Bits oder weniger B-Frames heben dort den Low stärker als den Schnitt der leichten Szenen. Eine Szene, die bei 100 klebt, hat Reserve. Weiter oben wächst vor allem die Datei.":
+      "That is the weak scene. More bits or fewer B-frames raise the low there more than the average of the easy scenes. A scene stuck at 100 has headroom. Further up, the file grows more than the picture improves.",
+    "Bitrate und VMAF laufen nicht mit.": "Bitrate and VMAF do not move together.",
+    "Bekommen schwere Frames mehr Bits, bleibt VMAF dort oben. Die Kurven laufen dann gegeneinander. Liegt die Größe nur an der Bildgruppe, Referenz groß und B-Frame klein, egal wie schwer das Bild ist, sagt die Zackenhöhe nichts mehr über die Schwierigkeit. Ein Tal im VMAF ohne entsprechendes Tal in der Bitrate heißt: die Stelle war schwer und hat trotzdem wenig bekommen.":
+      "When hard frames get more bits, VMAF stays high there. The curves then move against each other. When size comes only from the picture group, reference large and B-frame small no matter how hard the picture is, tooth height no longer says anything about difficulty. A dip in VMAF without a matching dip in bitrate means the passage was hard and still got little.",
+    "Abstand zum Gesamtschnitt.": "Gap to the overall mean.",
+    "Der Graph unter dem Hauptgraphen. Negativ: diese Szene ist härter als der Film im Mittel. Nahe null: typisch. Positiv: leichter. Die Spanne von der schwächsten bis zur stärksten Szene im oberen Graphen sagt dasselbe. Ein hoher Mittelwert kann eine schwache Szene verdecken.":
+      "The graph under the main graph. Negative: this scene is harder than the film on average. Near zero: typical. Positive: easier. The span from the weakest to the strongest scene on the upper graph says the same thing. A high mean can hide a weak scene.",
+    "Ein Encoder zackig, der andere ruhig.": "One encoder jagged, the other calm.",
+    "VMAF kann trotzdem fast gleich sein. Das ist oft die Bildgruppe, nicht die Qualität. Ein einzelner Intra-Spike wird geglättet, die Linie wirkt ruhig. Eine B-Frame-Säge bleibt stehen. Der VMAF-Wert kommt von den Bildern selbst, nicht von der gezeichneten Rate.":
+      "VMAF can still be almost the same. That is often the picture group, not the quality. A single intra spike is smoothed and the line looks calm. A B-frame saw stays. The VMAF value comes from the pictures themselves, not from the drawn rate.",
+    "Die gestrichelte Linie im Szenenverlauf ist diese Rate je angezeigtem Bild, auf derselben Zeitachse wie die bewerteten VMAF-Frames. Die Zahl in der Tabelle ist der Schnitt der Datei. Beides darf auseinanderliegen. Die Stufen, die die Säge auslösen, stehen unter":
+      "The dashed line in the scene course is that rate per displayed frame, on the same timeline as the scored VMAF frames. The number in the table is the file average. The two may differ. The settings that cause the saw are under",
+
+    "Langsamer schaut auf der CPU weiter voraus. x264 geht von etwa 10 Frames bei Sehr schnell auf etwa 60 bei Sehr langsam, x265 von etwa 15 auf etwa 40. SVT bleibt bei CQ und Preset 6 bei etwa 73 Frames und fällt erst bei den schnellen Presets auf etwa 41. Der Lookahead ist Teil der Stufe, kein eigener Regler. Bei NVIDIA bleibt er an den B-Frames gebunden, höchstens 31 Frames.":
+      "Slower looks further ahead on the CPU. x264 goes from about 10 frames at Fastest to about 60 at Slowest, x265 from about 15 to about 40. SVT stays at about 73 frames in CQ at preset 6 and only drops to about 41 on the fast presets. Lookahead is part of the preset, not its own control. On NVIDIA it stays tied to the B-frames, at most 31 frames.",
+    "Wirkt bei NVIDIA und bei CPU-H.264 sowie CPU-HEVC. Temporal AQ bleibt bei NVIDIA aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "Applies to NVIDIA and to CPU H.264 and CPU HEVC. Temporal AQ stays off on NVIDIA so it does not fight spatial AQ. Film on HEVC and AV1 uses the UHQ tune (lookahead and temporal filter). Anime stays on HQ without that filter. How many B-frames are set is chosen under B-frames.",
+    "Bei CPU-H.264 und CPU-HEVC ist 8 die Encoder-Vorgabe und entspricht der Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. SVT, VP9 und die übrigen Hardware-Encoder ignorieren den Regler.":
+      "On CPU H.264 and CPU HEVC, 8 is the encoder default and equals strength 1.0. Higher protects flats and dark areas more; fine detail can give way a little. SVT, VP9 and the other hardware encoders ignore the slider.",
+    "Wie weit liegen die Keyframes auseinander?": "How far apart are the keyframes?",
+    "Ein Keyframe ist ein volles Bild, von dem die Bilder danach abhängen. Der Abstand ist die längste Strecke bis zum nächsten. Kürzer heißt: der Player findet beim Spulen schneller ein Bild, die Datei wird etwas größer. Länger heißt: mehr Vorhersage, etwas kleinere Datei, gröbere Sprünge.":
+      "A keyframe is a full picture that the pictures after it depend on. The interval is the longest stretch until the next one. Shorter means the player finds a picture faster while seeking, and the file grows a little. Longer means more prediction, a slightly smaller file, and coarser jumps.",
+    "Automatisch lässt die Vorgabe des Encoders. SVT liegt bei etwa 5 Sekunden, x264 bei etwa 10. Die Encoder-Speed ändert diesen Abstand nicht, sie ändert den Lookahead. Ein Szenenschnitt darf weiterhin sein eigenes Keyframe bekommen. Der Regler setzt nur die Obergrenze.":
+      "Automatic leaves the encoder default. SVT is about 5 seconds, x264 about 10. Encoder speed does not change this interval; it changes the lookahead. A scene cut may still get its own keyframe. The control only sets the upper bound.",
+    "Keyframe-Abstand": "Keyframe interval",
+    "Automatisch": "Automatic",
+    "Kurz, etwa 2 Sekunden": "Short, about 2 seconds",
+    "Mittel, etwa 5 Sekunden": "Medium, about 5 seconds",
+    "Lang, etwa 10 Sekunden": "Long, about 10 seconds",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult im Player schneller, lang spart Bits. Automatisch lässt den Encoder entscheiden.":
+      "Maximum gap between keyframes. Short seeks faster in the player, long saves bits. Automatic lets the encoder decide.",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.":
+      "Maximum gap between keyframes. Short seeks faster, long saves bits.",
+    "Kurz setzt öfter ein volles Bild, das Springen wird feiner und die Datei etwas größer. Lang lässt den Encoder länger vorhersagen. Automatisch ist bei SVT etwa 5 Sekunden, bei x264 etwa 10.":
+      "Short inserts a full picture more often, seeking gets finer and the file a bit larger. Long lets the encoder predict further. Automatic is about 5 seconds for SVT and about 10 for x264.",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.":
+      "Move bits inside the frame: finer on flat areas, coarser where there is detail. 8 is the default.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker.":
+      "Spatial AQ shifts bits inside the frame. Sky, walls and gradients are quantized more finely so they band less. Detailed areas can be coarser. 8 is NVIDIA's default. Higher protects flats more.",
+    "AQ-Stärke (x264/x265):": "AQ strength (x264/x265):",
+    "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
+      "8 is the encoder default, which is strength 1.0. Higher protects flats and dark areas more; fine detail can give way a little. CPU H.264 and CPU HEVC only.",
+
     // --- Sprachumschalter (bleibt zweisprachig) ---
     "Sprache / Language": "Sprache / Language"
   };
@@ -2839,6 +2952,119 @@
     "Viel Bewegung": "Mucho movimiento",
     "Handkamera / Straße": "Cámara en mano / calle",
 
+    // --- NVENC B-Frames ---
+    "B-Frames (NVIDIA)":
+      "B-frames (NVIDIA)",
+    "B-Frames":
+      "B-frames",
+    "Automatisch (empfohlen)":
+      "Automático (recomendado)",
+    "Aus, Lookahead 31":
+      "Desactivado, lookahead 31",
+    "Kurz, 2 B-Frames":
+      "Corto, 2 B-frames",
+    "Mittel, 4 B-Frames":
+      "Medio, 4 B-frames",
+    "Tief, 7 hierarchisch":
+      "Profundo, 7 jerárquico",
+    "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
+      "Solo NVIDIA. Lookahead y B-frames comparten 31 fotogramas. Más B-frames ahorran bits de media, pero acortan el lookahead. En ABR/CBR un pasaje corto y difícil puede recibir menos tasa, baja el 1% low y la curva de bitrate se vuelve una sierra.",
+    "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
+      "Automático: en CQ la pirámide de la línea (latest, AV1: 7 jerárquico, si no 4); en ABR y CBR solo 2, para que los pasajes difíciles conserven sus bits. Profundo ahorra más de media y pone los bits en pocas imágenes de referencia. Desactivado mantiene la tasa más uniforme; el archivo suele ser algo mayor. Lo que la tarjeta rechaza se descarta.",
+    "Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.":
+      "Solo NVIDIA. Automático usa la pirámide de la línea en CQ y dos B-frames con bitrate.",
+    "Was machen die B-Frames bei NVIDIA?":
+      "¿Qué hacen los B-frames en NVIDIA?",
+    "Ein B-Frame wird aus Bildern davor und danach vorhergesagt und braucht deshalb weniger Bits als ein normales Bild. NVIDIA hat dafür ein festes Fenster von 31 Frames, das sich Lookahead und B-Frames teilen. Mehr B-Frames kürzen den Lookahead.":
+      "Un B-frame se predice a partir de imágenes anteriores y posteriores y por eso necesita menos bits que una imagen normal. NVIDIA tiene una ventana fija de 31 fotogramas que comparten lookahead y B-frames. Más B-frames acortan el lookahead.",
+    "Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 31) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.":
+      "Automático usa en CQ la pirámide de la línea: latest y AV1 siete B-frames jerárquicos (lookahead 24), si no cuatro (lookahead 27). En ABR y CBR solo dos (lookahead 29). Profundo ahorra más de media, pero pone los bits en pocas imágenes de referencia. La curva de bitrate se vuelve una sierra, y un pasaje corto y difícil puede recibir mucha menos tasa que el resto. Ahí cae el 1% low, mientras la media se mantiene. Desactivado (lookahead 31) mantiene la tasa más uniforme; el archivo suele ser algo mayor. Corto es el compromiso cuando importa el 1% low. Medio es el escalón anterior con cuatro B-frames. Lo que la tarjeta o la línea no puede, se descarta: jerárquico solo existe para AV1 en latest. Los codificadores de CPU ignoran la elección.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "Solo NVIDIA. El AQ temporal queda desactivado para no chocar con el AQ espacial. El cine en HEVC y AV1 usa el tune UHQ (lookahead y filtro temporal). El anime se queda en HQ sin ese filtro. Cuántos B-frames se usan se elige en B-frames.",
+    "Wie das in der Bitraten- und in der VMAF-Kurve aussieht:":
+      "Cómo se ve eso en la curva de bitrate y de VMAF:",
+    "Kurven lesen": "Leer las curvas",
+    "Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander.":
+      "Cada imagen no recibe la misma cantidad de datos. Por eso la media y el 1% low quedan separados.",
+    "Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames.":
+      "La línea discontinua es la cantidad de datos por imagen. Los dientes altos son imágenes de referencia, los pequeños de en medio son B-frames.",
+    "FAQ: Kurven": "FAQ: Curvas",
+    "Warum zackt die Bitrate, und warum liegt VMAF nicht flach?":
+      "¿Por qué la bitrate hace sierra y por qué el VMAF no es plano?",
+    "Jedes angezeigte Bild bekommt nicht dieselbe Datenmenge. CQ ist ein Qualitätsziel, ABR ein Schnitt über die Zeit, CBR eine Grenze. Ein ruhiger Dialog ist billig. Action, Korn, Dunkel und harte Kanten brauchen mehr, wenn die Qualität halten soll. Dazu kommt die Bildgruppe: ein Referenzbild speichert das Bild, die Bilder dazwischen speichern nur den Unterschied und bleiben klein. Die Kurve zeigt diese Verteilung. Sie ist kein Fehler der Messung.":
+      "Cada imagen mostrada no recibe la misma cantidad de datos. CQ es un objetivo de calidad, ABR una media en el tiempo, CBR un límite. Un diálogo tranquilo es barato. Acción, grano, oscuridad y bordes duros necesitan más si la calidad debe mantenerse. Además está el grupo de imágenes: una imagen de referencia guarda la imagen, las de en medio guardan solo la diferencia y se quedan pequeñas. La curva muestra esa distribución. No es un error de medición.",
+    "Säge, Zahn auf Zahn.": "Sierra, diente tras diente.",
+    "Die B-Frame-Pyramide, vor allem bei NVIDIA mit vier oder sieben B-Frames. Ein B-Frame wird aus Bildern davor und danach vorhergesagt. Die Referenzbilder bleiben groß, die B-Frames dazwischen klein: hoch, dann mittel, dann niedrig, dann wieder hoch. Die Glättung im Studio lässt das stehen. Sie zieht einen Frame nur dann auf den Median der drei Bilder links und rechts, wenn er mehr als das 2,5-fache dieses Medians ist. In der Säge sind die Nachbarn auch hoch, der Zahn bleibt. Aus oder Kurz (zwei B-Frames) macht die Linie ruhiger. Tief macht sie am schärfsten. Sieben hierarchische B-Frames gibt es nur für AV1 auf der Linie latest.":
+      "La pirámide de B-frames, sobre todo en NVIDIA con cuatro o siete B-frames. Un B-frame se predice a partir de imágenes anteriores y posteriores. Las de referencia siguen grandes, los B-frames de en medio pequeños: alto, luego medio, luego bajo, luego otra vez alto. El suavizado del estudio lo deja así. Solo baja un fotograma a la mediana de los tres de cada lado si supera 2,5 veces esa mediana. En la sierra los vecinos también son altos, así que el diente se queda. Desactivado o Corto (dos B-frames) calma la línea. Profundo la hace más aguda. Siete B-frames jerárquicos solo existen para AV1 en la línea latest.",
+    "Paare auf gleicher Höhe.": "Pares a la misma altura.",
+    "AV1 kann ein Bild mit wenigen Byte noch einmal anzeigen, weil es schon kodiert wurde. Diese Bits werden auf das kodierte Bild und die leeren Anzeigen danach verteilt. Der Schnitt der Szene bleibt gleich, die Linie wirkt stufig statt spitz.":
+      "AV1 puede volver a mostrar una imagen con pocos bytes, porque ya estaba codificada. Esos bits se reparten entre la imagen codificada y las visualizaciones vacías que siguen. La media de la escena no cambia; la línea parece escalonada en lugar de puntiaguda.",
+    "Eine einzelne Spitze.": "Un solo pico.",
+    "Ein Referenz- oder Intra-Bild, dessen Nachbarn niedrig sind. So eine Spitze setzt die Glättung auf den Median der Nachbarn und schreibt die Bits nicht auf die Nachbarn zurück. Der Mittelwert der gezeichneten Linie kann deshalb unter der kbit/s-Spalte der Szene liegen. Die Spalte ist Dateigröße geteilt durch Dauer und bleibt die echte Rate. Häufig bei SVT auf einem kurzen Testclip: ein großes Intra-Bild, der Rest fast leer. Auf dem ganzen Film gleicht sich das aus. Zwei-Pass zieht den Schnitt des Testclips näher ans Ziel, die Aufteilung zwischen Referenz und Vorhersage bleibt.":
+      "Una imagen de referencia o intra cuyos vecinos son bajos. El suavizado pone ese pico en la mediana de los vecinos y no reparte esos bits sobre ellos. La media de la línea dibujada puede quedar por debajo de la columna kbit/s de la escena. Esa columna es el tamaño del archivo dividido por la duración y sigue siendo la tasa real. Frecuente con SVT en un clip de prueba corto: una intra grande y el resto casi vacío. En la película entera se equilibra. El doble paso acerca la media del clip al objetivo; el reparto entre referencia y predicción permanece.",
+    "Eine Sekunde deutlich niedriger.": "Un segundo mucho más bajo.",
+    "Der Rest der Szene ist normal, nur ein kurzes Stück liegt weit unten. Die Ratensteuerung hat die schwere Stelle kaum gesehen. Bei NVIDIA teilen sich Lookahead und B-Frames ein Fenster von 31 Frames. Viele B-Frames kürzen den Lookahead, die Stelle bekommt insgesamt weniger Rate, nicht nur umsortiert innerhalb dieser Sekunde. Genau dort fällt der 1%-Low, der Mittelwert der Szene bleibt. Weniger B-Frames, bei ABR und CBR also Kurz oder Aus, geben der Stelle den Vorausblick zurück.":
+      "El resto de la escena es normal, solo un tramo corto queda muy abajo. El control de tasa apenas vio el pasaje difícil. En NVIDIA, lookahead y B-frames comparten una ventana de 31 fotogramas. Muchos B-frames acortan el lookahead, y el pasaje recibe menos tasa en total, no solo reordenada dentro de ese segundo. Ahí cae el 1% low, mientras la media de la escena se mantiene. Menos B-frames, Corto o Desactivado en ABR y CBR, devuelven la previsión a ese pasaje.",
+    "Eine ganze Szene weit darüber.": "Una escena entera muy por encima.",
+    "Action, Korn oder hartes Detail. CQ gibt ihr so viele Bits, wie die Qualität braucht. ABR darf hier typisch bis zum 1,5-fachen des Ziels. Eine ruhige Szene bleibt weit darunter. Das ist die Verteilung, die CQ und ABR leisten sollen.":
+      "Acción, grano o detalle duro. CQ le da tantos bits como pida la calidad. ABR puede subir aquí hasta unas 1,5 veces el objetivo. Una escena tranquila se queda muy por debajo. Esa es la distribución que CQ y ABR deben producir.",
+    "Fast eine Gerade.": "Casi una recta.",
+    "CBR, oder eine so leichte Stelle, dass der Encoder kaum noch Bits ausgeben muss. Bei CPU und SVT sind CBR und ABR technisch dasselbe, eine echte Gerade ist dort seltener. Feste QP, etwa bei VAAPI, hält die Quantisierungsstufe. Schwere Bilder brauchen dann trotzdem mehr Bits, die Qualität schwankt aber stärker mit, weil die Stufe nicht nachgibt.":
+      "CBR, o un pasaje tan fácil que el codificador apenas tiene que gastar bits. En CPU y SVT, CBR y ABR son técnicamente lo mismo, así que una recta de verdad es más rara. Un QP fijo, como en VAAPI, mantiene el escalón de cuantización. Las imágenes difíciles siguen necesitando más bits, pero la calidad oscila más con ellas, porque el escalón no cede.",
+    "VMAF glatt, Bitrate eine Säge.": "VMAF liso, bitrate en sierra.",
+    "Die kleinen B-Frames leihen sich das Bild von den großen Referenzen. Die Paketgröße zappelt, die Ähnlichkeit zur Quelle kann gleichmäßig bleiben. Sichtbar wird es, wenn die Vorhersage die Bewegung nicht trifft. Dann sind die kleinen Frames auch die schlechten, und VMAF geht mit ihnen nach unten.":
+      "Los B-frames pequeños toman la imagen de las referencias grandes. El tamaño del paquete salta, y la semejanza con el origen puede seguir uniforme. Se vuelve visible cuando la predicción no acierta el movimiento. Entonces los fotogramas pequeños son también los malos, y el VMAF baja con ellos.",
+    "Mittel hoch, 1%-Low tiefer.": "Media alta, 1% low más bajo.",
+    "Der Mittelwert ist der Schnitt aller bewerteten Frames. Der 1%-Low ist der Schnitt des schlechtesten Prozents. Wenige Frames in einem kurzen Tal ziehen den Low, der Schnitt bleibt. Eine Szene kann bei 98 liegen und im Low zwei Punkte verlieren. Die Empfehlung lässt den 1%-Low der schwächsten Szene nicht durchrutschen. Den Abstand stellst du unter Einstellungen ein, Vorgabe 6 Punkte.":
+      "La media es el promedio de todos los fotogramas puntuados. El 1% low es el promedio del peor uno por ciento. Unos pocos fotogramas en un valle corto tiran del low, y el promedio se mantiene. Una escena puede estar en 98 y perder dos puntos en el low. La recomendación no deja pasar el 1% low de la escena más débil. El margen se ajusta en Ajustes, valor inicial 6 puntos.",
+    "Ein kurzes Tal, dann wieder oben.": "Un valle corto y luego arriba otra vez.",
+    "Eine harte Stelle unter einer Sekunde: Schnitt, Blitz, schnelle Bewegung. Der Rest der Szene ist in Ordnung. Der 1%-Low zeigt genau dieses Tal. In der Bitrate fehlt dort oft die Anhebung, die ein längerer Lookahead gesetzt hätte.":
+      "Un pasaje difícil de menos de un segundo: un corte, un destello, movimiento rápido. El resto de la escena está bien. El 1% low muestra exactamente ese valle. En la bitrate suele faltar ahí la subida que habría puesto un lookahead más largo.",
+    "Eine Szene unter den anderen.": "Una escena por debajo de las demás.",
+    "Das ist die schwache Szene. Mehr Bits oder weniger B-Frames heben dort den Low stärker als den Schnitt der leichten Szenen. Eine Szene, die bei 100 klebt, hat Reserve. Weiter oben wächst vor allem die Datei.":
+      "Esa es la escena débil. Más bits o menos B-frames suben ahí el low más que la media de las escenas fáciles. Una escena pegada a 100 tiene margen. Más arriba crece sobre todo el archivo.",
+    "Bitrate und VMAF laufen nicht mit.": "Bitrate y VMAF no van juntos.",
+    "Bekommen schwere Frames mehr Bits, bleibt VMAF dort oben. Die Kurven laufen dann gegeneinander. Liegt die Größe nur an der Bildgruppe, Referenz groß und B-Frame klein, egal wie schwer das Bild ist, sagt die Zackenhöhe nichts mehr über die Schwierigkeit. Ein Tal im VMAF ohne entsprechendes Tal in der Bitrate heißt: die Stelle war schwer und hat trotzdem wenig bekommen.":
+      "Si los fotogramas difíciles reciben más bits, el VMAF se queda arriba ahí. Las curvas van entonces en sentidos opuestos. Si el tamaño solo depende del grupo de imágenes, referencia grande y B-frame pequeño sin importar lo difícil que sea la imagen, la altura del diente ya no dice nada de la dificultad. Un valle en el VMAF sin un valle equivalente en la bitrate significa: el pasaje era difícil y aun así recibió poco.",
+    "Abstand zum Gesamtschnitt.": "Distancia a la media general.",
+    "Der Graph unter dem Hauptgraphen. Negativ: diese Szene ist härter als der Film im Mittel. Nahe null: typisch. Positiv: leichter. Die Spanne von der schwächsten bis zur stärksten Szene im oberen Graphen sagt dasselbe. Ein hoher Mittelwert kann eine schwache Szene verdecken.":
+      "El gráfico bajo el principal. Negativo: esta escena es más difícil que la media de la película. Cerca de cero: típico. Positivo: más fácil. El rango de la escena más débil a la más fuerte en el gráfico de arriba dice lo mismo. Una media alta puede ocultar una escena débil.",
+    "Ein Encoder zackig, der andere ruhig.": "Un codificador en sierra, el otro tranquilo.",
+    "VMAF kann trotzdem fast gleich sein. Das ist oft die Bildgruppe, nicht die Qualität. Ein einzelner Intra-Spike wird geglättet, die Linie wirkt ruhig. Eine B-Frame-Säge bleibt stehen. Der VMAF-Wert kommt von den Bildern selbst, nicht von der gezeichneten Rate.":
+      "El VMAF puede ser casi igual. A menudo es el grupo de imágenes, no la calidad. Un solo pico intra se suaviza y la línea parece tranquila. Una sierra de B-frames se queda. El valor VMAF sale de las imágenes mismas, no de la tasa dibujada.",
+    "Die gestrichelte Linie im Szenenverlauf ist diese Rate je angezeigtem Bild, auf derselben Zeitachse wie die bewerteten VMAF-Frames. Die Zahl in der Tabelle ist der Schnitt der Datei. Beides darf auseinanderliegen. Die Stufen, die die Säge auslösen, stehen unter":
+      "La línea discontinua del recorrido de la escena es esa tasa por imagen mostrada, en el mismo eje de tiempo que los fotogramas VMAF puntuados. El número de la tabla es la media del archivo. Las dos cosas pueden diferir. Los ajustes que provocan la sierra están en",
+
+    "Langsamer schaut auf der CPU weiter voraus. x264 geht von etwa 10 Frames bei Sehr schnell auf etwa 60 bei Sehr langsam, x265 von etwa 15 auf etwa 40. SVT bleibt bei CQ und Preset 6 bei etwa 73 Frames und fällt erst bei den schnellen Presets auf etwa 41. Der Lookahead ist Teil der Stufe, kein eigener Regler. Bei NVIDIA bleibt er an den B-Frames gebunden, höchstens 31 Frames.":
+      "Más lento mira más adelante en la CPU. x264 va de unos 10 fotogramas en Muy rápido a unos 60 en Muy lento, x265 de unos 15 a unos 40. SVT se queda en unos 73 fotogramas en CQ con el preset 6 y solo baja a unos 41 en los presets rápidos. El lookahead forma parte del preset, no es un control propio. En NVIDIA sigue atado a los B-frames, como máximo 31 fotogramas.",
+    "Wirkt bei NVIDIA und bei CPU-H.264 sowie CPU-HEVC. Temporal AQ bleibt bei NVIDIA aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "Vale para NVIDIA y para H.264 y HEVC en CPU. El AQ temporal queda desactivado en NVIDIA para no chocar con el AQ espacial. El cine en HEVC y AV1 usa el tune UHQ (lookahead y filtro temporal). El anime se queda en HQ sin ese filtro. Cuántos B-frames se usan se elige en B-frames.",
+    "Bei CPU-H.264 und CPU-HEVC ist 8 die Encoder-Vorgabe und entspricht der Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. SVT, VP9 und die übrigen Hardware-Encoder ignorieren den Regler.":
+      "En H.264 y HEVC de CPU, 8 es el valor del codificador y equivale a fuerza 1,0. Más alto protege más las áreas planas y las zonas oscuras; el detalle fino puede ceder un poco. SVT, VP9 y el resto del hardware ignoran el control.",
+    "Wie weit liegen die Keyframes auseinander?": "¿A qué distancia están los keyframes?",
+    "Ein Keyframe ist ein volles Bild, von dem die Bilder danach abhängen. Der Abstand ist die längste Strecke bis zum nächsten. Kürzer heißt: der Player findet beim Spulen schneller ein Bild, die Datei wird etwas größer. Länger heißt: mehr Vorhersage, etwas kleinere Datei, gröbere Sprünge.":
+      "Un keyframe es una imagen completa de la que dependen las siguientes. La distancia es el tramo más largo hasta el siguiente. Más corto: el reproductor encuentra una imagen antes al saltar, y el archivo crece un poco. Más largo: más predicción, un archivo algo más pequeño y saltos más gruesos.",
+    "Automatisch lässt die Vorgabe des Encoders. SVT liegt bei etwa 5 Sekunden, x264 bei etwa 10. Die Encoder-Speed ändert diesen Abstand nicht, sie ändert den Lookahead. Ein Szenenschnitt darf weiterhin sein eigenes Keyframe bekommen. Der Regler setzt nur die Obergrenze.":
+      "Automático deja el valor del codificador. SVT está en unos 5 segundos, x264 en unos 10. La velocidad del encoder no cambia esta distancia; cambia el lookahead. Un cambio de escena puede seguir teniendo su propio keyframe. El control solo pone el máximo.",
+    "Keyframe-Abstand": "Intervalo de keyframes",
+    "Automatisch": "Automático",
+    "Kurz, etwa 2 Sekunden": "Corto, unos 2 segundos",
+    "Mittel, etwa 5 Sekunden": "Medio, unos 5 segundos",
+    "Lang, etwa 10 Sekunden": "Largo, unos 10 segundos",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult im Player schneller, lang spart Bits. Automatisch lässt den Encoder entscheiden.":
+      "Distancia máxima entre keyframes. Corto salta más rápido en el reproductor, largo ahorra bits. Automático deja decidir al codificador.",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.":
+      "Distancia máxima entre keyframes. Corto salta más rápido, largo ahorra bits.",
+    "Kurz setzt öfter ein volles Bild, das Springen wird feiner und die Datei etwas größer. Lang lässt den Encoder länger vorhersagen. Automatisch ist bei SVT etwa 5 Sekunden, bei x264 etwa 10.":
+      "Corto pone más a menudo una imagen completa, el salto es más fino y el archivo un poco mayor. Largo deja predecir más tiempo. Automático son unos 5 segundos en SVT y unos 10 en x264.",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.":
+      "Reparte bits dentro de la imagen: más fino en áreas planas, más grueso donde hay detalle. 8 es el valor inicial.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker.":
+      "El AQ espacial mueve bits dentro de la imagen. Cielo, paredes y degradados se cuantizan más fino para que hagan menos bandas. En el detalle la cuantización puede ser más gruesa. 8 es el valor de NVIDIA. Más alto protege más las áreas planas.",
+    "AQ-Stärke (x264/x265):": "Fuerza AQ (x264/x265):",
+    "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
+      "8 es el valor del codificador, equivale a fuerza 1,0. Más alto protege más las áreas planas y las zonas oscuras; el detalle fino puede ceder un poco. Solo H.264 y HEVC en CPU.",
+
     "Sprache / Language": "Sprache / Language"
   };
 
@@ -4028,6 +4254,119 @@
     "Live-Action / VFX": "Prise de vue réelle / VFX",
     "Viel Bewegung": "Beaucoup de mouvement",
     "Handkamera / Straße": "Caméra à la main / rue",
+
+    // --- NVENC B-Frames ---
+    "B-Frames (NVIDIA)":
+      "B-frames (NVIDIA)",
+    "B-Frames":
+      "B-frames",
+    "Automatisch (empfohlen)":
+      "Automatique (recommandé)",
+    "Aus, Lookahead 31":
+      "Désactivé, lookahead 31",
+    "Kurz, 2 B-Frames":
+      "Court, 2 B-frames",
+    "Mittel, 4 B-Frames":
+      "Moyen, 4 B-frames",
+    "Tief, 7 hierarchisch":
+      "Profond, 7 hiérarchique",
+    "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
+      "NVIDIA seulement. Lookahead et B-frames se partagent 31 images. Plus de B-frames économise des bits en moyenne, mais raccourcit le lookahead. En ABR/CBR un passage court et difficile peut alors recevoir moins de débit, le 1% low baisse, et la courbe de débit devient une scie.",
+    "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
+      "Automatique : en CQ la pyramide de la ligne (latest, AV1 : 7 hiérarchique, sinon 4), en ABR et CBR seulement 2, pour que les passages difficiles gardent leurs bits. Profond économise le plus en moyenne et met les bits sur quelques images de référence. Désactivé garde le débit le plus régulier ; le fichier est en général un peu plus gros. Ce que la carte refuse est ignoré.",
+    "Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.":
+      "NVIDIA seulement. Automatique prend la pyramide de la ligne en CQ et deux B-frames en débit.",
+    "Was machen die B-Frames bei NVIDIA?":
+      "Que font les B-frames chez NVIDIA ?",
+    "Ein B-Frame wird aus Bildern davor und danach vorhergesagt und braucht deshalb weniger Bits als ein normales Bild. NVIDIA hat dafür ein festes Fenster von 31 Frames, das sich Lookahead und B-Frames teilen. Mehr B-Frames kürzen den Lookahead.":
+      "Une B-frame est prédite à partir des images avant et après, et demande donc moins de bits qu'une image normale. NVIDIA a une fenêtre fixe de 31 images partagée entre lookahead et B-frames. Plus de B-frames raccourcit le lookahead.",
+    "Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 31) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.":
+      "Automatique prend en CQ la pyramide de la ligne : latest et AV1 sept B-frames hiérarchiques (lookahead 24), sinon quatre (lookahead 27). En ABR et CBR seulement deux (lookahead 29). Profond économise le plus en moyenne, mais met les bits sur quelques images de référence. La courbe de débit devient une scie, et un passage court et difficile peut recevoir beaucoup moins de débit que le reste. C'est là que le 1% low baisse, alors que la moyenne reste. Désactivé (lookahead 31) garde le débit le plus régulier ; le fichier est en général un peu plus gros. Court est le compromis quand le 1% low compte. Moyen est l'ancien palier à quatre B-frames. Ce que la carte ou la ligne ne sait pas faire est ignoré : hiérarchique n'existe que pour l'AV1 sur latest. Les encodeurs CPU ignorent le choix.",
+    "Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "NVIDIA seulement. L'AQ temporel reste désactivé pour ne pas contredire l'AQ spatial. Le film réel en HEVC et AV1 utilise le tune UHQ (lookahead et filtre temporel). L'anime reste en HQ sans ce filtre. Le nombre de B-frames se règle sous B-frames.",
+    "Wie das in der Bitraten- und in der VMAF-Kurve aussieht:":
+      "À quoi cela ressemble sur les courbes de débit et de VMAF :",
+    "Kurven lesen": "Lire les courbes",
+    "Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander.":
+      "Chaque image ne reçoit pas la même quantité de données. C'est pour cela que la moyenne et le 1% low s'écartent.",
+    "Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames.":
+      "La ligne en pointillés est la quantité de données par image. Les dents hautes sont des images de référence, les petites entre elles des B-frames.",
+    "FAQ: Kurven": "FAQ : Courbes",
+    "Warum zackt die Bitrate, und warum liegt VMAF nicht flach?":
+      "Pourquoi le débit fait-il des dents, et pourquoi le VMAF n'est-il pas plat ?",
+    "Jedes angezeigte Bild bekommt nicht dieselbe Datenmenge. CQ ist ein Qualitätsziel, ABR ein Schnitt über die Zeit, CBR eine Grenze. Ein ruhiger Dialog ist billig. Action, Korn, Dunkel und harte Kanten brauchen mehr, wenn die Qualität halten soll. Dazu kommt die Bildgruppe: ein Referenzbild speichert das Bild, die Bilder dazwischen speichern nur den Unterschied und bleiben klein. Die Kurve zeigt diese Verteilung. Sie ist kein Fehler der Messung.":
+      "Chaque image affichée ne reçoit pas la même quantité de données. CQ est un objectif de qualité, ABR une moyenne dans le temps, CBR un plafond. Un dialogue calme coûte peu. L'action, le grain, le noir et les contours durs demandent plus si la qualité doit tenir. S'y ajoute le groupe d'images : une image de référence stocke l'image, celles du milieu ne stockent que la différence et restent petites. La courbe montre cette répartition. Ce n'est pas une erreur de mesure.",
+    "Säge, Zahn auf Zahn.": "Scie, dent après dent.",
+    "Die B-Frame-Pyramide, vor allem bei NVIDIA mit vier oder sieben B-Frames. Ein B-Frame wird aus Bildern davor und danach vorhergesagt. Die Referenzbilder bleiben groß, die B-Frames dazwischen klein: hoch, dann mittel, dann niedrig, dann wieder hoch. Die Glättung im Studio lässt das stehen. Sie zieht einen Frame nur dann auf den Median der drei Bilder links und rechts, wenn er mehr als das 2,5-fache dieses Medians ist. In der Säge sind die Nachbarn auch hoch, der Zahn bleibt. Aus oder Kurz (zwei B-Frames) macht die Linie ruhiger. Tief macht sie am schärfsten. Sieben hierarchische B-Frames gibt es nur für AV1 auf der Linie latest.":
+      "La pyramide de B-frames, surtout chez NVIDIA avec quatre ou sept B-frames. Une B-frame est prédite à partir des images avant et après. Les images de référence restent grandes, les B-frames entre elles petites : haut, puis moyen, puis bas, puis de nouveau haut. Le lissage du studio laisse cela en place. Il ne ramène une image à la médiane des trois images de chaque côté que si elle dépasse 2,5 fois cette médiane. Dans une scie les voisines sont hautes aussi, la dent reste. Désactivé ou Court (deux B-frames) calme la ligne. Profond la rend la plus aiguë. Sept B-frames hiérarchiques n'existent que pour l'AV1 sur la ligne latest.",
+    "Paare auf gleicher Höhe.": "Paires à la même hauteur.",
+    "AV1 kann ein Bild mit wenigen Byte noch einmal anzeigen, weil es schon kodiert wurde. Diese Bits werden auf das kodierte Bild und die leeren Anzeigen danach verteilt. Der Schnitt der Szene bleibt gleich, die Linie wirkt stufig statt spitz.":
+      "AV1 peut réafficher une image avec quelques octets, parce qu'elle est déjà codée. Ces bits sont partagés entre l'image codée et les affichages vides qui suivent. La moyenne de la scène ne change pas ; la ligne paraît en marches plutôt qu'en pointes.",
+    "Eine einzelne Spitze.": "Une seule pointe.",
+    "Ein Referenz- oder Intra-Bild, dessen Nachbarn niedrig sind. So eine Spitze setzt die Glättung auf den Median der Nachbarn und schreibt die Bits nicht auf die Nachbarn zurück. Der Mittelwert der gezeichneten Linie kann deshalb unter der kbit/s-Spalte der Szene liegen. Die Spalte ist Dateigröße geteilt durch Dauer und bleibt die echte Rate. Häufig bei SVT auf einem kurzen Testclip: ein großes Intra-Bild, der Rest fast leer. Auf dem ganzen Film gleicht sich das aus. Zwei-Pass zieht den Schnitt des Testclips näher ans Ziel, die Aufteilung zwischen Referenz und Vorhersage bleibt.":
+      "Une image de référence ou intra dont les voisines sont basses. Le lissage met cette pointe à la médiane des voisines et ne reporte pas ces bits sur elles. La moyenne de la ligne dessinée peut donc passer sous la colonne kbit/s de la scène. Cette colonne est la taille du fichier divisée par la durée et reste le débit réel. Fréquent avec SVT sur un court extrait de test : une grande image intra, le reste presque vide. Sur le film entier cela se compense. Le deux-passes rapproche la moyenne de l'extrait de la cible ; la répartition entre référence et prédiction reste.",
+    "Eine Sekunde deutlich niedriger.": "Une seconde nettement plus basse.",
+    "Der Rest der Szene ist normal, nur ein kurzes Stück liegt weit unten. Die Ratensteuerung hat die schwere Stelle kaum gesehen. Bei NVIDIA teilen sich Lookahead und B-Frames ein Fenster von 31 Frames. Viele B-Frames kürzen den Lookahead, die Stelle bekommt insgesamt weniger Rate, nicht nur umsortiert innerhalb dieser Sekunde. Genau dort fällt der 1%-Low, der Mittelwert der Szene bleibt. Weniger B-Frames, bei ABR und CBR also Kurz oder Aus, geben der Stelle den Vorausblick zurück.":
+      "Le reste de la scène est normal, seul un court passage est très bas. Le contrôle de débit a à peine vu le passage difficile. Chez NVIDIA, lookahead et B-frames partagent une fenêtre de 31 images. Beaucoup de B-frames raccourcissent le lookahead, le passage reçoit moins de débit au total, pas seulement réparti autrement dans cette seconde. C'est là que le 1% low baisse, alors que la moyenne de la scène reste. Moins de B-frames, donc Court ou Désactivé en ABR et CBR, rendent au passage sa vue en avant.",
+    "Eine ganze Szene weit darüber.": "Une scène entière bien au-dessus.",
+    "Action, Korn oder hartes Detail. CQ gibt ihr so viele Bits, wie die Qualität braucht. ABR darf hier typisch bis zum 1,5-fachen des Ziels. Eine ruhige Szene bleibt weit darunter. Das ist die Verteilung, die CQ und ABR leisten sollen.":
+      "Action, grain ou détail dur. CQ lui donne autant de bits que la qualité exige. ABR peut monter ici jusqu'à environ 1,5 fois la cible. Une scène calme reste bien en dessous. C'est la répartition que CQ et ABR sont censés produire.",
+    "Fast eine Gerade.": "Presque une droite.",
+    "CBR, oder eine so leichte Stelle, dass der Encoder kaum noch Bits ausgeben muss. Bei CPU und SVT sind CBR und ABR technisch dasselbe, eine echte Gerade ist dort seltener. Feste QP, etwa bei VAAPI, hält die Quantisierungsstufe. Schwere Bilder brauchen dann trotzdem mehr Bits, die Qualität schwankt aber stärker mit, weil die Stufe nicht nachgibt.":
+      "CBR, ou un passage si facile que l'encodeur n'a presque plus de bits à dépenser. Sur CPU et SVT, CBR et ABR sont techniquement la même chose, une vraie droite y est plus rare. Un QP fixe, comme en VAAPI, tient le palier de quantification. Les images difficiles demandent quand même plus de bits, mais la qualité varie davantage avec elles, parce que le palier ne cède pas.",
+    "VMAF glatt, Bitrate eine Säge.": "VMAF lisse, débit en scie.",
+    "Die kleinen B-Frames leihen sich das Bild von den großen Referenzen. Die Paketgröße zappelt, die Ähnlichkeit zur Quelle kann gleichmäßig bleiben. Sichtbar wird es, wenn die Vorhersage die Bewegung nicht trifft. Dann sind die kleinen Frames auch die schlechten, und VMAF geht mit ihnen nach unten.":
+      "Les petites B-frames empruntent l'image aux grandes références. La taille des paquets saute, la ressemblance avec la source peut rester régulière. Cela devient visible quand la prédiction rate le mouvement. Alors les petites images sont aussi les mauvaises, et le VMAF descend avec elles.",
+    "Mittel hoch, 1%-Low tiefer.": "Moyenne haute, 1% low plus bas.",
+    "Der Mittelwert ist der Schnitt aller bewerteten Frames. Der 1%-Low ist der Schnitt des schlechtesten Prozents. Wenige Frames in einem kurzen Tal ziehen den Low, der Schnitt bleibt. Eine Szene kann bei 98 liegen und im Low zwei Punkte verlieren. Die Empfehlung lässt den 1%-Low der schwächsten Szene nicht durchrutschen. Den Abstand stellst du unter Einstellungen ein, Vorgabe 6 Punkte.":
+      "La moyenne est la moyenne de toutes les images notées. Le 1% low est la moyenne du pire pour cent. Quelques images dans un creux court tirent le low, la moyenne reste. Une scène peut être à 98 et perdre deux points sur le low. La recommandation ne laisse pas passer le 1% low de la scène la plus faible. L'écart se règle dans les paramètres, valeur par défaut 6 points.",
+    "Ein kurzes Tal, dann wieder oben.": "Un creux court, puis de nouveau en haut.",
+    "Eine harte Stelle unter einer Sekunde: Schnitt, Blitz, schnelle Bewegung. Der Rest der Szene ist in Ordnung. Der 1%-Low zeigt genau dieses Tal. In der Bitrate fehlt dort oft die Anhebung, die ein längerer Lookahead gesetzt hätte.":
+      "Un passage difficile de moins d'une seconde : une coupe, un flash, un mouvement rapide. Le reste de la scène va bien. Le 1% low montre exactement ce creux. Le débit y manque souvent la hausse qu'un lookahead plus long aurait posée.",
+    "Eine Szene unter den anderen.": "Une scène sous les autres.",
+    "Das ist die schwache Szene. Mehr Bits oder weniger B-Frames heben dort den Low stärker als den Schnitt der leichten Szenen. Eine Szene, die bei 100 klebt, hat Reserve. Weiter oben wächst vor allem die Datei.":
+      "C'est la scène faible. Plus de bits ou moins de B-frames y relèvent le low plus que la moyenne des scènes faciles. Une scène collée à 100 a de la réserve. Plus haut, c'est surtout le fichier qui grossit.",
+    "Bitrate und VMAF laufen nicht mit.": "Débit et VMAF ne suivent pas.",
+    "Bekommen schwere Frames mehr Bits, bleibt VMAF dort oben. Die Kurven laufen dann gegeneinander. Liegt die Größe nur an der Bildgruppe, Referenz groß und B-Frame klein, egal wie schwer das Bild ist, sagt die Zackenhöhe nichts mehr über die Schwierigkeit. Ein Tal im VMAF ohne entsprechendes Tal in der Bitrate heißt: die Stelle war schwer und hat trotzdem wenig bekommen.":
+      "Quand les images difficiles reçoivent plus de bits, le VMAF reste haut là. Les courbes vont alors en sens inverse. Quand la taille ne vient que du groupe d'images, référence grande et B-frame petite quelle que soit la difficulté de l'image, la hauteur de la dent ne dit plus rien de la difficulté. Un creux de VMAF sans creux correspondant du débit veut dire : le passage était difficile et a quand même peu reçu.",
+    "Abstand zum Gesamtschnitt.": "Écart à la moyenne générale.",
+    "Der Graph unter dem Hauptgraphen. Negativ: diese Szene ist härter als der Film im Mittel. Nahe null: typisch. Positiv: leichter. Die Spanne von der schwächsten bis zur stärksten Szene im oberen Graphen sagt dasselbe. Ein hoher Mittelwert kann eine schwache Szene verdecken.":
+      "Le graphique sous le graphique principal. Négatif : cette scène est plus dure que le film en moyenne. Proche de zéro : typique. Positif : plus facile. L'écart entre la scène la plus faible et la plus forte sur le graphique du haut dit la même chose. Une moyenne haute peut cacher une scène faible.",
+    "Ein Encoder zackig, der andere ruhig.": "Un encodeur en dents, l'autre calme.",
+    "VMAF kann trotzdem fast gleich sein. Das ist oft die Bildgruppe, nicht die Qualität. Ein einzelner Intra-Spike wird geglättet, die Linie wirkt ruhig. Eine B-Frame-Säge bleibt stehen. Der VMAF-Wert kommt von den Bildern selbst, nicht von der gezeichneten Rate.":
+      "Le VMAF peut quand même être presque identique. C'est souvent le groupe d'images, pas la qualité. Une seule pointe intra est lissée et la ligne paraît calme. Une scie de B-frames reste. La valeur VMAF vient des images elles-mêmes, pas du débit dessiné.",
+    "Die gestrichelte Linie im Szenenverlauf ist diese Rate je angezeigtem Bild, auf derselben Zeitachse wie die bewerteten VMAF-Frames. Die Zahl in der Tabelle ist der Schnitt der Datei. Beides darf auseinanderliegen. Die Stufen, die die Säge auslösen, stehen unter":
+      "La ligne en pointillés dans le déroulé de la scène est ce débit par image affichée, sur le même axe de temps que les images VMAF notées. Le nombre du tableau est la moyenne du fichier. Les deux peuvent différer. Les réglages qui provoquent la scie sont sous",
+
+    "Langsamer schaut auf der CPU weiter voraus. x264 geht von etwa 10 Frames bei Sehr schnell auf etwa 60 bei Sehr langsam, x265 von etwa 15 auf etwa 40. SVT bleibt bei CQ und Preset 6 bei etwa 73 Frames und fällt erst bei den schnellen Presets auf etwa 41. Der Lookahead ist Teil der Stufe, kein eigener Regler. Bei NVIDIA bleibt er an den B-Frames gebunden, höchstens 31 Frames.":
+      "Plus lent regarde plus loin sur le CPU. x264 va d'environ 10 images en Très rapide à environ 60 en Très lent, x265 d'environ 15 à environ 40. SVT reste à environ 73 images en CQ au preset 6 et ne tombe à environ 41 que sur les presets rapides. Le lookahead fait partie du palier, ce n'est pas un réglage à part. Chez NVIDIA il reste lié aux B-frames, 31 images au plus.",
+    "Wirkt bei NVIDIA und bei CPU-H.264 sowie CPU-HEVC. Temporal AQ bleibt bei NVIDIA aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.":
+      "Vaut pour NVIDIA et pour le H.264 et le HEVC sur CPU. L'AQ temporel reste désactivé chez NVIDIA pour ne pas contredire l'AQ spatial. Le film réel en HEVC et AV1 utilise le tune UHQ (lookahead et filtre temporel). L'anime reste en HQ sans ce filtre. Le nombre de B-frames se règle sous B-frames.",
+    "Bei CPU-H.264 und CPU-HEVC ist 8 die Encoder-Vorgabe und entspricht der Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. SVT, VP9 und die übrigen Hardware-Encoder ignorieren den Regler.":
+      "En H.264 et HEVC CPU, 8 est la valeur de l'encodeur et correspond à la force 1,0. Plus haut protège davantage les aplats et les zones sombres ; le détail fin peut céder un peu. SVT, VP9 et le reste du matériel ignorent le curseur.",
+    "Wie weit liegen die Keyframes auseinander?": "À quelle distance sont les keyframes ?",
+    "Ein Keyframe ist ein volles Bild, von dem die Bilder danach abhängen. Der Abstand ist die längste Strecke bis zum nächsten. Kürzer heißt: der Player findet beim Spulen schneller ein Bild, die Datei wird etwas größer. Länger heißt: mehr Vorhersage, etwas kleinere Datei, gröbere Sprünge.":
+      "Une keyframe est une image complète dont dépendent les images suivantes. L'intervalle est le plus long trajet jusqu'à la suivante. Plus court : le lecteur trouve une image plus vite en cherchant, et le fichier grossit un peu. Plus long : plus de prédiction, un fichier un peu plus petit, des sauts plus grossiers.",
+    "Automatisch lässt die Vorgabe des Encoders. SVT liegt bei etwa 5 Sekunden, x264 bei etwa 10. Die Encoder-Speed ändert diesen Abstand nicht, sie ändert den Lookahead. Ein Szenenschnitt darf weiterhin sein eigenes Keyframe bekommen. Der Regler setzt nur die Obergrenze.":
+      "Automatique laisse la valeur de l'encodeur. SVT est à environ 5 secondes, x264 à environ 10. La vitesse d'encodeur ne change pas cet intervalle ; elle change le lookahead. Un changement de scène peut toujours avoir sa propre keyframe. Le réglage ne fixe que le maximum.",
+    "Keyframe-Abstand": "Intervalle des keyframes",
+    "Automatisch": "Automatique",
+    "Kurz, etwa 2 Sekunden": "Court, environ 2 secondes",
+    "Mittel, etwa 5 Sekunden": "Moyen, environ 5 secondes",
+    "Lang, etwa 10 Sekunden": "Long, environ 10 secondes",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult im Player schneller, lang spart Bits. Automatisch lässt den Encoder entscheiden.":
+      "Écart maximal entre keyframes. Court avance plus vite dans le lecteur, long économise des bits. Automatique laisse l'encodeur décider.",
+    "Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.":
+      "Écart maximal entre keyframes. Court avance plus vite, long économise des bits.",
+    "Kurz setzt öfter ein volles Bild, das Springen wird feiner und die Datei etwas größer. Lang lässt den Encoder länger vorhersagen. Automatisch ist bei SVT etwa 5 Sekunden, bei x264 etwa 10.":
+      "Court pose plus souvent une image complète, le saut est plus fin et le fichier un peu plus gros. Long laisse l'encodeur prédire plus longtemps. Automatique, c'est environ 5 secondes pour SVT et environ 10 pour x264.",
+    "Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.":
+      "Répartir les bits dans l'image : plus fin sur les aplats, plus grossier là où il y a du détail. 8 est la valeur de départ.",
+    "Spatial AQ verschiebt Bits innerhalb des Bildes. Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In Detail darf die Quantisierung gröber sein. 8 ist die NVIDIA-Vorgabe. Höher schützt Flächen stärker.":
+      "L'AQ spatial déplace les bits dans l'image. Ciel, murs et dégradés sont quantifiés plus finement pour moins de bandes. Dans le détail, la quantification peut être plus grossière. 8 est la valeur NVIDIA. Plus haut protège davantage les aplats.",
+    "AQ-Stärke (x264/x265):": "Force AQ (x264/x265) :",
+    "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
+      "8 est la valeur de l'encodeur, soit une force de 1,0. Plus haut protège davantage les aplats et les zones sombres ; le détail fin peut céder un peu. H.264 et HEVC CPU seulement.",
 
     "Sprache / Language": "Sprache / Language"
   };

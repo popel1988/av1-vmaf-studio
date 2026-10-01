@@ -478,6 +478,9 @@ def build_editor_encode_cmd(
     work_dir: Optional[Path] = None,
     container: str = "mkv",
     encoder_speed: str = "balanced",
+    b_frames: str = "auto",
+    keyint_sec: int = 0,
+    aq_strength: int = 8,
 ) -> tuple[list, str]:
     """Re-Encode-Export: trim/atrim je Segment, optional xfade, dann concat."""
     if not segments:
@@ -685,8 +688,11 @@ def build_editor_encode_cmd(
         cmd += ff.vp9_args(encoder_speed, cq_mode=rm not in ("bitrate", "abr"))
     elif "nvenc" in enc:
         cmd += ff.nvenc_archive_args(
-            enc, width=int(tw or 0), height=int(th or 0),
-            multipass=None if rm in ("bitrate", "abr") else "qres")
+            enc, aq_strength, width=int(tw or 0), height=int(th or 0),
+            multipass=None if rm in ("bitrate", "abr") else "qres",
+            b_frames=b_frames, rate_mode=rm)
+    ff.apply_cpu_aq(cmd, enc, aq_strength)
+    cmd += ff.gop_args(float(tfps or 0), keyint_sec)
 
     first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
     audio_sel = list(next((s.get("audio_indexes") or [] for s in segments), []))

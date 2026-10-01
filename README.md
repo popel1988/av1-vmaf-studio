@@ -59,7 +59,7 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **Settings** | Parallel encodes, encoder speed and bench, watch folder, notifications, optional Jellyfin/Sonarr/Radarr rescan, API keys, profiles, default output folder, VMAF recommendation (1% gap, minimum savings). |
 | **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
 | **Diagnostics** | System health self-test including functional encoder tests. |
-| **FAQ** | In-app explanations of CQ/CBR/ABR, HDR / Dolby Vision profiles, VMAF, and containers. |
+| **FAQ** | In-app explanations of CQ/CBR/ABR, HDR / Dolby Vision profiles, VMAF, bitrate and VMAF curve shapes, keyframe interval, and containers. |
 
 Other highlights:
 
@@ -111,16 +111,22 @@ matching FFmpeg encoder:
   still uses the same 10–51 scale. Default container is MKV.
 - **NVENC quality defaults** (spatial AQ on, AQ strength **8**, UI 1–15).
   Temporal AQ stays off so it does not fight spatial AQ. Lookahead is
-  **31 minus the B-frame count**. CQ mode uses `-multipass qres`. Bitrate
-  mode uses `-multipass fullres` only when two-pass is on. H.264 and HEVC
-  add `-bf 4 -b_ref_mode middle` when the GPU accepts a short probe. Film on
-  HEVC and AV1 uses `-tune uhq` when the binary and the GPU accept it; anime
-  stays on `-tune hq` without the temporal filter. **latest** AV1 sends
-  `-bf 7 -b_ref_mode hierarchical` when the probe accepts it, and falls back
-  to `middle` or to no B-frames. **latest-legacy** never sends `hierarchical`.
-  4K HEVC/AV1 adds `-split_encode_mode forced` when the GPU is known to have
-  two or more NVENC engines. A rejected flag is dropped and the encode still
-  starts. The player does not use this set. See [Image channels](#image-channels).
+  **31 minus the B-frame count**. **B-frames** are a setting on the encode
+  page (and in the editor). **Auto** uses the channel pyramid in CQ mode
+  (latest AV1: `-bf 7 -b_ref_mode hierarchical`, otherwise `-bf 4 -b_ref_mode middle`)
+  and only `-bf 2 -b_ref_mode middle` in ABR/CBR, so a short hard passage
+  keeps its bits and the 1% low does not drop. **Deep** saves the most on
+  average and puts the bits on a few reference frames: the bitrate graph
+  becomes a saw and the 1% low of a short hard passage can fall while the
+  mean stays put. **Off** keeps lookahead at 31 and the rate the most even.
+  CQ mode uses `-multipass qres`. Bitrate mode uses `-multipass fullres`
+  only when two-pass is on. Film on HEVC and AV1 uses `-tune uhq` when the
+  binary and the GPU accept it; anime stays on `-tune hq` without the
+  temporal filter. **latest-legacy** never sends `hierarchical`; Deep falls
+  back to four B-frames. 4K HEVC/AV1 adds `-split_encode_mode forced` when
+  the GPU is known to have two or more NVENC engines. A rejected flag is
+  dropped and the encode still starts. The player does not use this set.
+  See [Image channels](#image-channels).
 
 **Image toolchain (current defaults):**
 
@@ -145,7 +151,7 @@ GitHub Actions publishes two tags from the same source. `docker compose up --bui
 | VMAF 1080p | `vmaf_v1.0.16_3d0h.json` (0–100) | `vmaf_v0.6.1.json` |
 | VMAF 4K | `vmaf_v1.0.16_1d5h_2160.json` (0–100) | `vmaf_4k_v0.6.1.json` |
 | Anime | same v1 file (NEG is inside the model) | separate NEG model files |
-| AV1 hierarchical B-frames | archive encode sends `-bf 7 -b_ref_mode hierarchical` when a probe accepts it | not in this FFmpeg build. `middle` is used only if a probe accepts it |
+| AV1 hierarchical B-frames | with B-frames set to Auto (CQ) or Deep, when a probe accepts `-bf 7 -b_ref_mode hierarchical` | not in this FFmpeg build. Auto/Deep fall back to `-bf 4 -b_ref_mode middle` when a probe accepts it |
 | H.264 / HEVC hierarchical B-frames | no (SDK 13.1 adds the mode for AV1 only) | no |
 
 Both images still include SVT-AV1, x265, x264, VP9, VAAPI, QSV, and CPU `libvmaf`. Neither includes `libvmaf_cuda`. `dovi_tool` 2.3.3 still does not inject AV1. CPU encode, remux and the player work on either tag. A score of 93 on **latest** is not a 93 on **latest-legacy**.
@@ -309,6 +315,23 @@ Diagnostics and the player transcode stay on fast presets on purpose.
 The Film/Series/Anime chips are job templates (CQ, codec, anime mode), not
 encoder speed.
 
+CPU lookahead is part of that preset, not its own control. At balanced,
+x264 looks about 40 frames ahead, x265 about 20, and SVT-AV1 in CQ about 73
+(about 41 on the fast presets). Across the five aliases, x264 runs from
+about 10 frames to about 60, x265 from about 15 to about 40. NVIDIA lookahead
+stays tied to the B-frame setting and never exceeds 31 frames.
+
+**Keyframe interval** on the encode page, in the editor and in the Super Tool
+is Automatic, or a cap of about 2, 5 or 10 seconds (`-g` only). Scene cuts
+may still insert their own keyframe. Automatic leaves the encoder default
+(SVT about 5 s, x264 about 10 s). Shorter seeks more finely and costs a few
+bits; longer leaves more of the group to prediction.
+
+**AQ strength** for CPU H.264 and HEVC uses the same 1–15 slider. 8 is the
+encoder default and maps to `aq-strength` 1.0 (`aq-mode` 1 for x264, 2 for
+x265); any other value is the slider divided by 8. SVT, VP9, QSV and VAAPI
+ignore it. NVIDIA still takes the slider as spatial AQ strength directly.
+
 Under **Settings → Encoder speed** you can run an **encoder test**: download
 free reference clips of different picture types (4K excerpts from Blender’s
 Big Buck Bunny, Sintel, Tears of Steel and Charge, 4K clips at 30/50/60 fps,
@@ -371,6 +394,68 @@ can park a large share of the target in a few reference frames. NVENC ABR
 (`-maxrate` 1.5×, `-bufsize` 2×, lookahead 31 minus B-frames) has to keep spending inside
 that buffer window, so a hard stretch raises many frames together. The VMAF
 scene curve shows the split; see [Quality assurance](#quality-assurance).
+
+### Reading the bitrate and VMAF curves
+
+A displayed frame does not get a fixed share of the target. CQ is a quality
+target, ABR an average over time, CBR a cap. Easy pictures are cheap; action,
+grain, darkness and hard edges cost more when quality is to hold. Inside a
+small group of pictures a reference frame stores the picture and the frames
+between it store only the difference, so they stay small. The curve is that
+distribution.
+
+Shapes you will see on the scene chart (solid VMAF, dashed per-frame rate)
+and on the main chart (mean and 1% low across quality steps):
+
+- **Saw.** The B-frame pyramid, mostly NVIDIA with four or seven B-frames:
+  high, medium, low, high again. Smoothing pulls a frame down to the median
+  of the three frames on each side only when it is above **2.5×** that
+  median. In a saw the neighbours are high too, so the tooth stays. Off or
+  Short (two B-frames) calms it. Deep makes it sharpest. Seven hierarchical
+  B-frames exist only for AV1 on `latest`.
+- **Pairs at the same height.** An AV1 show-existing display frame shares
+  its bits with the coded picture before it. The scene average is unchanged;
+  the line looks stepped.
+- **One spike.** A lone reference or intra frame. Smoothing sets it to the
+  neighbour median and does not paint those bits back, so the drawn mean can
+  sit below the scene kbit/s column (file size ÷ duration). Common for SVT
+  on a short test clip. Two-pass pulls that clip’s average toward the target;
+  the reference/prediction split remains.
+- **One second much lower.** Lookahead and B-frames share NVIDIA’s 31-frame
+  window. Many B-frames shorten the lookahead, so a short hard passage gets
+  less rate overall. That is where the 1% low falls while the scene mean
+  stays. Short or Off in ABR/CBR gives the passage its look-ahead back.
+- **A whole scene far above the others.** CQ spends what the quality needs.
+  ABR may go to about 1.5× there. A quiet scene stays far below.
+- **Almost flat.** CBR, or a passage so easy the encoder has little to spend.
+  On CPU/SVT, CBR and ABR are the same flag, so a true flat line is rarer.
+  Fixed QP (VAAPI) holds the step: hard pictures still use more bits, and
+  quality swings more because the step does not give way.
+- **VMAF smooth, bitrate a saw.** Small B-frames borrow the picture from the
+  large references. Quality stays even until prediction misses the motion;
+  then the small frames are the bad ones and VMAF drops with them.
+- **Mean high, 1% low lower.** The low is the average of the worst 1% of
+  frames. A short dip pulls it while the mean stays. The recommendation
+  keeps the weakest scene’s 1% low inside the configured gap (default 6).
+- **A short VMAF dip.** A cut, flash or fast motion under a second. The 1%
+  low is that dip. The bitrate there often lacks the lift a longer lookahead
+  would have set.
+- **One scene below the others.** The weak scene. More bits or fewer
+  B-frames raise its low more than the average of the easy scenes. A scene
+  stuck at 100 has headroom; further up, the file grows more than the picture.
+- **Bitrate and VMAF do not move together.** When hard frames get more bits,
+  VMAF stays high there. When size is only the picture group, tooth height
+  no longer tracks difficulty. A VMAF dip without a matching bitrate dip
+  means the passage was hard and still got little.
+- **Gap to the overall mean** (the chart under the main one). Negative: harder
+  than the film average. Near zero: typical. Positive: easier. A wide min–max
+  band on the main chart says the same thing: a high mean can hide one weak scene.
+- **One encoder jagged, the other calm, VMAF almost equal.** Often the
+  picture group, not the quality. A lone intra spike is smoothed; a B-frame
+  saw is not. VMAF is scored on the pictures, not on the drawn rate.
+
+The dashed line is the rate per displayed frame, on the same timeline as the
+scored VMAF frames. The table number is the file average. The two may differ.
 
 ### Dynamic range (SDR / HDR / Dolby Vision)
 

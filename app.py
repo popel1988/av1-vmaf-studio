@@ -563,6 +563,8 @@ class EnqueueRequest(BaseModel):
     grain: str = "off"
     deinterlace: str = "auto"       # auto | on | off
     aq_strength: int = 8
+    b_frames: str = "auto"           # NVENC: auto | off | short | medium | deep
+    keyint_sec: int = 0              # 0 = Encoder-Vorgabe, sonst 2, 5 oder 10 Sekunden
     two_pass: bool = False
     mobile_copy: bool = False        # zweite Ausgabe: H.264 MP4 fürs Handy, gleicher Decode
     mobile_height: int = 720         # 720 | 1080
@@ -930,6 +932,9 @@ class EditorEnqueueRequest(BaseModel):
     out_subdir: str = ""
     post_processing: str = "keep"
     encoder_speed: str = "balanced"
+    b_frames: str = "auto"
+    keyint_sec: int = 0
+    aq_strength: int = 8
     segments: list[dict] = []
 
 
@@ -1130,6 +1135,9 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "audio_codec": "aac" if a_codec == "copy" else a_codec,
         "audio_bitrate": int(req.audio_bitrate or 192),
         "audio_channels": a_channels,
+        "b_frames": req.b_frames or "auto",
+        "keyint_sec": int(req.keyint_sec or 0),
+        "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         "edit_spec": {
             "segments": clean_segs,
             "mode": mode,
@@ -1148,6 +1156,9 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
             "crossfade": float(req.crossfade or 0),
             "encoder_speed": req.encoder_speed or "balanced",
+            "b_frames": req.b_frames or "auto",
+            "keyint_sec": int(req.keyint_sec or 0),
+            "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         },
         "out_mode": req.out_mode,
         "out_subdir": req.out_subdir,
