@@ -114,11 +114,17 @@ class VideoInfo:
         }
 
 
-def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
-    """Vollständige Stream-Analyse via ffprobe. Liefert (VideoInfo, Fehler)."""
+def probe_with_error(path: Path, input_args: Optional[list] = None,
+                     size_bytes: Optional[int] = None) -> tuple[Optional[VideoInfo], Optional[str]]:
+    """Vollständige Stream-Analyse via ffprobe. Liefert (VideoInfo, Fehler).
+
+    input_args: Demuxer-Optionen vor der Quelle (z. B. ``-f dvdvideo -title 3``).
+    size_bytes: Größe, wenn die Quelle keine normale Datei ist (DVD-Ordner).
+    """
     from . import config
-    cmd = [
-        config.FFPROBE, "-v", "error",
+    cmd = [config.FFPROBE, "-v", "error"]
+    cmd += list(input_args or [])
+    cmd += [
         "-show_streams", "-show_format",
         "-of", "json",
         str(path),
@@ -152,10 +158,12 @@ def probe_with_error(path: Path) -> tuple[Optional[VideoInfo], Optional[str]]:
     # (viele MKVs liefern keine Stream-bit_rate, aber mkvmerge-Tags).
     bit_rate = _stream_bitrate(video, video.get("tags", {}) or {}, duration)
     overall_bitrate = int(_f(fmt.get("bit_rate")) or 0)
-    try:
-        size_bytes = path.stat().st_size
-    except OSError:
-        size_bytes = int(_f(fmt.get("size")) or 0)
+    if size_bytes is None:
+        try:
+            size_bytes = path.stat().st_size if path.is_file() else 0
+        except OSError:
+            size_bytes = 0
+        size_bytes = size_bytes or int(_f(fmt.get("size")) or 0)
     if not overall_bitrate and duration > 0 and size_bytes > 0:
         overall_bitrate = int(size_bytes * 8 / duration)
 
@@ -293,6 +301,7 @@ def _audio_entry(s: dict, index: int = 0, container_duration: float = 0.0) -> di
     br = _stream_bitrate(s, tags, container_duration)
     return {
         "index": index,  # relativer Audio-Index (0:a:index)
+        "pid": s.get("id") or "",  # MPEG-TS-PID (Blu-ray: Sprach-Zuordnung aus CLIPINF)
         "codec": s.get("codec_name", "?"),
         "channels": s.get("channels", 0),
         "layout": s.get("channel_layout", "") or "",
@@ -311,6 +320,7 @@ def _subtitle_entry(s: dict, index: int = 0) -> dict:
     disp = s.get("disposition", {}) or {}
     return {
         "index": index,  # relativer Untertitel-Index (0:s:index)
+        "pid": s.get("id") or "",
         "codec": s.get("codec_name", "?"),
         "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
         "title": tags.get("title", "") or tags.get("TITLE", "") or "",

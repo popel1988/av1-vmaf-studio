@@ -257,6 +257,62 @@
       "Open this under Remux & edit to remux it.",
     "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
       "An ISO image is not replaced. Choose an output folder.",
+    "Eine DVD wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "A DVD is not replaced. Choose an output folder.",
+    "Der längste Titel ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Kapitel und Sprachen kommen von der Disc.":
+      "The longest title is the main feature. The other titles stay selectable. Chapters and languages come from the disc.",
+    // --- FAQ: XPSNR, Historie, Mobile, Vergleich, Disc ---
+    "Was ist XPSNR neben VMAF?":
+      "What is XPSNR next to VMAF?",
+    "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
+      "XPSNR is a perceptually weighted PSNR from the FFmpeg filter xpsnr (FFmpeg 7.1+, in both image channels). It needs no models and runs in the same pass as libvmaf – the decoded frames are split to both filters, no second decode. Shown is the weighted value (4·Y + U + V) / 6 in dB. Roughly: 36 dB and up is good, 40 dB and up very good. Frames identical to the source (infinite PSNR) are excluded from the mean. The recommendation still follows VMAF; XPSNR is the second opinion, for example when VMAF gets too friendly with grain or sharpening.",
+    "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
+      "Where do the suggestion and runtime “from history” come from?",
+    "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
+      "Once a file is selected, the studio searches finished encodes with a VMAF value on the same encoder (platform and codec) whose source is similar: same resolution class, same codec, same HDR state, bitrate per pixel within a factor of two, same target height. From the (CQ, VMAF) pairs the highest CQ that still held the target VMAF is proposed; a gap between two tested values is interpolated. If no value reached the target, the best known one is shown with a note. “Apply” sets the slider – no test encode needed, the guardrail (measure VMAF after the encode) remains advisable.",
+    "Die Laufzeit-Schätzung nimmt die reine Encode-Zeit früherer Jobs (ohne VMAF-Analyse) und bildet den Median der Geschwindigkeit in Echtzeit-Vielfachen, zuerst für gleiche Auflösungsklasse und Encoder-Speed, sonst stufenweise lockerer. In der Warteschlange steht sie bei wartenden Einträgen als „≈“, bis die echte ETA des laufenden Encodes übernimmt. Beides braucht ein paar fertige Encodes; Jobs aus der Zeit vor dieser Version haben keine Quellmerkmale gespeichert und zählen nicht.":
+      "The runtime estimate takes the pure encode time of earlier jobs (without VMAF analysis) and forms the median speed as a multiple of realtime, first for the same resolution class and encoder speed, then step by step more loosely. In the queue it appears on waiting items as “≈” until the real ETA of the running encode takes over. Both need a few finished encodes; jobs from before this version stored no source summary and do not count.",
+    "Was macht „Zusätzlich Mobile-Fassung“?":
+      "What does “Also write a mobile copy” do?",
+    "Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit NVIDIA laufen die Bilder dann durch den Hauptspeicher statt komplett auf der GPU, weil Tonemap und Skalierung Software-Filter sind.":
+      "A second file in the same FFmpeg run: the source is decoded once, the archive encode and an H.264 copy (8-bit SDR, 720p or 1080p, CQ/CRF 23, AAC stereo 160 kbit/s, MP4 with faststart) hang on the same input. HDR is tone-mapped for this copy. The file is named ‹output name›_mobile.mp4 and sits next to the main output (next to the source with “replace original”). Not with chunked or remux; with two-pass it is written in the second pass. With NVIDIA the frames then pass through system memory instead of staying on the GPU, because tone map and scaling are software filters.",
+    "Wie prüfe ich das Ergebnis mit dem Auge?":
+      "How do I check the result by eye?",
+    "In den Details eines fertigen Jobs öffnet „Vorher/Nachher im Vergleichsplayer“ Quelle und Ausgabe synchron – nebeneinander oder als Wipe (geteiltes Bild, die Kante folgt der Maus). Was der Browser nicht direkt abspielen kann (HEVC, 10-bit, MKV), läuft über den HLS-Player des Studios mit Server-Transcode; „Immer Transcode“ erzwingt das für beide Seiten, damit identisch gewandelt wird. Unter dem Bild stehen die schwächsten VMAF-Stellen aus der Analyse des Jobs als Zeiten: Klick springt hin und hält an, ⏮/⏭ gehen bildweise. Die Zeiten stammen aus den Frame-Logs der Testszenen; ältere Sessions ohne gespeicherte Szenenstarts werden aus Dauer und Stichprobenzahl nachgerechnet.":
+      "In the details of a finished job, “Before/after in the comparison player” opens source and output in sync – side by side or as a wipe (split image, the edge follows the mouse). Whatever the browser cannot play directly (HEVC, 10-bit, MKV) runs through the studio's HLS player with server transcode; “Always transcode” forces that for both sides so they are converted identically. Below the picture the weakest VMAF spots from the job's analysis are listed as times: a click jumps there and pauses, ⏮/⏭ step frame by frame. The times come from the frame logs of the test scenes; older sessions without stored scene starts are recalculated from duration and sample count.",
+    "Blu-ray und DVD: Ordner und ISO":
+      "Blu-ray and DVD: folders and ISO",
+    "Ein BDMV-Ordner oder ein unverschlüsseltes Blu-ray-ISO listet seine Playlists; die längste ist der Hauptfilm. Sprach-Tags kommen aus den CLIPINF-Dateien der Disc, weil M2TS selbst keine trägt – nach dem Remux heißen die Spuren also nicht mehr „und“. Ein VIDEO_TS-Ordner oder ein DVD-ISO listet seine Titel aus den IFO-Dateien (Dauer, Kapitel, Größe); der Remux liest den Titel über FFmpegs dvdvideo-Demuxer, Kapitel und Sprachen kommen von der Disc. ISOs werden für Titel-Liste und Remux nur lesend eingehängt (UDF, dann ISO9660); der Container braucht dafür privileged. Eine Disc wird nie an Ort und Stelle ersetzt, Ziel ist immer ein Ordner. Verschlüsselte Discs (AACS, CSS) bleiben zu – es gibt keine Entschlüsselung.":
+      "A BDMV folder or an unencrypted Blu-ray ISO lists its playlists; the longest is the main feature. Language tags come from the disc's CLIPINF files because M2TS carries none – after the remux the tracks are no longer “und”. A VIDEO_TS folder or a DVD ISO lists its titles from the IFO files (duration, chapters, size); the remux reads the title through FFmpeg's dvdvideo demuxer, chapters and languages come from the disc. ISOs are mounted read-only for the title list and the remux (UDF, then ISO9660); the container needs privileged for that. A disc is never replaced in place, the target is always a folder. Encrypted discs (AACS, CSS) stay closed – there is no decryption.",
+    // --- Mobile-Fassung, Historie-Vorschlag, ETA, Vergleichsplayer ---
+    "Mobile-Fassung": "Mobile copy",
+    "Zusätzlich Mobile-Fassung (H.264 MP4)": "Also write a mobile copy (H.264 MP4)",
+    "Schätzung aus der Historie": "Estimate from history",
+    "Echtzeit": "realtime",
+    "frühere Encodes": "earlier encodes",
+    "andere Auflösung/Speed": "other resolution/speed",
+    "ohne VMAF-Analyse": "without VMAF analysis",
+    "Vorschlag aus der Historie": "Suggestion from history",
+    "Historie": "History",
+    "bester bekannter Wert": "best known value",
+    "wurde bisher nicht erreicht": "has not been reached so far",
+    "Laufzeit": "Runtime",
+    "Aus der Historie": "From history",
+    "Vorher/Nachher im Vergleichsplayer": "Before/after in the comparison player",
+    "Starte Wiedergabe …": "Starting playback …",
+    "Geladen": "Loaded",
+    "Spule …": "Seeking …",
+    "Szene": "Scene",
+    "Szenenanfang": "Scene start",
+    "Schwächste Stellen": "Weakest spots",
+    "Klick springt hin und hält an": "click jumps there and pauses",
+    "Testszenen": "Test scenes",
+    "Nebeneinander": "Side by side",
+    "Wipe (geteiltes Bild)": "Wipe (split image)",
+    "Immer Transcode (HLS)": "Always transcode (HLS)",
+    "Ansicht": "View",
+    "Wiedergabe": "Playback",
+    "DVD": "DVD",
     "Tonspuren": "Audio tracks",
     "Untertitel": "Subtitles",
     "Externe Spuren hinzufügen": "Add external tracks",
@@ -1664,6 +1720,61 @@
       "Para el remux, ábrelo en Remux y editar.",
     "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
       "Una imagen ISO no se sustituye. Elige una carpeta de destino.",
+    "Eine DVD wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "Un DVD no se sustituye. Elige una carpeta de destino.",
+    "Der längste Titel ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Kapitel und Sprachen kommen von der Disc.":
+      "El título más largo es la película principal. Los demás títulos siguen siendo elegibles. Capítulos e idiomas vienen del disco.",
+    // --- FAQ: XPSNR, Historie, Mobile, Vergleich, Disc ---
+    "Was ist XPSNR neben VMAF?":
+      "¿Qué es XPSNR junto a VMAF?",
+    "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
+      "XPSNR es un PSNR ponderado perceptualmente del filtro FFmpeg xpsnr (FFmpeg 7.1+, en ambas líneas de imagen). No necesita modelos y corre en la misma pasada que libvmaf: los fotogramas decodificados se reparten a ambos filtros, sin segunda decodificación. Se muestra el valor ponderado (4·Y + U + V) / 6 en dB. A grandes rasgos: desde 36 dB bien, desde 40 dB muy bien. Los fotogramas idénticos a la fuente (PSNR infinito) no entran en la media. La recomendación sigue basándose en VMAF; XPSNR es la segunda opinión, por ejemplo cuando VMAF es demasiado amable con el grano o el enfoque.",
+    "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
+      "¿De dónde salen la sugerencia y la duración «del historial»?",
+    "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
+      "En cuanto se elige un archivo, el estudio busca codificaciones terminadas con valor VMAF en el mismo codificador (plataforma y códec) cuya fuente sea similar: misma clase de resolución, mismo códec, misma situación HDR, tasa de bits por píxel como máximo al doble, misma altura objetivo. De los pares (CQ, VMAF) se propone el CQ más alto que aún mantuvo el VMAF objetivo; un hueco entre dos valores probados se interpola. Si ningún valor alcanzó el objetivo, se muestra el mejor conocido con un aviso. «Aplicar» fija el deslizador: no hace falta codificación de prueba, el guardarraíl (medir VMAF tras la codificación) sigue siendo recomendable.",
+    "Die Laufzeit-Schätzung nimmt die reine Encode-Zeit früherer Jobs (ohne VMAF-Analyse) und bildet den Median der Geschwindigkeit in Echtzeit-Vielfachen, zuerst für gleiche Auflösungsklasse und Encoder-Speed, sonst stufenweise lockerer. In der Warteschlange steht sie bei wartenden Einträgen als „≈“, bis die echte ETA des laufenden Encodes übernimmt. Beides braucht ein paar fertige Encodes; Jobs aus der Zeit vor dieser Version haben keine Quellmerkmale gespeichert und zählen nicht.":
+      "La estimación de duración toma el tiempo puro de codificación de trabajos anteriores (sin análisis VMAF) y forma la mediana de la velocidad en múltiplos de tiempo real, primero para la misma clase de resolución y velocidad de codificador, luego de forma más laxa por pasos. En la cola aparece en las entradas en espera como «≈» hasta que la ETA real de la codificación en curso toma el relevo. Ambas cosas necesitan algunas codificaciones terminadas; los trabajos anteriores a esta versión no guardaron características de la fuente y no cuentan.",
+    "Was macht „Zusätzlich Mobile-Fassung“?":
+      "¿Qué hace «Además una versión móvil»?",
+    "Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit NVIDIA laufen die Bilder dann durch den Hauptspeicher statt komplett auf der GPU, weil Tonemap und Skalierung Software-Filter sind.":
+      "Un segundo archivo en la misma ejecución de FFmpeg: la fuente se decodifica una vez, la codificación de archivo y una versión H.264 (SDR 8 bits, 720p o 1080p, CQ/CRF 23, AAC estéreo 160 kbit/s, MP4 con faststart) cuelgan de la misma entrada. El HDR se mapea a SDR para esta versión. El archivo se llama ‹nombre de salida›_mobile.mp4 y queda junto a la salida principal (junto a la fuente con «reemplazar original»). No con chunked ni remux; con dos pasadas se crea en la segunda. Con NVIDIA los fotogramas pasan entonces por la memoria principal en vez de quedarse en la GPU, porque el tone map y el escalado son filtros por software.",
+    "Wie prüfe ich das Ergebnis mit dem Auge?":
+      "¿Cómo compruebo el resultado a ojo?",
+    "In den Details eines fertigen Jobs öffnet „Vorher/Nachher im Vergleichsplayer“ Quelle und Ausgabe synchron – nebeneinander oder als Wipe (geteiltes Bild, die Kante folgt der Maus). Was der Browser nicht direkt abspielen kann (HEVC, 10-bit, MKV), läuft über den HLS-Player des Studios mit Server-Transcode; „Immer Transcode“ erzwingt das für beide Seiten, damit identisch gewandelt wird. Unter dem Bild stehen die schwächsten VMAF-Stellen aus der Analyse des Jobs als Zeiten: Klick springt hin und hält an, ⏮/⏭ gehen bildweise. Die Zeiten stammen aus den Frame-Logs der Testszenen; ältere Sessions ohne gespeicherte Szenenstarts werden aus Dauer und Stichprobenzahl nachgerechnet.":
+      "En los detalles de un trabajo terminado, «Antes/después en el reproductor comparativo» abre fuente y salida sincronizadas, lado a lado o como wipe (imagen dividida, el borde sigue al ratón). Lo que el navegador no puede reproducir directamente (HEVC, 10 bits, MKV) pasa por el reproductor HLS del estudio con transcodificación en el servidor; «Siempre transcodificar» lo fuerza para ambos lados para que se conviertan igual. Bajo la imagen se listan los puntos VMAF más débiles del análisis del trabajo como tiempos: un clic salta allí y pausa, ⏮/⏭ avanzan fotograma a fotograma. Los tiempos vienen de los registros de fotogramas de las escenas de prueba; las sesiones antiguas sin inicios de escena guardados se recalculan a partir de la duración y el número de muestras.",
+    "Blu-ray und DVD: Ordner und ISO":
+      "Blu-ray y DVD: carpetas e ISO",
+    "Ein BDMV-Ordner oder ein unverschlüsseltes Blu-ray-ISO listet seine Playlists; die längste ist der Hauptfilm. Sprach-Tags kommen aus den CLIPINF-Dateien der Disc, weil M2TS selbst keine trägt – nach dem Remux heißen die Spuren also nicht mehr „und“. Ein VIDEO_TS-Ordner oder ein DVD-ISO listet seine Titel aus den IFO-Dateien (Dauer, Kapitel, Größe); der Remux liest den Titel über FFmpegs dvdvideo-Demuxer, Kapitel und Sprachen kommen von der Disc. ISOs werden für Titel-Liste und Remux nur lesend eingehängt (UDF, dann ISO9660); der Container braucht dafür privileged. Eine Disc wird nie an Ort und Stelle ersetzt, Ziel ist immer ein Ordner. Verschlüsselte Discs (AACS, CSS) bleiben zu – es gibt keine Entschlüsselung.":
+      "Una carpeta BDMV o una ISO Blu-ray sin cifrar lista sus listas de reproducción; la más larga es la película principal. Las etiquetas de idioma vienen de los archivos CLIPINF del disco, porque M2TS no lleva ninguna: tras el remux las pistas ya no son «und». Una carpeta VIDEO_TS o una ISO DVD lista sus títulos desde los archivos IFO (duración, capítulos, tamaño); el remux lee el título con el demuxer dvdvideo de FFmpeg, capítulos e idiomas vienen del disco. Las ISO se montan solo lectura para la lista de títulos y el remux (UDF, luego ISO9660); el contenedor necesita privileged para ello. Un disco nunca se reemplaza en el sitio, el destino es siempre una carpeta. Los discos cifrados (AACS, CSS) permanecen cerrados: no hay descifrado.",
+    "Mobile-Fassung": "Versión móvil",
+    "Zusätzlich Mobile-Fassung (H.264 MP4)": "Además una versión móvil (H.264 MP4)",
+    "Schätzung aus der Historie": "Estimación según el historial",
+    "Echtzeit": "tiempo real",
+    "frühere Encodes": "codificaciones anteriores",
+    "andere Auflösung/Speed": "otra resolución/velocidad",
+    "ohne VMAF-Analyse": "sin análisis VMAF",
+    "Vorschlag aus der Historie": "Sugerencia del historial",
+    "Historie": "Historial",
+    "bester bekannter Wert": "mejor valor conocido",
+    "wurde bisher nicht erreicht": "no se ha alcanzado hasta ahora",
+    "Laufzeit": "Duración",
+    "Aus der Historie": "Del historial",
+    "Vorher/Nachher im Vergleichsplayer": "Antes/después en el reproductor comparativo",
+    "Starte Wiedergabe …": "Iniciando reproducción …",
+    "Geladen": "Cargado",
+    "Spule …": "Buscando …",
+    "Szene": "Escena",
+    "Szenenanfang": "Inicio de escena",
+    "Schwächste Stellen": "Puntos más débiles",
+    "Klick springt hin und hält an": "clic salta allí y pausa",
+    "Testszenen": "Escenas de prueba",
+    "Nebeneinander": "Lado a lado",
+    "Wipe (geteiltes Bild)": "Wipe (imagen dividida)",
+    "Immer Transcode (HLS)": "Siempre transcodificar (HLS)",
+    "Ansicht": "Vista",
+    "Wiedergabe": "Reproducción",
+    "DVD": "DVD",
     "Tonspuren": "Pistas de audio",
     "Untertitel": "Subtítulos",
     "Externe Spuren hinzufügen": "Añadir pistas externas",
@@ -2796,6 +2907,61 @@
       "Pour le remux, ouvrez-le sous Remux et édition.",
     "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen.":
       "Une image ISO n'est pas remplacée. Choisissez un dossier de sortie.",
+    "Eine DVD wird nicht ersetzt. Bitte einen Zielordner wählen.":
+      "Un DVD n'est pas remplacé. Choisissez un dossier de sortie.",
+    "Der längste Titel ist der Hauptfilm. Die übrigen Titel bleiben wählbar. Kapitel und Sprachen kommen von der Disc.":
+      "Le titre le plus long est le film principal. Les autres titres restent sélectionnables. Chapitres et langues viennent du disque.",
+    // --- FAQ: XPSNR, Historie, Mobile, Vergleich, Disc ---
+    "Was ist XPSNR neben VMAF?":
+      "Qu'est-ce que XPSNR à côté de VMAF ?",
+    "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
+      "XPSNR est un PSNR pondéré perceptuellement issu du filtre FFmpeg xpsnr (FFmpeg 7.1+, dans les deux lignes d'image). Il n'a besoin d'aucun modèle et tourne dans la même passe que libvmaf : les images décodées sont réparties vers les deux filtres, sans second décodage. La valeur affichée est la pondération (4·Y + U + V) / 6 en dB. En gros : à partir de 36 dB bon, à partir de 40 dB très bon. Les images identiques à la source (PSNR infini) n'entrent pas dans la moyenne. La recommandation suit toujours VMAF ; XPSNR est le second avis, par exemple quand VMAF devient trop indulgent avec le grain ou l'accentuation.",
+    "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
+      "D'où viennent la suggestion et la durée « d'après l'historique » ?",
+    "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
+      "Dès qu'un fichier est choisi, le studio cherche des encodages terminés avec valeur VMAF sur le même encodeur (plateforme et codec) dont la source est similaire : même classe de résolution, même codec, même situation HDR, débit par pixel au plus du simple au double, même hauteur cible. Parmi les paires (CQ, VMAF), le CQ le plus élevé ayant encore tenu le VMAF cible est proposé ; un écart entre deux valeurs testées est interpolé. Si aucune valeur n'a atteint la cible, la meilleure connue est affichée avec une note. « Appliquer » règle le curseur : pas d'encodage test nécessaire, le garde-fou (mesurer le VMAF après l'encodage) reste conseillé.",
+    "Die Laufzeit-Schätzung nimmt die reine Encode-Zeit früherer Jobs (ohne VMAF-Analyse) und bildet den Median der Geschwindigkeit in Echtzeit-Vielfachen, zuerst für gleiche Auflösungsklasse und Encoder-Speed, sonst stufenweise lockerer. In der Warteschlange steht sie bei wartenden Einträgen als „≈“, bis die echte ETA des laufenden Encodes übernimmt. Beides braucht ein paar fertige Encodes; Jobs aus der Zeit vor dieser Version haben keine Quellmerkmale gespeichert und zählen nicht.":
+      "L'estimation de durée prend le temps d'encodage pur des tâches précédentes (sans analyse VMAF) et forme la médiane de la vitesse en multiples du temps réel, d'abord pour la même classe de résolution et la même vitesse d'encodeur, puis de façon plus souple par paliers. Dans la file, elle apparaît sur les entrées en attente sous forme « ≈ » jusqu'à ce que l'ETA réelle de l'encodage en cours prenne le relais. Les deux ont besoin de quelques encodages terminés ; les tâches antérieures à cette version n'ont pas enregistré les caractéristiques de la source et ne comptent pas.",
+    "Was macht „Zusätzlich Mobile-Fassung“?":
+      "Que fait « Écrire aussi une version mobile » ?",
+    "Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit NVIDIA laufen die Bilder dann durch den Hauptspeicher statt komplett auf der GPU, weil Tonemap und Skalierung Software-Filter sind.":
+      "Un second fichier dans la même exécution FFmpeg : la source est décodée une fois, l'encodage d'archive et une version H.264 (SDR 8 bits, 720p ou 1080p, CQ/CRF 23, AAC stéréo 160 kbit/s, MP4 avec faststart) sont accrochés à la même entrée. Le HDR est tone-mappé pour cette version. Le fichier s'appelle ‹nom de sortie›_mobile.mp4 et se trouve à côté de la sortie principale (à côté de la source avec « remplacer l'original »). Pas avec chunked ni remux ; en deux passes il est créé dans la seconde. Avec NVIDIA, les images passent alors par la mémoire centrale au lieu de rester sur le GPU, car le tone map et la mise à l'échelle sont des filtres logiciels.",
+    "Wie prüfe ich das Ergebnis mit dem Auge?":
+      "Comment vérifier le résultat à l'œil ?",
+    "In den Details eines fertigen Jobs öffnet „Vorher/Nachher im Vergleichsplayer“ Quelle und Ausgabe synchron – nebeneinander oder als Wipe (geteiltes Bild, die Kante folgt der Maus). Was der Browser nicht direkt abspielen kann (HEVC, 10-bit, MKV), läuft über den HLS-Player des Studios mit Server-Transcode; „Immer Transcode“ erzwingt das für beide Seiten, damit identisch gewandelt wird. Unter dem Bild stehen die schwächsten VMAF-Stellen aus der Analyse des Jobs als Zeiten: Klick springt hin und hält an, ⏮/⏭ gehen bildweise. Die Zeiten stammen aus den Frame-Logs der Testszenen; ältere Sessions ohne gespeicherte Szenenstarts werden aus Dauer und Stichprobenzahl nachgerechnet.":
+      "Dans les détails d'une tâche terminée, « Avant/après dans le lecteur comparatif » ouvre source et sortie en synchro, côte à côte ou en wipe (image partagée, le bord suit la souris). Ce que le navigateur ne peut pas lire directement (HEVC, 10 bits, MKV) passe par le lecteur HLS du studio avec transcodage serveur ; « Toujours transcoder » l'impose aux deux côtés pour une conversion identique. Sous l'image figurent les points VMAF les plus faibles de l'analyse de la tâche sous forme de temps : un clic y saute et met en pause, ⏮/⏭ avancent image par image. Les temps viennent des journaux d'images des scènes de test ; les sessions plus anciennes sans débuts de scène enregistrés sont recalculées d'après la durée et le nombre d'échantillons.",
+    "Blu-ray und DVD: Ordner und ISO":
+      "Blu-ray et DVD : dossiers et ISO",
+    "Ein BDMV-Ordner oder ein unverschlüsseltes Blu-ray-ISO listet seine Playlists; die längste ist der Hauptfilm. Sprach-Tags kommen aus den CLIPINF-Dateien der Disc, weil M2TS selbst keine trägt – nach dem Remux heißen die Spuren also nicht mehr „und“. Ein VIDEO_TS-Ordner oder ein DVD-ISO listet seine Titel aus den IFO-Dateien (Dauer, Kapitel, Größe); der Remux liest den Titel über FFmpegs dvdvideo-Demuxer, Kapitel und Sprachen kommen von der Disc. ISOs werden für Titel-Liste und Remux nur lesend eingehängt (UDF, dann ISO9660); der Container braucht dafür privileged. Eine Disc wird nie an Ort und Stelle ersetzt, Ziel ist immer ein Ordner. Verschlüsselte Discs (AACS, CSS) bleiben zu – es gibt keine Entschlüsselung.":
+      "Un dossier BDMV ou une ISO Blu-ray non chiffrée liste ses playlists ; la plus longue est le film principal. Les étiquettes de langue viennent des fichiers CLIPINF du disque, car le M2TS n'en porte aucune : après le remux, les pistes ne sont plus « und ». Un dossier VIDEO_TS ou une ISO DVD liste ses titres d'après les fichiers IFO (durée, chapitres, taille) ; le remux lit le titre via le démultiplexeur dvdvideo de FFmpeg, chapitres et langues viennent du disque. Les ISO sont montées en lecture seule pour la liste des titres et le remux (UDF, puis ISO9660) ; le conteneur a besoin de privileged pour cela. Un disque n'est jamais remplacé sur place, la cible est toujours un dossier. Les disques chiffrés (AACS, CSS) restent fermés : il n'y a pas de déchiffrement.",
+    "Mobile-Fassung": "Version mobile",
+    "Zusätzlich Mobile-Fassung (H.264 MP4)": "Écrire aussi une version mobile (H.264 MP4)",
+    "Schätzung aus der Historie": "Estimation d'après l'historique",
+    "Echtzeit": "temps réel",
+    "frühere Encodes": "encodages précédents",
+    "andere Auflösung/Speed": "autre résolution/vitesse",
+    "ohne VMAF-Analyse": "sans analyse VMAF",
+    "Vorschlag aus der Historie": "Suggestion d'après l'historique",
+    "Historie": "Historique",
+    "bester bekannter Wert": "meilleure valeur connue",
+    "wurde bisher nicht erreicht": "n'a pas encore été atteint",
+    "Laufzeit": "Durée",
+    "Aus der Historie": "D'après l'historique",
+    "Vorher/Nachher im Vergleichsplayer": "Avant/après dans le lecteur comparatif",
+    "Starte Wiedergabe …": "Démarrage de la lecture …",
+    "Geladen": "Chargé",
+    "Spule …": "Recherche …",
+    "Szene": "Scène",
+    "Szenenanfang": "Début de scène",
+    "Schwächste Stellen": "Points les plus faibles",
+    "Klick springt hin und hält an": "un clic y saute et met en pause",
+    "Testszenen": "Scènes de test",
+    "Nebeneinander": "Côte à côte",
+    "Wipe (geteiltes Bild)": "Wipe (image partagée)",
+    "Immer Transcode (HLS)": "Toujours transcoder (HLS)",
+    "Ansicht": "Vue",
+    "Wiedergabe": "Lecture",
+    "DVD": "DVD",
     "Tonspuren": "Pistes audio",
     "Untertitel": "Sous-titres",
     "Externe Spuren hinzufügen": "Ajouter des pistes externes",

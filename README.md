@@ -45,15 +45,15 @@ mode**, and language support for **DE / EN / ES / FR**:
 
 | Page | Purpose |
 |------|---------|
-| **Encoding** | Direct encoding with CQ/bitrate/ABR **or target-VMAF** (test encodes, then automatic encode), size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side. |
+| **Encoding** | Direct encoding with CQ/bitrate/ABR **or target-VMAF** (test encodes, then automatic encode), size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side. A **suggestion from history** proposes a CQ without a test run when similar sources have been encoded before. An optional **mobile copy** (H.264 MP4) is written from the same decode. |
 | **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. Same two-column layout as Encoding. |
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
 | **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
 | **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
 | **Editor** | Timeline editor: In/Out cuts, keep/cut ranges, reorder, multi-file concat, **direct upload**, per-source audio/subtitle selection, remux (keyframe copy) or encode export (CQ/CBR/ABR) to the queue. |
 | **Player** | Full media player: Direct-Play when possible, else HLS; quality profiles (NVENC/CPU from diagnostics), chapters, text subs + optional PGS burn-in. |
-| **A/B compare** | Side-by-side original vs. encode playback in the browser. |
-| **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. |
+| **A/B compare** | Original vs. encode in sync, side by side or as a **wipe** (split image with a draggable edge). Files the browser cannot decode run through the HLS player (server transcode). Opened from a job's details it lists the **weakest VMAF spots** as clickable times (jump and pause), plus the test scenes. |
+| **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. Waiting encodes show an **estimated runtime** from the history (median speed of earlier encodes on the same encoder and resolution class). |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
 | **Library** | Recursive scan with live filters, savings estimates (not a probe encode), **sub-libraries**, NFO title/year on each row (sort and search), NFO popup, CSV export. |
 | **Settings** | Parallel encodes, encoder speed and bench, watch folder, notifications, optional Jellyfin/Sonarr/Radarr rescan, API keys, profiles, default output folder, VMAF recommendation (1% gap, minimum savings). |
@@ -239,6 +239,26 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   `mov_text`/`tx3g`→SRT conversion.
 - **Post-encode caps**: optional max output size (MB) and max video bitrate
   (kbit/s); failed caps are reported after the job.
+- **Mobile copy** (Encoding → options): a second output in the same FFmpeg run.
+  The source is decoded once; the archive encode and an H.264 8-bit SDR MP4
+  (720p or 1080p, CRF/CQ 23, AAC stereo 160 kbit/s, `faststart`) hang on the
+  same input. HDR is tone-mapped for this copy. The file is named
+  `<output stem>_mobile.mp4` next to the main output (next to the source when
+  “replace original” is on). Not with chunked encoding or remux; on two-pass
+  it is written during pass 2. With the mobile copy on, NVIDIA runs with
+  decoded frames in system memory (tone map and scale are software filters).
+- **Suggestion from history** (Encoding, under the rate control): once a file
+  is selected, the history is searched for finished encodes with a VMAF value
+  on the same encoder (platform + codec) whose source is similar — same
+  resolution class, codec, HDR, bitrate per pixel within a factor of two —
+  and the same target height. From the (CQ, VMAF) pairs the highest CQ that
+  still held the target VMAF is proposed; a gap between two tested values is
+  interpolated. If no value held, the best known one is shown with a note.
+  **Apply** sets the slider. The same data gives a runtime estimate
+  (median speed of earlier encodes); the queue shows that estimate for
+  waiting items until the real ETA takes over. Both need a few finished
+  encodes first. Jobs recorded before this version have no source summary and
+  do not count.
 
 ---
 
@@ -437,7 +457,8 @@ through the normal queue.
 
 | Capability | Details |
 |------------|---------|
-| **Blu-ray folder or ISO** | A `BDMV` tree, or an unencrypted `.iso`, lists its playlists. The longest playlist is the main feature and is selected on the Remux page. Shorter playlists stay selectable. A playlist of several M2TS files is copied in that order, with chapter marks from the playlist. An ISO is mounted read-only for the title list and again for the remux (UDF, then ISO9660); the container needs permission to mount, which the compose file grants with `privileged`. Encrypted images stay closed. Opening one ISO does not mount every image in the folder. |
+| **Blu-ray folder or ISO** | A `BDMV` tree, or an unencrypted `.iso`, lists its playlists. The longest playlist is the main feature and is selected on the Remux page. Shorter playlists stay selectable. A playlist of several M2TS files is copied in that order, with chapter marks from the playlist. **Language tags** come from the disc's `CLIPINF` files (M2TS itself carries none), so audio and subtitle tracks are no longer `und` after the remux. An ISO is mounted read-only for the title list and again for the remux (UDF, then ISO9660); the container needs permission to mount, which the compose file grants with `privileged`. Encrypted images stay closed. Opening one ISO does not mount every image in the folder. |
+| **DVD folder or ISO** | A `VIDEO_TS` tree, or an unencrypted DVD `.iso`, lists its titles from the IFO files (duration, chapters, size). The longest title is the main feature. The remux reads the title through FFmpeg's `dvdvideo` demuxer (libdvdread), so chapters and track languages come from the disc. Output goes to a folder (a disc is never replaced in place). CSS-encrypted discs are refused with a clear message; there is no decryption. |
 | **Track selection** | Keep/remove individual audio & subtitle tracks. |
 | **Reorder** | Move tracks up/down; the order defines the output order (internal and external tracks share the same tables). |
 | **Track metadata** | Edit `default`/`forced` disposition, language, and title per track. |
@@ -534,6 +555,12 @@ One media mount is enough — sources and encodes live in the same tree:
   and the frame curve. Screenshot captions and the results table show
   `VMAF` and `1%` for that scene when the value was stored. **Older saved
   sessions only have the scene mean** — their 1%-low appears after a new run.
+- **XPSNR**: when the FFmpeg build has the `xpsnr` filter (7.1+, both image
+  channels), every scene is scored with XPSNR in the same pass as libvmaf (the
+  decoded frames are split, no second decode). The weighted value
+  `(4·Y + U + V) / 6` appears next to VMAF in the results, in chart tooltips and
+  in the CSV. Roughly: ≥ 36 dB good, ≥ 40 dB very good. Frames that are
+  identical to the source (infinite PSNR) are excluded from the mean.
 - **Extra metrics**: besides mean VMAF, **1%-low** (mean of the worst 1% of frames),
   **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
   (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a

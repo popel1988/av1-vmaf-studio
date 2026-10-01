@@ -1130,6 +1130,7 @@
   };
 
   window.stopFullPlayer = stopSession;
+  window.fpDetectClientCodecs = detectClientCodecs;
 
   function initFullPlayer() {
     if (!$("fp-video")) return;

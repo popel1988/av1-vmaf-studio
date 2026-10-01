@@ -340,7 +340,12 @@ async def browse_input(path: str = "", kind: str = "video"):
     if kind == "video":
         try:
             from core import bluray as bluray_mod
+            from core import dvd as dvd_mod
             bluray = bluray_mod.describe(target)
+            if bluray:
+                bluray["kind"] = "bluray"
+            else:
+                bluray = dvd_mod.describe(target)
         except Exception:
             bluray = None
 
@@ -372,9 +377,17 @@ async def _browse_iso(target: Path, path: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     rel_here = config.rel_input(target) or path
+    if data.get("kind") == "dvd":
+        # Lesbarkeit über den Demuxer prüfen; der öffnet die ISO ohne Mount.
+        from core import dvd as dvd_mod
+        main = next((t for t in data["titles"] if t["role"] == "main"), data["titles"][0])
+        info, err = await asyncio.to_thread(dvd_mod.probe_title, target, main["clips"][0])
+        if info is None:
+            return JSONResponse({"error": err or "DVD nicht lesbar"}, status_code=400)
     data["iso"] = rel_here
     for title in data.get("titles") or []:
         title["iso"] = rel_here
+        title["source"] = rel_here
     return {
         "path": rel_here,
         "parent": config.rel_input(target.parent),
@@ -462,18 +475,32 @@ async def search_input(path: str = "", q: str = "", limit: int = 500,
 
 @app.get("/api/probe")
 async def probe(path: str, disc_clip: str = ""):
+    """Stream-Analyse. disc_clip: Titel in einem Abbild oder DVD-Ordner
+    (``BDMV/STREAM/00001.m2ts`` bei Blu-ray-ISO, ``dvd:3`` bei DVD)."""
+    from core import bluray as bluray_mod
+    from core import dvd as dvd_mod
     target = _safe_resolve(path)
-    if target is None or not target.is_file():
+    if target is None or not target.exists():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
     if disc_clip:
-        if target.suffix.lower() != ".iso":
+        if dvd_mod.is_dvd_title(disc_clip):
+            if not (target.is_dir() or target.suffix.lower() == ".iso"):
+                return JSONResponse({"error": "Keine DVD-Quelle"}, status_code=400)
+            info, err = await asyncio.to_thread(dvd_mod.probe_title, target, disc_clip)
+            if info is None:
+                return JSONResponse({"error": err or "DVD nicht lesbar"}, status_code=400)
+            return info.to_dict()
+        if not target.is_file() or target.suffix.lower() != ".iso":
             return JSONResponse({"error": "Kein ISO-Abbild"}, status_code=400)
 
         def _run():
-            from core import bluray as bluray_mod
             mount = bluray_mod.mount_iso(target)
             try:
-                return ff.probe_with_error(bluray_mod.clip_path(mount, disc_clip))
+                clip = bluray_mod.clip_path(mount, disc_clip)
+                res = ff.probe_with_error(clip)
+                if res[0] is not None:
+                    bluray_mod.apply_languages(res[0], clip)
+                return res
             finally:
                 bluray_mod.unmount_iso(mount)
 
@@ -481,8 +508,12 @@ async def probe(path: str, disc_clip: str = ""):
             info, err = await asyncio.to_thread(_run)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+    elif not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
     else:
         info, err = ff.probe_with_error(target)
+        if info is not None:
+            bluray_mod.apply_languages(info, target)
     if info is None:
         return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
     return info.to_dict()
@@ -533,6 +564,8 @@ class EnqueueRequest(BaseModel):
     deinterlace: str = "auto"       # auto | on | off
     aq_strength: int = 8
     two_pass: bool = False
+    mobile_copy: bool = False        # zweite Ausgabe: H.264 MP4 fürs Handy, gleicher Decode
+    mobile_height: int = 720         # 720 | 1080
     anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
     verify_vmaf: bool = False        # Guardrail: echten VMAF nach Encode messen
     verify_min: float = 93.0         # Ziel-VMAF für die Guardrail
@@ -1136,15 +1169,41 @@ async def editor_enqueue(req: EditorEnqueueRequest):
 @app.post("/api/remux/enqueue")
 async def remux_enqueue(req: RemuxEnqueueRequest):
     """Remux-/Bearbeiten-Job einreihen (kein Video-Re-Encode)."""
+    from core import dvd as dvd_mod
     target = _safe_resolve(req.path)
-    if target is None or not target.is_file():
+    spec = dict(req.spec or {})
+    dvd_title = 0
+    try:
+        dvd_title = int(spec.get("dvd_title") or 0)
+    except (TypeError, ValueError):
+        dvd_title = 0
+    if target is None or not target.exists():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    if target.is_dir():
+        if not dvd_title or dvd_mod.disc_root(target) is None:
+            return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    elif not target.is_file():
         return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
 
     from core.queue_manager import build_job_settings
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
-    spec = dict(req.spec or {})
     spec["container"] = container
-    if target.suffix.lower() == ".iso":
+    suffix = req.suffix or "_remux"
+    if dvd_title:
+        if dvd_title < 1 or dvd_title > 99:
+            return JSONResponse({"error": "Ungültiger DVD-Titel"}, status_code=400)
+        if target.is_file() and target.suffix.lower() != ".iso":
+            return JSONResponse({"error": "Keine DVD-Quelle"}, status_code=400)
+        spec["dvd_title"] = dvd_title
+        spec.pop("playlist_clips", None)
+        if (req.post_processing or "") == "inplace" or (
+                target.is_dir() and (req.post_processing or "") == "archive"):
+            return JSONResponse(
+                {"error": "Eine DVD wird nicht ersetzt. Bitte einen Zielordner wählen."},
+                status_code=400)
+        if (spec.get("disc_role") or "") == "extra":
+            suffix = f"{suffix}_t{dvd_title:02d}"
+    elif target.suffix.lower() == ".iso":
         clips = [str(c) for c in (spec.get("playlist_clips") or []) if c]
         if not clips or any(not _disc_clip_ok(c) for c in clips):
             return JSONResponse(
@@ -1154,6 +1213,8 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
             return JSONResponse(
                 {"error": "Ein ISO-Abbild wird nicht ersetzt. Bitte einen Zielordner wählen."},
                 status_code=400)
+        if (spec.get("disc_role") or "") == "extra" and spec.get("disc_playlist"):
+            suffix = f"{suffix}_{str(spec['disc_playlist'])[:12]}"
     else:
         resolved_clips = []
         for rel in spec.get("playlist_clips") or []:
@@ -1180,7 +1241,7 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
         "post_processing": req.post_processing,
         "safe_replace": req.safe_replace,
         "integrity_check": req.integrity_check,
-        "suffix": req.suffix or "_remux",
+        "suffix": suffix,
         "name_pattern": req.name_pattern or "{stem}{suffix}",
         "on_duplicate": req.on_duplicate or "ask",
         "edit_spec": spec,
@@ -1244,6 +1305,49 @@ async def save_profile(req: ProfileRequest):
 async def delete_profile(name: str):
     from core import profiles
     return {"profiles": profiles.delete(name)}
+
+
+class SuggestRequest(BaseModel):
+    path: str
+    platform: str = "cpu"
+    codec: str = "av1"
+    rate_mode: str = "cq"
+    target_vmaf: float = 94.0
+    target_height: int = 0
+    encoder_speed: str = "balanced"
+    two_pass: bool = False
+
+
+@app.post("/api/suggest")
+async def suggest_from_history(req: SuggestRequest):
+    """CQ-Vorschlag und Laufzeit-Schätzung aus der Historie – ohne Testlauf.
+
+    Grundlage sind fertige Encodes mit VMAF-Wert von Quellen ähnlicher
+    Auflösung, Codec, Bitrate und HDR-Lage auf demselben Encoder.
+    """
+    from core import history
+    target = config.resolve_input(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    info = await asyncio.to_thread(ff.ffprobe, target)
+    if info is None:
+        return {"suggestion": None, "eta": None}
+    src = history.source_summary(info)
+    th = int(req.target_height or 0)
+    if th and info.height and th >= info.height:
+        th = 0  # kein Downscale → wie „Original“
+    settings = {
+        "video_mode": "encode", "platform": req.platform, "codec": req.codec,
+        "rate_mode": req.rate_mode, "encoder_speed": req.encoder_speed,
+        "target_height": th, "two_pass": req.two_pass,
+    }
+    suggestion = await asyncio.to_thread(
+        history.suggest_quality, src, req.platform, req.codec, req.rate_mode,
+        float(req.target_vmaf), th)
+    eta = await asyncio.to_thread(history.estimate_eta, src, settings)
+    if eta:
+        eta["human"] = ff.human_duration(eta["seconds"])
+    return {"suggestion": suggestion, "eta": eta, "source": src}
 
 
 class RequeueRequest(BaseModel):
@@ -1967,6 +2071,54 @@ async def vmaf_clip_bitrate(session: str, file: str):
         return vmaf_mod.scored_bitrate(path, dur, fps)
 
     return await asyncio.to_thread(_measure)
+
+
+@app.get("/api/compare/weak-spots")
+async def compare_weak_spots(session: str = "", job: str = "", result: int = -1):
+    """Schwächste Stellen (Filmzeiten) eines VMAF-Ergebnisses für den Vergleich.
+
+    Entweder direkt über die Session oder über einen Job (Warteschlange/Historie),
+    dessen Analyse die Session kennt.
+    """
+    import json as _json
+    from core import history, vmaf as vmaf_mod
+    duration = 0.0
+    fps = 0.0
+    result_index = result if result >= 0 else None
+    if job and not session:
+        item = queue.get_item(job)
+        if item is not None:
+            session = (item.vmaf or {}).get("session") or ""
+            duration = float((item.info or {}).get("duration") or 0)
+            fps = float((item.info or {}).get("fps") or 0)
+            if result_index is None:
+                result_index = getattr(item.settings, "selected_result_index", None)
+        else:
+            rec = history.get(job)
+            if rec:
+                try:
+                    sd = _json.loads(rec.get("settings_json") or "{}")
+                except ValueError:
+                    sd = {}
+                if result_index is None and sd.get("selected_result_index") is not None:
+                    result_index = int(sd["selected_result_index"])
+                # Session über den Quellpfad finden (neueste zuerst).
+                sessions = vmaf_mod.sessions_for_source(rec.get("path") or "")
+                if sessions:
+                    session = sessions[0].get("session") or ""
+                try:
+                    src = _json.loads(rec.get("source_json") or "{}")
+                    duration = float(src.get("duration") or 0)
+                    fps = float(src.get("fps") or 0)
+                except ValueError:
+                    duration = 0.0
+    if not session:
+        return {"spots": [], "scenes": []}
+    data = await asyncio.to_thread(vmaf_mod.weak_spots, session, result_index, duration)
+    data = data or {"spots": [], "scenes": []}
+    if fps:
+        data["fps"] = fps
+    return data
 
 
 @app.post("/api/queue/{item_id}/cancel")

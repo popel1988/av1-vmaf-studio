@@ -245,7 +245,18 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
     # Eine Blu-ray-Playlist aus mehreren M2TS wird als eine Quelle verkettet.
     inputs: list[str] = []
     playlist = [str(p) for p in (spec.get("playlist_clips") or []) if p]
-    if len(playlist) > 1:
+    dvd_title = 0
+    try:
+        dvd_title = int(spec.get("dvd_title") or 0)
+    except (TypeError, ValueError):
+        dvd_title = 0
+    if dvd_title:
+        # DVD-Titel aus VIDEO_TS-Ordner oder ISO: der Demuxer liefert Kapitel
+        # und Sprach-Tags, Video/Ton werden 1:1 kopiert.
+        from . import dvd
+        playlist = []
+        inputs = dvd.input_args(dvd_title) + ["-i", str(info.path)]
+    elif len(playlist) > 1:
         try:
             config.WORK_DIR.mkdir(parents=True, exist_ok=True)
             concat = config.WORK_DIR / f"bluray_{uuid.uuid4().hex[:8]}.txt"

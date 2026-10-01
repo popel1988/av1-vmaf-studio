@@ -220,20 +220,14 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); align-items: start; }
 
 /* Encoding/VMAF: Quelle als schmale Spalte, Einstellungen daneben (wie Super-Tool-Blöcke) */
-.source-card {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-}
 .source-card .card-body {
   display: flex;
   flex-direction: column;
-  flex: 1;
   min-height: 0;
 }
 .source-card .browser {
   flex: 1 1 auto;
-  max-height: none;
+  max-height: min(58vh, 620px);
   min-height: 240px;
 }
 .card {
@@ -886,6 +880,26 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ab-controls { display: flex; align-items: center; gap: 12px; }
 @media (max-width: 900px) { .ab-videos, .ab-pickers { grid-template-columns: 1fr; } }
 
+/* Wipe: beide Videos übereinander, B wird von links her abgeschnitten.
+   Die Kante folgt der Maus (Ziehen) oder dem Handle. */
+.ab-videos.ab-wipe { display: block; position: relative; background: #000; border-radius: 8px; overflow: hidden; cursor: col-resize; aspect-ratio: 16 / 9; max-height: 70vh; }
+.ab-videos.ab-wipe .ab-pane { position: absolute; inset: 0; border-radius: 0; background: transparent; }
+.ab-videos.ab-wipe .ab-pane video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+.ab-videos.ab-wipe .ab-pane:nth-child(2) { clip-path: inset(0 0 0 var(--ab-wipe, 50%)); }
+.ab-videos.ab-wipe .ab-pane:nth-child(2) .ab-tag { left: auto; right: 8px; }
+.ab-wipe-handle {
+  position: absolute; top: 0; bottom: 0; left: var(--ab-wipe, 50%); width: 2px; z-index: 3;
+  background: rgba(255,255,255,.85); box-shadow: 0 0 6px rgba(0,0,0,.7); pointer-events: none;
+}
+.ab-wipe-handle span {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(0,0,0,.65); color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 10px; white-space: nowrap;
+}
+.ab-weak { margin-top: 12px; }
+.ab-weak-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ab-weak-list button { font-variant-numeric: tabular-nums; }
+.ab-weak-list button.active { outline: 2px solid var(--accent, #6aa8ff); }
+
 /* API-Schlüssel-Liste */
 .apikey-list { margin: 10px 0; }
 .apikey-row {
@@ -1077,17 +1091,9 @@ button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, t
 .badge.diag-fail { color: var(--bad, #e74c3c); }
 
 /* Super-Tool: Ordnerwahl + Live-Dateiliste nebeneinander */
-.st-folder-area { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; align-items: stretch; }
-.st-folder-area > .field:has(> .browser) {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.st-folder-area > .field > .browser {
-  flex: 1 1 auto;
-  max-height: none;
-  min-height: 280px;
-}
+.st-folder-area { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+/* Ordnerliste neben dem Einstellungsfeld: doppelt so hoch wie .browser-sm. */
+.st-folder-area > .field > .browser.browser-sm { max-height: 440px; }
 @media (max-width: 900px) { .st-folder-area { grid-template-columns: 1fr; } }
 .st-file-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 12px;
@@ -1677,6 +1683,21 @@ input[type="range"]::-moz-range-thumb {
   background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent); color: var(--warn, #d97706);
 }
 .vmaf-delta.bad {
+  background: color-mix(in srgb, var(--bad, #ef4444) 18%, transparent); color: var(--bad, #ef4444);
+}
+/* Zweitmetrik (XPSNR) in derselben Pillenform wie die VMAF-Δ-Marke. */
+.metric-pill {
+  display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; vertical-align: 1px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent); color: var(--text-muted);
+}
+.metric-pill.good {
+  background: color-mix(in srgb, var(--good, #22c55e) 20%, transparent); color: var(--good, #16a34a);
+}
+.metric-pill.warn {
+  background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent); color: var(--warn, #d97706);
+}
+.metric-pill.bad {
   background: color-mix(in srgb, var(--bad, #ef4444) 18%, transparent); color: var(--bad, #ef4444);
 }
 .data-table tr.row-target-miss td:first-child { box-shadow: inset 3px 0 0 var(--warn, #f59e0b); }

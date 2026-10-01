@@ -226,8 +226,14 @@ def build_encode_cmd(
     preserve_dv: bool = False,
     crop: str = "",
     encoder_speed: str = "balanced",
+    mobile: Optional[dict] = None,
 ) -> list[str]:
-    """Erzeugt das vollständige FFmpeg-Kommando für einen Encode."""
+    """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
+
+    mobile: zweite Ausgabe aus demselben Decode (``{"path", "height", "quality"}``):
+    H.264 8-bit SDR in MP4 mit AAC-Stereo, z. B. fürs Handy. Beide Ausgaben
+    hängen am selben Input; FFmpeg dekodiert einmal und bedient beide Encoder.
+    """
     from . import config
     cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
 
@@ -239,7 +245,10 @@ def build_encode_cmd(
     sharpen_on = sharpen in _SHARPEN
     grain_on = grain in _GRAIN
     deint_on = bool(deinterlace_filter(deinterlace, bool(getattr(info, "interlaced", False))))
-    software_filters = denoise_on or sharpen_on or grain_on or deint_on or bool(crop)
+    # Die Mobile-Fassung braucht Software-Filter (Tonemap/Scale) und damit
+    # Frames im RAM; eine reine CUDA-Pipeline kommt dann nicht in Frage.
+    software_filters = (denoise_on or sharpen_on or grain_on or deint_on
+                        or bool(crop) or bool(mobile))
     nvidia_cuda_frames = False
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
@@ -382,7 +391,42 @@ def build_encode_cmd(
         cmd += ["-progress", "pipe:1", "-nostats", str(output)]
     else:
         cmd += [str(output)]
+    if mobile and pass_num != 1:
+        cmd += mobile_output_args(info, platform, mobile, deinterlace=deinterlace,
+                                  crop=crop, keep_chapters=keep_chapters)
     return cmd
+
+
+def mobile_output_args(info: VideoInfo, platform: str, mobile: dict, *,
+                       deinterlace: str = "auto", crop: str = "",
+                       keep_chapters: bool = True) -> list[str]:
+    """Zweite Ausgabe am selben Input: H.264, 8-bit SDR, AAC-Stereo, MP4.
+
+    Ausgabeoptionen (``-vf``, ``-c:v``, ``-map``) gelten in FFmpeg je Ausgabedatei;
+    deshalb steht dieser Block nach der Hauptausgabe und bekommt eigene Werte.
+    """
+    height = int(mobile.get("height") or 720)
+    quality = int(mobile.get("quality") or 23)
+    path = str(mobile.get("path") or "")
+    enc = ff.encoder_name(platform, "h264") or "libx264"
+    # Tonemap bei HDR-Quellen immer (H.264 fürs Handy ist SDR), 8-bit, kein 10-bit.
+    vf = build_video_filters(info, platform, height, True,
+                             nvidia_cuda_frames=False, preserve_hdr=False,
+                             deinterlace=deinterlace, force_10bit=False, crop=crop)
+    args: list[str] = []
+    if vf:
+        args += ["-vf", vf]
+    args += ["-map", "0:v:0", "-c:v", enc]
+    args += ff.quality_args(platform, quality)
+    args += ff.encoder_preset_args(enc, "fast")
+    if enc == "libx264":
+        args += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
+    elif "nvenc" in enc:
+        args += ["-pix_fmt", "yuv420p", "-rc", "vbr", "-profile:v", "high"]
+    args += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-sn"]
+    args += ["-map_chapters", "0" if keep_chapters else "-1"]
+    args += ["-movflags", "+faststart", path]
+    return args
 
 
 @dataclass

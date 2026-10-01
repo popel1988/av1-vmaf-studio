@@ -250,6 +250,97 @@ def describe(folder: Path, *, media_rels: bool = True) -> Optional[dict]:
     return {"root": root_rel, "titles": titles}
 
 
+# Stream-Typen in der CLPI, die eine Sprachkennung tragen.
+_CLPI_AUDIO = {0x03, 0x04, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0xA1, 0xA2}
+_CLPI_GRAPHICS = {0x90, 0x91}
+_CLPI_TEXT = 0x92
+
+
+def is_disc_clip(path: Path) -> bool:
+    """M2TS innerhalb von BDMV/STREAM."""
+    p = Path(path)
+    return (p.suffix.lower() in (".m2ts", ".mts")
+            and p.parent.name.upper() == "STREAM"
+            and p.parent.parent.name.upper() == "BDMV")
+
+
+def clip_languages(m2ts: Path) -> dict[int, str]:
+    """PID → Sprachcode aus BDMV/CLIPINF/<clip>.clpi. Leer, wenn nichts da ist.
+
+    M2TS selbst trägt keine Sprach-Tags; die stehen in der Clip-Info.
+    """
+    m2ts = Path(m2ts)
+    clipinf = m2ts.parent.parent / "CLIPINF"
+    clpi = None
+    for name in (m2ts.stem + ".clpi", m2ts.stem + ".CLPI"):
+        if (clipinf / name).is_file():
+            clpi = clipinf / name
+            break
+    if clpi is None:
+        return {}
+    try:
+        data = clpi.read_bytes()
+    except OSError:
+        return {}
+    if len(data) < 0x20 or data[:4] != b"HDMV":
+        return {}
+    prog = _u32(data, 0x0C)
+    if prog <= 0 or prog + 6 > len(data):
+        return {}
+    langs: dict[int, str] = {}
+    n_seq = data[prog + 5]
+    off = prog + 6
+    for _ in range(n_seq):
+        if off + 8 > len(data):
+            break
+        n_streams = data[off + 6]
+        off += 8
+        for _ in range(n_streams):
+            if off + 3 > len(data):
+                break
+            pid = _u16(data, off)
+            length = data[off + 2]
+            body = data[off + 3:off + 3 + length]
+            off += 3 + length
+            if not body:
+                continue
+            ctype = body[0]
+            raw = b""
+            if ctype in _CLPI_AUDIO and len(body) >= 5:
+                raw = body[2:5]
+            elif ctype in _CLPI_GRAPHICS and len(body) >= 4:
+                raw = body[1:4]
+            elif ctype == _CLPI_TEXT and len(body) >= 5:
+                raw = body[2:5]
+            code = raw.decode("ascii", "ignore").strip().lower()
+            if len(code) == 3 and code.isalpha():
+                langs[pid] = code
+    return langs
+
+
+def apply_languages(info, m2ts: Path) -> int:
+    """Fehlende Sprach-Tags der Spuren aus der CLPI ergänzen. Liefert die Anzahl."""
+    if not is_disc_clip(m2ts):
+        return 0
+    langs = clip_languages(m2ts)
+    if not langs:
+        return 0
+    changed = 0
+    for entry in list(getattr(info, "audio", None) or []) + list(getattr(info, "subtitles", None) or []):
+        if (entry.get("language") or "und") != "und":
+            continue
+        try:
+            pid = int(str(entry.get("pid") or ""), 0)
+        except ValueError:
+            continue
+        code = langs.get(pid)
+        if code:
+            entry["language"] = code
+            entry["language_from"] = "clpi"
+            changed += 1
+    return changed
+
+
 def clip_path(mount: Path, rel: str) -> Path:
     """Datei im eingehängten Abbild. Lehnt absolute Pfade und .. ab."""
     root = mount.resolve()
@@ -319,28 +410,36 @@ def unmount_iso(dest: Optional[Path]) -> None:
 
 
 def inspect_image(iso: Path) -> dict:
-    """Titel lesen und prüfen, dass der Hauptfilm als Video lesbar ist."""
+    """Titel lesen (Blu-ray oder DVD) und bei Blu-ray prüfen, dass der Hauptfilm lesbar ist.
+
+    Eine DVD prüft der Aufrufer über den dvdvideo-Demuxer, der die ISO direkt öffnet.
+    """
+    from . import dvd
     from .ffmpeg_utils import probe_with_error
 
     mount = mount_iso(iso)
     try:
         described = describe(mount, media_rels=False)
-        if not described or not described.get("titles"):
-            raise RuntimeError(
-                "Keine Blu-ray-Struktur in diesem Abbild. "
-                "Verschlüsselte ISOs werden nicht geöffnet."
+        if described and described.get("titles"):
+            described["kind"] = "bluray"
+            main = next(
+                (t for t in described["titles"] if t["role"] == "main"),
+                described["titles"][0],
             )
-        main = next(
-            (t for t in described["titles"] if t["role"] == "main"),
-            described["titles"][0],
+            first = clip_path(mount, main["clips"][0])
+            info, _err = probe_with_error(first)
+            if info is None or not getattr(info, "codec", None):
+                raise RuntimeError(
+                    "Das Abbild ist nicht als Video lesbar. "
+                    "Verschlüsselte ISOs werden nicht geöffnet."
+                )
+            return described
+        dvd_desc = dvd.describe(mount)
+        if dvd_desc and dvd_desc.get("titles"):
+            return dvd_desc
+        raise RuntimeError(
+            "Keine Blu-ray- oder DVD-Struktur in diesem Abbild. "
+            "Verschlüsselte ISOs werden nicht geöffnet."
         )
-        first = clip_path(mount, main["clips"][0])
-        info, _err = probe_with_error(first)
-        if info is None or not getattr(info, "codec", None):
-            raise RuntimeError(
-                "Das Abbild ist nicht als Video lesbar. "
-                "Verschlüsselte ISOs werden nicht geöffnet."
-            )
-        return described
     finally:
         unmount_iso(mount)

@@ -131,6 +131,7 @@ class VmafResult:
     vmaf_1pct: float = 0.0    # Mittel der schlechtesten 1 % Frames ("1%-Low")
     psnr: float = 0.0
     ssim: float = 0.0
+    xpsnr: float = 0.0        # XPSNR (dB, 4:1:1 über Y/U/V gewichtet), FFmpeg ≥ 7.1
     screenshot_ref: str = ""            # Szene 0 (Rückwärtskompatibilität)
     screenshot_enc: str = ""
     screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
@@ -165,6 +166,8 @@ class VmafResult:
             d["psnr"] = round(self.psnr, 2)
         if self.ssim:
             d["ssim"] = round(self.ssim, 4)
+        if self.xpsnr:
+            d["xpsnr"] = round(self.xpsnr, 2)
         if self.screenshot_ref:
             d["screenshot_ref"] = f"/api/preview/{self.screenshot_ref}"
         if self.screenshot_enc:
@@ -187,7 +190,11 @@ class VmafResult:
                     "scene": s.get("scene", 0),
                     "vmaf": round(float(s.get("vmaf") or 0.0), 2),
                 }
-                for key, nd in (("hmean", 2), ("p1", 2), ("psnr", 2), ("ssim", 4)):
+                if s.get("start") is not None:
+                    item["start"] = round(float(s.get("start") or 0.0), 3)
+                    item["length"] = round(float(s.get("length") or 0.0), 3)
+                for key, nd in (("hmean", 2), ("p1", 2), ("psnr", 2), ("ssim", 4),
+                                ("xpsnr", 2), ("xpsnr_min", 2)):
                     raw = s.get(key)
                     if raw:
                         item[key] = round(float(raw), nd)
@@ -241,10 +248,14 @@ class VmafAnalysis:
     target_gap: float = 0.0    # 1%-Low-Abstand dazu (0 = Floor aus)
     target_anchor: str = ""    # both | target | mean
     sample_windows: list = field(default_factory=list)
+    sample_starts: list = field(default_factory=list)  # [(start, länge)] je Szene
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
         return {
+            **({"sample_starts": [[round(float(s), 3), round(float(l), 3)]
+                                  for s, l in self.sample_starts]}
+               if self.sample_starts else {}),
             "results": [r.to_dict() for r in self.results],
             "recommended_value": rec,
             "recommended_quality": rec,
@@ -388,24 +399,92 @@ def _score_chain(duration: float, prefix: str = "") -> str:
     return ",".join(parts)
 
 
+_xpsnr_ok: Optional[bool] = None
+
+
+def xpsnr_available() -> bool:
+    """FFmpeg mit xpsnr-Filter (ab 7.1)? Einmal geprüft, dann gecacht."""
+    global _xpsnr_ok
+    if _xpsnr_ok is None:
+        try:
+            proc = subprocess.run([config.FFMPEG, "-hide_banner", "-h", "filter=xpsnr"],
+                                  capture_output=True, text=True, timeout=20)
+            _xpsnr_ok = proc.returncode == 0 and "xpsnr" in (proc.stdout or "").lower()
+        except (OSError, subprocess.TimeoutExpired):
+            _xpsnr_ok = False
+    return bool(_xpsnr_ok)
+
+
+def _parse_xpsnr(stats: Path) -> Optional[dict]:
+    """Per-Frame-Statistik des xpsnr-Filters mitteln (Y sowie 4:1:1-gewichtet)."""
+    try:
+        text = stats.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    ys, ws = [], []
+    identical = 0
+    pat = re.compile(r"y:\s*([0-9.]+|inf)\s+u:\s*([0-9.]+|inf)\s+v:\s*([0-9.]+|inf)", re.I)
+    for line in text.splitlines():
+        m = pat.search(line)
+        if not m:
+            continue
+        vals = []
+        for raw in m.groups():
+            try:
+                vals.append(float(raw))
+            except ValueError:
+                vals.append(float("inf"))
+        y, u, v = vals
+        # Identische Frames (inf) verzerren den Schnitt; sie zählen nicht mit.
+        if y == float("inf"):
+            identical += 1
+            continue
+        u = min(u, 99.0)
+        v = min(v, 99.0)
+        ys.append(y)
+        ws.append((4 * y + u + v) / 6.0)
+    if not ys:
+        if identical:
+            return {"xpsnr": 99.0, "xpsnr_y": 99.0, "xpsnr_min": 99.0}
+        return None
+    return {"xpsnr": sum(ws) / len(ws), "xpsnr_y": sum(ys) / len(ys), "xpsnr_min": min(ys)}
+
+
 def _run_libvmaf(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool, dims: Optional[tuple[int, int]], features: str,
-    clip_len: float = 0.0,
+    clip_len: float = 0.0, with_xpsnr: bool = False,
 ) -> Optional[dict]:
-    """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None."""
+    """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None.
+
+    with_xpsnr: XPSNR im selben Lauf über ``split`` mitrechnen (kein zweiter
+    Decode). Das Ergebnis landet unter ``data["xpsnr"]``.
+    """
     _, model_path = _model_for(info, neg)
     log = work / f"vmaf_{key}.json"
+    xlog = work / f"xpsnr_{key}.txt"
     w, h = dims if dims else (info.width, info.height)
     scale = f"scale={w}:{h}:flags=bicubic"
     dist_dur = ff._probe_duration(distorted) or float(clip_len or 0)
     ref_dur = ff._probe_duration(reference) or float(clip_len or 0)
-    fc = (
-        f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
-        f"[1:v]{_score_chain(ref_dur)}[ref];"
-        f"[dist][ref]libvmaf=model=path={model_path}:"
+    vmaf_filter = (
+        f"libvmaf=model=path={model_path}:"
         f"{features}log_fmt=json:log_path={log}:shortest=1:n_threads={_vmaf_threads()}"
     )
+    if with_xpsnr:
+        xpath = str(xlog).replace("\\", "/").replace(":", "\\:")
+        fc = (
+            f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
+            f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
+            f"[d1][r1]{vmaf_filter};"
+            f"[d2][r2]xpsnr=stats_file={xpath}:shortest=1"
+        )
+    else:
+        fc = (
+            f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
+            f"[1:v]{_score_chain(ref_dur)}[ref];"
+            f"[dist][ref]{vmaf_filter}"
+        )
     cmd = [config.FFMPEG, "-y", "-hide_banner",
            "-i", str(distorted), "-i", str(reference),
            "-filter_complex", fc, "-f", "null", "-"]
@@ -413,9 +492,14 @@ def _run_libvmaf(
     if not log.exists():
         return None
     try:
-        return json.loads(log.read_text())
+        data = json.loads(log.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    if with_xpsnr and xlog.exists():
+        parsed = _parse_xpsnr(xlog)
+        if parsed:
+            data["xpsnr"] = parsed
+    return data
 
 
 def _metrics_from_json(data: dict) -> Optional[dict]:
@@ -443,6 +527,7 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         float(f["metrics"]["vmaf"]) for f in frames
         if f.get("metrics") and f["metrics"].get("vmaf") is not None
     ]
+    xp = data.get("xpsnr") or {}
     return {
         "vmaf": float(mean),
         "hmean": float(vm.get("harmonic_mean") or 0.0),
@@ -450,6 +535,8 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "p1": float(p1),
         "psnr": float(psnr),
         "ssim": float(ssim),
+        "xpsnr": float(xp.get("xpsnr") or 0.0),
+        "xpsnr_min": float(xp.get("xpsnr_min") or 0.0),
         "frames": _downsample_vmaf(series),
     }
 
@@ -475,16 +562,23 @@ def _vmaf_metrics(
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     clip_len: float = 0.0,
 ) -> Optional[dict]:
-    """Vollständige Metriken (VMAF + PSNR + SSIM + 1%-Low) für einen Vergleich.
+    """Vollständige Metriken (VMAF + PSNR + SSIM + XPSNR + 1%-Low) für einen Vergleich.
 
-    PSNR/SSIM werden über die libvmaf-`feature`-Option mitberechnet. Schlägt der
-    Lauf mit Features fehl (ältere FFmpeg-Builds), wird auf einen reinen
-    VMAF-Lauf zurückgefallen – die Kern-Metrik bleibt so immer verfügbar.
+    PSNR/SSIM werden über die libvmaf-`feature`-Option mitberechnet, XPSNR im
+    selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Schlägt der Lauf fehl
+    (ältere Builds), wird stufenweise zurückgefallen – die Kern-Metrik bleibt so
+    immer verfügbar.
     """
-    data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                        features="feature=name=psnr|name=float_ssim:",
-                        clip_len=clip_len)
+    features = "feature=name=psnr|name=float_ssim:"
+    data = None
+    if xpsnr_available():
+        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                            features=features, clip_len=clip_len, with_xpsnr=True)
     metrics = _metrics_from_json(data) if data else None
+    if metrics is None:
+        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                            features=features, clip_len=clip_len)
+        metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
                             features="", clip_len=clip_len)
@@ -676,6 +770,7 @@ def analyze(
         p1s: list[float] = []
         psnrs: list[float] = []
         ssims: list[float] = []
+        xpsnrs: list[float] = []
         shots: list[dict] = []
         scene_scores: list[dict] = []
 
@@ -770,13 +865,19 @@ def analyze(
                 psnrs.append(metrics["psnr"])
             if metrics.get("ssim"):
                 ssims.append(metrics["ssim"])
+            if metrics.get("xpsnr"):
+                xpsnrs.append(metrics["xpsnr"])
             scene_scores.append({
                 "scene": si,
+                "start": float(start),      # Position im Film (s) – für Sprünge im Player
+                "length": float(clip_len),
                 "vmaf": score,
                 "hmean": metrics.get("hmean") or 0.0,
                 "p1": metrics.get("p1") or 0.0,
                 "psnr": metrics.get("psnr") or 0.0,
                 "ssim": metrics.get("ssim") or 0.0,
+                "xpsnr": metrics.get("xpsnr") or 0.0,
+                "xpsnr_min": metrics.get("xpsnr_min") or 0.0,
                 "frames": metrics.get("frames") or [],
             })
             clip_bytes = test_file.stat().st_size
@@ -833,6 +934,7 @@ def analyze(
             vmaf_1pct=_avg(p1s),
             psnr=_avg(psnrs),
             ssim=_avg(ssims),
+            xpsnr=_avg(xpsnrs),
             clip_size_bytes=total_size,
             predicted_size_bytes=predicted,
             savings_percent=savings,
@@ -849,6 +951,7 @@ def analyze(
         if not sample_specs:
             sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
         analysis.sample_windows = list(opts.sample_windows or [])
+        analysis.sample_starts = [(float(s), float(l)) for s, l in sample_specs]
         references: list[tuple[Path, float, float]] = []
         ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
         dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
@@ -1296,6 +1399,96 @@ def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
             "stats": _series_stats(frames, clip_seconds),
         })
     return {"scene": int(scene), "series": series}
+
+
+def weak_spots(session: str, result_index: Optional[int] = None,
+               duration: float = 0.0, limit: int = 12) -> Optional[dict]:
+    """Die schwächsten Stellen eines Ergebnisses als Filmzeiten.
+
+    Aus den libvmaf-Frame-Logs je Szene: Szenenstart + Frame-Index × Framedauer.
+    Ohne Frame-Logs bleibt der Szenenstart mit dem Szenen-VMAF. Für den
+    Vorher/Nachher-Vergleich im Player.
+    """
+    data = load_session(session)
+    if data is None:
+        return None
+    analysis = data.get("analysis") or {}
+    params = data.get("params") or {}
+    results = [r for r in (analysis.get("results") or []) if isinstance(r, dict)]
+    if not results:
+        return None
+    if result_index is None or not (0 <= int(result_index) < len(results)):
+        idx = next((i for i, r in enumerate(results) if r.get("recommended")), 0)
+    else:
+        idx = int(result_index)
+    res = results[idx]
+    try:
+        clip_seconds = float(analysis.get("clip_seconds") or params.get("clip_seconds") or 0)
+    except (TypeError, ValueError):
+        clip_seconds = 0.0
+    scenes = [s for s in (res.get("scene_scores") or []) if isinstance(s, dict)]
+    # Szenenstarts: aus den Scores, sonst aus der Analyse, sonst nachrechnen.
+    starts = analysis.get("sample_starts") or []
+    if not starts and duration > 0:
+        try:
+            n = int(params.get("samples") or len(scenes) or 1)
+            starts = _sample_starts(float(duration), int(clip_seconds or 30), n)
+        except (TypeError, ValueError):
+            starts = []
+    spots = []
+    root = config.VMAF_SESSIONS_DIR / session
+    for s in scenes:
+        si = int(s.get("scene", 0))
+        start = s.get("start")
+        length = s.get("length") or clip_seconds
+        if start is None and si < len(starts):
+            start, length = float(starts[si][0]), float(starts[si][1] or clip_seconds)
+        if start is None:
+            continue
+        start = float(start)
+        name = _frame_log_name(res.get("platform") or "", res.get("codec") or "",
+                               res.get("value", res.get("quality")), si)
+        frames = []
+        path = root / name if name else None
+        if path is not None and path.is_file():
+            try:
+                blob = json.loads(path.read_text(encoding="utf-8"))
+                for fr in blob.get("frames") or []:
+                    v = (fr.get("metrics") or {}).get("vmaf")
+                    if v is None:
+                        continue
+                    frames.append((int(fr.get("frameNum") or len(frames)), float(v)))
+            except (OSError, ValueError):
+                frames = []
+        if frames:
+            frame_sec = float(length) / len(frames) if length else 0.0
+            # Pro Szene die drei schwächsten, aber nicht direkt benachbart
+            # (sonst dreimal dieselbe Stelle).
+            picked: list[tuple[int, float]] = []
+            for n, v in sorted(frames, key=lambda f: f[1]):
+                if any(abs(n - p[0]) * frame_sec < 1.0 for p in picked):
+                    continue
+                picked.append((n, v))
+                if len(picked) >= 3:
+                    break
+            for n, v in picked:
+                spots.append({"time": round(start + n * frame_sec, 2), "vmaf": round(v, 2),
+                              "scene": si, "frame": n, "kind": "frame"})
+        else:
+            spots.append({"time": round(start, 2), "vmaf": round(float(s.get("vmaf") or 0), 2),
+                          "scene": si, "kind": "scene"})
+    spots.sort(key=lambda x: x["vmaf"])
+    return {
+        "session": session,
+        "label": res.get("label") or "",
+        "vmaf": res.get("vmaf"),
+        "spots": spots[:max(1, int(limit))],
+        "scenes": [{"scene": int(s.get("scene", 0)),
+                    "start": (float(s["start"]) if s.get("start") is not None
+                              else (float(starts[int(s.get("scene", 0))][0])
+                                    if int(s.get("scene", 0)) < len(starts) else None)),
+                    "vmaf": round(float(s.get("vmaf") or 0), 2)} for s in scenes],
+    }
 
 
 def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:

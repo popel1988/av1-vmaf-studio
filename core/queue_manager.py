@@ -58,6 +58,9 @@ class JobSettings:
     deinterlace: str = "auto"       # auto | on | off
     aq_strength: int = 8             # NVENC Spatial-AQ-Stärke 1–15
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
+    # Zweite Ausgabe aus demselben Decode: H.264 MP4 fürs Handy (0 = aus).
+    mobile_copy: bool = False
+    mobile_height: int = 720
     anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
     # Audio-Optimierung: video_mode="copy" => nur Remux (Video 1:1), Tonspuren
     # werden je nach scope (bloated|all) transcodiert. Kein VMAF/Encode.
@@ -145,6 +148,9 @@ class QueueItem:
     original_size: int = 0
     output_size: int = 0
     output_path: str = ""
+    extra_outputs: list = field(default_factory=list)  # z. B. Mobile-Fassung
+    eta_estimate: Optional[dict] = None   # Schätzung aus der Historie (vor dem Start)
+    encode_seconds: float = 0.0           # reine Encode-Zeit (ohne VMAF-Analyse)
     saved_bytes: int = 0
     vmaf_verify: Optional[float] = None  # gemessener VMAF der Ausgabe (Guardrail)
     verify_attempts: int = 0             # Anzahl Encode-Versuche (>1 = Retry lief)
@@ -192,6 +198,8 @@ class QueueItem:
             "caps_failed": self.caps_failed,
             "crop": self.crop,
             "output_path": self.output_path,
+            "extra_outputs": list(self.extra_outputs or []),
+            "eta_estimate": self.eta_estimate,
             "vmaf_warning": self.vmaf_warning,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -264,6 +272,8 @@ class QueueManager:
                 "original_size": it.original_size,
                 "output_size": it.output_size,
                 "output_path": it.output_path,
+                "extra_outputs": list(it.extra_outputs or []),
+                "eta_estimate": it.eta_estimate,
                 "saved_bytes": it.saved_bytes,
                 "error": it.error or "",
                 "message": it.message or "",
@@ -358,6 +368,8 @@ class QueueManager:
                     original_size=int(d.get("original_size", 0) or 0),
                     output_size=int(d.get("output_size", 0) or 0),
                     output_path=str(d.get("output_path") or ""),
+                    extra_outputs=[str(x) for x in (d.get("extra_outputs") or []) if x],
+                    eta_estimate=d.get("eta_estimate") if isinstance(d.get("eta_estimate"), dict) else None,
                     saved_bytes=int(d.get("saved_bytes", 0) or 0),
                     vmaf_verify=d.get("vmaf_verify"),
                     verify_attempts=int(d.get("verify_attempts", 0) or 0),
@@ -431,7 +443,9 @@ class QueueManager:
     def add_file(self, path: str, settings: JobSettings, group_id: Optional[str] = None) -> Optional[QueueItem]:
         from . import job_plan
         p = Path(path)
-        if not p.is_file():
+        # Ein DVD-Ordner (VIDEO_TS) ist als Remux-Quelle erlaubt.
+        is_dvd_dir = p.is_dir() and bool((getattr(settings, "edit_spec", None) or {}).get("dvd_title"))
+        if not p.is_file() and not is_dvd_dir:
             return None
         # Duplikat: skip → nicht einreihen; ask/overwrite → einreihen (UI warnt vorher).
         on_dup = (getattr(settings, "on_duplicate", "ask") or "ask").lower()
@@ -446,10 +460,16 @@ class QueueManager:
             settings=settings,
             group_id=group_id or uuid.uuid4().hex[:8],
         )
-        info = ffprobe(p)
+        info = ffprobe(p) if p.is_file() else None
         if info:
             item.info = info.to_dict()
             item.original_size = info.size_bytes
+            item.eta_estimate = _eta_from_history(item.info, settings)
+        if is_dvd_dir:
+            try:
+                item.original_size = int((settings.edit_spec or {}).get("disc_size") or 0)
+            except (TypeError, ValueError):
+                pass
         with self._lock:
             self._items.append(item)
         self._persist()
@@ -737,9 +757,23 @@ class QueueManager:
                 logger.debug("Medienserver übersprungen: %s", me)
 
     def _open_source(self, item: QueueItem):
-        """ffprobe der Quelle. Eine ISO wird dafür lesend eingehängt."""
+        """ffprobe der Quelle. Eine Blu-ray-ISO wird dafür lesend eingehängt,
+        eine DVD (Ordner oder ISO) öffnet der dvdvideo-Demuxer direkt."""
         spec = item.settings.edit_spec or {}
         clips = [str(c) for c in (spec.get("playlist_clips") or []) if c]
+        dvd_title = int(spec.get("dvd_title") or 0) if str(spec.get("dvd_title") or "").isdigit() else 0
+        if dvd_title:
+            from . import dvd
+            info, err = dvd.probe_title(Path(item.path), dvd_title)
+            if info is None:
+                return None, err or "DVD nicht lesbar"
+            try:
+                info.duration = float(spec.get("playlist_duration") or info.duration or 0)
+            except (TypeError, ValueError):
+                pass
+            if not item.original_size:
+                item.original_size = int(info.size_bytes or 0)
+            return info, None
         if Path(item.path).suffix.lower() == ".iso" and clips:
             from . import bluray
             mount = bluray.mount_iso(Path(item.path))
@@ -751,6 +785,7 @@ class QueueManager:
             info, err = probe_with_error(Path(abs_clips[0]))
             if info is None:
                 return None, err or "ISO nicht lesbar"
+            bluray.apply_languages(info, Path(abs_clips[0]))
             try:
                 info.duration = float(spec.get("playlist_duration") or info.duration or 0)
             except (TypeError, ValueError):
@@ -765,7 +800,11 @@ class QueueManager:
                 item.original_size = size
             item._mounted_clips = abs_clips
             return info, None
-        return probe_with_error(Path(item.path))
+        info, err = probe_with_error(Path(item.path))
+        if info is not None:
+            from . import bluray
+            bluray.apply_languages(info, Path(item.path))
+        return info, err
 
     def _process(self, item: QueueItem) -> None:
         info, probe_err = self._open_source(item)
@@ -1004,7 +1043,10 @@ class QueueManager:
             if attempt > 1:
                 item.message = (f"Encode-Wiederholung {attempt}/{max_attempts} "
                                 f"({_quality_label(s)})")
+            t_enc = time.time()
             rc, stderr, cmd, cancelled = self._encode_to(item, s, info, out_path, on_prog)
+            # Nur der letzte (gültige) Encode-Lauf zählt für die Historie/ETA.
+            item.encode_seconds = time.time() - t_enc
             if cancelled or rc != 0:
                 break
             # Dolby Vision: Bei HEVC wird die RPU nach dem Encode via dovi_tool
@@ -1029,6 +1071,7 @@ class QueueManager:
                             score, s.verify_min, item.title)
                 _bump_quality(s)
                 out_path.unlink(missing_ok=True)
+                _unlink_mobile(item)
                 continue
             break
 
@@ -1036,19 +1079,27 @@ class QueueManager:
         if cancelled:
             item.status = STATUS_CANCELLED
             out_path.unlink(missing_ok=True)
+            _unlink_mobile(item)
         elif rc != 0:
             item.status = STATUS_FAILED
             item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
             logger.error("Encode fehlgeschlagen: %s (Exit %s)\nCMD: %s\nSTDERR:\n%s",
                          item.title, rc, " ".join(cmd), stderr)
             out_path.unlink(missing_ok=True)
+            _unlink_mobile(item)
         elif (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
               and self._savings_too_low(item, out_path)):
             keep_msg = self._discard_keep_source(item, out_path)
+            _unlink_mobile(item)
             item.progress["percent"] = 100.0
         else:
             item.output_path = str(out_path)
             item.output_size = out_path.stat().st_size if out_path.exists() else 0
+            mobile_path = getattr(item, "_mobile_path", None)
+            if mobile_path is not None and Path(mobile_path).exists():
+                item.extra_outputs = [str(mobile_path)]
+                logger.info("Mobile-Fassung: %s (%s)", mobile_path,
+                            ff.human_size(Path(mobile_path).stat().st_size))
             item.saved_bytes = max(0, item.original_size - item.output_size)
             # Trotz ausgeschöpfter Versuche unter Ziel? Als Warnung vermerken.
             if (do_verify and item.vmaf_verify is not None
@@ -1487,6 +1538,14 @@ class QueueManager:
             "crop": item.crop,
             "encoder_speed": getattr(s, "encoder_speed", "balanced") or "balanced",
         }
+        mobile_path = _mobile_output_path(item, out_path)
+        if mobile_path is not None:
+            enc_kw["mobile"] = {
+                "path": str(mobile_path),
+                "height": int(getattr(s, "mobile_height", 720) or 720),
+                "quality": 23,
+            }
+            item._mobile_path = mobile_path
         if s.rate_mode in ("bitrate", "abr"):
             enc_kw["rate_mode"] = s.rate_mode
             br = int(s.quality or 0)
@@ -1917,6 +1976,8 @@ def build_job_settings(d: dict) -> JobSettings:
         deinterlace=_deint(d.get("deinterlace", "auto")),
         aq_strength=max(1, min(15, int(d.get("aq_strength", 8) or 8))),
         two_pass=bool(d.get("two_pass", False)),
+        mobile_copy=bool(d.get("mobile_copy", False)),
+        mobile_height=1080 if int(d.get("mobile_height", 720) or 720) >= 1080 else 720,
         anime=bool(d.get("anime", False)),
         video_mode=d.get("video_mode", "encode"),
         audio_opt_scope=d.get("audio_opt_scope", "bloated"),
@@ -2014,6 +2075,48 @@ def _output_path(item: QueueItem) -> Path:
     except OSError:
         pass
     return out
+
+
+def _eta_from_history(info: Optional[dict], settings: JobSettings) -> Optional[dict]:
+    """Laufzeit-Schätzung aus früheren Encodes (None ohne passende Daten)."""
+    if not info:
+        return None
+    try:
+        from . import history
+        est = history.estimate_eta(history.source_summary(info), settings)
+    except Exception as e:  # Historie darf das Einreihen nie blockieren
+        logger.debug("ETA-Schätzung nicht möglich: %s", e)
+        return None
+    if est:
+        est["human"] = ff.human_duration(est["seconds"])
+    return est
+
+
+def _mobile_output_path(item: QueueItem, out_path: Path) -> Optional[Path]:
+    """Pfad der Mobile-Fassung neben der Hauptausgabe; None, wenn aus.
+
+    Nur für echte Encodes (kein Remux/Copy/Chunked). Bei „Original ersetzen“
+    liegt die Hauptausgabe zunächst unter einem Temp-Namen, die Mobile-Datei
+    bekommt gleich den endgültigen Namen neben der Quelle.
+    """
+    s = item.settings
+    if not getattr(s, "mobile_copy", False):
+        return None
+    if getattr(s, "video_mode", "encode") != "encode" or getattr(s, "chunked", False):
+        return None
+    if s.post_processing == "inplace":
+        src = Path(item.path)
+        return src.with_name(f"{src.stem}_mobile.mp4")
+    return out_path.with_name(f"{out_path.stem}_mobile.mp4")
+
+
+def _unlink_mobile(item: QueueItem) -> None:
+    mobile_path = getattr(item, "_mobile_path", None)
+    if mobile_path is not None:
+        try:
+            Path(mobile_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _quality_label(s: JobSettings) -> str:

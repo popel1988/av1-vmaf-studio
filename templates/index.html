@@ -281,6 +281,10 @@
                   <input type="number" id="opt-bitrate" min="500" max="50000" step="500" value="6000" />
                   <p class="hint">kbit/s · CBR = feste Rate, ABR = variables Ziel.</p>
                 </div>
+                <div class="field" id="cq-suggest-field" style="display:none">
+                  <label data-tip="Aus fertigen Encodes mit VMAF-Wert: gleiche Plattform und Codec, Quelle mit ähnlicher Auflösung, Codec, Bitrate und HDR-Lage. Der höchste CQ, der das Ziel-VMAF noch gehalten hat, wird vorgeschlagen – ohne Test-Encodes. Dazu eine Laufzeit-Schätzung aus der reinen Encode-Zeit früherer Jobs.">Aus der Historie</label>
+                  <p class="hint" id="cq-suggest" style="margin:0"></p>
+                </div>
                 <div class="field">
                   <label>Rauschminderung (Denoise)</label>
                   <select id="opt-denoise">
@@ -398,6 +402,14 @@
                 <label class="check">
                   <input type="checkbox" id="opt-anime" />
                   <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-mobile-copy" />
+                  <span data-tip="Zweite Datei im selben Lauf: H.264 8-bit SDR in MP4 mit AAC-Stereo, Name {stem}_mobile.mp4 neben der Hauptausgabe. FFmpeg dekodiert die Quelle nur einmal und bedient beide Encoder. HDR wird für diese Fassung getonemappt. Nicht bei Chunked oder Remux.">Zusätzlich Mobile-Fassung (H.264 MP4)</span>
+                  <select id="opt-mobile-height" style="width:auto;margin-left:6px">
+                    <option value="720">720p</option>
+                    <option value="1080">1080p</option>
+                  </select>
                 </label>
                 <label class="check">
                   <input type="checkbox" id="opt-autocrop" />
@@ -2565,10 +2577,11 @@
             <span class="badge" id="ab-badge">—</span>
           </div>
           <div class="card-body">
-            <p class="hint">Spielt zwei Videos synchron nebeneinander ab – ideal für Vorher/Nachher.
-              Hinweis: Der Browser muss den Codec abspielen können (AV1/VP9/H.264 meist ja,
-              HEVC oft nicht). Bei nicht abspielbaren Dateien den Screenshot-Vergleich im
-              VMAF-Tool nutzen.</p>
+            <p class="hint">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
+              (geteiltes Bild mit verschiebbarer Kante). Was der Browser nicht direkt abspielen
+              kann, läuft über den HLS-Player des Studios (Server-Transcode). Aus den
+              Job-Details kommt zusätzlich die Liste der schwächsten VMAF-Stellen, die sich
+              direkt anspringen lassen.</p>
             <div class="ab-pickers">
               <div class="field">
                 <label>Video A</label>
@@ -2594,16 +2607,35 @@
                 <label style="font-size:11px">Versatz B (s)</label>
                 <input type="number" id="ab-offset" value="0" step="0.1" style="width:90px" />
               </div>
+              <div class="field" style="margin:0">
+                <label style="font-size:11px">Ansicht</label>
+                <select id="ab-mode" style="width:auto">
+                  <option value="side">Nebeneinander</option>
+                  <option value="wipe">Wipe (geteiltes Bild)</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label style="font-size:11px" data-tip="Direct = Datei unverändert an den Browser. Transcode = HLS-Session mit Server-Encode (H.264), auch für HEVC/10-bit. Auto wählt Direct, wenn der Browser den Codec kann.">Wiedergabe</label>
+                <select id="ab-playback" style="width:auto">
+                  <option value="auto">Auto</option>
+                  <option value="hls">Immer Transcode (HLS)</option>
+                </select>
+              </div>
+              <span id="ab-status" class="muted" style="font-size:12px"></span>
             </div>
-            <div class="ab-videos">
-              <div class="ab-pane"><span class="ab-tag">A</span><video id="ab-video-a" controls preload="metadata"></video></div>
-              <div class="ab-pane"><span class="ab-tag">B</span><video id="ab-video-b" controls preload="metadata"></video></div>
+            <div class="ab-videos" id="ab-videos">
+              <div class="ab-pane"><span class="ab-tag">A</span><video id="ab-video-a" controls preload="metadata" playsinline></video></div>
+              <div class="ab-pane"><span class="ab-tag">B</span><video id="ab-video-b" controls preload="metadata" playsinline></video></div>
+              <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
             </div>
             <div class="ab-controls">
               <button class="btn btn-primary btn-sm" id="ab-play">▶ / ⏸ (beide)</button>
+              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-back" title="Ein Bild zurück (beide)">⏮</button>
+              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-fwd" title="Ein Bild vor (beide)">⏭</button>
               <input type="range" id="ab-seek" min="0" max="1000" value="0" style="flex:1" />
               <span id="ab-time" class="muted">0:00</span>
             </div>
+            <div id="ab-weak" class="ab-weak" style="display:none"></div>
           </div>
         </section>
 
@@ -2763,7 +2795,7 @@
               <div class="faq-body">
                 <p>AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.</p>
                 <p>Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.</p>
-                <p>Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der edge-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt.</p>
+                <p>Wirkt nur bei NVIDIA. Temporal AQ bleibt aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. H.264 und HEVC setzen vier B-Frames als Referenz. AV1 auf der latest-Linie setzt die hierarchische Pyramide mit sieben B-Frames, wenn die Karte sie annimmt; latest-legacy bleibt bei vier B-Frames.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-vmaf">
@@ -2784,6 +2816,37 @@
               <summary>Was tun Anime-Modus, Auto-Crop und Film-Grain?</summary>
               <div class="faq-body">
                 <p>Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-xpsnr">
+              <summary>Was ist XPSNR neben VMAF?</summary>
+              <div class="faq-body">
+                <p>XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-history-suggest">
+              <summary>Woher kommen Vorschlag und Laufzeit „aus der Historie“?</summary>
+              <div class="faq-body">
+                <p>Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.</p>
+                <p>Die Laufzeit-Schätzung nimmt die reine Encode-Zeit früherer Jobs (ohne VMAF-Analyse) und bildet den Median der Geschwindigkeit in Echtzeit-Vielfachen, zuerst für gleiche Auflösungsklasse und Encoder-Speed, sonst stufenweise lockerer. In der Warteschlange steht sie bei wartenden Einträgen als „≈“, bis die echte ETA des laufenden Encodes übernimmt. Beides braucht ein paar fertige Encodes; Jobs aus der Zeit vor dieser Version haben keine Quellmerkmale gespeichert und zählen nicht.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-mobile">
+              <summary>Was macht „Zusätzlich Mobile-Fassung“?</summary>
+              <div class="faq-body">
+                <p>Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit NVIDIA laufen die Bilder dann durch den Hauptspeicher statt komplett auf der GPU, weil Tonemap und Skalierung Software-Filter sind.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-compare">
+              <summary>Wie prüfe ich das Ergebnis mit dem Auge?</summary>
+              <div class="faq-body">
+                <p>In den Details eines fertigen Jobs öffnet „Vorher/Nachher im Vergleichsplayer“ Quelle und Ausgabe synchron – nebeneinander oder als Wipe (geteiltes Bild, die Kante folgt der Maus). Was der Browser nicht direkt abspielen kann (HEVC, 10-bit, MKV), läuft über den HLS-Player des Studios mit Server-Transcode; „Immer Transcode“ erzwingt das für beide Seiten, damit identisch gewandelt wird. Unter dem Bild stehen die schwächsten VMAF-Stellen aus der Analyse des Jobs als Zeiten: Klick springt hin und hält an, ⏮/⏭ gehen bildweise. Die Zeiten stammen aus den Frame-Logs der Testszenen; ältere Sessions ohne gespeicherte Szenenstarts werden aus Dauer und Stichprobenzahl nachgerechnet.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-disc">
+              <summary>Blu-ray und DVD: Ordner und ISO</summary>
+              <div class="faq-body">
+                <p>Ein BDMV-Ordner oder ein unverschlüsseltes Blu-ray-ISO listet seine Playlists; die längste ist der Hauptfilm. Sprach-Tags kommen aus den CLIPINF-Dateien der Disc, weil M2TS selbst keine trägt – nach dem Remux heißen die Spuren also nicht mehr „und“. Ein VIDEO_TS-Ordner oder ein DVD-ISO listet seine Titel aus den IFO-Dateien (Dauer, Kapitel, Größe); der Remux liest den Titel über FFmpegs dvdvideo-Demuxer, Kapitel und Sprachen kommen von der Disc. ISOs werden für Titel-Liste und Remux nur lesend eingehängt (UDF, dann ISO9660); der Container braucht dafür privileged. Eine Disc wird nie an Ort und Stelle ersetzt, Ziel ist immer ein Ordner. Verschlüsselte Discs (AACS, CSS) bleiben zu – es gibt keine Entschlüsselung.</p>
               </div>
             </details>
           </div>
