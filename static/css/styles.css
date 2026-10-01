@@ -2064,6 +2064,17 @@ input[type="range"]::-moz-range-thumb {
   .vmaf-scale-row { grid-template-columns: 32px 56px 1fr; gap: 8px; }
 }
 .faq-item .faq-body p:last-child { margin-bottom: 0; }
+.faq-table-wrap { overflow-x: auto; margin: 0 0 10px; }
+.faq-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.faq-table th, .faq-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.faq-table thead th { color: var(--text-muted); font-weight: 600; font-size: 11.5px; }
+.faq-table tbody th { text-align: left; color: var(--text); font-weight: 600; }
 .faq-jump {
   color: var(--accent);
   text-decoration: none;

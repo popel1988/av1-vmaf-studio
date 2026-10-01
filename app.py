@@ -2657,6 +2657,7 @@ class EncoderBenchStartRequest(BaseModel):
     values: list[int] = [24, 28, 32]
     platform: str = "cpu"
     codec: str = "av1"
+    b_frames: str = "auto"
     clip_seconds: int = 12
     samples: int = 3
     anime: bool = False

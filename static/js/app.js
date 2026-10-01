@@ -2462,6 +2462,7 @@
           rate_mode: ebRateMode(),
           values,
           platform, codec,
+          b_frames: ($("eb-b-frames") && $("eb-b-frames").value) || "auto",
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
           anime: !!($("eb-anime") && $("eb-anime").checked),
@@ -2876,6 +2877,7 @@
       encoder_speed: encoderSpeedValue("vt-enc-speed"),
       ...gatherOutputCommon(),
       anime: $("vt-anime") ? $("vt-anime").checked : false,
+      b_frames: ($("vt-b-frames") && $("vt-b-frames").value) || "auto",
     };
   }
 
@@ -8108,6 +8110,7 @@
       suffix: "_" + $("st-codec").value,
       encoder_speed: encoderSpeedValue("st-enc-speed"),
       aq_strength: $("st-aq-strength") ? parseInt($("st-aq-strength").value, 10) : 8,
+      b_frames: ($("st-b-frames") && $("st-b-frames").value) || "auto",
       keyint_sec: $("st-keyint") ? (parseInt($("st-keyint").value, 10) || 0) : 0,
       post_processing: $("st-post").value,
       audio_mode: $("st-audio-mode").value,

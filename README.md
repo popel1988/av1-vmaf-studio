@@ -315,11 +315,28 @@ Diagnostics and the player transcode stay on fast presets on purpose.
 The Film/Series/Anime chips are job templates (CQ, codec, anime mode), not
 encoder speed.
 
-CPU lookahead is part of that preset, not its own control. At balanced,
-x264 looks about 40 frames ahead, x265 about 20, and SVT-AV1 in CQ about 73
-(about 41 on the fast presets). Across the five aliases, x264 runs from
-about 10 frames to about 60, x265 from about 15 to about 40. NVIDIA lookahead
-stays tied to the B-frame setting and never exceeds 31 frames.
+CPU lookahead is part of the speed preset. The studio does not pass its own
+lookahead. NVIDIA is the exception: lookahead and B-frames share 31 frames,
+so the B-frame control is the lookahead control. Off is 31 frames, Short
+(2 B-frames) 29, Medium (4) 27, Deep (7 hierarchical) 24. Deep exists only
+for AV1 on `latest`; otherwise it falls back to 4 B-frames and 27 frames.
+Automatic uses 24 in CQ on latest AV1, 27 in other CQ, and 29 in ABR/CBR.
+
+x264 `rc-lookahead` for the five aliases: fastest/veryfast 10, fast 30,
+balanced/medium 40, slow 50, slowest/slower 60. The other natives are
+ultrafast and superfast 0, faster 20, veryslow and placebo 60.
+
+x265 `rc-lookahead`: fastest/veryfast 15, fast 15, balanced/medium 20,
+slow 25, slowest/slower 40. The other natives are ultrafast 5, superfast 10,
+faster 15, veryslow 40, placebo 60.
+
+SVT-AV1 stays on automatic lookahead. In CQ that is 73 frames for presets
+0–7, and for preset 8 below 1080p. It is 41 frames from preset 8 at 1080p
+and above, from preset 9 upward at any size, and at 8K even on the slow
+presets. The studio aliases follow that: balanced (6), slow (4) and slowest
+(2) are 73 under 8K; fast (10) and fastest (12) are 41. ABR and CBR are
+58 frames on every preset. VP9 stays at 25 frames; its speed preset does
+not change that. QSV and VAAPI have no frame lookahead the studio sets.
 
 **Keyframe interval** on the encode page, in the editor and in the Super Tool
 is Automatic, or a cap of about 2, 5 or 10 seconds (`-g` only). Scene cuts

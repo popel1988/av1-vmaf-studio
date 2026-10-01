@@ -653,6 +653,16 @@
                   <p class="hint enc-speed-warn" style="display:none"></p>
                 </div>
                 <div class="field">
+                  <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
+                  <select id="vt-b-frames">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="short">Kurz, 2 B-Frames</option>
+                    <option value="medium">Mittel, 4 B-Frames</option>
+                    <option value="deep">Tief, 7 hierarchisch</option>
+                  </select>
+                </div>
+                <div class="field">
                   <label>Steuerungsmodus</label>
                   <select id="vt-rate-mode">
                     <option value="cq">CQ / QP / CRF (Qualitätszahl)</option>
@@ -1138,6 +1148,16 @@
                 <input type="range" id="st-aq-strength" min="1" max="15" value="8" />
               </div>
               <div class="field">
+                <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
+                <select id="st-b-frames">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="off">Aus, Lookahead 31</option>
+                  <option value="short">Kurz, 2 B-Frames</option>
+                  <option value="medium">Mittel, 4 B-Frames</option>
+                  <option value="deep">Tief, 7 hierarchisch</option>
+                </select>
+              </div>
+              <div class="field">
                 <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
                 <select id="st-keyint">
                   <option value="0">Automatisch</option>
@@ -1526,6 +1546,16 @@
               <div class="field">
                 <label>Werte (kommagetrennt, max. 4)</label>
                 <input type="text" id="eb-values" value="24, 28, 32" placeholder="z. B. 24, 28, 32" />
+              </div>
+              <div class="field">
+                <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
+                <select id="eb-b-frames">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="off">Aus, Lookahead 31</option>
+                  <option value="short">Kurz, 2 B-Frames</option>
+                  <option value="medium">Mittel, 4 B-Frames</option>
+                  <option value="deep">Tief, 7 hierarchisch</option>
+                </select>
               </div>
               <div class="field">
                 <label>GPU / Plattform</label>
@@ -2766,7 +2796,59 @@
                 <p>Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.</p>
                 <p>Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.</p>
                 <p>Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.</p>
-                <p>Langsamer schaut auf der CPU weiter voraus. x264 geht von etwa 10 Frames bei Sehr schnell auf etwa 60 bei Sehr langsam, x265 von etwa 15 auf etwa 40. SVT bleibt bei CQ und Preset 6 bei etwa 73 Frames und fällt erst bei den schnellen Presets auf etwa 41. Der Lookahead ist Teil der Stufe, kein eigener Regler. Bei NVIDIA bleibt er an den B-Frames gebunden, höchstens 31 Frames.</p>
+                <p>Der Lookahead ist kein eigener Regler. Bei NVIDIA stellst du ihn über die B-Frames ein: Lookahead und B-Frames teilen sich 31 Frames, der Lookahead ist 31 minus die B-Frame-Zahl. Bei x264, x265, SVT und VP9 hängt die Zahl fest an der Encoder-Stufe. Das Studio setzt sie nicht extra. Ein eigener Regler würde die Stufe aushebeln.</p>
+                <div class="faq-table-wrap">
+                  <table class="faq-table">
+                    <thead>
+                      <tr>
+                        <th rowspan="2">Stufe</th>
+                        <th colspan="3">x264</th>
+                        <th colspan="3">x265</th>
+                        <th colspan="3">SVT-AV1</th>
+                      </tr>
+                      <tr>
+                        <th>CQ</th><th>ABR</th><th>CBR</th>
+                        <th>CQ</th><th>ABR</th><th>CBR</th>
+                        <th>CQ</th><th>ABR</th><th>CBR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th>Sehr schnell</th>
+                        <td>10</td><td>10</td><td>10</td>
+                        <td>15</td><td>15</td><td>15</td>
+                        <td>41</td><td>58</td><td>58</td>
+                      </tr>
+                      <tr>
+                        <th>Schnell</th>
+                        <td>30</td><td>30</td><td>30</td>
+                        <td>15</td><td>15</td><td>15</td>
+                        <td>41</td><td>58</td><td>58</td>
+                      </tr>
+                      <tr>
+                        <th>Ausgewogen</th>
+                        <td>40</td><td>40</td><td>40</td>
+                        <td>20</td><td>20</td><td>20</td>
+                        <td>73</td><td>58</td><td>58</td>
+                      </tr>
+                      <tr>
+                        <th>Langsam</th>
+                        <td>50</td><td>50</td><td>50</td>
+                        <td>25</td><td>25</td><td>25</td>
+                        <td>73</td><td>58</td><td>58</td>
+                      </tr>
+                      <tr>
+                        <th>Sehr langsam</th>
+                        <td>60</td><td>60</td><td>60</td>
+                        <td>40</td><td>40</td><td>40</td>
+                        <td>73</td><td>58</td><td>58</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p>x264 und x265 ändern den Lookahead zwischen CQ, ABR und CBR nicht, deshalb stehen dort dreimal dieselben Frames. Bei SVT sind ABR und CBR auf jeder Stufe 58. Die 73 bei SVT und CQ gelten unter 8K. Ab Preset 9, ab Preset 8 bei 1080p und höher, und bei 8K auch auf den langsamen Presets, sind es bei CQ 41 Frames.</p>
+                <p>NVIDIA. Aus: 31 Frames. Kurz (2 B-Frames): 29. Mittel (4): 27. Tief (7 hierarchisch): 24, nur AV1 auf latest, sonst fällt Tief auf 4 B-Frames und 27 Frames zurück. Automatisch nimmt bei CQ auf latest und AV1 die 24, sonst bei CQ die 27, bei ABR und CBR die 29.</p>
+                <p>VP9 bleibt bei 25 Frames, die Speed-Stufe ändert das nicht. QSV und VAAPI haben keinen Frame-Lookahead, den das Studio setzt.</p>
                 <p>Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.</p>
               </div>
             </details>
