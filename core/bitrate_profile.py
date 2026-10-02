@@ -183,13 +183,24 @@ def _stats(bins: list[dict], duration: float) -> dict:
     }
 
 
-def _picture_floor(bins: list[dict], duration: float) -> float:
+def _min_pct(value) -> int:
+    """Mindestanteil der ruhigen Szene, 5 bis 60. Vorgabe 10."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = 10
+    return max(5, min(60, v))
+
+
+def _picture_floor(bins: list[dict], duration: float, min_pct: int = 10) -> float:
     """Untergrenze für Stichproben.
 
     Der Median wird nur aus Abschnitten gebildet, die noch nach Film aussehen.
-    Abspann nahe 0 zieht ihn nicht nach unten. Die Grenze liegt bei 10 % davon,
-    mindestens 1,5 Mbit/s, sobald der Film deutlich darüber liegt.
+    Abspann nahe 0 zieht ihn nicht nach unten. Die Grenze ist ``min_pct``
+    Prozent dieses Medians. Bei der Vorgabe 10 und einem Film ab 8 Mbit/s
+    liegt sie zusätzlich bei mindestens 1,5 Mbit/s.
     """
+    pct = _min_pct(min_pct)
     head, tail = _body_range(duration)
     vals = [float(b["kbps"]) for b in bins
             if head <= float(b["t"]) < tail and float(b["kbps"]) > 0]
@@ -200,8 +211,8 @@ def _picture_floor(bins: list[dict], duration: float) -> float:
     rough = sorted(vals)[len(vals) // 2]
     picture = [v for v in vals if v >= rough * 0.15] or vals
     med = sorted(picture)[len(picture) // 2]
-    floor = med * 0.10
-    if med >= 8000:
+    floor = med * (pct / 100.0)
+    if pct == 10 and med >= 8000:
         floor = max(floor, 1500.0)
     return floor
 
@@ -250,7 +261,8 @@ def _score_target(role: str, scores: list[float]) -> float:
     return ordered[n // 2]
 
 
-def pick_windows(bins: list[dict], duration: float, clip: float, count: int) -> list[dict]:
+def pick_windows(bins: list[dict], duration: float, clip: float, count: int,
+                 min_pct: int = 10) -> list[dict]:
     """Schwere, typische und ruhige Ausschnitte, ohne Überlappung."""
     duration = float(duration or 0)
     clip = max(5.0, float(clip or 30))
@@ -258,7 +270,7 @@ def pick_windows(bins: list[dict], duration: float, clip: float, count: int) -> 
     if duration <= 0 or not bins:
         return []
     clip = min(clip, duration)
-    floor = _picture_floor(bins, duration)
+    floor = _picture_floor(bins, duration, min_pct)
     head, tail = _content_range(bins, duration, floor)
     starts = []
     t = head
@@ -316,14 +328,17 @@ def load_bins(path: Path, duration: float) -> tuple[list[dict], dict]:
     return bins, stats
 
 
-def profile(path: Path, duration: float, clip: float, samples: int) -> dict:
+def profile(path: Path, duration: float, clip: float, samples: int,
+           min_pct: int = 10) -> dict:
     bins, stats = load_bins(path, duration)
     span = duration if duration > 0 else (bins[-1]["t"] + BIN_SEC if bins else 0)
+    pct = _min_pct(min_pct)
     return {
         "bin_sec": BIN_SEC,
         "duration": round(span, 3),
         "bins": bins,
-        "windows": pick_windows(bins, span, clip, samples),
-        "floor_kbps": round(_picture_floor(bins, span), 1),
+        "windows": pick_windows(bins, span, clip, samples, pct),
+        "floor_kbps": round(_picture_floor(bins, span, pct), 1),
+        "min_pct": pct,
         **stats,
     }

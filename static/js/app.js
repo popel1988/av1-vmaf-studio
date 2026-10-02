@@ -709,6 +709,14 @@
     return el && el.checked ? "bitrate" : "even";
   }
 
+  function sceneMinPct() {
+    const el = $("scene-min-pct");
+    const n = el ? parseInt(el.value, 10) : 10;
+    if (!n || n < 5) return 5;
+    if (n > 60) return 60;
+    return n;
+  }
+
   function bitrateQuery() {
     const page = state.currentPage;
     if (page === "vmaf") {
@@ -841,7 +849,7 @@
     const seq = state.bitrateSeq;
     try {
       const res = await fetch(
-        `/api/bitrate?path=${encodeURIComponent(path)}&samples=${q.samples}&clip=${q.clip}`);
+        `/api/bitrate?path=${encodeURIComponent(path)}&samples=${q.samples}&clip=${q.clip}&min_pct=${sceneMinPct()}`);
       const data = await res.json();
       if (state.bitrateFor !== path || seq !== state.bitrateSeq) return;
       if (data.error) {
@@ -867,11 +875,11 @@
         if (state.bitrateData && state.selected && !state.selected.isBatch) loadBitrateCurve();
       }, 400);
     };
-    ["vt-samples", "vt-clip", "opt-vmaf-samples", "opt-vmaf-clip", "st-samples", "st-clip"].forEach((id) => {
+    ["vt-samples", "vt-clip", "opt-vmaf-samples", "opt-vmaf-clip", "st-samples", "st-clip", "scene-min-pct"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", refresh);
-      if (id.indexOf("clip") >= 0) el.addEventListener("input", refresh);
+      if (id.indexOf("clip") >= 0 || id === "scene-min-pct") el.addEventListener("input", refresh);
     });
   }
 
@@ -2989,6 +2997,7 @@
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
       sample_mode: sampleModeValue(),
+      scene_min_pct: sceneMinPct(),
       two_pass: !!($("vt-two-pass") && $("vt-two-pass").checked
         && ($("vt-rate-mode").value === "abr" || $("vt-rate-mode").value === "bitrate")),
       generate_screenshots: $("vt-screenshots").checked,
@@ -3722,6 +3731,7 @@
     });
     const nerdFloor = $("nerd-floor");
     if (nerdFloor) nerdFloor.addEventListener("input", applyNerdFloor);
+    bindVmafZoom();
     refreshVmafHistory();
   }
 
@@ -4610,6 +4620,127 @@
     return (Number(b && b.t) || 0) + 0.25;
   }
 
+  function readVmafZoom() {
+    const yminEl = $("vmaf-zoom-ymin");
+    const ymaxEl = $("vmaf-zoom-ymax");
+    const x0El = $("vmaf-zoom-x0");
+    const x1El = $("vmaf-zoom-x1");
+    const yMin = yminEl && yminEl.value !== "" ? Number(yminEl.value) : null;
+    const yMax = ymaxEl && ymaxEl.value !== "" ? Number(ymaxEl.value) : null;
+    let x0 = x0El ? Number(x0El.value) : 0;
+    let x1 = x1El ? Number(x1El.value) : 100;
+    if (!Number.isFinite(x0)) x0 = 0;
+    if (!Number.isFinite(x1)) x1 = 100;
+    x0 = Math.max(0, Math.min(100, x0));
+    x1 = Math.max(0, Math.min(100, x1));
+    if (x1 < x0) {
+      const swap = x0;
+      x0 = x1;
+      x1 = swap;
+    }
+    if (x1 - x0 < 1) x1 = Math.min(100, x0 + 1);
+    const hasYMin = yMin != null && Number.isFinite(yMin);
+    const hasYMax = yMax != null && Number.isFinite(yMax);
+    return {
+      yMin, yMax, x0, x1,
+      partialY: hasYMin || hasYMax,
+      lockedX: x0 > 0.05 || x1 < 99.95,
+    };
+  }
+
+  function datasetXExtent(datasets) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    (datasets || []).forEach((d) => {
+      (d.data || []).forEach((p) => {
+        if (p && typeof p.x === "number" && Number.isFinite(p.x)) {
+          if (p.x < lo) lo = p.x;
+          if (p.x > hi) hi = p.x;
+        }
+      });
+    });
+    return hi > lo ? [lo, hi] : null;
+  }
+
+  function syncVmafZoomLabel() {
+    const lab = $("vmaf-zoom-xlabel");
+    if (!lab) return;
+    const z = readVmafZoom();
+    lab.textContent = z.lockedX
+      ? `${Math.round(z.x0)}–${Math.round(z.x1)} %`
+      : tt("gesamt");
+  }
+
+  function applyZoomToChart(chart) {
+    if (!chart || !chart.$zoom) return;
+    const meta = chart.$zoom;
+    const z = readVmafZoom();
+    const y = chart.options.scales && chart.options.scales.y;
+    if (y) {
+      const lo = z.yMin != null && Number.isFinite(z.yMin)
+        ? z.yMin : (meta.ySuggest ? meta.ySuggest[0] : 0);
+      const hi = z.yMax != null && Number.isFinite(z.yMax)
+        ? z.yMax : (meta.ySuggest ? meta.ySuggest[1] : 100);
+      if (z.partialY && hi > lo) {
+        y.min = lo;
+        y.max = hi;
+      } else {
+        delete y.min;
+        delete y.max;
+        if (meta.ySuggest) {
+          y.suggestedMin = meta.ySuggest[0];
+          y.suggestedMax = meta.ySuggest[1];
+        }
+      }
+    }
+    const x = chart.options.scales && chart.options.scales.x;
+    if (x && meta.xMode) {
+      if (z.lockedX && meta.xMode === "linear" && meta.extent) {
+        const span = meta.extent[1] - meta.extent[0];
+        x.min = meta.extent[0] + span * z.x0 / 100;
+        x.max = meta.extent[0] + span * z.x1 / 100;
+      } else if (z.lockedX && meta.xMode === "index" && meta.labelCount > 1) {
+        x.min = (meta.labelCount - 1) * z.x0 / 100;
+        x.max = (meta.labelCount - 1) * z.x1 / 100;
+      } else {
+        delete x.min;
+        delete x.max;
+      }
+    }
+    chart.update("none");
+  }
+
+  function attachVmafZoom(chart, meta) {
+    if (!chart) return;
+    chart.$zoom = meta;
+    applyZoomToChart(chart);
+  }
+
+  function refreshVmafZoom() {
+    syncVmafZoomLabel();
+    [state.vmafChart, state.vmafFrameChart, state.vmafNerdChart].forEach(applyZoomToChart);
+  }
+
+  function bindVmafZoom() {
+    const ymin = $("vmaf-zoom-ymin");
+    const ymax = $("vmaf-zoom-ymax");
+    const x0 = $("vmaf-zoom-x0");
+    const x1 = $("vmaf-zoom-x1");
+    const reset = $("vmaf-zoom-reset");
+    if (ymin) ymin.addEventListener("change", refreshVmafZoom);
+    if (ymax) ymax.addEventListener("change", refreshVmafZoom);
+    if (x0) x0.addEventListener("input", refreshVmafZoom);
+    if (x1) x1.addEventListener("input", refreshVmafZoom);
+    if (reset) reset.addEventListener("click", () => {
+      if (ymin) ymin.value = "";
+      if (ymax) ymax.value = "";
+      if (x0) x0.value = "0";
+      if (x1) x1.value = "100";
+      refreshVmafZoom();
+    });
+    syncVmafZoomLabel();
+  }
+
   function loadSceneBitrate(vmaf) {
     const session = state.vmafSession;
     if (!vmaf || !session) return Promise.resolve();
@@ -4680,23 +4811,11 @@
       const label = r.label || ("Q" + r.quality);
       const n = sc.frames.length;
       const span = scoredSpan(clipSec, sc);
-      datasets.push({
-        label,
-        yAxisID: "y",
-        data: hasBr
-          ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * span, y: v }))
-          : sc.frames,
-        borderColor: color,
-        backgroundColor: "transparent",
-        pointRadius: 0,
-        borderWidth: r.recommended ? 2.4 : 1.5,
-        tension: 0.2,
-        spanGaps: true,
-      });
-      if (hasBr) {
+      if (hasBr && sc.bitrate && sc.bitrate.length) {
         datasets.push({
           label: label + " · Bitrate",
           yAxisID: "y1",
+          order: 2,
           data: sc.bitrate.map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
           borderColor: color,
           backgroundColor: "transparent",
@@ -4707,10 +4826,27 @@
           spanGaps: true,
         });
       }
+      datasets.push({
+        label,
+        yAxisID: "y",
+        order: 0,
+        data: hasBr
+          ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * span, y: v }))
+          : sc.frames,
+        borderColor: color,
+        backgroundColor: "transparent",
+        pointRadius: 0,
+        borderWidth: r.recommended ? 2.4 : 1.5,
+        tension: 0.2,
+        spanGaps: true,
+      });
     });
     const opts = lineChartOptions(col, "VMAF");
     opts.scales.y.suggestedMin = 80;
     opts.scales.y.suggestedMax = 100;
+    opts.plugins.legend.position = "bottom";
+    opts.plugins.legend.labels.boxWidth = 12;
+    opts.plugins.legend.labels.filter = (item) => !String(item.text || "").endsWith("· Bitrate");
     if (hasBr) {
       opts.scales.x.type = "linear";
       opts.scales.x.title = { display: true, text: "Sekunden", color: col.muted };
@@ -4722,29 +4858,45 @@
         grid: { drawOnChartArea: false },
         ticks: { color: col.muted },
       };
-      opts.interaction = { mode: "nearest", intersect: false, axis: "x" };
-    } else {
-      const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
-      opts.scales.x.ticks.autoSkip = false;
+      opts.interaction = { mode: "x", intersect: false };
+      opts.plugins.tooltip = {
+        mode: "x",
+        intersect: false,
+        filter: (item) => !(item.dataset && item.dataset.yAxisID === "y1"),
+      };
       state.vmafFrameChart = new Chart(ctx, {
         type: "line",
-        data: {
-          labels: Array.from({ length: n }, (_, i) => {
-            if (i === 0) return "Anfang";
-            if (i === n - 1) return "Ende";
-            if (i === Math.floor(n / 2)) return "Mitte";
-            return "";
-          }),
-          datasets,
-        },
+        data: { datasets },
         options: opts,
+      });
+      attachVmafZoom(state.vmafFrameChart, {
+        ySuggest: [80, 100],
+        xMode: "linear",
+        extent: datasetXExtent(datasets),
+        labelCount: 0,
       });
       return;
     }
+    const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
+    opts.scales.x.ticks.autoSkip = false;
     state.vmafFrameChart = new Chart(ctx, {
       type: "line",
-      data: { datasets },
+      data: {
+        labels: Array.from({ length: n }, (_, i) => {
+          if (i === 0) return "Anfang";
+          if (i === n - 1) return "Ende";
+          if (i === Math.floor(n / 2)) return "Mitte";
+          return "";
+        }),
+        datasets,
+      },
       options: opts,
+    });
+    attachVmafZoom(state.vmafFrameChart, {
+      ySuggest: [80, 100],
+      xMode: "index",
+      extent: null,
+      labelCount: n,
     });
   }
 
@@ -4941,6 +5093,12 @@
         data: { labels, datasets },
         options: opts,
       });
+      attachVmafZoom(state.vmafNerdChart, {
+        ySuggest: [70, 100],
+        xMode: "index",
+        extent: null,
+        labelCount: labels.length,
+      });
     }
     if (!body) return;
     const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.";
@@ -5111,7 +5269,7 @@
     });
 
     if (state.vmafChart) state.vmafChart.destroy();
-    state.vmafChart = new Chart(ctx, {
+    const mainChart = new Chart(ctx, {
       type: "line",
       data: { labels, datasets },
       options: {
@@ -5180,6 +5338,8 @@
         },
       },
     });
+    state.vmafChart = mainChart;
+    attachVmafZoom(mainChart, { ySuggest: [80, 100], xMode: null });
   }
 
   // Mehrere Codecs: faire Achse = VMAF (y) vs. Ersparnis % (x). Je Codec eine
@@ -5224,7 +5384,7 @@
     });
 
     if (state.vmafChart) state.vmafChart.destroy();
-    state.vmafChart = new Chart(ctx, {
+    const multiChart = new Chart(ctx, {
       type: "scatter",
       data: { datasets },
       options: {
@@ -5270,11 +5430,13 @@
               color: col.muted,
             },
             suggestedMin: 80, suggestedMax: 100,
-            grid: { color: col.grid }, ticks: { color: col.muted },
+            grid: { color: col.grid },             ticks: { color: col.muted },
           },
         },
       },
     });
+    state.vmafChart = multiChart;
+    attachVmafZoom(multiChart, { ySuggest: [80, 100], xMode: null });
   }
 
   function restyleChart() {
@@ -8328,6 +8490,7 @@
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.sample_mode = sampleModeValue("st-sample-mode");
+      s.scene_min_pct = sceneMinPct();
       s.two_pass = !!($("st-two-pass") && $("st-two-pass").checked
         && (s.rate_mode === "abr" || s.rate_mode === "bitrate"));
       s.test_values = stTestValues();

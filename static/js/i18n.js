@@ -766,10 +766,19 @@
     "CSV exportieren": "Export CSV",
     "Neu einordnen": "Re-rank",
     "Daten für Nerds": "Data for nerds",
+    "VMAF-Höhe": "VMAF height",
+    "Ausschnitt": "Window",
+    "gesamt": "full",
+    "Zurücksetzen": "Reset",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Leave the height empty for the automatic range. Only the lower number, e.g. 85, shows 85 to 100. The window applies to the scene curve and the frame curve. A click on a legend entry hides that line.",
     "Bitrate-Verlauf": "Bitrate curve",
     "VMAF-Szenen nach Bitrate": "VMAF scenes by bitrate",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
-      "Reads the video stream's packet sizes and does not decode. The first run can take a while; after that the curve comes from the cache. The marks are the suggestion: a hard, a typical and a quiet spot. Credits and logos under the floor do not count as a quiet scene. The checkbox uses the suggestion for the next VMAF run.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Reads the video stream's packet sizes and does not decode. The first run can take a while; after that the curve comes from the cache. The marks are the suggestion: a hard, a typical and a quiet spot. Credits and logos under the floor do not count as a quiet scene. Set the minimum share beside it, default 10% of the median. The checkbox uses the suggestion for the next VMAF run.",
+    "Mindestanteil": "Minimum share",
+    "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
+      "Floor for the quiet scene, as a percent of the median of the picture sections. Credits and logos below it do not count. Default 10.",
     "Bitrate wird gelesen …": "Reading bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Could not load the bitrate curve.",
     "Anteil unter": "Share under",
@@ -2291,10 +2300,19 @@
     "CSV exportieren": "Exportar CSV",
     "Neu einordnen": "Reordenar",
     "Daten für Nerds": "Datos para expertos",
+    "VMAF-Höhe": "Altura VMAF",
+    "Ausschnitt": "Recorte",
+    "gesamt": "completo",
+    "Zurücksetzen": "Restablecer",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Vacío deja la altura automática. Solo el número inferior, p. ej. 85, muestra de 85 a 100. El recorte vale para la curva de la escena y la curva de frames. Un clic en la leyenda oculta esa línea.",
     "Bitrate-Verlauf": "Curva de bitrate",
     "VMAF-Szenen nach Bitrate": "Escenas VMAF según bitrate",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
-      "Lee el tamaño de los paquetes del vídeo y no decodifica. La primera vez puede tardar; después la curva sale de la caché. Las marcas son la propuesta: un tramo difícil, uno típico y uno tranquilo. Créditos y logos bajo el suelo no cuentan como escena tranquila. La casilla usa la propuesta en el siguiente VMAF.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Lee el tamaño de los paquetes del vídeo y no decodifica. La primera vez puede tardar; después la curva sale de la caché. Las marcas son la propuesta: un tramo difícil, uno típico y uno tranquilo. Créditos y logos bajo el suelo no cuentan como escena tranquila. El mínimo se ajusta al lado, por defecto el 10 % de la mediana. La casilla usa la propuesta en el siguiente VMAF.",
+    "Mindestanteil": "Mínimo",
+    "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
+      "Suelo de la escena tranquila, en porcentaje de la mediana de los tramos de imagen. Por debajo no cuentan créditos ni logos. Por defecto 10.",
     "Bitrate wird gelesen …": "Leyendo bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "No se pudo cargar la curva de bitrate.",
     "Anteil unter": "Porcentaje bajo",
@@ -3639,10 +3657,19 @@
     "CSV exportieren": "Exporter CSV",
     "Neu einordnen": "Réordonner",
     "Daten für Nerds": "Données pour experts",
+    "VMAF-Höhe": "Hauteur VMAF",
+    "Ausschnitt": "Extrait",
+    "gesamt": "entier",
+    "Zurücksetzen": "Réinitialiser",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Vide, la hauteur reste automatique. Seul le nombre du bas, p. ex. 85, affiche 85 à 100. L'extrait s'applique à la courbe de scène et à la courbe d'images. Un clic dans la légende masque cette ligne.",
     "Bitrate-Verlauf": "Courbe de débit",
     "VMAF-Szenen nach Bitrate": "Scènes VMAF selon le débit",
-    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
-      "Lit la taille des paquets vidéo et ne décode pas. Le premier passage peut prendre du temps, ensuite la courbe vient du cache. Les marques sont la proposition : un passage difficile, un typique et un calme. Générique et logos sous le plancher ne comptent pas comme scène calme. La case utilise la proposition pour le prochain VMAF.",
+    "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
+      "Lit la taille des paquets vidéo et ne décode pas. Le premier passage peut prendre du temps, ensuite la courbe vient du cache. Les marques sont la proposition : un passage difficile, un typique et un calme. Générique et logos sous le plancher ne comptent pas comme scène calme. Le minimum se règle à côté, 10 % de la médiane par défaut. La case utilise la proposition pour le prochain VMAF.",
+    "Mindestanteil": "Part minimale",
+    "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
+      "Plancher de la scène calme, en pourcentage de la médiane des passages d'image. En dessous, générique et logos ne comptent pas. Défaut 10.",
     "Bitrate wird gelesen …": "Lecture du débit …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Impossible de charger la courbe de débit.",
     "Anteil unter": "Part sous",

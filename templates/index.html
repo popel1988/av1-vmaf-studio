@@ -176,8 +176,13 @@
                     <input type="checkbox" id="bitrate-sample-mode" />
                     VMAF-Szenen nach Bitrate
                   </label>
+                  <label class="scene-min" data-page="vmaf supertool" data-tip="Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.">
+                    Mindestanteil
+                    <input type="number" id="scene-min-pct" min="5" max="60" step="1" value="10" />
+                    %
+                  </label>
                 </div>
-                <p class="hint" data-page="vmaf">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.</p>
+                <p class="hint" data-page="vmaf">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.</p>
                 <p class="hint" id="bitrate-summary"></p>
                 <div class="bitrate-wins" id="bitrate-wins" data-page="vmaf"></div>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-sm" id="bitrate-chart-wrap" hidden>
@@ -787,6 +792,20 @@
           <div class="card-body vmaf-body">
             <div class="vmaf-charts">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+              <div class="vmaf-zoom" id="vmaf-zoom">
+                <label>VMAF-Höhe
+                  <input id="vmaf-zoom-ymin" type="number" min="0" max="100" step="1" inputmode="numeric">
+                  <span>–</span>
+                  <input id="vmaf-zoom-ymax" type="number" min="0" max="100" step="1" inputmode="numeric">
+                </label>
+                <label class="vmaf-zoom-x">Ausschnitt
+                  <input id="vmaf-zoom-x0" type="range" min="0" max="100" step="1" value="0">
+                  <input id="vmaf-zoom-x1" type="range" min="0" max="100" step="1" value="100">
+                  <span id="vmaf-zoom-xlabel">gesamt</span>
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
+              </div>
+              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
               <div class="vmaf-chart-wrap">
                 <canvas id="vmaf-chart"></canvas>
               </div>
