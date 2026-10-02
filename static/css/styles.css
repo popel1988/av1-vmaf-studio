@@ -1620,10 +1620,10 @@ input[type="range"]::-moz-range-thumb {
   background: transparent; color: var(--accent); font: inherit; font-size: 12px;
   padding: 6px 8px; cursor: pointer; text-align: center; }
 .shot-play:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.shot-badge { position: absolute; top: 6px; left: 6px; z-index: 2; display: flex; flex-direction: column;
-  padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.66); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.3; }
-.shot-badge small { font-size: 9px; font-weight: 500; opacity: .85; text-transform: uppercase; letter-spacing: .3px; }
-.shot-check { position: absolute; top: 6px; right: 6px; z-index: 2; background: rgba(0,0,0,.66);
+.shot-badge { position: static; display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 8px 4px; background: transparent; color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.35; }
+.shot-badge small { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+.shot-check { position: absolute; top: 6px; right: 6px; z-index: 3; background: rgba(0,0,0,.72);
   border-radius: 6px; padding: 3px 5px; cursor: pointer; display: flex; }
 .shot-check input { cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent); }
 

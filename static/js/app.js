@@ -3987,8 +3987,8 @@
             <label class="shot-check" title="Für Vergleich auswählen">
               <input type="checkbox" ${t.ref ? "checked" : ""} />
             </label>
-            <span class="shot-badge">${escapeHtml(t.label)}<small>${escapeHtml(t.sub)}</small></span>
             <img src="${t.src}" alt="${escapeHtml(t.label)}" loading="lazy" />
+            <span class="shot-badge">${escapeHtml(t.label)}<small>${escapeHtml(t.sub)}</small></span>
             ${t.clip ? `<button type="button" class="shot-play" data-clip="${escapeHtml(t.clip)}">${escapeHtml(tt("Abspielen"))}</button>` : ""}
           </div>`;
         }).join("")}
