@@ -2252,6 +2252,7 @@
       codec: ($("ed-codec") && $("ed-codec").value) || "av1",
       encoder_speed: ($("ed-enc-speed") && $("ed-enc-speed").value) || "balanced",
       b_frames: ($("ed-b-frames") && $("ed-b-frames").value) || "auto",
+      nvenc_tune: ($("ed-nvenc-tune") && $("ed-nvenc-tune").value) || "auto",
       aq_strength: ($("ed-aq-strength") && parseInt($("ed-aq-strength").value, 10)) || 8,
       keyint_sec: ($("ed-keyint") && parseInt($("ed-keyint").value, 10)) || 0,
       cq: ($("ed-cq") && parseInt($("ed-cq").value, 10)) || 30,

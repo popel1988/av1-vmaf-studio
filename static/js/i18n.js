@@ -1649,6 +1649,16 @@
       "B-frames (NVIDIA)",
     "B-Frames":
       "B-frames",
+    "Tune (NVIDIA)":
+      "Tune (NVIDIA)",
+    "Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.":
+      "NVIDIA HEVC and AV1 only. UHQ smooths across frames. Off omits the tune.",
+    "Automatisch probiert bei Realfilm auf HEVC und AV1 den UHQ-Tune und bleibt bei Anime auf HQ. Aus lässt den Tune weg, wie vor v7.":
+      "Automatic tries the UHQ tune on live-action HEVC and AV1 and stays on HQ for anime. Off omits the tune, as before v7.",
+    "Tune steht auf der Encode-Seite und im VMAF-Vergleich: Automatisch, UHQ, HQ oder Aus. Automatisch ist das bisherige Verhalten. Aus lässt den Tune weg, wie vor v7. Ein explizites Aus gilt auch bei Anime.":
+      "Tune is on the encode page and in the VMAF comparison: Automatic, UHQ, HQ or Off. Automatic is the previous behavior. Off omits the tune, as before v7. An explicit off also applies to anime.",
+    "Tune automatisch": "Tune automatic",
+    "Tune aus": "Tune off",
     "Automatisch (empfohlen)":
       "Automatic (recommended)",
     "Aus, Lookahead 31":
@@ -1659,6 +1669,10 @@
       "Medium, 4 B-frames",
     "Tief, 7 hierarchisch":
       "Deep, 7 hierarchical",
+    "Tief, 7 hierarchisch (Legacy: nur bis 4)":
+      "Deep, 7 hierarchical (legacy: only up to 4)",
+    "Auf dieser Linie geht es nur bis 4 B-Frames. Tief ist nicht wählbar.":
+      "This line only goes to 4 B-frames. Deep cannot be selected.",
     "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
       "NVIDIA only. Lookahead and B-frames share 31 frames. More B-frames save bits on average but shorten the lookahead. In ABR/CBR a short hard passage can then get less rate, the 1% low falls, and the bitrate graph becomes a saw.",
     "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
@@ -1770,6 +1784,19 @@
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 is the encoder default, which is strength 1.0. Higher protects flats and dark areas more; fine detail can give way a little. CPU H.264 and CPU HEVC only.",
 
+    "Grundeinstellungen": "Shared settings",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
+      "Each row is its own run. Platform, codec, speed, B-frames, tune, AQ and keyframe interval apply only to that row.",
+    "Vergleich 1": "Comparison 1",
+    "Vergleich 2": "Comparison 2",
+    "Vergleich 3": "Comparison 3",
+    "Vergleich 4": "Comparison 4",
+    "Vergleich 5": "Comparison 5",
+    "Vergleich 6": "Comparison 6",
+    "Vergleich 7": "Comparison 7",
+    "+ Weiteren Vergleich": "+ Another comparison",
+    "Vergleich entfernen": "Remove comparison",
+    "Höchstens sechs zusätzliche Vergleiche.": "At most six extra comparisons.",
     "Dieselbe Zeile, anderes Setting": "Same row, different setting",
     "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
       "Extra runs only for the base encoder above. Each mark changes exactly one thing: the speed preset or the B-frames. The other setting stays as it is in the form.",
@@ -2978,6 +3005,16 @@
       "B-frames (NVIDIA)",
     "B-Frames":
       "B-frames",
+    "Tune (NVIDIA)":
+      "Tune (NVIDIA)",
+    "Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.":
+      "Solo NVIDIA HEVC y AV1. UHQ suaviza entre fotogramas. Desactivado omite el tune.",
+    "Automatisch probiert bei Realfilm auf HEVC und AV1 den UHQ-Tune und bleibt bei Anime auf HQ. Aus lässt den Tune weg, wie vor v7.":
+      "Automático prueba el tune UHQ en HEVC y AV1 de imagen real y se queda en HQ con anime. Desactivado omite el tune, como antes de v7.",
+    "Tune steht auf der Encode-Seite und im VMAF-Vergleich: Automatisch, UHQ, HQ oder Aus. Automatisch ist das bisherige Verhalten. Aus lässt den Tune weg, wie vor v7. Ein explizites Aus gilt auch bei Anime.":
+      "El tune está en la página de codificación y en la comparación VMAF: Automático, UHQ, HQ o Desactivado. Automático es el comportamiento anterior. Desactivado omite el tune, como antes de v7. Un desactivado explícito también vale para anime.",
+    "Tune automatisch": "Tune automático",
+    "Tune aus": "Tune desactivado",
     "Automatisch (empfohlen)":
       "Automático (recomendado)",
     "Aus, Lookahead 31":
@@ -2988,6 +3025,10 @@
       "Medio, 4 B-frames",
     "Tief, 7 hierarchisch":
       "Profundo, 7 jerárquico",
+    "Tief, 7 hierarchisch (Legacy: nur bis 4)":
+      "Profundo, 7 jerárquico (legacy: solo hasta 4)",
+    "Auf dieser Linie geht es nur bis 4 B-Frames. Tief ist nicht wählbar.":
+      "En esta línea solo hay hasta 4 B-frames. Profundo no se puede elegir.",
     "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
       "Solo NVIDIA. Lookahead y B-frames comparten 31 fotogramas. Más B-frames ahorran bits de media, pero acortan el lookahead. En ABR/CBR un pasaje corto y difícil puede recibir menos tasa, baja el 1% low y la curva de bitrate se vuelve una sierra.",
     "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
@@ -3099,6 +3140,19 @@
     "AQ-Stärke (x264/x265):": "Fuerza AQ (x264/x265):",
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 es el valor del codificador, equivale a fuerza 1,0. Más alto protege más las áreas planas y las zonas oscuras; el detalle fino puede ceder un poco. Solo H.264 y HEVC en CPU.",
+    "Grundeinstellungen": "Ajustes comunes",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
+      "Cada fila es una pasada propia. Plataforma, códec, velocidad, B-frames, tune, AQ y distancia de keyframes valen solo para esa fila.",
+    "Vergleich 1": "Comparación 1",
+    "Vergleich 2": "Comparación 2",
+    "Vergleich 3": "Comparación 3",
+    "Vergleich 4": "Comparación 4",
+    "Vergleich 5": "Comparación 5",
+    "Vergleich 6": "Comparación 6",
+    "Vergleich 7": "Comparación 7",
+    "+ Weiteren Vergleich": "+ Otra comparación",
+    "Vergleich entfernen": "Quitar comparación",
+    "Höchstens sechs zusätzliche Vergleiche.": "Como máximo seis comparaciones extra.",
     "Dieselbe Zeile, anderes Setting": "La misma fila, otro ajuste",
     "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
       "Pasadas extra solo para el codificador base de arriba. Cada marca cambia exactamente una cosa: el preset de velocidad o los B-frames. El otro ajuste se queda como está en el formulario.",
@@ -4302,6 +4356,16 @@
       "B-frames (NVIDIA)",
     "B-Frames":
       "B-frames",
+    "Tune (NVIDIA)":
+      "Tune (NVIDIA)",
+    "Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.":
+      "NVIDIA HEVC et AV1 seulement. UHQ lisse sur plusieurs images. Désactivé omet le tune.",
+    "Automatisch probiert bei Realfilm auf HEVC und AV1 den UHQ-Tune und bleibt bei Anime auf HQ. Aus lässt den Tune weg, wie vor v7.":
+      "Automatique essaie le tune UHQ sur HEVC et AV1 en prises de vues réelles et reste sur HQ pour l'anime. Désactivé omet le tune, comme avant v7.",
+    "Tune steht auf der Encode-Seite und im VMAF-Vergleich: Automatisch, UHQ, HQ oder Aus. Automatisch ist das bisherige Verhalten. Aus lässt den Tune weg, wie vor v7. Ein explizites Aus gilt auch bei Anime.":
+      "Le tune est sur la page d'encodage et dans la comparaison VMAF : Automatique, UHQ, HQ ou Désactivé. Automatique est le comportement précédent. Désactivé omet le tune, comme avant v7. Un désactivé explicite vaut aussi pour l'anime.",
+    "Tune automatisch": "Tune automatique",
+    "Tune aus": "Tune désactivé",
     "Automatisch (empfohlen)":
       "Automatique (recommandé)",
     "Aus, Lookahead 31":
@@ -4312,6 +4376,10 @@
       "Moyen, 4 B-frames",
     "Tief, 7 hierarchisch":
       "Profond, 7 hiérarchique",
+    "Tief, 7 hierarchisch (Legacy: nur bis 4)":
+      "Profond, 7 hiérarchique (legacy : jusqu'à 4 seulement)",
+    "Auf dieser Linie geht es nur bis 4 B-Frames. Tief ist nicht wählbar.":
+      "Sur cette ligne, le maximum est 4 B-frames. Profond n'est pas sélectionnable.",
     "Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.":
       "NVIDIA seulement. Lookahead et B-frames se partagent 31 images. Plus de B-frames économise des bits en moyenne, mais raccourcit le lookahead. En ABR/CBR un passage court et difficile peut alors recevoir moins de débit, le 1% low baisse, et la courbe de débit devient une scie.",
     "Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg.":
@@ -4423,6 +4491,19 @@
     "AQ-Stärke (x264/x265):": "Force AQ (x264/x265) :",
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 est la valeur de l'encodeur, soit une force de 1,0. Plus haut protège davantage les aplats et les zones sombres ; le détail fin peut céder un peu. H.264 et HEVC CPU seulement.",
+    "Grundeinstellungen": "Réglages communs",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
+      "Chaque ligne est une passe à part. Plateforme, codec, vitesse, B-frames, tune, AQ et intervalle de keyframes ne valent que pour cette ligne.",
+    "Vergleich 1": "Comparaison 1",
+    "Vergleich 2": "Comparaison 2",
+    "Vergleich 3": "Comparaison 3",
+    "Vergleich 4": "Comparaison 4",
+    "Vergleich 5": "Comparaison 5",
+    "Vergleich 6": "Comparaison 6",
+    "Vergleich 7": "Comparaison 7",
+    "+ Weiteren Vergleich": "+ Autre comparaison",
+    "Vergleich entfernen": "Retirer la comparaison",
+    "Höchstens sechs zusätzliche Vergleiche.": "Six comparaisons en plus au maximum.",
     "Dieselbe Zeile, anderes Setting": "La même ligne, un autre réglage",
     "Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.":
       "Passes en plus seulement pour l'encodeur de base ci-dessus. Chaque coche ne change qu'une chose : le palier de vitesse ou les B-frames. L'autre réglage reste celui du formulaire.",

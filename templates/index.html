@@ -340,7 +340,17 @@
                     <option value="medium">Mittel, 4 B-Frames</option>
                     <option value="deep">Tief, 7 hierarchisch</option>
                   </select>
-                  <p class="hint">Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg. <a href="#faq-bframes" class="faq-jump">FAQ</a></p>
+                  <p class="hint">Automatisch: bei CQ die Pyramide der Linie (latest, AV1: 7 hierarchisch, sonst 4), bei ABR und CBR nur 2, damit schwere Stellen ihre Bits behalten. Tief spart im Schnitt am meisten und legt die Bits auf wenige Referenzbilder. Aus hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Was die Karte ablehnt, fällt weg. <span id="bf-legacy-note" hidden>Auf dieser Linie geht es nur bis 4 B-Frames. Tief ist nicht wählbar.</span> <a href="#faq-bframes" class="faq-jump">FAQ</a></p>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                  <select id="opt-nvenc-tune">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="uhq">UHQ</option>
+                    <option value="hq">HQ</option>
+                    <option value="off">Aus</option>
+                  </select>
+                  <p class="hint">Automatisch probiert bei Realfilm auf HEVC und AV1 den UHQ-Tune und bleibt bei Anime auf HQ. Aus lässt den Tune weg, wie vor v7.</p>
                 </div>
                 <div class="field">
                   <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult im Player schneller, lang spart Bits. Automatisch lässt den Encoder entscheiden.">Keyframe-Abstand</label>
@@ -627,54 +637,8 @@
               ins Encoding übernehmen.</p>
 
             <div class="opt-section">
-              <h4 class="subsection">Vergleich</h4>
+              <h4 class="subsection">Grundeinstellungen</h4>
               <div class="settings-grid">
-                <div class="field">
-                  <label>GPU / Plattform (Basis)</label>
-                  <select id="vt-platform">
-                    {% for p in platform_options %}
-                    <option value="{{ p.value }}">{{ p.label }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Codec (Basis)</label>
-                  <select id="vt-codec">
-                    <option value="av1">AV1</option>
-                    <option value="hevc">HEVC / H.265</option>
-                    <option value="h264">H.264</option>
-                    <option value="vp9">VP9 (nur CPU)</option>
-                  </select>
-                  <p class="hint" id="vt-codec-hint"></p>
-                </div>
-                <div class="field">
-                  <label data-tip="Gleiche Speed-Stufe wie beim späteren Encode, sonst sind VMAF-Werte nicht vergleichbar.">Encoder-Speed</label>
-                  <select id="vt-enc-speed">{{ enc_speed_options() }}</select>
-                  <p class="hint enc-speed-warn" style="display:none"></p>
-                </div>
-                <div class="field">
-                  <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
-                  <select id="vt-b-frames">
-                    <option value="auto">Automatisch (empfohlen)</option>
-                    <option value="off">Aus, Lookahead 31</option>
-                    <option value="short">Kurz, 2 B-Frames</option>
-                    <option value="medium">Mittel, 4 B-Frames</option>
-                    <option value="deep">Tief, 7 hierarchisch</option>
-                  </select>
-                </div>
-                <div class="field" id="vt-aq-field">
-                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="vt-aq-val">8</strong></label>
-                  <input type="range" id="vt-aq-strength" min="1" max="15" value="8" />
-                </div>
-                <div class="field">
-                  <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
-                  <select id="vt-keyint">
-                    <option value="0">Automatisch</option>
-                    <option value="2">Kurz, etwa 2 Sekunden</option>
-                    <option value="5">Mittel, etwa 5 Sekunden</option>
-                    <option value="10">Lang, etwa 10 Sekunden</option>
-                  </select>
-                </div>
                 <div class="field">
                   <label>Steuerungsmodus</label>
                   <select id="vt-rate-mode">
@@ -705,27 +669,6 @@
                   <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
                 </div>
               </div>
-            </div>
-
-            <div class="opt-section">
-              <h4 class="subsection">Encoder &amp; Optionen</h4>
-              <div class="field">
-                <label>Zusätzlich vergleichen mit</label>
-                <div id="vt-compare" class="compare-encoders"></div>
-                <p class="hint">Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.</p>
-              </div>
-              <div class="field">
-                <label>Dieselbe Zeile, anderes Setting</label>
-                <p class="hint">Zusätzliche Läufe nur für den Basis-Encoder oben. Jede Markierung ändert genau eine Sache: die Speed-Stufe oder die B-Frames. Die andere Einstellung bleibt, wie sie im Formular steht.</p>
-                <div class="cmp-group">
-                  <span class="cmp-title">Weitere B-Frames</span>
-                  <div id="vt-var-bf" class="compare-encoders"></div>
-                </div>
-                <div class="cmp-group">
-                  <span class="cmp-title">Weitere Speed-Stufen</span>
-                  <div id="vt-var-speed" class="compare-encoders"></div>
-                </div>
-              </div>
               <div class="fmt-checks" style="margin-top:10px">
                 <label class="check">
                   <input type="checkbox" id="vt-screenshots" checked />
@@ -741,6 +684,71 @@
                 </label>
               </div>
               <p class="hint">Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.</p>
+            </div>
+
+            <div class="opt-section">
+              <h4 class="subsection">Encoder</h4>
+              <p class="hint">Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.</p>
+              <div class="vt-enc-row" id="vt-enc-base">
+                <div class="vt-row-head"><span>Vergleich 1</span></div>
+                <div class="field">
+                  <label>GPU / Plattform</label>
+                  <select id="vt-platform">
+                    {% for p in platform_options %}
+                    <option value="{{ p.value }}">{{ p.label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Codec</label>
+                  <select id="vt-codec">
+                    <option value="av1">AV1</option>
+                    <option value="hevc">HEVC / H.265</option>
+                    <option value="h264">H.264</option>
+                    <option value="vp9">VP9 (nur CPU)</option>
+                  </select>
+                  <p class="hint" id="vt-codec-hint"></p>
+                </div>
+                <div class="field">
+                  <label data-tip="Gleiche Speed-Stufe wie beim späteren Encode, sonst sind VMAF-Werte nicht vergleichbar.">Encoder-Speed</label>
+                  <select id="vt-enc-speed">{{ enc_speed_options() }}</select>
+                  <p class="hint enc-speed-warn" style="display:none"></p>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
+                  <select id="vt-b-frames">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="short">Kurz, 2 B-Frames</option>
+                    <option value="medium">Mittel, 4 B-Frames</option>
+                    <option value="deep">Tief, 7 hierarchisch</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                  <select id="vt-nvenc-tune">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="uhq">UHQ</option>
+                    <option value="hq">HQ</option>
+                    <option value="off">Aus</option>
+                  </select>
+                </div>
+                <div class="field" id="vt-aq-field">
+                  <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="vt-aq-val">8</strong></label>
+                  <input type="range" id="vt-aq-strength" min="1" max="15" value="8" />
+                </div>
+                <div class="field">
+                  <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                  <select id="vt-keyint">
+                    <option value="0">Automatisch</option>
+                    <option value="2">Kurz, etwa 2 Sekunden</option>
+                    <option value="5">Mittel, etwa 5 Sekunden</option>
+                    <option value="10">Lang, etwa 10 Sekunden</option>
+                  </select>
+                </div>
+              </div>
+              <div id="vt-extra-rows"></div>
+              <button type="button" class="btn btn-ghost btn-sm" id="vt-add-row">+ Weiteren Vergleich</button>
             </div>
 
             <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
@@ -1183,6 +1191,15 @@
                 </select>
               </div>
               <div class="field">
+                <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                <select id="st-nvenc-tune">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="uhq">UHQ</option>
+                  <option value="hq">HQ</option>
+                  <option value="off">Aus</option>
+                </select>
+              </div>
+              <div class="field">
                 <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
                 <select id="st-keyint">
                   <option value="0">Automatisch</option>
@@ -1580,6 +1597,15 @@
                   <option value="short">Kurz, 2 B-Frames</option>
                   <option value="medium">Mittel, 4 B-Frames</option>
                   <option value="deep">Tief, 7 hierarchisch</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                <select id="eb-nvenc-tune">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="uhq">UHQ</option>
+                  <option value="hq">HQ</option>
+                  <option value="off">Aus</option>
                 </select>
               </div>
               <div class="field" id="eb-aq-field">
@@ -2519,6 +2545,15 @@
                     <option value="deep">Tief, 7 hierarchisch</option>
                   </select>
                 </div>
+                <div class="field">
+                  <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                  <select id="ed-nvenc-tune">
+                    <option value="auto">Automatisch (empfohlen)</option>
+                    <option value="uhq">UHQ</option>
+                    <option value="hq">HQ</option>
+                    <option value="off">Aus</option>
+                  </select>
+                </div>
                 <div class="field" id="ed-aq-field">
                   <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="ed-aq-val">8</strong></label>
                   <input type="range" id="ed-aq-strength" min="1" max="15" value="8" />
@@ -2984,6 +3019,7 @@
                 <p>AQ heißt adaptive Quantisierung. Spatial AQ verschiebt Bits innerhalb eines Bildes: flache Flächen wie Himmel, Wände und Verläufe werden feiner quantisiert, damit sie weniger banden. In detailreichen Stellen dürfen die Stufen gröber sein, weil Fehler im Muster untergehen.</p>
                 <p>Der Regler geht von 1 bis 15. 8 ist die NVIDIA-Vorgabe und der Startwert hier. Höher schützt Flächen stärker und kann feines Detail etwas mehr opfern. Niedriger lässt Flächen eher banden. Das CQ- oder Bitrate-Ziel bleibt gleich, nur die Verteilung im Bild ändert sich.</p>
                 <p>Wirkt bei NVIDIA und bei CPU-H.264 sowie CPU-HEVC. Temporal AQ bleibt bei NVIDIA aus, damit es sich nicht mit Spatial AQ widerspricht. Realfilm auf HEVC und AV1 nutzt den UHQ-Tune (Lookahead und Temporalfilter). Anime bleibt bei HQ ohne diesen Filter. Wie viele B-Frames gesetzt werden, steht unter B-Frames.</p>
+                <p>Tune steht auf der Encode-Seite und im VMAF-Vergleich: Automatisch, UHQ, HQ oder Aus. Automatisch ist das bisherige Verhalten. Aus lässt den Tune weg, wie vor v7. Ein explizites Aus gilt auch bei Anime.</p>
                 <p>Bei CPU-H.264 und CPU-HEVC ist 8 die Encoder-Vorgabe und entspricht der Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. SVT, VP9 und die übrigen Hardware-Encoder ignorieren den Regler.</p>
               </div>
             </details>
@@ -3089,6 +3125,7 @@
       multiMedia: {{ multi_media|tojson }},
       defaultOutput: {{ default_output|tojson }},
       encoderSpeed: {{ encoder_speed|tojson }},
+      imageChannel: {{ image_channel|tojson }},
       vmafP1Gap: {{ vmaf_p1_gap|tojson }},
       vmafP1Anchor: {{ vmaf_p1_anchor|tojson }},
       vmafTarget: {{ vmaf_target|tojson }},

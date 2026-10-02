@@ -1394,6 +1394,23 @@ input[type="range"]::-moz-range-thumb {
 .compare-encoders input { accent-color: var(--accent); }
 .compare-encoders .empty { color: var(--text-muted); font-size: 12px; }
 
+.vt-enc-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.vt-enc-row .vt-row-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+#vt-add-row { margin-top: 8px; }
+
 /* Kompakte Format-/Container-Auswahl (Super-Tool) als Pills nebeneinander */
 .fmt-checks { display: flex; flex-wrap: wrap; gap: 8px; }
 .fmt-checks label {
@@ -1823,7 +1840,8 @@ input[type="range"]::-moz-range-thumb {
   .source-card .browser { max-height: 300px; min-height: 0; }
   .settings-grid,
   .settings-grid-3,
-  #audio-encode-opts .settings-grid { grid-template-columns: 1fr; }
+  #audio-encode-opts .settings-grid,
+  .vt-enc-row { grid-template-columns: 1fr; }
 }
 
 /* scrollbar */

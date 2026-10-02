@@ -104,11 +104,11 @@ matching FFmpeg encoder:
 - The Intel backend is switchable via `INTEL_ENCODER` (`vaapi` = default, `qsv`).
 - If an encoder is missing from the FFmpeg build, the job is rejected with a clear
   error (instead of failing silently) and available encoders are listed.
-- In the **VMAF Tool**, multiple encoders/codecs can be compared at once;
+- In the **VMAF Tool**, multiple encoders can be compared at once.
+  Shared settings (rate mode, samples, test values, clip length, screenshots,
+  anime, two-pass) apply to every row. Each row has its own platform, codec,
+  speed, B-frames, AQ and keyframe interval. Further rows are added with **+**.
   CQ test values are shifted per codec into a comparable quality range.
-  The same base encoder can also be run again with only a different speed
-  preset or only a different B-frame mode. Those extra runs are not crossed
-  with each other.
 - **VP9 is CPU-only.** A GPU platform is switched to CPU for that job. Speed
   maps to `-cpu-used` (balanced = 2). Typical CRF is about 30–35; the slider
   still uses the same 10–51 scale. Default container is MKV.
@@ -125,7 +125,9 @@ matching FFmpeg encoder:
   CQ mode uses `-multipass qres`. Bitrate mode uses `-multipass fullres`
   only when two-pass is on. Film on HEVC and AV1 uses `-tune uhq` when the
   binary and the GPU accept it; anime stays on `-tune hq` without the
-  temporal filter. **latest-legacy** never sends `hierarchical`; Deep falls
+  temporal filter. The encode form can force HQ, UHQ, or omit the tune
+  (`off`). Automatic is the previous behavior, and an explicit off is
+  honored even for anime. **latest-legacy** never sends `hierarchical`; Deep falls
   back to four B-frames. 4K HEVC/AV1 adds `-split_encode_mode forced` when
   the GPU is known to have two or more NVENC engines. A rejected flag is
   dropped and the encode still starts. The player does not use this set.

@@ -639,6 +639,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
     samples = max(1, min(5, int(cfg.get("samples") or 3)))
     anime = bool(cfg.get("anime"))
     b_frames = ff.normalize_b_frames(cfg.get("b_frames", "auto"))
+    nvenc_tune = ff.normalize_nvenc_tune(cfg.get("nvenc_tune", "auto"))
     try:
         aq_strength = max(1, min(15, int(cfg.get("aq_strength") or 8)))
     except (TypeError, ValueError):
@@ -721,6 +722,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 opts=opts,
                 encoder_speed=speed,
                 b_frames=b_frames,
+                nvenc_tune=nvenc_tune,
                 aq_strength=aq_strength,
                 keyint_sec=keyint_sec,
                 cancelled=lambda: _cancel.is_set(),

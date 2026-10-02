@@ -907,6 +907,13 @@ def _nvenc_engine_count() -> int:
     return count
 
 
+def normalize_nvenc_tune(value) -> str:
+    """auto | off | hq | uhq. Unbekanntes wird auto."""
+    v = str(value or "auto").strip().lower()
+    v = {"aus": "off", "none": "off", "0": "off"}.get(v, v)
+    return v if v in ("auto", "off", "hq", "uhq") else "auto"
+
+
 def nvenc_archive_args(
     enc: str,
     aq_strength: int = 8,
@@ -918,6 +925,7 @@ def nvenc_archive_args(
     engines: Optional[int] = None,
     b_frames: str = "auto",
     rate_mode: str = "cq",
+    tune: str = "auto",
 ) -> list[str]:
     """Archiv-NVENC: AQ, Tune, B-Frames, Split.
 
@@ -928,8 +936,9 @@ def nvenc_archive_args(
     zwei B-Frames (Lookahead 29) und bei CQ die Pyramide der Linie (latest-AV1
     sieben hierarchisch, sonst vier). Tief fällt auf mittel zurück, wenn die
     Karte oder die Linie keine hierarchische AV1-Pyramide hat.
-    Realfilm auf HEVC/AV1 probiert ``-tune uhq`` (Lookahead und Temporalfilter).
-    Anime bleibt bei ``hq`` ohne Temporalfilter. 4K-HEVC/AV1 setzt
+    Realfilm auf HEVC/AV1 probiert bei ``tune=auto`` ``-tune uhq``.
+    ``off`` lässt den Tune weg. ``hq`` und ``uhq`` setzen die Stufe fest.
+    Anime bleibt bei ``auto`` und ``uhq`` auf ``hq``. 4K-HEVC/AV1 setzt
     ``-split_encode_mode forced``, wenn mindestens zwei NVENC-Engines bekannt sind.
     ``weighted_pred`` bleibt aus, es verträgt sich nicht mit B-Frames.
     """
@@ -964,12 +973,18 @@ def nvenc_archive_args(
     if "-bf" in chosen:
         bf = int(chosen[chosen.index("-bf") + 1])
 
+    want = normalize_nvenc_tune(tune)
+    if anime and want in ("auto", "uhq"):
+        want = "hq"
+    elif want == "auto":
+        want = "uhq" if enc in ("hevc_nvenc", "av1_nvenc") else "hq"
+
     uhq_on = False
-    if not anime and enc in ("hevc_nvenc", "av1_nvenc") and has("uhq"):
+    if want == "uhq" and enc in ("hevc_nvenc", "av1_nvenc") and has("uhq"):
         if _nvenc_accepts(enc, chosen + ["-tune", "uhq"]):
             chosen += ["-tune", "uhq"]
             uhq_on = True
-    if not anime and not uhq_on and bf >= 4 and has("tf_level"):
+    if want == "uhq" and not uhq_on and bf >= 4 and has("tf_level"):
         if _nvenc_accepts(enc, chosen + ["-tf_level", "4"]):
             chosen += ["-tf_level", "4"]
 
@@ -984,7 +999,7 @@ def nvenc_archive_args(
     if "-tune" in chosen:
         i = chosen.index("-tune")
         args += [chosen[i], chosen[i + 1]]
-    else:
+    elif want != "off":
         args += ["-tune", "hq"]
     args += nvenc_quality_args(enc, aq_strength, lookahead=max(0, 31 - bf))
     for flag in ("-bf", "-b_ref_mode", "-tf_level", "-split_encode_mode"):

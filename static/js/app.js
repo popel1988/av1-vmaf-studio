@@ -1410,7 +1410,6 @@
       if ($("vt-codec")) vtUpdateCodecAvailability();
       if ($("st-codec")) stUpdateCodec();
       if ($("eb-codec")) ebUpdateCodec();
-      buildCompareOptions();
     } catch (e) { /* still: UI fällt auf Build-Verfügbarkeit zurück */ }
   }
 
@@ -1451,85 +1450,131 @@
     return COMPARE_LABELS[v] || v;
   }
 
-  // Zeigt ALLE verfügbaren Encoder-Kombinationen (Plattform × Codec) als
-  // Vergleichsziele im VMAF-Tool an – außer dem gewählten Basis-Encoder.
-  function buildCompareOptions() {
-    const cont = $("vt-compare");
-    if (!cont) return;
-    const base = `${$("vt-platform").value}:${$("vt-codec").value}`;
-    const prev = new Set(getCompareEncoders());
-    const all = encoderMatrix().filter((e) =>
-      isEncoderAvailable(e.platform, e.codec) && e.value !== base);
-    if (!all.length) {
-      cont.innerHTML = '<span class="empty">Keine weiteren Encoder verfügbar.</span>';
-      return;
-    }
-    // Nach Art gruppieren: GPU-Encoder zuerst, dann CPU (Software).
-    const groups = [
-      { key: "gpu", title: "GPU / Hardware" },
-      { key: "cpu", title: "CPU / Software" },
-    ];
-    cont.innerHTML = groups.map((g) => {
-      const items = all.filter((e) => e.kind === g.key);
-      if (!items.length) return "";
-      return `<div class="cmp-group"><span class="cmp-title">${g.title}</span>` +
-        items.map((e) =>
-          `<label><input type="checkbox" class="compare-enc" value="${e.value}" ` +
-          `${prev.has(e.value) ? "checked" : ""}/>` +
-          `<span>${escapeHtml(compareLabel(e.value, e))}</span></label>`
-        ).join("") + `</div>`;
-    }).join("");
+  const VT_EXTRA_MAX = 6;
+  let vtRowSeq = 0;
+
+  function vtCloneOptions(fromId, toSelect) {
+    const from = $(fromId);
+    if (!from || !toSelect) return;
+    toSelect.innerHTML = from.innerHTML;
   }
 
-  function getCompareEncoders() {
-    return [...document.querySelectorAll(".compare-enc:checked")].map((b) => b.value);
+  function refreshVtAddButton() {
+    const btn = $("vt-add-row");
+    if (!btn) return;
+    const n = document.querySelectorAll("#vt-extra-rows .vt-enc-row").length;
+    btn.disabled = n >= VT_EXTRA_MAX;
+    btn.title = n >= VT_EXTRA_MAX ? "Höchstens sechs zusätzliche Vergleiche." : "";
   }
 
-  function buildVariantOptions() {
-    const bfBox = $("vt-var-bf");
-    const spBox = $("vt-var-speed");
-    if (!bfBox || !spBox) return;
-    const plat = $("vt-platform").value;
-    const codec = $("vt-codec").value;
-    const curBf = ($("vt-b-frames") && $("vt-b-frames").value) || "auto";
-    const curSp = ($("vt-enc-speed") && $("vt-enc-speed").value) || "";
-    const prevBf = new Set([...bfBox.querySelectorAll(".vt-var-bf:checked")].map((b) => b.value));
-    const prevSp = new Set([...spBox.querySelectorAll(".vt-var-speed:checked")].map((b) => b.value));
-    const bfChoices = [
-      ["auto", "Automatisch (empfohlen)"],
-      ["off", "Aus, Lookahead 31"],
-      ["short", "Kurz, 2 B-Frames"],
-      ["medium", "Mittel, 4 B-Frames"],
-      ["deep", "Tief, 7 hierarchisch"],
-    ];
-    if (plat !== "nvidia") {
-      bfBox.innerHTML = '<span class="empty">Nur NVIDIA. Die anderen Encoder ignorieren B-Frames.</span>';
-    } else {
-      bfBox.innerHTML = bfChoices.filter(([v]) => v !== curBf).map(([v, label]) =>
-        `<label><input type="checkbox" class="vt-var-bf" value="${v}" ` +
-        `${prevBf.has(v) ? "checked" : ""}/><span>${escapeHtml(label)}</span></label>`
-      ).join("");
-    }
-    const presets = speedPresetsFor(plat, codec).filter((p) => p.value !== curSp);
-    if (!presets.length) {
-      spBox.innerHTML = '<span class="empty">Keine weitere Speed-Stufe.</span>';
-    } else {
-      spBox.innerHTML = presets.map((p) =>
-        `<label><input type="checkbox" class="vt-var-speed" value="${escapeHtml(p.value)}" ` +
-        `${prevSp.has(p.value) ? "checked" : ""}/><span>${escapeHtml(p.label)}</span></label>`
-      ).join("");
-    }
-  }
-
-  function getCompareVariants() {
-    const out = [];
-    document.querySelectorAll(".vt-var-bf:checked").forEach((b) => {
-      out.push({ kind: "b_frames", value: b.value });
+  function renumberVtRows() {
+    document.querySelectorAll("#vt-extra-rows .vt-enc-row").forEach((row, i) => {
+      const title = row.querySelector(".vt-row-title");
+      if (title) title.textContent = "Vergleich " + (i + 2);
     });
-    document.querySelectorAll(".vt-var-speed:checked").forEach((b) => {
-      out.push({ kind: "speed", value: b.value });
+  }
+
+  function syncExtraRow(prefix) {
+    const sel = $(prefix + "-codec");
+    const platEl = $(prefix + "-platform");
+    if (!sel || !platEl) return;
+    const plat = platEl.value;
+    let firstAvail = null;
+    [...sel.options].forEach((opt) => {
+      const ok = isEncoderAvailable(plat, opt.value);
+      opt.disabled = !ok;
+      opt.textContent = (CODEC_LABELS[opt.value] || opt.value.toUpperCase())
+        + (ok ? "" : encUnavailReason(plat, opt.value));
+      if (ok && firstAvail === null) firstAvail = opt.value;
     });
-    return out.slice(0, 12);
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && firstAvail) {
+      sel.value = firstAvail;
+    }
+    fillJobSpeedSelect(prefix + "-enc-speed", prefix + "-platform", prefix + "-codec");
+    syncAqField(prefix);
+  }
+
+  function addVtRow() {
+    const host = $("vt-extra-rows");
+    if (!host) return;
+    if (host.querySelectorAll(".vt-enc-row").length >= VT_EXTRA_MAX) return;
+    const rows = [...host.querySelectorAll(".vt-enc-row")];
+    const src = rows.length ? rows[rows.length - 1].dataset.prefix : "";
+    const srcId = (suffix) => src ? (src + "-" + suffix) : ("vt-" + suffix);
+    vtRowSeq += 1;
+    const prefix = "vtx-" + vtRowSeq;
+    const row = document.createElement("div");
+    row.className = "vt-enc-row";
+    row.dataset.prefix = prefix;
+    row.innerHTML =
+      `<div class="vt-row-head"><span class="vt-row-title"></span>` +
+      `<button type="button" class="btn btn-ghost btn-sm vt-row-remove">Vergleich entfernen</button></div>` +
+      `<div class="field"><label>GPU / Plattform</label><select id="${prefix}-platform"></select></div>` +
+      `<div class="field"><label>Codec</label><select id="${prefix}-codec"></select></div>` +
+      `<div class="field"><label>Encoder-Speed</label><select id="${prefix}-enc-speed"></select>` +
+      `<p class="hint enc-speed-warn" style="display:none"></p></div>` +
+      `<div class="field"><label>B-Frames (NVIDIA)</label><select id="${prefix}-b-frames"></select></div>` +
+      `<div class="field"><label>Tune (NVIDIA)</label><select id="${prefix}-nvenc-tune"></select></div>` +
+      `<div class="field" id="${prefix}-aq-field"><label>AQ-Stärke (NVIDIA): <strong id="${prefix}-aq-val">8</strong></label>` +
+      `<input type="range" id="${prefix}-aq-strength" min="1" max="15" value="8" /></div>` +
+      `<div class="field"><label>Keyframe-Abstand</label><select id="${prefix}-keyint"></select></div>`;
+    host.appendChild(row);
+    vtCloneOptions("vt-platform", $(prefix + "-platform"));
+    vtCloneOptions("vt-codec", $(prefix + "-codec"));
+    vtCloneOptions("vt-b-frames", $(prefix + "-b-frames"));
+    vtCloneOptions("vt-nvenc-tune", $(prefix + "-nvenc-tune"));
+    vtCloneOptions("vt-keyint", $(prefix + "-keyint"));
+    const copyVal = (from, to) => {
+      const a = $(from), b = $(to);
+      if (a && b) b.value = a.value;
+    };
+    copyVal(srcId("platform"), prefix + "-platform");
+    copyVal(srcId("codec"), prefix + "-codec");
+    copyVal(srcId("b-frames"), prefix + "-b-frames");
+    copyVal(srcId("nvenc-tune"), prefix + "-nvenc-tune");
+    copyVal(srcId("keyint"), prefix + "-keyint");
+    const srcAq = $(srcId("aq-strength"));
+    const dstAq = $(prefix + "-aq-strength");
+    if (srcAq && dstAq) {
+      dstAq.value = srcAq.value;
+      const lab = $(prefix + "-aq-val");
+      if (lab) lab.textContent = srcAq.value;
+    }
+    syncExtraRow(prefix);
+    const srcSpeed = $(srcId("enc-speed"));
+    if (srcSpeed) {
+      fillJobSpeedSelect(prefix + "-enc-speed", prefix + "-platform", prefix + "-codec", srcSpeed.value);
+    }
+    $(prefix + "-platform").addEventListener("change", () => syncExtraRow(prefix));
+    $(prefix + "-codec").addEventListener("change", () => syncExtraRow(prefix));
+    $(prefix + "-enc-speed").addEventListener("change", () => refreshEncSpeedWarn($(prefix + "-enc-speed")));
+    dstAq.addEventListener("input", () => {
+      const lab = $(prefix + "-aq-val");
+      if (lab) lab.textContent = dstAq.value;
+    });
+    row.querySelector(".vt-row-remove").addEventListener("click", () => {
+      row.remove();
+      renumberVtRows();
+      refreshVtAddButton();
+    });
+    renumberVtRows();
+    refreshVtAddButton();
+    applyLegacyBFrames(row);
+  }
+
+  function gatherVtRows() {
+    return [...document.querySelectorAll("#vt-extra-rows .vt-enc-row")].slice(0, VT_EXTRA_MAX).map((row) => {
+      const p = row.dataset.prefix;
+      return {
+        platform: $(p + "-platform").value,
+        codec: $(p + "-codec").value,
+        encoder_speed: encoderSpeedValue(p + "-enc-speed"),
+        b_frames: $(p + "-b-frames").value || "auto",
+        nvenc_tune: ($(p + "-nvenc-tune") && $(p + "-nvenc-tune").value) || "auto",
+        aq_strength: parseInt($(p + "-aq-strength").value, 10) || 8,
+        keyint_sec: parseInt($(p + "-keyint").value, 10) || 0,
+      };
+    });
   }
 
   function gatherAudioTracks() {
@@ -1564,6 +1609,7 @@
       deinterlace: $("opt-deinterlace") ? $("opt-deinterlace").value : "auto",
       aq_strength: $("opt-aq-strength") ? parseInt($("opt-aq-strength").value, 10) : 8,
       b_frames: $("opt-b-frames") ? $("opt-b-frames").value : "auto",
+      nvenc_tune: $("opt-nvenc-tune") ? $("opt-nvenc-tune").value : "auto",
       keyint_sec: $("opt-keyint") ? (parseInt($("opt-keyint").value, 10) || 0) : 0,
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
@@ -2011,7 +2057,6 @@
       sel.innerHTML = '<option value="balanced">Kein Speed-Preset (VAAPI)</option>';
       sel.value = "balanced";
       refreshEncSpeedWarn(sel);
-      if (selId === "vt-enc-speed") buildVariantOptions();
       return;
     }
     sel.innerHTML = presets.map((p) =>
@@ -2020,7 +2065,6 @@
       ? want
       : nativeForAlias(platEl.value, codecEl.value, "balanced");
     refreshEncSpeedWarn(sel);
-    if (selId === "vt-enc-speed") buildVariantOptions();
   }
   function refreshAllJobSpeedSelects(preferred) {
     ENC_SPEED_JOB_IDS.forEach(([sid, pid, cid]) => fillJobSpeedSelect(sid, pid, cid, preferred));
@@ -2055,6 +2099,10 @@
     if (row) {
       plat = ($(row[1]) && $(row[1]).value) || "";
       cod = ($(row[2]) && $(row[2]).value) || "";
+    } else if (sel.id.endsWith("-enc-speed")) {
+      const prefix = sel.id.slice(0, -"-enc-speed".length);
+      plat = ($(prefix + "-platform") && $(prefix + "-platform").value) || "";
+      cod = ($(prefix + "-codec") && $(prefix + "-codec").value) || "";
     }
     const t = encSpeedWarnText(sel.value, plat, cod);
     warn.textContent = t;
@@ -2086,6 +2134,23 @@
     if (window.APP_CONFIG) APP_CONFIG.encoderSpeed = v;
   }
 
+  function applyLegacyBFrames(root) {
+    if (!window.APP_CONFIG || APP_CONFIG.imageChannel !== "legacy") return;
+    const scope = root && root.querySelectorAll ? root : document;
+    const selects = scope.id && String(scope.id).endsWith("b-frames")
+      ? [scope]
+      : [...scope.querySelectorAll('select[id$="b-frames"]')];
+    selects.forEach((sel) => {
+      const opt = [...sel.options].find((o) => o.value === "deep");
+      if (!opt) return;
+      opt.disabled = true;
+      opt.textContent = "Tief, 7 hierarchisch (Legacy: nur bis 4)";
+      if (sel.value === "deep") sel.value = "medium";
+    });
+    const note = $("bf-legacy-note");
+    if (note) note.hidden = false;
+  }
+
   function initEncoderSpeed() {
     ENC_SPEED_IDS.forEach((id) => {
       const el = $(id);
@@ -2108,6 +2173,7 @@
     });
     const saved = (window.APP_CONFIG && APP_CONFIG.encoderSpeed) || "balanced";
     applyEncoderSpeed(saved);
+    applyLegacyBFrames();
     fetch("/api/settings").then((r) => r.json()).then((d) => {
       if (d && d.encoder_speed) applyEncoderSpeed(d.encoder_speed);
     }).catch(() => {});
@@ -2514,6 +2580,7 @@
           values,
           platform, codec,
           b_frames: ($("eb-b-frames") && $("eb-b-frames").value) || "auto",
+          nvenc_tune: ($("eb-nvenc-tune") && $("eb-nvenc-tune").value) || "auto",
           aq_strength: ($("eb-aq-strength") && parseInt($("eb-aq-strength").value, 10)) || 8,
           keyint_sec: ($("eb-keyint") && parseInt($("eb-keyint").value, 10)) || 0,
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
@@ -2850,19 +2917,14 @@
 
     $("vt-platform").addEventListener("change", () => {
       vtUpdateCodecAvailability();
-      buildCompareOptions();
     });
     $("vt-codec").addEventListener("change", () => {
       vtUpdateCodecAvailability();
-      buildCompareOptions();
     });
     vtUpdateCodecAvailability();
-    buildCompareOptions();
-    const vtBf = $("vt-b-frames");
-    if (vtBf) vtBf.addEventListener("change", buildVariantOptions);
-    const vtSp = $("vt-enc-speed");
-    if (vtSp) vtSp.addEventListener("change", buildVariantOptions);
-    buildVariantOptions();
+    const addRow = $("vt-add-row");
+    if (addRow) addRow.addEventListener("click", addVtRow);
+    refreshVtAddButton();
 
     $("btn-vmaf-start").addEventListener("click", vtEnqueue);
   }
@@ -2923,7 +2985,6 @@
       vmaf_check: true,
       workflow: "compare_only",
       rate_mode: $("vt-rate-mode").value,
-      compare_encoders: getCompareEncoders(),
       test_values: vtGatherTestValues(),
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
@@ -2936,9 +2997,10 @@
       ...gatherOutputCommon(),
       anime: $("vt-anime") ? $("vt-anime").checked : false,
       b_frames: ($("vt-b-frames") && $("vt-b-frames").value) || "auto",
+      nvenc_tune: ($("vt-nvenc-tune") && $("vt-nvenc-tune").value) || "auto",
       aq_strength: $("vt-aq-strength") ? parseInt($("vt-aq-strength").value, 10) : 8,
       keyint_sec: $("vt-keyint") ? (parseInt($("vt-keyint").value, 10) || 0) : 0,
-      compare_variants: getCompareVariants(),
+      compare_rows: gatherVtRows(),
     };
   }
 
@@ -3023,12 +3085,20 @@
     updateCodecAvailability();
     if (r.encoder_speed) setSel("opt-enc-speed", r.encoder_speed);
     setSel("opt-b-frames", r.b_frames || (($("vt-b-frames") && $("vt-b-frames").value) || "auto"));
-    setSel("opt-keyint", ($("vt-keyint") && $("vt-keyint").value) || "0");
-    const vtAq = $("vt-aq-strength");
-    if (vtAq) {
-      setSel("opt-aq-strength", vtAq.value);
+    applyLegacyBFrames($("opt-b-frames"));
+    setSel("opt-nvenc-tune", r.nvenc_tune || (($("vt-nvenc-tune") && $("vt-nvenc-tune").value) || "auto"));
+    if (Object.prototype.hasOwnProperty.call(r, "keyint_sec")) {
+      setSel("opt-keyint", r.keyint_sec);
+    } else {
+      setSel("opt-keyint", ($("vt-keyint") && $("vt-keyint").value) || "0");
+    }
+    const aq = Object.prototype.hasOwnProperty.call(r, "aq_strength") && r.aq_strength
+      ? r.aq_strength
+      : ($("vt-aq-strength") && $("vt-aq-strength").value);
+    if (aq) {
+      setSel("opt-aq-strength", aq);
       const lab = $("aq-strength-val");
-      if (lab) lab.textContent = vtAq.value;
+      if (lab) lab.textContent = aq;
     }
   }
 
@@ -4934,19 +5004,29 @@
       (x.platform || "") === (r.platform || "") && (x.codec || "") === (r.codec || ""));
     const speeds = new Set(same.map((x) => x.encoder_speed || ""));
     const bfs = new Set(same.map((x) => x.b_frames || ""));
+    const aqs = new Set(same.map((x) => String(x.aq_strength ?? "")));
+    const kis = new Set(same.map((x) => String(x.keyint_sec ?? "")));
+    const tunes = new Set(same.map((x) => x.nvenc_tune || ""));
     const tags = {
       auto: "Automatisch", off: "Aus", short: "Kurz", medium: "Mittel", deep: "Tief",
+    };
+    const tuneTags = {
+      auto: "Tune automatisch", off: "Tune aus", hq: "HQ", uhq: "UHQ",
     };
     const extra = [];
     if (speeds.size > 1 && r.encoder_speed) extra.push(r.encoder_speed);
     if (bfs.size > 1 && r.b_frames) extra.push(tags[r.b_frames] || r.b_frames);
+    if (tunes.size > 1 && r.nvenc_tune) extra.push(tt(tuneTags[r.nvenc_tune] || r.nvenc_tune));
+    if (aqs.size > 1 && r.aq_strength) extra.push("AQ " + r.aq_strength);
+    if (kis.size > 1) extra.push(r.keyint_sec ? (r.keyint_sec + " s") : "Keyframe automatisch");
     return extra.length ? `${base} · ${extra.join(" · ")}` : base;
   }
 
   function resultHasSettingVariants(results) {
     const rows = results || [];
     const keys = new Set(rows.map((r) =>
-      [r.platform, r.codec, r.encoder_speed || "", r.b_frames || ""].join("|")));
+      [r.platform, r.codec, r.encoder_speed || "", r.b_frames || "",
+       r.nvenc_tune || "", r.aq_strength || "", r.keyint_sec || ""].join("|")));
     const pcs = new Set(rows.map((r) => [r.platform, r.codec].join("|")));
     return keys.size > pcs.size;
   }
@@ -5990,6 +6070,8 @@
       if (lab) lab.textContent = String(s.aq_strength);
     }
     if (s.b_frames) set("opt-b-frames", s.b_frames);
+    applyLegacyBFrames($("opt-b-frames"));
+    if (s.nvenc_tune) set("opt-nvenc-tune", s.nvenc_tune);
     if (s.keyint_sec !== undefined && s.keyint_sec !== null) {
       set("opt-keyint", String(s.keyint_sec));
     }
@@ -8204,6 +8286,7 @@
       encoder_speed: encoderSpeedValue("st-enc-speed"),
       aq_strength: $("st-aq-strength") ? parseInt($("st-aq-strength").value, 10) : 8,
       b_frames: ($("st-b-frames") && $("st-b-frames").value) || "auto",
+      nvenc_tune: ($("st-nvenc-tune") && $("st-nvenc-tune").value) || "auto",
       keyint_sec: $("st-keyint") ? (parseInt($("st-keyint").value, 10) || 0) : 0,
       post_processing: $("st-post").value,
       audio_mode: $("st-audio-mode").value,

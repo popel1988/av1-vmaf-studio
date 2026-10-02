@@ -228,6 +228,7 @@ def build_encode_cmd(
     encoder_speed: str = "balanced",
     b_frames: str = "auto",
     keyint_sec: int = 0,
+    nvenc_tune: str = "auto",
     mobile: Optional[dict] = None,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
@@ -338,7 +339,8 @@ def build_encode_cmd(
         cmd += ff.nvenc_archive_args(
             enc, aq_strength, anime=bool(force_10bit),
             width=out_w, height=out_h, multipass="qres",
-            b_frames=b_frames, rate_mode=rate_mode)
+            b_frames=b_frames, rate_mode=rate_mode,
+            tune=nvenc_tune)
     elif "nvenc" in enc:
         out_w, out_h = ff.scaled_frame_size(info.width, info.height, target_height)
         cmd += ff.encoder_preset_args(enc, encoder_speed)
@@ -346,7 +348,8 @@ def build_encode_cmd(
             enc, aq_strength, anime=bool(force_10bit),
             width=out_w, height=out_h,
             multipass="fullres" if two_pass else None,
-            b_frames=b_frames, rate_mode=rate_mode)
+            b_frames=b_frames, rate_mode=rate_mode,
+            tune=nvenc_tune)
     elif "qsv" in enc:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
 

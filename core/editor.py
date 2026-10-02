@@ -481,6 +481,7 @@ def build_editor_encode_cmd(
     b_frames: str = "auto",
     keyint_sec: int = 0,
     aq_strength: int = 8,
+    nvenc_tune: str = "auto",
 ) -> tuple[list, str]:
     """Re-Encode-Export: trim/atrim je Segment, optional xfade, dann concat."""
     if not segments:
@@ -690,7 +691,7 @@ def build_editor_encode_cmd(
         cmd += ff.nvenc_archive_args(
             enc, aq_strength, width=int(tw or 0), height=int(th or 0),
             multipass=None if rm in ("bitrate", "abr") else "qres",
-            b_frames=b_frames, rate_mode=rm)
+            b_frames=b_frames, rate_mode=rm, tune=nvenc_tune)
     ff.apply_cpu_aq(cmd, enc, aq_strength)
     cmd += ff.gop_args(float(tfps or 0), keyint_sec)
 

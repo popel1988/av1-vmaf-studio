@@ -234,6 +234,7 @@ async def index(request: Request):
             "multi_media": config.MULTI_MEDIA,
             "default_output": app_settings.default_output_rel(),
             "encoder_speed": app_settings.encoder_speed(),
+            "image_channel": config.IMAGE_CHANNEL,
             "vmaf_p1_gap": app_settings.vmaf_p1_gap(),
             "vmaf_p1_anchor": app_settings.vmaf_p1_anchor(),
             "vmaf_target": app_settings.vmaf_target(),
@@ -564,6 +565,7 @@ class EnqueueRequest(BaseModel):
     deinterlace: str = "auto"       # auto | on | off
     aq_strength: int = 8
     b_frames: str = "auto"           # NVENC: auto | off | short | medium | deep
+    nvenc_tune: str = "auto"         # NVENC: auto | off | hq | uhq
     keyint_sec: int = 0              # 0 = Encoder-Vorgabe, sonst 2, 5 oder 10 Sekunden
     two_pass: bool = False
     mobile_copy: bool = False        # zweite Ausgabe: H.264 MP4 fürs Handy, gleicher Decode
@@ -583,7 +585,8 @@ class EnqueueRequest(BaseModel):
     target_vmaf: float = 0.0         # >0: Ziel-VMAF (Super-Tool)
     rate_mode: str = "cq"            # cq | bitrate | abr
     compare_encoders: list[str] = []  # zusätzliche "plattform:codec"-Vergleiche
-    compare_variants: list[dict] = []  # Basis-Encoder, je Eintrag nur Speed oder B-Frames
+    compare_variants: list[dict] = []  # alte Ein-Achsen-Varianten
+    compare_rows: list[dict] = []  # volle Zusatzzeilen im VMAF-Vergleich
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     samples: int = 1
@@ -934,6 +937,7 @@ class EditorEnqueueRequest(BaseModel):
     post_processing: str = "keep"
     encoder_speed: str = "balanced"
     b_frames: str = "auto"
+    nvenc_tune: str = "auto"
     keyint_sec: int = 0
     aq_strength: int = 8
     segments: list[dict] = []
@@ -1137,6 +1141,7 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "audio_bitrate": int(req.audio_bitrate or 192),
         "audio_channels": a_channels,
         "b_frames": req.b_frames or "auto",
+        "nvenc_tune": req.nvenc_tune or "auto",
         "keyint_sec": int(req.keyint_sec or 0),
         "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         "edit_spec": {
@@ -1158,6 +1163,7 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "crossfade": float(req.crossfade or 0),
             "encoder_speed": req.encoder_speed or "balanced",
             "b_frames": req.b_frames or "auto",
+            "nvenc_tune": req.nvenc_tune or "auto",
             "keyint_sec": int(req.keyint_sec or 0),
             "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         },
@@ -2659,6 +2665,7 @@ class EncoderBenchStartRequest(BaseModel):
     platform: str = "cpu"
     codec: str = "av1"
     b_frames: str = "auto"
+    nvenc_tune: str = "auto"
     aq_strength: int = 8
     keyint_sec: int = 0
     clip_seconds: int = 12

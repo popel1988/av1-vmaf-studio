@@ -59,6 +59,7 @@ class JobSettings:
     aq_strength: int = 8             # 1–15. NVIDIA direkt, x264/x265 als Stärke/8 (8 = 1,0)
     # NVENC-B-Frames: auto | off | short | medium | deep
     b_frames: str = "auto"
+    nvenc_tune: str = "auto"         # auto | off | hq | uhq
     keyint_sec: int = 0              # 0 = Encoder-Vorgabe, sonst 2/5/10 Sekunden
     two_pass: bool = False           # Zwei-Pass (nur Bitraten-Modus sinnvoll)
     # Zweite Ausgabe aus demselben Decode: H.264 MP4 fürs Handy (0 = aus).
@@ -96,6 +97,8 @@ class JobSettings:
     compare_encoders: list = field(default_factory=list)
     # Zusätzliche Läufe nur des Basis-Encoders: {"kind","value"}.
     compare_variants: list = field(default_factory=list)
+    # Volle Zusatzzeilen des VMAF-Vergleichs.
+    compare_rows: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
@@ -914,6 +917,7 @@ class QueueManager:
                 params=asdict(s),
                 encoders=_parse_encoders(s.compare_encoders),
                 variants=list(getattr(s, "compare_variants", None) or []),
+                rows=list(getattr(s, "compare_rows", None) or []),
                 target_vmaf=s.target_vmaf,
                 anime=s.anime,
                 refine_midpoint=s.workflow != "compare_only",
@@ -930,6 +934,7 @@ class QueueManager:
                 encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
                 b_frames=getattr(s, "b_frames", "auto") or "auto",
                 keyint_sec=getattr(s, "keyint_sec", 0) or 0,
+                nvenc_tune=getattr(s, "nvenc_tune", "auto") or "auto",
                 opts=vmaf_opts,
                 status=lambda m: setattr(item, "message", m),
                 cancelled=lambda: item.id in self._cancel_ids,
@@ -1149,6 +1154,7 @@ class QueueManager:
             "deinterlace": s.deinterlace,
             "aq_strength": s.aq_strength,
             "b_frames": getattr(s, "b_frames", "auto") or "auto",
+            "nvenc_tune": getattr(s, "nvenc_tune", "auto") or "auto",
             "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
             "force_10bit": s.anime,
             "crop": item.crop,
@@ -1416,6 +1422,7 @@ class QueueManager:
                 container=spec.get("container") or s.container or "mkv",
                 encoder_speed=spec.get("encoder_speed") or getattr(s, "encoder_speed", "balanced") or "balanced",
                 b_frames=spec.get("b_frames") or getattr(s, "b_frames", "auto") or "auto",
+                nvenc_tune=spec.get("nvenc_tune") or getattr(s, "nvenc_tune", "auto") or "auto",
                 keyint_sec=ff.normalize_keyint_sec(
                     spec.get("keyint_sec", getattr(s, "keyint_sec", 0))),
                 aq_strength=max(1, min(15, int(
@@ -1553,6 +1560,7 @@ class QueueManager:
             "crop": item.crop,
             "encoder_speed": getattr(s, "encoder_speed", "balanced") or "balanced",
             "b_frames": getattr(s, "b_frames", "auto") or "auto",
+            "nvenc_tune": getattr(s, "nvenc_tune", "auto") or "auto",
             "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
         }
         mobile_path = _mobile_output_path(item, out_path)
@@ -1993,6 +2001,7 @@ def build_job_settings(d: dict) -> JobSettings:
         deinterlace=_deint(d.get("deinterlace", "auto")),
         aq_strength=max(1, min(15, int(d.get("aq_strength", 8) or 8))),
         b_frames=ff.normalize_b_frames(d.get("b_frames", "auto")),
+        nvenc_tune=ff.normalize_nvenc_tune(d.get("nvenc_tune", "auto")),
         keyint_sec=ff.normalize_keyint_sec(d.get("keyint_sec", 0)),
         two_pass=bool(d.get("two_pass", False)),
         mobile_copy=bool(d.get("mobile_copy", False)),
@@ -2016,6 +2025,7 @@ def build_job_settings(d: dict) -> JobSettings:
         rate_mode=d.get("rate_mode", "cq"),
         compare_encoders=list(d.get("compare_encoders", [])),
         compare_variants=_parse_variants(d.get("compare_variants")),
+        compare_rows=_parse_rows(d.get("compare_rows")),
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
@@ -2052,6 +2062,40 @@ def _session_name(item: QueueItem) -> str:
     stem = Path(item.title).stem
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:60] or "clip"
     return f"{safe}_{item.id[:6]}"
+
+
+def _parse_rows(entries) -> list:
+    """Volle Vergleichszeilen. Höchstens sechs, ohne Dubletten."""
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for raw in entries or []:
+        if not isinstance(raw, dict):
+            continue
+        p = str(raw.get("platform") or "")
+        c = str(raw.get("codec") or "")
+        if p not in _VALID_PLATFORMS or c not in _VALID_CODECS:
+            continue
+        sp = ff.normalize_encoder_speed(raw.get("encoder_speed") or raw.get("speed"))
+        bf = ff.normalize_b_frames(raw.get("b_frames"))
+        try:
+            aq = int(raw.get("aq_strength", 8) or 8)
+        except (TypeError, ValueError):
+            aq = 8
+        aq = max(1, min(15, aq))
+        ki = ff.normalize_keyint_sec(raw.get("keyint_sec"))
+        tune = ff.normalize_nvenc_tune(raw.get("nvenc_tune", "auto"))
+        item = (p, c, sp, bf, aq, ki, tune)
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append({
+            "platform": p, "codec": c, "encoder_speed": sp,
+            "b_frames": bf, "aq_strength": aq, "keyint_sec": ki,
+            "nvenc_tune": tune,
+        })
+        if len(out) >= 6:
+            break
+    return out
 
 
 def _parse_variants(entries) -> list:
@@ -2254,7 +2298,8 @@ def _log_job_start(item: "QueueItem", info, out_path: Path, kind: str = "Encode"
                 enc_name, aq, anime=bool(s.anime),
                 width=fw, height=fh, multipass=mp,
                 b_frames=getattr(s, "b_frames", "auto") or "auto",
-                rate_mode=s.rate_mode)
+                rate_mode=s.rate_mode,
+                tune=getattr(s, "nvenc_tune", "auto") or "auto")
             lines.append("    NVENC          : " + " ".join(nv))
         elif s.platform == "cpu" and s.codec in ("h264", "hevc"):
             aq = max(1, min(15, int(getattr(s, "aq_strength", 8) or 8)))
