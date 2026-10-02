@@ -131,6 +131,17 @@ def resolve_input(rel: str) -> Optional[Path]:
     ``upload:<filename>`` verweist auf eine Datei im Upload-Ordner.
     """
     raw = (rel or "").strip()
+    if raw:
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            try:
+                target = candidate.resolve()
+            except OSError:
+                return None
+            for _, base in MEDIA_ROOTS:
+                if _within(target, base.resolve()):
+                    return target
+            return None
     if raw.startswith("upload:"):
         name = raw[len("upload:"):].strip().replace("\\", "/")
         if "/" in name or name in ("", ".", ".."):

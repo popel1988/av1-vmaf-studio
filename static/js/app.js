@@ -3933,9 +3933,20 @@
       if (s && s.ref && !refSrc) refSrc = s.ref;
     });
 
+    let sceneStart = 0;
+    let sceneLen = 0;
+    results.forEach((x) => {
+      const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
+      if (!s || s.start == null) return;
+      sceneStart = Number(s.start) || 0;
+      sceneLen = Number(s.length) || sceneLen;
+    });
     const tiles = [];
     if (refSrc)
-      tiles.push({ src: refSrc, label: "Original", sub: `Szene ${sc + 1}`, ref: true });
+      tiles.push({
+        src: refSrc, label: "Original", sub: `Szene ${sc + 1}`, ref: true,
+        start: sceneStart, len: sceneLen,
+      });
     results.forEach((x) => {
       const s = x.shots.find((sh) => sh.scene === sc);
       if (s && s.enc) {
@@ -3956,6 +3967,7 @@
           sub: bits.join(" · "),
           recommended: x.r.recommended,
           clip: (grid === $("vmaf-screenshots") && s.clip) ? s.clip : "",
+          start: sceneStart, len: sceneLen,
         });
       }
     });
@@ -3977,13 +3989,16 @@
         ${groupTabs}${sceneTabs}
         <span class="shot-hint">Bilder ankreuzen und vergleichen – oder anklicken zum Vergrößern.</span>
         <button class="btn small shot-compare" disabled>Auswahl vergleichen</button>
+        ${grid === $("vmaf-screenshots") ? `<button class="btn small shot-ab" disabled title="Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.">Im A/B abspielen</button>` : ""}
       </div>
       <div class="shot-gallery">
         ${tiles.map((t) => {
           const cap = `${t.label} · ${t.sub}`;
           return `
           <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""}"
-               data-src="${t.src}" data-cap="${escapeHtml(cap)}">
+               data-src="${t.src}" data-cap="${escapeHtml(cap)}"
+               data-kind="${t.ref ? "ref" : "enc"}" data-clip="${escapeHtml(t.clip || "")}"
+               data-start="${Number(t.start) || 0}" data-len="${Number(t.len) || 0}">
             <label class="shot-check" title="Für Vergleich auswählen">
               <input type="checkbox" ${t.ref ? "checked" : ""} />
             </label>
@@ -4011,13 +4026,26 @@
       }));
 
     const cmpBtn = grid.querySelector(".shot-compare");
+    const abBtn = grid.querySelector(".shot-ab");
     const selected = () => [...grid.querySelectorAll(".shot-tile")]
       .filter((t) => t.querySelector(".shot-check input").checked)
-      .map((t) => ({ src: t.dataset.src, label: t.dataset.cap }));
+      .map((t) => ({
+        src: t.dataset.src,
+        label: t.dataset.cap,
+        kind: t.dataset.kind || "",
+        clip: t.dataset.clip || "",
+        start: Number(t.dataset.start) || 0,
+        len: Number(t.dataset.len) || 0,
+      }));
     const updateCmp = () => {
-      const n = selected().length;
+      const picks = selected();
+      const n = picks.length;
       cmpBtn.disabled = n < 1;
       cmpBtn.textContent = n > 0 ? `Auswahl vergleichen (${n})` : "Auswahl vergleichen";
+      if (!abBtn) return;
+      const why = clipAbBlock(picks);
+      abBtn.disabled = !!why;
+      abBtn.title = why ? tt(why) : "";
     };
     grid.querySelectorAll(".shot-check input").forEach((c) => {
       c.addEventListener("click", (e) => e.stopPropagation());
@@ -4026,6 +4054,10 @@
     cmpBtn.addEventListener("click", () => {
       const items = selected();
       if (items.length) openGallery(items);
+    });
+    if (abBtn) abBtn.addEventListener("click", () => {
+      const picks = selected();
+      if (!clipAbBlock(picks)) openClipAb(picks);
     });
     grid.querySelectorAll(".shot-tile img").forEach((img) =>
       img.addEventListener("click", () => {
@@ -4534,7 +4566,7 @@
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
     drawFrameChart(vmaf);
-    loadSceneBitrate(vmaf).then(() => {
+    Promise.all([loadSceneBitrate(vmaf), loadSourceBitrate(vmaf)]).then(() => {
       if (state.vmafShown !== vmaf) return;
       drawFrameChart(vmaf);
       if (state.vmafNerd && state.nerdData) drawNerdFrames(state.nerdData);
@@ -4811,6 +4843,50 @@
     return Promise.all(jobs);
   }
 
+  function sourceBinsFor(scene) {
+    const pack = state.sourceBr;
+    if (!pack || pack.session !== state.vmafSession || pack.scene !== scene) return [];
+    return pack.bins || [];
+  }
+
+  function loadSourceBitrate(vmaf) {
+    const session = state.vmafSession;
+    const scenes = vmaf ? vmafSceneList(vmaf) : [];
+    const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? null);
+    if (!session || scene == null) return Promise.resolve();
+    const key = session + ":" + scene;
+    if (state.sourceBr && state.sourceBr.key === key) return Promise.resolve();
+    return fetch(`/api/vmaf/source-bitrate?session=${encodeURIComponent(session)}&scene=${scene}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (state.vmafSession !== session) return;
+        state.sourceBr = {
+          key, session, scene,
+          bins: (data && data.bins) || [],
+        };
+      })
+      .catch(() => {
+        if (state.vmafSession !== session) return;
+        state.sourceBr = { key, session, scene, bins: [] };
+      });
+  }
+
+  function originalBitrateDataset(bins, col, data) {
+    return {
+      label: tt("Original"),
+      yAxisID: "y1",
+      order: 3,
+      data,
+      borderColor: col.text,
+      backgroundColor: "transparent",
+      borderDash: [2, 2],
+      pointRadius: 0,
+      borderWidth: 1.6,
+      tension: 0.15,
+      spanGaps: true,
+    };
+  }
+
   function drawFrameChart(vmaf) {
     const wrap = $("vmaf-frame-wrap");
     const ctx = $("vmaf-frame-chart");
@@ -4834,12 +4910,14 @@
     }
     wrap.hidden = false;
     const clipSec = Number(vmaf.clip_seconds) || 0;
+    const srcBins = sourceBinsFor(scene);
     const hasBr = clipSec > 0 && rows.some((r) => {
       const sc = sceneEntry(r, scene);
       return sc && sc.bitrate && sc.bitrate.length;
     });
+    const timed = hasBr || (clipSec > 0 && srcBins.length > 0);
     if (title) {
-      title.textContent = hasBr
+      title.textContent = timed
         ? `Verlauf Szene ${scene + 1} · VMAF und Bitrate der Testclips`
         : `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt`;
     }
@@ -4870,7 +4948,7 @@
         label,
         yAxisID: "y",
         order: 0,
-        data: hasBr
+        data: timed
           ? sc.frames.map((v, idx) => ({ x: (idx + 0.5) / n * span, y: v }))
           : sc.frames,
         borderColor: color,
@@ -4881,13 +4959,19 @@
         spanGaps: true,
       });
     });
+    if (timed && srcBins.length) {
+      datasets.push(originalBitrateDataset(
+        srcBins, col,
+        srcBins.map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
+      ));
+    }
     const opts = lineChartOptions(col, "VMAF");
     opts.scales.y.suggestedMin = 80;
     opts.scales.y.suggestedMax = 100;
     opts.plugins.legend.position = "bottom";
     opts.plugins.legend.labels.boxWidth = 12;
     opts.plugins.legend.labels.filter = (item) => !String(item.text || "").endsWith("· Bitrate");
-    if (hasBr) {
+    if (timed) {
       opts.scales.x.type = "linear";
       opts.scales.x.title = { display: true, text: "Sekunden", color: col.muted };
       opts.scales.x.ticks.autoSkip = true;
@@ -5092,6 +5176,21 @@
           spanGaps: true,
         });
       });
+      const srcBins = sourceBinsFor(nerdScene);
+      const frameSec = Number(series[0] && series[0].frame_sec) || 0;
+      if (srcBins.length && frameSec > 0) {
+        let j = 0;
+        const data = [];
+        for (let i = 0; i < n; i++) {
+          const t = i * frameSec;
+          while (j + 1 < srcBins.length
+            && Math.abs(Number(srcBins[j + 1].t) - t) <= Math.abs(Number(srcBins[j].t) - t)) {
+            j += 1;
+          }
+          data.push(Number(srcBins[j].kbps));
+        }
+        datasets.push(originalBitrateDataset(srcBins, col, data));
+      }
     }
     const floor = nerdFloorValue();
     datasets.push({
@@ -10115,6 +10214,81 @@
     }
   }
 
+  function clipPlayUrl(file) {
+    return `/api/vmaf/clip?session=${encodeURIComponent(state.vmafSession)}`
+      + `&file=${encodeURIComponent(file)}`;
+  }
+
+  function clipAbBlock(picks) {
+    if (!picks || picks.length !== 2) {
+      return "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.";
+    }
+    const refs = picks.filter((p) => p.kind === "ref");
+    const encs = picks.filter((p) => p.kind !== "ref");
+    if (refs.length === 1 && encs.length === 1) {
+      const src = state.vmafSource;
+      if (!src || src.available === false || !src.path) return "Quelle nicht mehr verfügbar";
+      if (!encs[0].clip || !state.vmafSession || !(encs[0].len > 0)) return "Testclip fehlt";
+      return "";
+    }
+    if (!refs.length && encs.length === 2) {
+      if (!state.vmafSession || encs.some((p) => !p.clip)) return "Testclip fehlt";
+      return "";
+    }
+    return "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.";
+  }
+
+  async function openClipAb(picks) {
+    if (!ab.sides.a || !ab.sides.b) return;
+    const refs = picks.filter((p) => p.kind === "ref");
+    const encs = picks.filter((p) => p.kind !== "ref");
+    const sa = ab.sides.a;
+    const sb = ab.sides.b;
+    sa.clipUrl = "";
+    sb.clipUrl = "";
+    sa.path = "";
+    sb.path = "";
+    state.abJob = "";
+    const off = $("ab-offset");
+    if (off) off.value = "0";
+    navTo("abcompare");
+    abApplyMode();
+    const badge = $("ab-badge");
+    if (badge) badge.textContent = tt("Lädt …");
+    const pathA = $("ab-path-a");
+    const pathB = $("ab-path-b");
+    let ok;
+    if (refs.length === 1) {
+      const enc = encs[0];
+      const start = enc.start || refs[0].start || 0;
+      const len = enc.len || refs[0].len || 0;
+      ab.window = len > 0 ? { start, end: start + len } : null;
+      sa.path = state.vmafSource.path;
+      sa.root = "media";
+      sa.offset = 0;
+      sb.clipUrl = clipPlayUrl(enc.clip);
+      sb.offset = start;
+      if (pathA) pathA.value = state.vmafSource.path;
+      if (pathB) pathB.value = "";
+      abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
+      ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
+    } else {
+      const len = encs[0].len || encs[1].len || 0;
+      ab.window = len > 0 ? { start: 0, end: len } : null;
+      sa.clipUrl = clipPlayUrl(encs[0].clip);
+      sb.clipUrl = clipPlayUrl(encs[1].clip);
+      sa.offset = 0;
+      sb.offset = 0;
+      if (pathA) pathA.value = "";
+      if (pathB) pathB.value = "";
+      abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
+      ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+    }
+    if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
+    const box = $("ab-weak");
+    if (box) { box.style.display = "none"; box.innerHTML = ""; }
+  }
+
   /* --------------------------------------------------- A/B-VERGLEICHSPLAYER */
   // Zwei Seiten (A = Quelle, B = Ausgabe). Jede Seite spielt direkt
   // (/api/media), wenn der Browser den Codec kann, sonst über eine HLS-Session
@@ -10126,11 +10300,12 @@
     wipe: 50,           // Kante in %
     seeking: false,
     weak: null,         // Schwachstellen (vom Job)
+    window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
   };
 
   function abMakeSide(key) {
     return {
-      key, video: $("ab-video-" + key), path: "", root: "media",
+      key, video: $("ab-video-" + key), path: "", root: "media", clipUrl: "",
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
     };
   }
@@ -10163,6 +10338,19 @@
 
   async function abStartSide(side, startSec) {
     abDestroy(side);
+    if (side.clipUrl) {
+      side.mode = "direct";
+      side.path = side.clipUrl;
+      side.sid = "";
+      side.video.src = side.clipUrl;
+      side.video.load();
+      side.ready = true;
+      side.video.addEventListener("loadedmetadata", () => {
+        const dur = Number(side.video.duration);
+        if (Number.isFinite(dur) && dur > 0) side.duration = (side.offset || 0) + dur;
+      }, { once: true });
+      return true;
+    }
     if (!side.path) return false;
     const forceHls = $("ab-playback") && $("ab-playback").value === "hls";
     const codecs = (typeof window.fpDetectClientCodecs === "function") ? window.fpDetectClientCodecs() : ["h264"];
@@ -10234,6 +10422,10 @@
   async function abSeekBoth(t, pauseAfter) {
     const sa = ab.sides.a, sb = ab.sides.b;
     if (!sa || !sb) return;
+    const win = ab.window;
+    if (win && win.end > win.start) {
+      t = Math.max(win.start, Math.min(win.end - 0.05, t));
+    }
     ab.seeking = true;
     const wasPaused = sa.video.paused;
     const jobs = [];
@@ -10308,6 +10500,9 @@
 
     load.addEventListener("click", async () => {
       const sa = ab.sides.a, sb = ab.sides.b;
+      sa.clipUrl = "";
+      sb.clipUrl = "";
+      ab.window = null;
       sa.path = $("ab-path-a").value.trim(); sa.root = $("ab-root-a").value || "media";
       sb.path = $("ab-path-b").value.trim(); sb.root = $("ab-root-b").value || "media";
       const badge = $("ab-badge");
@@ -10346,11 +10541,18 @@
     va.addEventListener("timeupdate", () => {
       const seek = $("ab-seek"), time = $("ab-time");
       const sa = ab.sides.a;
-      const dur = sa.duration || va.duration || 0;
-      const cur = abTime(sa);
+      const win = ab.window;
+      const boxed = win && win.end > win.start;
+      const origin = boxed ? win.start : 0;
+      const dur = boxed ? (win.end - win.start) : (sa.duration || va.duration || 0);
+      const cur = abTime(sa) - origin;
       if (dur) {
-        if (seek && !ab.seeking) seek.value = String(Math.round((cur / dur) * 1000));
-        if (time) time.textContent = fmtClock(cur) + " / " + fmtClock(dur);
+        if (seek && !ab.seeking) seek.value = String(Math.round((Math.max(0, cur) / dur) * 1000));
+        if (time) time.textContent = fmtClock(Math.max(0, cur)) + " / " + fmtClock(dur);
+      }
+      if (boxed && abTime(sa) >= win.end - 0.05) {
+        va.pause();
+        vb.pause();
       }
       // Laufende Drift korrigieren (engere Toleranz für sauberere Sync).
       if (abSynced() && ab.sides.b.ready && Math.abs((abTime(ab.sides.b) - abOffsetB()) - cur) > 0.15) {
@@ -10373,10 +10575,15 @@
     const seekEl = $("ab-seek");
     seekEl.addEventListener("input", () => { ab.seeking = true; });
     seekEl.addEventListener("change", (e) => {
-      const dur = ab.sides.a.duration || va.duration || 0;
+      const win = ab.window;
+      const boxed = win && win.end > win.start;
+      const origin = boxed ? win.start : 0;
+      const dur = boxed ? (win.end - win.start) : (ab.sides.a.duration || va.duration || 0);
       ab.seeking = false;
-      if (dur) abSeekBoth((parseInt(e.target.value, 10) / 1000) * dur);
+      if (dur) abSeekBoth(origin + (parseInt(e.target.value, 10) / 1000) * dur);
     });
+    va.addEventListener("ended", () => vb.pause());
+    vb.addEventListener("ended", () => va.pause());
 
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
@@ -10398,7 +10605,10 @@
       wrap.addEventListener("dblclick", () => { if (ab.mode === "wipe") $("ab-play").click(); });
     }
     const pb = $("ab-playback");
-    if (pb) pb.addEventListener("change", () => { if (ab.sides.a.path || ab.sides.b.path) load.click(); });
+    if (pb) pb.addEventListener("change", () => {
+      if (ab.sides.a.clipUrl || ab.sides.b.clipUrl) return;
+      if (ab.sides.a.path || ab.sides.b.path) load.click();
+    });
 
     const browse = (which) => {
       openFilePickerModal({

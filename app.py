@@ -2075,6 +2075,16 @@ async def vmaf_frames(session: str, scene: int = 0):
     return data
 
 
+@app.get("/api/vmaf/source-bitrate")
+async def vmaf_source_bitrate(session: str, scene: int = 0):
+    """Frame-Bitrate der Quelle in einer VMAF-Szene. Keine Qualitätsmetrik."""
+    from core import vmaf as vmaf_mod
+    data = await asyncio.to_thread(vmaf_mod.source_scene_bitrate, session, scene)
+    if not data or not data.get("bins"):
+        return JSONResponse({"error": "Quelle nicht verfügbar"}, status_code=404)
+    return data
+
+
 @app.get("/api/vmaf/clip-bitrate")
 async def vmaf_clip_bitrate(session: str, file: str):
     """Bitrate je Frame eines behaltenen Testclips, auf die VMAF-Zeitachse gelegt."""

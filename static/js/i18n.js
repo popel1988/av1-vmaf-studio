@@ -1132,6 +1132,11 @@
     "Analyse": "Analysis",
     "1 VMAF-Analyse": "1 VMAF analysis",
     "Auswahl vergleichen": "Compare selection",
+    "Im A/B abspielen": "Play in A/B",
+    "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.":
+      "Pick exactly two: the original and one test clip, or two test clips.",
+    "Quelle nicht mehr verfügbar": "Source no longer available",
+    "Testclip fehlt": "Test clip missing",
     "Für Vergleich auswählen": "Select for comparison",
     "Kein aktueller Vergleich – oben einen früheren auswählen":
       "No current comparison – pick an earlier one above",
@@ -2614,6 +2619,11 @@
     "Analyse": "Análisis",
     "1 VMAF-Analyse": "1 análisis VMAF",
     "Auswahl vergleichen": "Comparar selección",
+    "Im A/B abspielen": "Reproducir en A/B",
+    "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.":
+      "Elige exactamente dos: el original y un clip de prueba, o dos clips de prueba.",
+    "Quelle nicht mehr verfügbar": "La fuente ya no está disponible",
+    "Testclip fehlt": "Falta el clip de prueba",
     "Für Vergleich auswählen": "Seleccionar para comparar",
     "Kein aktueller Vergleich – oben einen früheren auswählen": "No hay comparación actual – selecciona una anterior arriba",
     "Scan läuft …": "Escaneo en curso …",
@@ -3972,6 +3982,11 @@
     "Analyse": "Analyse",
     "1 VMAF-Analyse": "1 analyse VMAF",
     "Auswahl vergleichen": "Comparer la sélection",
+    "Im A/B abspielen": "Lire en A/B",
+    "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.":
+      "Choisir exactement deux : l'original et un clip de test, ou deux clips de test.",
+    "Quelle nicht mehr verfügbar": "La source n'est plus disponible",
+    "Testclip fehlt": "Clip de test manquant",
     "Für Vergleich auswählen": "Sélectionner pour comparer",
     "Kein aktueller Vergleich – oben einen früheren auswählen": "Aucune comparaison actuelle – choisissez-en une antérieure ci-dessus",
     "Scan läuft …": "Analyse en cours …",

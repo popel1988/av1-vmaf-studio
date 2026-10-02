@@ -130,10 +130,15 @@ def clip_bins(path: Path, bin_sec: float = 0.5) -> list[dict]:
     ]
 
 
-def clip_packets(path: Path) -> list[dict]:
-    """Ein Eintrag je angezeigtem Videopaket: Zeitpunkt und Größe in Bytes."""
-    cmd = [
-        config.FFPROBE, "-v", "error",
+def clip_packets(path: Path, start: float = 0, end: float = 0) -> list[dict]:
+    """Ein Eintrag je angezeigtem Videopaket: Zeitpunkt und Größe in Bytes.
+
+    ``end > start`` liest nur dieses Intervall (Filmzeit, Sekunden).
+    """
+    cmd = [config.FFPROBE, "-v", "error"]
+    if end > start:
+        cmd += ["-read_intervals", f"{float(start):.3f}%{float(end):.3f}"]
+    cmd += [
         "-select_streams", "v:0",
         "-show_entries", "packet=pts_time,size",
         "-of", "csv=p=0",

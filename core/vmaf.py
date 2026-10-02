@@ -1407,15 +1407,8 @@ def _body_kbps(values: list[float]) -> list[float]:
     return out
 
 
-def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
-    """Bitrate je angezeigtem Frame, Zeitachse wie die bewerteten VMAF-Frames.
-
-    t = 0 ist das erste bewertete Bild. n ist der Frame-Index dazu.
-    Leere AV1-Anzeige-Frames teilen sich die Bits mit dem codierten Bild davor.
-    Einzelne Referenz-Spitzen werden auf das Niveau der Nachbarframes gesetzt.
-    """
-    from . import bitrate_profile
-    packets = bitrate_profile.clip_packets(path)
+def _curve_from_packets(packets: list[dict], duration: float = 0, fps: float = 0) -> dict:
+    """Frame-Bitrate aus Paketen, deren Zeit bei 0 am Clipanfang liegt."""
     if not packets:
         return {"bins": [], "scored_sec": 0, "frame": True}
     if fps <= 0:
@@ -1447,6 +1440,79 @@ def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
         "frame": True,
         "align": "body",
     }
+
+
+def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
+    """Bitrate je angezeigtem Frame, Zeitachse wie die bewerteten VMAF-Frames.
+
+    t = 0 ist das erste bewertete Bild. n ist der Frame-Index dazu.
+    Leere AV1-Anzeige-Frames teilen sich die Bits mit dem codierten Bild davor.
+    Einzelne Referenz-Spitzen werden auf das Niveau der Nachbarframes gesetzt.
+    """
+    from . import bitrate_profile
+    return _curve_from_packets(bitrate_profile.clip_packets(path), duration, fps)
+
+
+def source_scene_bitrate(session: str, scene: int) -> Optional[dict]:
+    """Frame-Bitrate der Quelle im Szenenfenster, auf die VMAF-Zeitachse gelegt.
+
+    Kein VMAF. Das Ergebnis liegt neben der Session, damit dieselbe Szene
+    nicht noch einmal gelesen wird. Fehlt die Quelle, bleibt das Ergebnis leer.
+    """
+    data = load_session(session)
+    if data is None:
+        return None
+    src = Path(str(data.get("source_path") or ""))
+    if not src.is_file():
+        return None
+    cache = _session_meta_path(session).parent / f"source_bitrate_s{int(scene)}.json"
+    if cache.is_file():
+        try:
+            blob = json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            blob = None
+        if isinstance(blob, dict) and blob.get("bins"):
+            return blob
+    start = length = None
+    analysis = data.get("analysis") or {}
+    for raw in analysis.get("results") or []:
+        if not isinstance(raw, dict):
+            continue
+        for item in raw.get("scene_scores") or []:
+            if not isinstance(item, dict) or item.get("scene") != int(scene):
+                continue
+            if item.get("start") is None:
+                continue
+            start = float(item.get("start") or 0)
+            length = float(item.get("length") or 0)
+            break
+        if start is not None:
+            break
+    if start is None or length <= 0:
+        return None
+    info = ff.ffprobe(src)
+    fps = float(info.fps or 0) if info else 0.0
+    from . import bitrate_profile
+    end = start + length
+    packets = bitrate_profile.clip_packets(src, start, end)
+    if not packets:
+        packets = [
+            pkt for pkt in bitrate_profile.clip_packets(src)
+            if start <= float(pkt["t"]) < end
+        ]
+    shifted = []
+    for pkt in packets:
+        rel = float(pkt["t"]) - start
+        if rel < -0.001 or rel > length + 0.5:
+            continue
+        shifted.append({"t": max(0.0, rel), "bytes": int(pkt["bytes"])})
+    curve = _curve_from_packets(shifted, length, fps)
+    if curve.get("bins"):
+        try:
+            cache.write_text(json.dumps(curve), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Quell-Bitrate konnte nicht gespeichert werden: %s", exc)
+    return curve
 
 
 def _series_stats(frames: list[dict], clip_seconds: float) -> dict:
