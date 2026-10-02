@@ -824,12 +824,13 @@ def nvenc_quality_args(enc: str, aq_strength: int = 8, lookahead: int = 31) -> l
     """Spatial AQ und Lookahead für NVENC.
 
     Temporal AQ bleibt aus: NVIDIA rät davon ab, es zusammen mit Spatial AQ
-    zu setzen. Lookahead ist höchstens 31 abzüglich der B-Frame-Zahl.
+    zu setzen. Mit B-Frames ist der Lookahead höchstens 31 abzüglich der
+    B-Frame-Zahl. Ohne B-Frames darf er 32 sein, das ist der alte Weg.
     """
     if "nvenc" not in (enc or ""):
         return []
     strength = max(1, min(15, int(aq_strength or 8)))
-    la = max(0, min(31, int(lookahead)))
+    la = max(0, min(32, int(lookahead)))
     return ["-spatial-aq", "1", "-aq-strength", str(strength), "-rc-lookahead", str(la)]
 
 
@@ -936,6 +937,8 @@ def nvenc_archive_args(
     zwei B-Frames (Lookahead 29) und bei CQ die Pyramide der Linie (latest-AV1
     sieben hierarchisch, sonst vier). Tief fällt auf mittel zurück, wenn die
     Karte oder die Linie keine hierarchische AV1-Pyramide hat.
+    ``b_frames=off`` schickt kein ``-bf``. Der Lookahead ist dann 32, und 31,
+    wenn die Karte 32 ablehnt.
     Realfilm auf HEVC/AV1 probiert bei ``tune=auto`` ``-tune uhq``.
     ``off`` lässt den Tune weg. ``hq`` und ``uhq`` setzen die Stufe fest.
     Anime bleibt bei ``auto`` und ``uhq`` auf ``hq``. 4K-HEVC/AV1 setzt
@@ -952,22 +955,24 @@ def nvenc_archive_args(
     from . import config
     channel = getattr(config, "IMAGE_CHANNEL", "latest")
     resolved = resolve_b_frames(b_frames, rate_mode, enc, channel)
-    spec = b_frame_spec(resolved)
-    # Hierarchisch zuerst, bei Ablehnung die mittlere Stufe, dann nur -bf.
-    fallbacks = [spec]
-    if resolved == "deep":
-        fallbacks.append(b_frame_spec("medium"))
-    if len(spec) > 2:
-        fallbacks.append(spec[:2])
+    # Aus: kein -bf. Die Karte nimmt ihre Vorgabe, der Lookahead darf 32 sein.
+    # Mit B-Frames bleibt das Fenster bei 31 abzüglich der B-Frame-Zahl.
     chosen: list[str] = []
-    for cand in fallbacks:
-        if "-b_ref_mode" in cand and not has("b_ref_mode"):
-            continue
-        if "hierarchical" in cand and not has("hierarchical"):
-            continue
-        if _nvenc_accepts(enc, cand):
-            chosen += cand
-            break
+    if resolved != "off":
+        spec = b_frame_spec(resolved)
+        fallbacks = [spec]
+        if resolved == "deep":
+            fallbacks.append(b_frame_spec("medium"))
+        if len(spec) > 2:
+            fallbacks.append(spec[:2])
+        for cand in fallbacks:
+            if "-b_ref_mode" in cand and not has("b_ref_mode"):
+                continue
+            if "hierarchical" in cand and not has("hierarchical"):
+                continue
+            if _nvenc_accepts(enc, cand):
+                chosen += cand
+                break
 
     bf = 0
     if "-bf" in chosen:
@@ -1001,7 +1006,11 @@ def nvenc_archive_args(
         args += [chosen[i], chosen[i + 1]]
     elif want != "off":
         args += ["-tune", "hq"]
-    args += nvenc_quality_args(enc, aq_strength, lookahead=max(0, 31 - bf))
+    if resolved == "off" and _nvenc_accepts(enc, ["-rc-lookahead", "32"]):
+        lookahead = 32
+    else:
+        lookahead = max(0, 31 - bf)
+    args += nvenc_quality_args(enc, aq_strength, lookahead=lookahead)
     for flag in ("-bf", "-b_ref_mode", "-tf_level", "-split_encode_mode"):
         if flag in chosen:
             i = chosen.index(flag)

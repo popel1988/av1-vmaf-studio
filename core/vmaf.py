@@ -237,6 +237,7 @@ class VmafResult:
     aq_strength: int = 0
     keyint_sec: int = 0
     nvenc_tune: str = ""
+    encoder_args: str = ""          # Flags ab -c:v, wie der Test-Encode sie bekam
 
     def to_dict(self) -> dict:
         d = {
@@ -252,6 +253,7 @@ class VmafResult:
             "aq_strength": int(self.aq_strength or 0),
             "keyint_sec": int(self.keyint_sec or 0),
             "nvenc_tune": self.nvenc_tune or "",
+            "encoder_args": self.encoder_args or "",
             "vmaf": round(self.vmaf, 2),
             "vmaf_score": round(quality_score(self.vmaf, self.vmaf_1pct, self.vmaf_hmean), 2),
             "clip_size_bytes": self.clip_size_bytes,
@@ -886,6 +888,7 @@ def analyze(
         xpsnrs: list[float] = []
         shots: list[dict] = []
         scene_scores: list[dict] = []
+        enc_args = ""
 
         for si, (reference, start, clip_len) in enumerate(references):
             if cancelled():
@@ -951,6 +954,8 @@ def analyze(
             cmd = _test_cmd(2 if cpu_two else None)
             rc, enc_err = runner.run(cmd, clip_len)
             prog["done"] += 1
+            if not enc_args:
+                enc_args = _encoder_args_text(cmd)
             if not test_file.exists() or test_file.stat().st_size == 0:
                 tail = (enc_err or "").strip().splitlines()
                 last_error = (
@@ -1064,6 +1069,7 @@ def analyze(
             aq_strength=aq_use,
             keyint_sec=ki_use,
             nvenc_tune=tune_use,
+            encoder_args=enc_args,
         ))
 
     try:
@@ -1285,6 +1291,24 @@ def clip_path(session: str, filename: str) -> Optional[Path]:
 
 
 _LOG_NAME = re.compile(r"^vmaf_[A-Za-z0-9._-]+_s\d+\.json$")
+
+
+def _encoder_args_text(cmd: list[str]) -> str:
+    """Videofahnen ab ``-c:v`` bis vor ``-map`` oder ``-passlogfile``.
+
+    Das ist der Teil, den der Encoder gesehen hat, nach der Karten-Probe.
+    Eingabe, Filter und Ausgabe bleiben draußen. ``-pass 2`` bleibt drin.
+    """
+    try:
+        start = cmd.index("-c:v")
+    except ValueError:
+        return ""
+    stop = len(cmd)
+    for i in range(start + 1, len(cmd)):
+        if cmd[i] in ("-map", "-passlogfile", "-progress"):
+            stop = i
+            break
+    return " ".join(cmd[start:stop])
 
 
 def _frame_log_name(platform: str, codec: str, value, scene,

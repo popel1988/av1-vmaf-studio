@@ -335,7 +335,7 @@
                   <label data-tip="Nur NVIDIA. Lookahead und B-Frames teilen sich 31 Frames. Mehr B-Frames sparen im Schnitt Bits, kürzen aber den Lookahead. Bei ABR/CBR kann eine kurze schwere Stelle dann weniger Rate bekommen, der 1%-Low fällt, und die Bitratenkurve wird zur Säge.">B-Frames (NVIDIA)</label>
                   <select id="opt-b-frames">
                     <option value="auto">Automatisch (empfohlen)</option>
-                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="off">Aus, Lookahead 32</option>
                     <option value="short">Kurz, 2 B-Frames</option>
                     <option value="medium">Mittel, 4 B-Frames</option>
                     <option value="deep">Tief, 7 hierarchisch</option>
@@ -718,7 +718,7 @@
                   <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
                   <select id="vt-b-frames">
                     <option value="auto">Automatisch (empfohlen)</option>
-                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="off">Aus, Lookahead 32</option>
                     <option value="short">Kurz, 2 B-Frames</option>
                     <option value="medium">Mittel, 4 B-Frames</option>
                     <option value="deep">Tief, 7 hierarchisch</option>
@@ -1184,7 +1184,7 @@
                 <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
                 <select id="st-b-frames">
                   <option value="auto">Automatisch (empfohlen)</option>
-                  <option value="off">Aus, Lookahead 31</option>
+                  <option value="off">Aus, Lookahead 32</option>
                   <option value="short">Kurz, 2 B-Frames</option>
                   <option value="medium">Mittel, 4 B-Frames</option>
                   <option value="deep">Tief, 7 hierarchisch</option>
@@ -1593,7 +1593,7 @@
                 <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
                 <select id="eb-b-frames">
                   <option value="auto">Automatisch (empfohlen)</option>
-                  <option value="off">Aus, Lookahead 31</option>
+                  <option value="off">Aus, Lookahead 32</option>
                   <option value="short">Kurz, 2 B-Frames</option>
                   <option value="medium">Mittel, 4 B-Frames</option>
                   <option value="deep">Tief, 7 hierarchisch</option>
@@ -2539,7 +2539,7 @@
                   <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames</label>
                   <select id="ed-b-frames">
                     <option value="auto">Automatisch (empfohlen)</option>
-                    <option value="off">Aus, Lookahead 31</option>
+                    <option value="off">Aus, Lookahead 32</option>
                     <option value="short">Kurz, 2 B-Frames</option>
                     <option value="medium">Mittel, 4 B-Frames</option>
                     <option value="deep">Tief, 7 hierarchisch</option>
@@ -2869,7 +2869,7 @@
                 <p>Es gibt zwei verschiedene „Presets“. Die Chips Film, Serie und Anime oben bei Encoding sind Vorlagen für CQ, Codec, Anime-Modus und Ton – die kannst du anwenden und danach alles ändern, eigene Profile speichern. Das ist nicht die Encoder-Geschwindigkeit.</p>
                 <p>Das Encoder-Speed-Preset bestimmt, wie gründlich der Encoder sucht (nicht, was CQ 28 bedeutet). Langsamer = meist kleinere Datei bei ähnlichem Bild, nicht automatisch schärfer. Unter Einstellungen → Encoder-Speed stellst du die Vorgabe ein; Encoding, VMAF-Tool, Super-Tool und Editor können sie pro Job überschreiben.</p>
                 <p>Ausgewogen (Standard) entspricht den bisherigen Werten: SVT-AV1 6 (Skala 0 langsam … 13 schnell), x264/x265 medium, Nvidia NVENC p5 (p1 schnell … p7 langsam), Intel QSV slower. AMD/Intel VAAPI hat in diesem Pfad kein extra Speed-Preset. Sehr schnell/schnell: größere Dateien, schlechtere Bit-Effizienz. Langsam/sehr langsam: deutlich mehr Zeit, besonders AV1 auf der CPU – nicht mit hoher Parallelität kombinieren. Diagnose und Player-Transcode bleiben absichtlich schnell, damit Tests nicht minutenlang dauern.</p>
-                <p>Der Lookahead ist kein eigener Regler. Bei NVIDIA stellst du ihn über die B-Frames ein: Lookahead und B-Frames teilen sich 31 Frames, der Lookahead ist 31 minus die B-Frame-Zahl. Bei x264, x265, SVT und VP9 hängt die Zahl fest an der Encoder-Stufe. Das Studio setzt sie nicht extra. Ein eigener Regler würde die Stufe aushebeln.</p>
+                <p>Der Lookahead ist kein eigener Regler. Bei NVIDIA stellst du ihn über die B-Frames ein: Lookahead und B-Frames teilen sich 31 Frames, der Lookahead ist 31 minus die B-Frame-Zahl. Aus lässt -bf weg und setzt den Lookahead auf 32. Lehnt die Karte 32 ab, bleibt er bei 31. Bei x264, x265, SVT und VP9 hängt die Zahl fest an der Encoder-Stufe. Das Studio setzt sie nicht extra. Ein eigener Regler würde die Stufe aushebeln.</p>
                 <div class="faq-table-wrap">
                   <table class="faq-table">
                     <thead>
@@ -2920,7 +2920,7 @@
                   </table>
                 </div>
                 <p>x264 und x265 ändern den Lookahead zwischen CQ, ABR und CBR nicht, deshalb stehen dort dreimal dieselben Frames. Bei SVT sind ABR und CBR auf jeder Stufe 58. Die 73 bei SVT und CQ gelten unter 8K. Ab Preset 9, ab Preset 8 bei 1080p und höher, und bei 8K auch auf den langsamen Presets, sind es bei CQ 41 Frames.</p>
-                <p>NVIDIA. Aus: 31 Frames. Kurz (2 B-Frames): 29. Mittel (4): 27. Tief (7 hierarchisch): 24, nur AV1 auf latest, sonst fällt Tief auf 4 B-Frames und 27 Frames zurück. Automatisch nimmt bei CQ auf latest und AV1 die 24, sonst bei CQ die 27, bei ABR und CBR die 29.</p>
+                <p>NVIDIA. Aus: 32 Frames, ohne -bf. Lehnt die Karte 32 ab, bleibt der Lookahead bei 31. Kurz (2 B-Frames): 29. Mittel (4): 27. Tief (7 hierarchisch): 24, nur AV1 auf latest, sonst fällt Tief auf 4 B-Frames und 27 Frames zurück. Automatisch nimmt bei CQ auf latest und AV1 die 24, sonst bei CQ die 27, bei ABR und CBR die 29.</p>
                 <p>VP9 bleibt bei 25 Frames, die Speed-Stufe ändert das nicht. QSV und VAAPI haben keinen Frame-Lookahead, den das Studio setzt.</p>
                 <p>Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.</p>
               </div>
@@ -3027,7 +3027,7 @@
               <summary>Was machen die B-Frames bei NVIDIA?</summary>
               <div class="faq-body">
                 <p>Ein B-Frame wird aus Bildern davor und danach vorhergesagt und braucht deshalb weniger Bits als ein normales Bild. NVIDIA hat dafür ein festes Fenster von 31 Frames, das sich Lookahead und B-Frames teilen. Mehr B-Frames kürzen den Lookahead.</p>
-                <p>Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 31) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.</p>
+                <p>Automatisch nimmt bei CQ die Pyramide der Image-Linie: latest und AV1 sieben B-Frames hierarchisch (Lookahead 24), sonst vier (Lookahead 27). Bei ABR und CBR nur zwei (Lookahead 29). Tief spart im Schnitt am meisten, legt die Bits aber auf wenige Referenzbilder. Die Bitratenkurve wird dadurch zur Säge, und eine kurze schwere Stelle kann deutlich weniger Rate bekommen als der Rest. Genau dort fällt der 1%-Low, während der Mittelwert gleich bleibt. Aus (Lookahead 32, ohne -bf; 31, wenn die Karte 32 ablehnt) hält die Rate am gleichmäßigsten, die Datei wird meist etwas größer. Kurz ist der Kompromiss, wenn der 1%-Low zählen soll. Mittel ist die bisherige Stufe mit vier B-Frames. Was die Karte oder die Linie nicht kann, fällt weg: hierarchisch gibt es nur für AV1 auf latest. CPU-Encoder ignorieren die Wahl.</p>
                 <p>Wie das in der Bitraten- und in der VMAF-Kurve aussieht: <a href="#faq-curves" class="faq-jump">Kurven lesen</a>.</p>
               </div>
             </details>

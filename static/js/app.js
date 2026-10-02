@@ -4330,6 +4330,17 @@
     const num = (v, d) => (v == null || v === "" || Number.isNaN(Number(v)))
       ? "" : Number(v).toFixed(d);
     const line = (cells) => cells.map(esc).join(";");
+    const settingCells = (r) => [
+      r.encoder_speed || "",
+      r.b_frames || "",
+      r.nvenc_tune || "",
+      r.aq_strength ? r.aq_strength : "",
+      Object.prototype.hasOwnProperty.call(r, "keyint_sec") ? r.keyint_sec : "",
+      r.encoder_args || "",
+    ];
+    const settingHead = [
+      "Speed", "B-Frames", "Tune", "AQ", "Keyframe s", "Encoder-Args",
+    ];
     const scenes = vmafSceneList(vmaf);
     const session = state.vmafSession;
     Promise.all([
@@ -4345,6 +4356,7 @@
       lines.push(line([
         "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
         "H-Mittel", "PSNR", "XPSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
+        ...settingHead,
       ]));
       rows.forEach((r) => {
         lines.push(line([
@@ -4353,10 +4365,14 @@
           num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
           num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4), num(r.savings_percent, 1),
           r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
+          ...settingCells(r),
         ]));
       });
       lines.push("");
-      lines.push(line(["Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "XPSNR", "SSIM", "kbit/s"]));
+      lines.push(line([
+        "Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "XPSNR", "SSIM", "kbit/s",
+        ...settingHead,
+      ]));
       rows.forEach((r) => {
         (r.scene_scores || []).forEach((sc) => {
           lines.push(line([
@@ -4365,6 +4381,7 @@
             num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
             num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4),
             sc.kbps ? Math.round(sc.kbps) : "",
+            ...settingCells(r),
           ]));
         });
       });

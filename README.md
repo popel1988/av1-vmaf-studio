@@ -121,7 +121,8 @@ matching FFmpeg encoder:
   keeps its bits and the 1% low does not drop. **Deep** saves the most on
   average and puts the bits on a few reference frames: the bitrate graph
   becomes a saw and the 1% low of a short hard passage can fall while the
-  mean stays put. **Off** keeps lookahead at 31 and the rate the most even.
+  mean stays put. **Off** sends no `-bf` and uses lookahead 32 when the GPU
+  accepts it, otherwise 31. That keeps the rate the most even.
   CQ mode uses `-multipass qres`. Bitrate mode uses `-multipass fullres`
   only when two-pass is on. Film on HEVC and AV1 uses `-tune uhq` when the
   binary and the GPU accept it; anime stays on `-tune hq` without the
