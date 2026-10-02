@@ -1748,11 +1748,28 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-chart-scenes:empty { display: none; }
 .vmaf-chart-wrap { position: relative; height: 300px; min-width: 0; overflow: hidden; }
 .vmaf-chart-wrap-sm { height: 320px; }
-.vmaf-zoom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 6px; font-size: 13px; }
+.vmaf-zoom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 14px 0 6px; font-size: 13px; }
 .vmaf-zoom label { display: inline-flex; align-items: center; gap: 6px; }
 .vmaf-zoom input[type="number"] { width: 4.2rem; }
-.vmaf-zoom-x { flex: 1; min-width: 240px; }
-.vmaf-zoom-x input[type="range"] { flex: 1; min-width: 72px; }
+.vmaf-zoom-x { flex: 1; min-width: 220px; }
+.vmaf-range { position: relative; flex: 1; min-width: 140px; height: 28px; }
+.vmaf-range-track {
+  position: absolute; left: 9px; right: 9px; top: 50%; height: 6px; margin-top: -3px;
+  border-radius: 3px; background: var(--surface-3); pointer-events: none;
+}
+.vmaf-range-fill {
+  position: absolute; top: 0; bottom: 0; border-radius: 3px;
+  background: var(--accent); opacity: 0.45; pointer-events: none;
+}
+.vmaf-range input[type="range"] {
+  position: absolute; left: 0; top: 0; width: 100%; height: 28px; margin: 0;
+  background: none; pointer-events: none;
+}
+.vmaf-range input[type="range"]::-webkit-slider-runnable-track { background: transparent; }
+.vmaf-range input[type="range"]::-moz-range-track { background: transparent; border: none; }
+.vmaf-range input[type="range"]::-webkit-slider-thumb { pointer-events: auto; }
+.vmaf-range input[type="range"]::-moz-range-thumb { pointer-events: auto; }
+.vmaf-range input[type="range"].is-top { z-index: 2; }
 .vmaf-zoom-hint { margin: 0 0 8px; }
 .vmaf-subchart { margin-top: 16px; }
 .vmaf-curve-hint { margin: 8px 0 0; }
@@ -1762,7 +1779,7 @@ input[type="range"]::-moz-range-thumb {
 .scene-min input { width: 4.2rem; }
 .bitrate-wins { display: flex; flex-wrap: wrap; gap: 6px; }
 .bitrate-win { font-size: 12px; color: var(--text-muted); }
-.vmaf-nerd { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+.vmaf-nerd { min-width: 0; margin-top: 4px; }
 .vmaf-nerd-floor { display: flex; align-items: center; gap: 12px; margin-top: 10px; max-width: 440px; }
 .vmaf-nerd-floor label { font-size: 13px; white-space: nowrap; }
 .vmaf-nerd-floor input[type="range"] { flex: 1; min-width: 0; }

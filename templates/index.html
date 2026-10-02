@@ -792,20 +792,6 @@
           <div class="card-body vmaf-body">
             <div class="vmaf-charts">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
-              <div class="vmaf-zoom" id="vmaf-zoom">
-                <label>VMAF-Höhe
-                  <input id="vmaf-zoom-ymin" type="number" min="0" max="100" step="1" inputmode="numeric">
-                  <span>–</span>
-                  <input id="vmaf-zoom-ymax" type="number" min="0" max="100" step="1" inputmode="numeric">
-                </label>
-                <label class="vmaf-zoom-x">Ausschnitt
-                  <input id="vmaf-zoom-x0" type="range" min="0" max="100" step="1" value="0">
-                  <input id="vmaf-zoom-x1" type="range" min="0" max="100" step="1" value="100">
-                  <span id="vmaf-zoom-xlabel">gesamt</span>
-                </label>
-                <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
-              </div>
-              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
               <div class="vmaf-chart-wrap">
                 <canvas id="vmaf-chart"></canvas>
               </div>
@@ -816,6 +802,23 @@
                   <canvas id="vmaf-gap-chart"></canvas>
                 </div>
               </div>
+              <div class="vmaf-zoom" id="vmaf-zoom">
+                <label>VMAF-Höhe
+                  <input id="vmaf-zoom-ymin" type="number" min="0" max="100" step="1" inputmode="numeric">
+                  <span>–</span>
+                  <input id="vmaf-zoom-ymax" type="number" min="0" max="100" step="1" inputmode="numeric">
+                </label>
+                <label class="vmaf-zoom-x">Ausschnitt
+                  <span class="vmaf-range">
+                    <span class="vmaf-range-track" aria-hidden="true"><span class="vmaf-range-fill" id="vmaf-zoom-fill"></span></span>
+                    <input id="vmaf-zoom-x0" type="range" min="0" max="100" step="1" value="0" title="Anfang">
+                    <input id="vmaf-zoom-x1" type="range" min="0" max="100" step="1" value="100" title="Ende">
+                  </span>
+                  <span id="vmaf-zoom-xlabel">gesamt</span>
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
+              </div>
+              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
               <div id="vmaf-frame-wrap" class="vmaf-subchart" hidden>
                 <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
@@ -823,8 +826,7 @@
                 </div>
                 <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               </div>
-            </div>
-            <div id="vmaf-nerd" class="vmaf-nerd" hidden>
+              <div id="vmaf-nerd" class="vmaf-nerd" hidden>
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap">
                 <canvas id="vmaf-nerd-chart"></canvas>
@@ -834,6 +836,7 @@
                 <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
               </div>
               <div id="vmaf-nerd-body"></div>
+              </div>
             </div>
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">

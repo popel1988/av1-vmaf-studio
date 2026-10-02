@@ -3728,6 +3728,7 @@
       nerd.classList.toggle("active", state.vmafNerd);
       state.nerdKey = "";
       refreshNerdFrames();
+      if (!state.vmafNerd && state.vmafShown) drawFrameChart(state.vmafShown);
     });
     const nerdFloor = $("nerd-floor");
     if (nerdFloor) nerdFloor.addEventListener("input", applyNerdFloor);
@@ -4662,6 +4663,33 @@
     return hi > lo ? [lo, hi] : null;
   }
 
+  function paintVmafRange() {
+    const x0 = $("vmaf-zoom-x0");
+    const x1 = $("vmaf-zoom-x1");
+    const fill = $("vmaf-zoom-fill");
+    if (!x0 || !x1 || !fill) return;
+    const a = Number(x0.value);
+    const b = Number(x1.value);
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    fill.style.left = lo + "%";
+    fill.style.width = Math.max(0, hi - lo) + "%";
+  }
+
+  function clampVmafWindow(changed) {
+    const x0 = $("vmaf-zoom-x0");
+    const x1 = $("vmaf-zoom-x1");
+    if (!x0 || !x1) return;
+    const gap = 1;
+    let a = Number(x0.value);
+    let b = Number(x1.value);
+    if (changed === "x0" && a > b - gap) x0.value = String(Math.max(0, b - gap));
+    if (changed === "x1" && b < a + gap) x1.value = String(Math.min(100, a + gap));
+    x0.classList.toggle("is-top", changed === "x0");
+    x1.classList.toggle("is-top", changed !== "x0");
+    paintVmafRange();
+  }
+
   function syncVmafZoomLabel() {
     const lab = $("vmaf-zoom-xlabel");
     if (!lab) return;
@@ -4669,6 +4697,7 @@
     lab.textContent = z.lockedX
       ? `${Math.round(z.x0)}–${Math.round(z.x1)} %`
       : tt("gesamt");
+    paintVmafRange();
   }
 
   function applyZoomToChart(chart) {
@@ -4729,13 +4758,20 @@
     const reset = $("vmaf-zoom-reset");
     if (ymin) ymin.addEventListener("change", refreshVmafZoom);
     if (ymax) ymax.addEventListener("change", refreshVmafZoom);
-    if (x0) x0.addEventListener("input", refreshVmafZoom);
-    if (x1) x1.addEventListener("input", refreshVmafZoom);
+    if (x0) x0.addEventListener("input", () => {
+      clampVmafWindow("x0");
+      refreshVmafZoom();
+    });
+    if (x1) x1.addEventListener("input", () => {
+      clampVmafWindow("x1");
+      refreshVmafZoom();
+    });
     if (reset) reset.addEventListener("click", () => {
       if (ymin) ymin.value = "";
       if (ymax) ymax.value = "";
       if (x0) x0.value = "0";
       if (x1) x1.value = "100";
+      paintVmafRange();
       refreshVmafZoom();
     });
     syncVmafZoomLabel();
@@ -4780,6 +4816,10 @@
     const ctx = $("vmaf-frame-chart");
     const title = $("vmaf-frame-title");
     destroyNamedChart("vmafFrameChart");
+    if (state.vmafNerd) {
+      if (wrap) wrap.hidden = true;
+      return;
+    }
     const scenes = vmafSceneList(vmaf);
     const scene = state.chartScene != null
       ? state.chartScene
@@ -4910,6 +4950,9 @@
       destroyNamedChart("vmafNerdChart");
       return;
     }
+    const frame = $("vmaf-frame-wrap");
+    if (frame) frame.hidden = true;
+    destroyNamedChart("vmafFrameChart");
     wrap.hidden = false;
     const vmaf = state.vmafShown;
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
