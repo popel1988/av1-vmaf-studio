@@ -5424,10 +5424,13 @@
     const slider = $("nerd-floor");
     if (slider && slider.value !== String(floor)) slider.value = String(floor);
     const series = (state.nerdData && state.nerdData.series) || [];
-    document.querySelectorAll("#vmaf-nerd-body .vmaf-nerd-dip").forEach((el) => {
+    document.querySelectorAll("#vmaf-nerd-body .vmaf-nerd-dip, #vmaf-nerd-body .vmaf-nerd-dip-short").forEach((el) => {
       const s = series[Number(el.getAttribute("data-nerd-i"))];
       if (!s) return;
-      el.textContent = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0);
+      const full = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0);
+      el.textContent = el.classList.contains("vmaf-nerd-dip-short")
+        ? full.split(" · ")[0]
+        : full;
     });
     const chart = state.vmafNerdChart;
     if (!chart) return;
@@ -5436,6 +5439,48 @@
     ds.data = ds.data.map(() => floor);
     ds.label = tt("Schwelle " + floor);
     chart.update("none");
+  }
+
+  function nerdSharedLine(series) {
+    const results = (state.vmafShown && state.vmafShown.results) || [];
+    const rows = (series || []).map((s) =>
+      results.find((r) => (r.label || "") === (s.label || ""))).filter(Boolean);
+    if (!rows.length) return "";
+    const same = (pick) => {
+      const vals = rows.map(pick);
+      return vals.every((v) => v === vals[0]) ? vals[0] : null;
+    };
+    const parts = [];
+    const plat = same((r) => r.platform || "");
+    if (plat === "nvidia") parts.push("NVIDIA");
+    else if (plat === "cpu") parts.push("CPU");
+    else if (plat) parts.push(plat);
+    const sp = same((r) => r.encoder_speed || "");
+    if (sp) parts.push(tt(speedLabelFor(rows[0].platform, rows[0].codec, sp) || sp));
+    const allNvidia = rows.every((r) => (r.platform || "") === "nvidia");
+    if (allNvidia) {
+      const bf = same((r) => r.b_frames || "");
+      const bfTags = {
+        auto: "Automatisch", off: "Aus, Lookahead 32", short: "Kurz",
+        medium: "Mittel", deep: "Tief",
+      };
+      if (bf) parts.push(tt(bfTags[bf] || bf));
+      const tune = same((r) => r.nvenc_tune || "");
+      const tuneTags = {
+        auto: "Tune automatisch", off: "Tune aus", hq: "HQ", uhq: "UHQ",
+      };
+      if (tune) parts.push(tt(tuneTags[tune] || tune));
+    }
+    const aq = same((r) => (r.aq_strength ? String(r.aq_strength) : ""));
+    if (aq && rows.every((r) => aqMode(r.platform, r.codec))) parts.push("AQ " + aq);
+    const ki = same((r) => (
+      r.keyint_sec == null || r.keyint_sec === "" ? null : String(r.keyint_sec)));
+    if (ki != null) {
+      const n = Number(ki);
+      parts.push(n ? (n + " s") : tt("Keyframe automatisch"));
+    }
+    if (same((r) => (r.two_pass ? "1" : "0")) === "1") parts.push(tt("Zwei-Pass"));
+    return parts.length ? (tt("Für alle") + ": " + parts.join(" · ")) : "";
   }
 
   function drawNerdFrames(data) {
@@ -5452,10 +5497,16 @@
     const col = chartColors();
     const n = Math.max(...series.map((s) => (s.frames || []).length));
     const labels = Array.from({ length: n }, (_, i) => String(i + 1));
+    const nerdKeyOf = (s, i) => s.label || ("Serie " + (i + 1));
+    const nerdOff = (key) => !!(state.nerdHidden && state.nerdHidden.has(key));
+    let nerdHasOriginal = false;
     const datasets = series.map((s, i) => {
       const color = CHART_PALETTE[i % CHART_PALETTE.length];
+      const key = nerdKeyOf(s, i);
       return {
-        label: s.label || ("Serie " + (i + 1)),
+        label: key,
+        nerdKey: key,
+        hidden: nerdOff(key),
         data: (s.frames || []).map((f) => f.vmaf),
         borderColor: color,
         backgroundColor: "transparent",
@@ -5475,8 +5526,11 @@
         const byN = {};
         sc.bitrate.forEach((b) => { byN[b.n] = Number(b.kbps); });
         const color = CHART_PALETTE[i % CHART_PALETTE.length];
+        const key = nerdKeyOf(s, i);
         datasets.push({
-          label: (s.label || ("Serie " + (i + 1))) + " · Bitrate",
+          label: key + " · Bitrate",
+          nerdKey: key,
+          hidden: nerdOff(key),
           yAxisID: "y1",
           data: (s.frames || []).map((f) => (byN[f.n] == null ? null : byN[f.n])),
           borderColor: color,
@@ -5501,7 +5555,11 @@
           }
           data.push(Number(srcBins[j].kbps));
         }
-        datasets.push(originalBitrateDataset(srcBins, col, data));
+        const src = originalBitrateDataset(srcBins, col, data);
+        src.nerdKey = "original";
+        src.hidden = nerdOff("original");
+        nerdHasOriginal = true;
+        datasets.push(src);
       }
     }
     const floor = nerdFloorValue();
@@ -5520,6 +5578,7 @@
     });
     if (ctx && typeof Chart !== "undefined") {
       const opts = lineChartOptions(col, "VMAF");
+      opts.plugins.legend.display = false;
       opts.scales.y.suggestedMin = 70;
       opts.scales.y.suggestedMax = 100;
       if (datasets.some((d) => d.yAxisID === "y1")) {
@@ -5556,7 +5615,12 @@
     }
     if (!body) return;
     const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.";
-    body.innerHTML = `<p class="vmaf-nerd-legend">${escapeHtml(legend)}</p>` + series.map((s, i) => {
+    const num = (v) => Number(v).toFixed(2);
+    const cell = (v) => (v == null || v === "" ? "" : escapeHtml(num(v)));
+    const rows = series.map((s, i) => {
+      const key = nerdKeyOf(s, i);
+      const color = CHART_PALETTE[i % CHART_PALETTE.length];
+      const st = s.stats || {};
       const worst = (s.worst || []).map((f) => {
         const extra = [
           f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
@@ -5565,33 +5629,69 @@
         return `<li>Frame ${f.n} · VMAF ${Number(f.vmaf).toFixed(2)}`
           + (extra ? ` · ${extra}` : "") + `</li>`;
       }).join("");
-      const st = s.stats || {};
-      const num = (v) => Number(v).toFixed(2);
-      const lines = [];
-      if (st.mean != null) {
-        lines.push(`Schnitt ${num(st.mean)} · Median ${num(st.median)} · σ ${num(st.stdev)}`);
-        lines.push(`1%-Low ${num(st.p1)} · P5 ${num(st.p5)} · P95 ${num(st.p95)}`);
-        lines.push(`Min ${num(st.min)} · Max ${num(st.max)}`);
-      }
-      const stats = lines.map((l) => `<p class="hint vmaf-nerd-stat">${escapeHtml(l)}</p>`).join("");
-      const dip = (s.frames || []).length
-        ? `<p class="hint vmaf-nerd-stat vmaf-nerd-dip" data-nerd-i="${i}">${escapeHtml(nerdDipText(s.frames, floor, Number(s.frame_sec) || 0))}</p>`
+      const dipFull = (s.frames || []).length
+        ? nerdDipText(s.frames, floor, Number(s.frame_sec) || 0)
         : "";
       let psnr = "";
       if (st.psnr_mean != null) {
         const d = Number(st.psnr_delta);
         const mark = d >= 0 ? "−" : "+";
-        psnr = `<p class="hint vmaf-nerd-stat">${escapeHtml(`PSNR schwache 5 % ${num(st.psnr_weak)} · Schnitt ${num(st.psnr_mean)} · ${mark}${Math.abs(d).toFixed(2)} dB`)}</p>`;
+        psnr = `PSNR schwache 5 % ${num(st.psnr_weak)} · Schnitt ${num(st.psnr_mean)} · ${mark}${Math.abs(d).toFixed(2)} dB`;
       }
-      return `<div class="vmaf-nerd-col">
-        <p class="vmaf-nerd-label">${escapeHtml(s.label || "")}</p>
-        <p class="hint">${s.count} Frames</p>
-        ${stats}
-        ${dip}
-        ${psnr}
-        <ol class="vmaf-nerd-worst">${worst}</ol>
-      </div>`;
+      const extraBits = [
+        s.count != null ? `${s.count} Frames` : "",
+        st.p5 != null ? `P5 ${num(st.p5)} · P95 ${num(st.p95)}` : "",
+        psnr,
+      ].filter(Boolean);
+      const details = `<details><summary>${escapeHtml(tt("schwächste Frames"))}</summary>`
+        + extraBits.map((l) => `<p class="hint">${escapeHtml(l)}</p>`).join("")
+        + (dipFull
+          ? `<p class="hint vmaf-nerd-dip" data-nerd-i="${i}">${escapeHtml(dipFull)}</p>`
+          : "")
+        + (worst ? `<ol class="vmaf-nerd-worst">${worst}</ol>` : "")
+        + `</details>`;
+      return `<tr>
+        <td><input type="checkbox" class="nerd-show" data-nerd-key="${escapeHtml(key)}"${nerdOff(key) ? "" : " checked"}></td>
+        <td class="nerd-name"><span class="nerd-swatch" style="background:${color}"></span>${escapeHtml(key)}${details}</td>
+        <td>${cell(st.mean)}</td>
+        <td>${cell(st.median)}</td>
+        <td>${cell(st.stdev)}</td>
+        <td>${cell(st.p1)}</td>
+        <td>${cell(st.min)}</td>
+        <td>${cell(st.max)}</td>
+        <td class="vmaf-nerd-dip-short" data-nerd-i="${i}">${escapeHtml(dipFull.split(" · ")[0] || "")}</td>
+      </tr>`;
     }).join("");
+    const originalRow = nerdHasOriginal
+      ? `<tr>
+        <td><input type="checkbox" class="nerd-show" data-nerd-key="original"${nerdOff("original") ? "" : " checked"}></td>
+        <td class="nerd-name" colspan="8"><span class="nerd-swatch" style="background:${col.text}"></span>${escapeHtml(tt("Original"))}</td>
+      </tr>`
+      : "";
+    const shared = nerdSharedLine(series);
+    body.innerHTML = (shared ? `<p class="vmaf-nerd-shared">${escapeHtml(shared)}</p>` : "")
+      + `<p class="hint vmaf-nerd-legend" title="${escapeHtml(tt(legend))}">${escapeHtml(tt("Haken zeigt VMAF und Bitrate dieser Zeile im Graphen."))}</p>`
+      + `<table class="data-table vmaf-nerd-table"><thead><tr>`
+      + `<th></th><th>${escapeHtml(tt("Einstellung"))}</th>`
+      + `<th>${escapeHtml(tt("Schnitt"))}</th><th>${escapeHtml(tt("Median"))}</th><th>σ</th>`
+      + `<th>${escapeHtml(tt("1%-Low"))}</th><th>${escapeHtml(tt("Min"))}</th><th>${escapeHtml(tt("Max"))}</th>`
+      + `<th title="${escapeHtml(tt(legend))}">${escapeHtml(tt("unter"))}</th>`
+      + `</tr></thead><tbody>${rows}${originalRow}</tbody></table>`;
+    body.querySelectorAll(".nerd-show").forEach((box) => {
+      box.addEventListener("change", () => {
+        const key = box.getAttribute("data-nerd-key");
+        if (!state.nerdHidden) state.nerdHidden = new Set();
+        if (box.checked) state.nerdHidden.delete(key);
+        else state.nerdHidden.add(key);
+        const chart = state.vmafNerdChart;
+        if (!chart) return;
+        (chart.data.datasets || []).forEach((d, idx) => {
+          if (d.nerdKey !== key) return;
+          chart.setDatasetVisibility(idx, box.checked);
+        });
+        chart.update("none");
+      });
+    });
     const floorLab = $("nerd-floor-val");
     if (floorLab) floorLab.textContent = String(floor);
   }

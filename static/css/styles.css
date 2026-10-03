@@ -1799,10 +1799,17 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-nerd-floor { display: flex; align-items: center; gap: 12px; margin-top: 10px; max-width: 440px; }
 .vmaf-nerd-floor label { font-size: 13px; white-space: nowrap; }
 .vmaf-nerd-floor input[type="range"] { flex: 1; min-width: 0; }
-.vmaf-nerd-body, #vmaf-nerd-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 12px; }
-.vmaf-nerd-legend { grid-column: 1 / -1; margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
-.vmaf-nerd-stat { margin: 0; }
-.vmaf-nerd-label { margin: 0; font-size: 13px; font-weight: 600; }
+.vmaf-nerd-body, #vmaf-nerd-body { display: block; margin-top: 8px; min-width: 0; overflow-x: auto; }
+.vmaf-nerd-shared { margin: 8px 0 2px; font-size: 13px; line-height: 1.4; }
+.vmaf-nerd-legend { margin: 4px 0 6px; font-size: 12px; line-height: 1.4; color: var(--text-muted); }
+.vmaf-nerd-table { width: 100%; font-size: 12px; }
+.vmaf-nerd-table th,
+.vmaf-nerd-table td { padding: 3px 6px; white-space: nowrap; vertical-align: top; }
+.vmaf-nerd-table td.nerd-name { white-space: normal; font-weight: 600; min-width: 12rem; }
+.vmaf-nerd-table details { margin-top: 2px; font-weight: 400; color: var(--text-muted); }
+.vmaf-nerd-table summary { cursor: pointer; }
+.vmaf-nerd-table input[type="checkbox"] { margin: 2px 0 0; }
+.nerd-swatch { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 2px; vertical-align: baseline; }
 .vmaf-nerd-worst { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-muted); }
 .vmaf-nerd-worst li { margin: 2px 0; }
 #btn-vmaf-nerd.active { color: var(--accent); border-color: var(--accent); }
