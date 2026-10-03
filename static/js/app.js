@@ -4805,13 +4805,85 @@
     });
   }
 
+  function vmafResultKey(r) {
+    return (r && r.label) || ("Q" + (r && r.quality));
+  }
+
+  function vmafRowOff(key) {
+    return !!(state.vmafHidden && state.vmafHidden.has(key));
+  }
+
+  function vmafRowColor(r, i) {
+    if (r && r.recommended) return chartColors().good;
+    return CHART_PALETTE[i % CHART_PALETTE.length];
+  }
+
+  function setVmafRowShown(key, on) {
+    if (!state.vmafHidden) state.vmafHidden = new Set();
+    if (on) state.vmafHidden.delete(key);
+    else state.vmafHidden.add(key);
+    document.querySelectorAll("[data-vmaf-key], [data-nerd-key]").forEach((box) => {
+      const k = box.getAttribute("data-vmaf-key") || box.getAttribute("data-nerd-key");
+      if (k === key) box.checked = !!on;
+    });
+    const vmaf = state.vmafShown;
+    if (vmaf) {
+      drawChart(vmaf);
+      drawGapChart(vmaf);
+      if (!state.vmafNerd) drawFrameChart(vmaf);
+    }
+    const chart = state.vmafNerdChart;
+    if (chart) {
+      (chart.data.datasets || []).forEach((d, idx) => {
+        if (d.nerdKey !== key) return;
+        chart.setDatasetVisibility(idx, !!on);
+      });
+      chart.update("none");
+    }
+  }
+
+  function vmafBrief(r) {
+    const spread = vmafSpread(r);
+    let s = `${Number(r.vmaf).toFixed(2)}`;
+    if (spread) {
+      const mark = vmafDeltaMark(spread.delta);
+      s += `<span class="vmaf-delta ${mark.cls}" title="${escapeHtml(mark.text)}">${mark.text}</span>`;
+    }
+    const lo = vmafTargetLo(state.vmafShown);
+    const miss = vmafResultMiss(r, lo, vmafP1GapValue());
+    if (miss) {
+      s += ` <span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">Ziel verfehlt</span>`;
+    }
+    return s;
+  }
+
   function fillVmafTable(vmaf) {
     syncKeepSourceBanner(vmaf);
+    const wrap = document.querySelector(".vmaf-table-wrap");
+    let sharedEl = $("vmaf-shared");
+    if (wrap && !sharedEl) {
+      sharedEl = document.createElement("p");
+      sharedEl.id = "vmaf-shared";
+      sharedEl.className = "vmaf-nerd-shared";
+      wrap.insertBefore(sharedEl, wrap.firstChild);
+    }
+    if (sharedEl) {
+      const shared = nerdSharedLine((vmaf.results || []).map((r) => ({ label: r.label || "" })));
+      sharedEl.hidden = !shared;
+      sharedEl.textContent = shared;
+    }
     const body = $("vmaf-table").querySelector("tbody");
-    body.innerHTML = vmaf.results.map((r, idx) => `
+    const tip = tt("Haken zeigt diese Zeile in den Graphen.");
+    body.innerHTML = vmaf.results.map((r, idx) => {
+      const key = vmafResultKey(r);
+      const bits = bitrateReport(r);
+      const more = [bits, vmafCell(r)].filter(Boolean).join("<br>");
+      return `
       <tr class="${r.recommended ? "row-recommended" : ""} ${vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue()) ? "row-target-miss" : ""}">
-        <td>${escapeHtml(r.label || ("Q" + r.quality))}${bitrateReport(r) ? `<div class="hint">${escapeHtml(bitrateReport(r))}</div>` : ""}</td>
-        <td>${vmafCell(r)}</td>
+        <td><input type="checkbox" data-vmaf-key="${escapeHtml(key)}" title="${escapeHtml(tip)}"${vmafRowOff(key) ? "" : " checked"}></td>
+        <td><span class="nerd-swatch" style="background:${vmafRowColor(r, idx)}"></span>${escapeHtml(key)}
+          <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details></td>
+        <td>${vmafBrief(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td class="vmaf-row-actions">
@@ -4820,7 +4892,11 @@
             : '<span class="badge recommended">Empfohlen</span>') : ""}
           <button class="btn btn-ghost btn-sm" data-take="${idx}" title="Diese Einstellung ins Encoding übernehmen">→ Encoding</button>
         </td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
+    body.querySelectorAll("[data-vmaf-key]").forEach((box) => {
+      box.addEventListener("change", () => setVmafRowShown(box.getAttribute("data-vmaf-key"), box.checked));
+    });
     body.querySelectorAll("[data-take]").forEach((b) =>
       b.addEventListener("click", () =>
         transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
@@ -4908,7 +4984,7 @@
     const ctx = $("vmaf-gap-chart");
     destroyNamedChart("vmafGapChart");
     const scenes = vmafSceneList(vmaf);
-    const rows = vmaf.results || [];
+    const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
     if (!wrap || !ctx || scenes.length < 2 || !rows.length) {
       if (wrap) wrap.hidden = true;
       return;
@@ -4916,10 +4992,11 @@
     wrap.hidden = false;
     const col = chartColors();
     const labels = scenes.map((n) => `Szene ${n + 1}`);
-    const datasets = rows.map((r, i) => {
-      const color = r.recommended ? col.good : CHART_PALETTE[i % CHART_PALETTE.length];
+    const datasets = rows.map((r) => {
+      const i = (vmaf.results || []).indexOf(r);
+      const color = vmafRowColor(r, i < 0 ? 0 : i);
       return {
-        label: r.label || ("Q" + r.quality),
+        label: vmafResultKey(r),
         data: scenes.map((n) => {
           const v = sceneScoreOf(r, n);
           return v == null ? null : Math.round((v - r.vmaf) * 100) / 100;
@@ -4932,10 +5009,12 @@
         spanGaps: true,
       };
     });
+    const gapOpts = lineChartOptions(col, "Δ VMAF");
+    if ((vmaf.results || []).length > 4) gapOpts.plugins.legend.display = false;
     state.vmafGapChart = new Chart(ctx, {
       type: "line",
       data: { labels, datasets },
-      options: lineChartOptions(col, "Δ VMAF"),
+      options: gapOpts,
     });
   }
 
@@ -5235,10 +5314,12 @@
     }
     const col = chartColors();
     const datasets = [];
-    rows.forEach((r, i) => {
+    rows.forEach((r) => {
+      if (vmafRowOff(vmafResultKey(r))) return;
       const sc = sceneEntry(r, scene);
-      const color = r.recommended ? col.good : CHART_PALETTE[i % CHART_PALETTE.length];
-      const label = r.label || ("Q" + r.quality);
+      const i = (vmaf.results || []).indexOf(r);
+      const color = vmafRowColor(r, i < 0 ? 0 : i);
+      const label = vmafResultKey(r);
       const n = sc.frames.length;
       const span = scoredSpan(clipSec, sc);
       if (hasBr && sc.bitrate && sc.bitrate.length) {
@@ -5278,6 +5359,7 @@
       ));
     }
     const opts = lineChartOptions(col, "VMAF");
+    if ((vmaf.results || []).length > 4) opts.plugins.legend.display = false;
     opts.scales.y.suggestedMin = 80;
     opts.scales.y.suggestedMax = 100;
     opts.plugins.legend.position = "bottom";
@@ -5498,7 +5580,7 @@
     const n = Math.max(...series.map((s) => (s.frames || []).length));
     const labels = Array.from({ length: n }, (_, i) => String(i + 1));
     const nerdKeyOf = (s, i) => s.label || ("Serie " + (i + 1));
-    const nerdOff = (key) => !!(state.nerdHidden && state.nerdHidden.has(key));
+    const nerdOff = (key) => vmafRowOff(key);
     let nerdHasOriginal = false;
     const datasets = series.map((s, i) => {
       const color = CHART_PALETTE[i % CHART_PALETTE.length];
@@ -5679,17 +5761,7 @@
       + `</tr></thead><tbody>${rows}${originalRow}</tbody></table>`;
     body.querySelectorAll(".nerd-show").forEach((box) => {
       box.addEventListener("change", () => {
-        const key = box.getAttribute("data-nerd-key");
-        if (!state.nerdHidden) state.nerdHidden = new Set();
-        if (box.checked) state.nerdHidden.delete(key);
-        else state.nerdHidden.add(key);
-        const chart = state.vmafNerdChart;
-        if (!chart) return;
-        (chart.data.datasets || []).forEach((d, idx) => {
-          if (d.nerdKey !== key) return;
-          chart.setDatasetVisibility(idx, box.checked);
-        });
-        chart.update("none");
+        setVmafRowShown(box.getAttribute("data-nerd-key"), box.checked);
       });
     });
     const floorLab = $("nerd-floor-val");
@@ -5772,7 +5844,7 @@
 
     const ctx = $("vmaf-chart");
     const col = chartColors();
-    const rows = vmaf.results || [];
+    const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
     const scene = state.chartScene;
     const sceneMode = scene != null;
     const labels = rows.map((r) => r.label || ("Q" + r.quality));
@@ -5913,6 +5985,7 @@
     const sceneMode = scene != null;
     const groups = {};
     vmaf.results.forEach((r) => {
+      if (vmafRowOff(vmafResultKey(r))) return;
       const key = resultSeriesName(r, vmaf.results);
       (groups[key] = groups[key] || []).push(r);
     });

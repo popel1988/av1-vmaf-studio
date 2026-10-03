@@ -1760,6 +1760,10 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-body { display: grid; grid-template-columns: 1.4fr 1fr; gap: 22px; align-items: start; }
 .vmaf-charts { grid-column: 1; grid-row: 1; min-width: 0; }
 .vmaf-table-wrap { grid-column: 2; grid-row: 1; min-width: 0; }
+#vmaf-table th, #vmaf-table td { padding: 4px 8px; vertical-align: top; }
+#vmaf-table .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }
+#vmaf-table .vmaf-result-details summary { cursor: pointer; }
+#vmaf-table input[type="checkbox"] { margin: 2px 0 0; }
 .vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
 .vmaf-chart-scenes:empty { display: none; }
 .vmaf-chart-wrap { position: relative; height: 300px; min-width: 0; overflow: hidden; }
