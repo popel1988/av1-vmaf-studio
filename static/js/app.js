@@ -1525,7 +1525,24 @@
       `<div class="field"><label>Tune (NVIDIA)</label><select id="${prefix}-nvenc-tune"></select></div>` +
       `<div class="field" id="${prefix}-aq-field"><label>AQ-Stärke (NVIDIA): <strong id="${prefix}-aq-val">8</strong></label>` +
       `<input type="range" id="${prefix}-aq-strength" min="1" max="15" value="8" /></div>` +
-      `<div class="field"><label>Keyframe-Abstand</label><select id="${prefix}-keyint"></select></div>`;
+      `<div class="field"><label>Keyframe-Abstand</label><select id="${prefix}-keyint"></select></div>` +
+      `<label class="check vt-rate-toggle">` +
+      `<input type="checkbox" id="${prefix}-rate-custom" />` +
+      `<span data-tip="Steuerungsmodus, Testwerte und Zwei-Pass nur für diese Zeile. Clip-Anzahl und Länge bleiben gemeinsam.">Andere Steuerung</span></label>` +
+      `<div class="vt-rate-extra" id="${prefix}-rate-extra">` +
+      `<div class="field"><label>Steuerungsmodus</label><select id="${prefix}-rate-mode">` +
+      `<option value="cq">CQ / QP / CRF (Qualitätszahl)</option>` +
+      `<option value="bitrate">Festbitrate (CBR)</option>` +
+      `<option value="abr">Average Bitrate (VBR-Ziel)</option></select></div>` +
+      `<div class="field"><label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>` +
+      `<div class="test-values-grid">` +
+      `<input type="number" class="vt-row-val" />` +
+      `<input type="number" class="vt-row-val" />` +
+      `<input type="number" class="vt-row-val" />` +
+      `<input type="number" class="vt-row-val" /></div>` +
+      `<p class="hint vt-row-hint"></p></div>` +
+      `<label class="check vt-row-two"><input type="checkbox" id="${prefix}-two-pass" />` +
+      `<span>Zwei-Pass für die Testclips</span></label></div>`;
     host.appendChild(row);
     vtCloneOptions("vt-platform", $(prefix + "-platform"));
     vtCloneOptions("vt-codec", $(prefix + "-codec"));
@@ -1553,8 +1570,14 @@
     if (srcSpeed) {
       fillJobSpeedSelect(prefix + "-enc-speed", prefix + "-platform", prefix + "-codec", srcSpeed.value);
     }
+    fillRowRate(prefix);
     $(prefix + "-platform").addEventListener("change", () => syncExtraRow(prefix));
     $(prefix + "-codec").addEventListener("change", () => syncExtraRow(prefix));
+    $(prefix + "-rate-custom").addEventListener("change", () => {
+      const extra = $(prefix + "-rate-extra");
+      if (extra) extra.classList.toggle("is-open", $(prefix + "-rate-custom").checked);
+    });
+    $(prefix + "-rate-mode").addEventListener("change", () => syncRowRate(prefix));
     $(prefix + "-enc-speed").addEventListener("change", () => refreshEncSpeedWarn($(prefix + "-enc-speed")));
     dstAq.addEventListener("input", () => {
       const lab = $(prefix + "-aq-val");
@@ -1571,9 +1594,9 @@
   }
 
   function gatherVtRows() {
-    return [...document.querySelectorAll("#vt-extra-rows .vt-enc-row")].slice(0, VT_EXTRA_MAX).map((row) => {
-      const p = row.dataset.prefix;
-      return {
+    return [...document.querySelectorAll("#vt-extra-rows .vt-enc-row")].slice(0, VT_EXTRA_MAX).map((el) => {
+      const p = el.dataset.prefix;
+      const row = {
         platform: $(p + "-platform").value,
         codec: $(p + "-codec").value,
         encoder_speed: encoderSpeedValue(p + "-enc-speed"),
@@ -1582,7 +1605,60 @@
         aq_strength: parseInt($(p + "-aq-strength").value, 10) || 8,
         keyint_sec: parseInt($(p + "-keyint").value, 10) || 0,
       };
+      if (!($(p + "-rate-custom") && $(p + "-rate-custom").checked)) return row;
+      const mode = $(p + "-rate-mode").value;
+      const box = $(p + "-rate-extra");
+      row.rate_mode = mode;
+      row.test_values = box
+        ? [...box.querySelectorAll(".vt-row-val")]
+          .map((inp) => parseInt(inp.value, 10))
+          .filter((v) => !isNaN(v) && v > 0)
+          .slice(0, 4)
+        : [];
+      row.two_pass = (mode === "abr" || mode === "bitrate")
+        && !!($(p + "-two-pass") && $(p + "-two-pass").checked);
+      return row;
     });
+  }
+
+  function fillRowRate(prefix) {
+    const modeEl = $(prefix + "-rate-mode");
+    const baseMode = $("vt-rate-mode");
+    if (modeEl && baseMode) modeEl.value = baseMode.value;
+    const src = [...document.querySelectorAll("#vt-test-grid .vt-test-val")];
+    const box = $(prefix + "-rate-extra");
+    if (box) {
+      [...box.querySelectorAll(".vt-row-val")].forEach((inp, i) => {
+        inp.value = src[i] ? src[i].value : "";
+      });
+    }
+    const two = $(prefix + "-two-pass");
+    if (two && $("vt-two-pass")) two.checked = $("vt-two-pass").checked;
+    syncRowRate(prefix);
+  }
+
+  function syncRowRate(prefix) {
+    const modeEl = $(prefix + "-rate-mode");
+    const box = $(prefix + "-rate-extra");
+    if (!modeEl || !box) return;
+    const mode = modeEl.value;
+    const fam = mode === "cq" ? "cq" : "bitrate";
+    const inputs = [...box.querySelectorAll(".vt-row-val")];
+    const hint = box.querySelector(".vt-row-hint");
+    const twoWrap = box.querySelector(".vt-row-two");
+    if (mode === "cq") {
+      if (hint) hint.textContent = tt("CQ/QP: niedrig = hohe Qualität · hoch = kleinere Datei · leere Felder werden ignoriert");
+      inputs.forEach((inp) => { inp.min = 1; inp.max = 51; });
+    } else {
+      if (hint) hint.textContent = tt("Bitrate in kbit/s (z. B. 8000, 6000, 4000, 2000) · leere Felder werden ignoriert");
+      inputs.forEach((inp) => { inp.min = 500; inp.max = 50000; });
+    }
+    if (twoWrap) twoWrap.hidden = fam !== "bitrate";
+    if (box.dataset.fam && box.dataset.fam !== fam) {
+      const defaults = mode === "cq" ? [20, 24, 28, 32] : [8000, 6000, 4000, 2000];
+      inputs.forEach((inp, idx) => { inp.value = defaults[idx]; });
+    }
+    box.dataset.fam = fam;
   }
 
   function gatherAudioTracks() {
@@ -2391,7 +2467,7 @@
       }
       const recCls = recSpeed && r.speed === recSpeed ? " row-recommended" : "";
         const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
-        const ist = measuredBitrateText(r.video_kbps, r.video_bitrate_human);
+        const ist = bitrateReport(r);
       const vmaf = r.vmaf != null ? Number(r.vmaf).toFixed(1) : "—";
       const low = r.vmaf_1pct != null ? Number(r.vmaf_1pct).toFixed(1) : "—";
       const spd = speedLabelFor(r.platform, r.codec, r.speed);
@@ -3718,6 +3794,10 @@
     }
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
+    const applyBtn = $("btn-vmaf-apply");
+    if (applyBtn) applyBtn.addEventListener("click", () => {
+      if (state.vmafArchiveData) applyArchivedVmaf(state.vmafArchiveData);
+    });
     const csv = $("btn-vmaf-csv");
     if (csv) csv.addEventListener("click", exportVmafCsv);
     const repick = $("btn-vmaf-repick");
@@ -3869,14 +3949,178 @@
       fillVmafTable(vmaf);
       state.shotScene = null;
       renderScreenshots(vmaf);
+      state.vmafArchiveData = data;
+      const applied = $("vmaf-archive-applied");
+      if (applied) applied.textContent = "";
     } catch (e) { /* ignorieren */ }
+  }
+
+  function vmafRunGroups(vmaf) {
+    const groups = [];
+    (vmaf.results || []).forEach((r) => {
+      const mode = r.rate_mode || vmaf.rate_mode || "cq";
+      const key = [
+        r.platform || "", r.codec || "", r.encoder_speed || "", r.b_frames || "",
+        r.nvenc_tune || "", r.aq_strength || "", r.keyint_sec || "",
+        mode, r.two_pass ? "1" : "0",
+      ].join("|");
+      let g = groups.find((x) => x.key === key);
+      if (!g) {
+        g = { key, r, mode, values: [] };
+        groups.push(g);
+      }
+      const v = r.value != null ? r.value : r.quality;
+      if (v != null && !g.values.includes(v)) g.values.push(Number(v));
+    });
+    return groups;
+  }
+
+  function applyArchivedVmaf(data) {
+    const vmaf = (data && data.analysis) || {};
+    const params = (data && data.params) || {};
+    const groups = vmafRunGroups(vmaf);
+    const baseGroup = groups.find((g) =>
+      g.r.platform === vmaf.recommended_platform && g.r.codec === vmaf.recommended_codec
+      && g.mode === (vmaf.rate_mode || g.mode))
+      || groups.find((g) => g.mode === (vmaf.rate_mode || "cq"))
+      || groups[0];
+    const base = {
+      platform: params.platform || (baseGroup && baseGroup.r.platform) || "",
+      codec: params.codec || (baseGroup && baseGroup.r.codec) || "",
+      encoder_speed: params.encoder_speed || (baseGroup && baseGroup.r.encoder_speed) || "",
+      b_frames: params.b_frames || (baseGroup && baseGroup.r.b_frames) || "auto",
+      nvenc_tune: params.nvenc_tune || (baseGroup && baseGroup.r.nvenc_tune) || "auto",
+      aq_strength: params.aq_strength || (baseGroup && baseGroup.r.aq_strength) || 8,
+      keyint_sec: params.keyint_sec != null
+        ? params.keyint_sec
+        : ((baseGroup && baseGroup.r.keyint_sec) || 0),
+      rate_mode: params.rate_mode || vmaf.rate_mode || (baseGroup && baseGroup.mode) || "cq",
+      test_values: (params.test_values && params.test_values.length)
+        ? params.test_values
+        : (baseGroup ? baseGroup.values : []),
+      two_pass: params.two_pass != null
+        ? !!params.two_pass
+        : !!(baseGroup && (baseGroup.r.two_pass
+          || String(baseGroup.r.encoder_args || "").includes("-multipass fullres")
+          || /(^|\s)-pass(\s|$)/.test(baseGroup.r.encoder_args || ""))),
+      clip_seconds: params.clip_seconds || vmaf.clip_seconds || 30,
+      samples: params.samples
+        || (vmaf.sample_starts && vmaf.sample_starts.length)
+        || 1,
+      anime: !!params.anime,
+      screenshots: params.generate_screenshots !== false,
+      sample_mode: params.sample_mode || "even",
+      scene_min_pct: params.scene_min_pct || 10,
+    };
+    const setVal = (id, val) => {
+      const el = $(id);
+      if (!el || val == null || val === "") return;
+      el.value = String(val);
+    };
+    setVal("vt-platform", base.platform);
+    if (typeof vtUpdateCodecAvailability === "function") vtUpdateCodecAvailability();
+    setVal("vt-codec", base.codec);
+    if (typeof vtUpdateCodecAvailability === "function") vtUpdateCodecAvailability();
+    fillJobSpeedSelect("vt-enc-speed", "vt-platform", "vt-codec", base.encoder_speed);
+    setVal("vt-b-frames", base.b_frames);
+    setVal("vt-nvenc-tune", base.nvenc_tune);
+    if ($("vt-aq-strength")) {
+      $("vt-aq-strength").value = String(base.aq_strength);
+      const lab = $("vt-aq-val");
+      if (lab) lab.textContent = String(base.aq_strength);
+    }
+    setVal("vt-keyint", base.keyint_sec);
+    setVal("vt-rate-mode", base.rate_mode);
+    vtUpdateTestHints(false);
+    const tests = [...document.querySelectorAll("#vt-test-grid .vt-test-val")];
+    tests.forEach((inp, i) => {
+      inp.value = base.test_values[i] != null ? String(base.test_values[i]) : "";
+    });
+    const clip = $("vt-clip");
+    if (clip) {
+      clip.value = String(base.clip_seconds);
+      const shown = $("vt-clip-val");
+      if (shown) shown.textContent = clip.value;
+    }
+    setVal("vt-samples", base.samples);
+    if ($("vt-two-pass")) $("vt-two-pass").checked = !!base.two_pass;
+    if ($("vt-anime")) $("vt-anime").checked = !!base.anime;
+    if ($("vt-screenshots")) $("vt-screenshots").checked = !!base.screenshots;
+    const sampleBox = $("bitrate-sample-mode");
+    if (sampleBox) sampleBox.checked = base.sample_mode === "bitrate";
+    setVal("scene-min-pct", base.scene_min_pct);
+    applyLegacyBFrames(document.getElementById("vt-enc-base"));
+
+    document.querySelectorAll("#vt-extra-rows .vt-enc-row").forEach((el) => el.remove());
+    refreshVtAddButton();
+    const extras = Array.isArray(params.compare_rows)
+      ? params.compare_rows
+      : groups.filter((g) => g !== baseGroup).map((g) => {
+        const ownRate = g.mode !== base.rate_mode
+          || !!g.r.two_pass !== !!base.two_pass
+          || JSON.stringify(g.values) !== JSON.stringify(base.test_values || []);
+        return {
+          platform: g.r.platform,
+          codec: g.r.codec,
+          encoder_speed: g.r.encoder_speed,
+          b_frames: g.r.b_frames,
+          nvenc_tune: g.r.nvenc_tune,
+          aq_strength: g.r.aq_strength,
+          keyint_sec: g.r.keyint_sec,
+          rate_mode: ownRate ? g.mode : "",
+          test_values: ownRate ? g.values : [],
+          two_pass: ownRate ? !!g.r.two_pass : false,
+        };
+      });
+    extras.slice(0, VT_EXTRA_MAX).forEach((row) => {
+      addVtRow();
+      const host = $("vt-extra-rows");
+      const el = host && host.lastElementChild;
+      const prefix = el && el.dataset.prefix;
+      if (!prefix) return;
+      setVal(prefix + "-platform", row.platform);
+      syncExtraRow(prefix);
+      setVal(prefix + "-codec", row.codec);
+      syncExtraRow(prefix);
+      fillJobSpeedSelect(prefix + "-enc-speed", prefix + "-platform", prefix + "-codec", row.encoder_speed);
+      setVal(prefix + "-b-frames", row.b_frames || "auto");
+      setVal(prefix + "-nvenc-tune", row.nvenc_tune || "auto");
+      const aq = $(prefix + "-aq-strength");
+      if (aq && row.aq_strength) {
+        aq.value = String(row.aq_strength);
+        const lab = $(prefix + "-aq-val");
+        if (lab) lab.textContent = String(row.aq_strength);
+      }
+      setVal(prefix + "-keyint", row.keyint_sec != null ? row.keyint_sec : 0);
+      if (row.rate_mode) {
+        const box = $(prefix + "-rate-extra");
+        const custom = $(prefix + "-rate-custom");
+        if (box) box.dataset.fam = row.rate_mode === "cq" ? "cq" : "bitrate";
+        setVal(prefix + "-rate-mode", row.rate_mode);
+        syncRowRate(prefix);
+        const inputs = box ? [...box.querySelectorAll(".vt-row-val")] : [];
+        (row.test_values || []).slice(0, 4).forEach((v, i) => {
+          if (inputs[i]) inputs[i].value = String(v);
+        });
+        const two = $(prefix + "-two-pass");
+        if (two) two.checked = !!row.two_pass;
+        if (custom) custom.checked = true;
+        if (box) box.classList.add("is-open");
+      }
+      applyLegacyBFrames($(prefix + "-b-frames"));
+    });
+    const note = $("vmaf-archive-applied");
+    if (note) note.textContent = " · " + tt("Einstellungen für einen neuen Vergleich übernommen.");
   }
 
   function showLiveVmaf() {
     state.viewSession = null;
+    state.vmafArchiveData = null;
     state.lastVmafKey = null; // Neuzeichnen der Live-Ansicht erzwingen
     const note = $("vmaf-archive-note");
     if (note) note.style.display = "none";
+    const applied = $("vmaf-archive-applied");
+    if (applied) applied.textContent = "";
     const sel = $("vmaf-history");
     if (sel) sel.value = "";
     renderVmaf(state.lastItems || [], state.lastActiveId);
@@ -3893,7 +4137,28 @@
 
   function measuredBitrateText(kbps, human) {
     const h = (human && String(human).trim()) || fmtKbps(kbps);
-    return h && h !== "—" ? `Ist ${h}` : "";
+    return h && h !== "—" ? `${tt("Ist")} ${h}` : "";
+  }
+
+  // Zielbitrate und gemessene Bitrate nebeneinander, plus Abweichung in Prozent.
+  // Bei CQ gibt es kein Bitrate-Ziel, dann bleibt die gemessene Bitrate.
+  function bitrateReport(r, kbps) {
+    if (!r) return "";
+    const raw = kbps != null && kbps !== "" ? kbps : r.video_kbps;
+    const measured = Number(raw);
+    const ist = measured > 0 ? fmtKbps(measured) : "";
+    const mode = r.rate_mode || "";
+    const target = Number(r.value != null ? r.value : r.quality);
+    if ((mode === "abr" || mode === "bitrate") && target > 0) {
+      const parts = [`${tt("Ziel")} ${Math.round(target)} kbit/s`];
+      if (ist) parts.push(`${tt("Ist")} ${ist}`);
+      if (measured > 0) {
+        const d = Math.round((measured - target) / target * 100);
+        parts.push((d > 0 ? "+" : "") + d + " %");
+      }
+      return parts.join(" · ");
+    }
+    return ist ? `${tt("Ist")} ${ist}` : "";
   }
 
   function shotsOf(r) {
@@ -3957,9 +4222,8 @@
           bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
         if (sceneScore && sceneScore.xpsnr != null)
           bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
-        const ist = measuredBitrateText(
-          (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps,
-          s && s.kbps ? "" : x.r.video_bitrate_human);
+        const ist = bitrateReport(
+          x.r, (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps);
         if (ist) bits.push(ist);
         tiles.push({
           src: s.enc,
@@ -4373,7 +4637,25 @@
     const num = (v, d) => (v == null || v === "" || Number.isNaN(Number(v)))
       ? "" : Number(v).toFixed(d);
     const line = (cells) => cells.map(esc).join(";");
+    const rateName = (r) => {
+      const m = (r && r.rate_mode) || vmaf.rate_mode || "";
+      if (m === "abr") return "ABR";
+      if (m === "bitrate") return "CBR";
+      if (m === "cq") return "CQ";
+      return m;
+    };
+    const twoName = (r) => {
+      const args = (r && r.encoder_args) || "";
+      const on = !!(r && r.two_pass)
+        || args.includes("-multipass fullres")
+        || /(^|\s)-pass(\s|$)/.test(args);
+      return on ? "ja" : "nein";
+    };
     const settingCells = (r) => [
+      rateName(r),
+      twoName(r),
+      r.video_kbps ? Math.round(r.video_kbps) : "",
+      r.recommended ? "ja" : "",
       r.encoder_speed || "",
       r.b_frames || "",
       r.nvenc_tune || "",
@@ -4382,20 +4664,30 @@
       r.encoder_args || "",
     ];
     const settingHead = [
+      "Steuerungsmodus", "Zwei-Pass", "Ist kbit/s", "Empfohlen",
       "Speed", "B-Frames", "Tune", "AQ", "Keyframe s", "Encoder-Args",
     ];
     const scenes = vmafSceneList(vmaf);
     const session = state.vmafSession;
+    const pull = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
     Promise.all([
       loadSceneBitrate(vmaf),
       session
         ? Promise.all(scenes.map((sc) =>
-          fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)))
+          pull(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc}`)))
         : Promise.resolve([]),
-    ]).then(([, logs]) => {
+      session
+        ? Promise.all(scenes.map((sc) =>
+          pull(`/api/vmaf/source-bitrate?session=${encodeURIComponent(session)}&scene=${sc}`)))
+        : Promise.resolve([]),
+    ]).then(([, logs, sources]) => {
       const lines = [];
+      lines.push(line([
+        "Modell", vmaf.model || "",
+        "Clip s", vmaf.clip_seconds || "",
+        "Szenen", scenes.length,
+      ]));
+      lines.push("");
       lines.push(line([
         "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
         "H-Mittel", "PSNR", "XPSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
@@ -4413,13 +4705,15 @@
       });
       lines.push("");
       lines.push(line([
-        "Szene", "Einstellung", "VMAF", "1%-Low", "H-Mittel", "PSNR", "XPSNR", "SSIM", "kbit/s",
+        "Szene", "Start s", "Länge s", "Einstellung", "VMAF", "1%-Low", "H-Mittel",
+        "PSNR", "XPSNR", "SSIM", "kbit/s",
         ...settingHead,
       ]));
       rows.forEach((r) => {
         (r.scene_scores || []).forEach((sc) => {
           lines.push(line([
             (sc.scene != null ? sc.scene + 1 : ""),
+            num(sc.start, 3), num(sc.length, 3),
             r.label || ("Q" + r.quality),
             num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
             num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4),
@@ -4482,6 +4776,24 @@
         lines.push(line(["Einstellung", "Szene", "Frame", "Zeit s", "kbit/s"]));
         brRows.forEach((row) => lines.push(row));
       }
+      const srcRows = [];
+      (sources || []).forEach((pack, idx) => {
+        const bins = (pack && pack.bins) || [];
+        const sceneNo = (scenes[idx] != null ? scenes[idx] : idx) + 1;
+        bins.forEach((b) => {
+          srcRows.push(line([
+            sceneNo,
+            b.n != null ? b.n : "",
+            num(b.t, 4), num(b.kbps, 1),
+          ]));
+        });
+      });
+      if (srcRows.length) {
+        lines.push("");
+        lines.push(line(["Original-Bitrate"]));
+        lines.push(line(["Szene", "Frame", "Zeit s", "kbit/s"]));
+        srcRows.forEach((row) => lines.push(row));
+      }
       const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");
       const stem = (state.vmafSource && state.vmafSource.name)
@@ -4498,7 +4810,7 @@
     const body = $("vmaf-table").querySelector("tbody");
     body.innerHTML = vmaf.results.map((r, idx) => `
       <tr class="${r.recommended ? "row-recommended" : ""} ${vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue()) ? "row-target-miss" : ""}">
-        <td>${escapeHtml(r.label || ("Q" + r.quality))}${measuredBitrateText(r.video_kbps, r.video_bitrate_human) ? `<div class="hint">${escapeHtml(measuredBitrateText(r.video_kbps, r.video_bitrate_human))}</div>` : ""}</td>
+        <td>${escapeHtml(r.label || ("Q" + r.quality))}${bitrateReport(r) ? `<div class="hint">${escapeHtml(bitrateReport(r))}</div>` : ""}</td>
         <td>${vmafCell(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
@@ -5324,9 +5636,12 @@
     const aqs = new Set(same.map((x) => String(x.aq_strength ?? "")));
     const kis = new Set(same.map((x) => String(x.keyint_sec ?? "")));
     const tunes = new Set(same.map((x) => x.nvenc_tune || ""));
+    const modes = new Set(same.map((x) => x.rate_mode || "cq"));
+    const twos = new Set(same.map((x) => (x.two_pass ? "1" : "0")));
     const tags = {
       auto: "Automatisch", off: "Aus", short: "Kurz", medium: "Mittel", deep: "Tief",
     };
+    const modeTags = { cq: "CQ", bitrate: "CBR", abr: "ABR" };
     const tuneTags = {
       auto: "Tune automatisch", off: "Tune aus", hq: "HQ", uhq: "UHQ",
     };
@@ -5336,6 +5651,8 @@
     if (tunes.size > 1 && r.nvenc_tune) extra.push(tt(tuneTags[r.nvenc_tune] || r.nvenc_tune));
     if (aqs.size > 1 && r.aq_strength) extra.push("AQ " + r.aq_strength);
     if (kis.size > 1) extra.push(r.keyint_sec ? (r.keyint_sec + " s") : "Keyframe automatisch");
+    if (modes.size > 1) extra.push(modeTags[r.rate_mode] || r.rate_mode || "CQ");
+    if (twos.size > 1 && r.two_pass) extra.push(tt("Zwei-Pass"));
     return extra.length ? `${base} · ${extra.join(" · ")}` : base;
   }
 
@@ -5343,7 +5660,8 @@
     const rows = results || [];
     const keys = new Set(rows.map((r) =>
       [r.platform, r.codec, r.encoder_speed || "", r.b_frames || "",
-       r.nvenc_tune || "", r.aq_strength || "", r.keyint_sec || ""].join("|")));
+       r.nvenc_tune || "", r.aq_strength || "", r.keyint_sec || "",
+       r.rate_mode || "cq", r.two_pass ? "1" : "0"].join("|")));
     const pcs = new Set(rows.map((r) => [r.platform, r.codec].join("|")));
     return keys.size > pcs.size;
   }
@@ -5431,8 +5749,8 @@
               const r = rows[i];
               if (!r) return "";
               const lines = [];
+              const sc = sceneMode ? sceneEntry(r, scene) : null;
               if (sceneMode) {
-                const sc = sceneEntry(r, scene);
                 if (sc && sc.p1 != null) lines.push(`1%-Low ${Number(sc.p1).toFixed(1)}`);
                 if (sc && sc.hmean != null) lines.push(`H-Ø ${Number(sc.hmean).toFixed(1)}`);
                 if (sc && sc.xpsnr != null) {
@@ -5457,6 +5775,8 @@
                 }
               }
               if (r.recommended) lines.push("★ Empfohlener Sweet Spot");
+              const bits = bitrateReport(r, sceneMode && sc ? sc.kbps : null);
+              if (bits) lines.push(bits);
               return lines;
             },
           }},
@@ -5552,8 +5872,10 @@
                 if (r.xpsnr != null) extra.push(`XPSNR ${Number(r.xpsnr).toFixed(1)} dB`);
               }
               const v = sceneMode ? sceneScoreOf(r, scene) : r.vmaf;
+              const bits = bitrateReport(r, sceneMode && sc ? sc.kbps : null);
               return `${c.dataset.label} ${String(r.label || "").split("·").pop().trim()}: `
                 + `VMAF ${v != null ? Number(v).toFixed(1) : "—"} · ${r.predicted_human} (${r.savings_percent}%)`
+                + (bits ? ` · ${bits}` : "")
                 + (extra.length ? ` · ${extra.join(" · ")}` : "")
                 + (sceneMode ? " · Ersparnis = ganze Datei" : "")
                 + (r.recommended ? "  ★" : "");
@@ -10456,9 +10778,40 @@
     const wipe = ab.mode === "wipe";
     wrap.classList.toggle("ab-wipe", wipe);
     if (handle) handle.style.display = wipe ? "" : "none";
-    // Im Wipe liegen die Videos übereinander → native Controls stören.
-    Object.values(ab.sides).forEach((s) => { if (s.video) s.video.controls = !wipe; });
     wrap.style.setProperty("--ab-wipe", ab.wipe + "%");
+    abApplyZoom();
+  }
+
+  // 1:1 und darüber: die Mitte füllt das Fenster in echten Pixeln (bzw. 2×/4×).
+  // Der Maßstab gilt für beide Seiten, damit derselbe Ausschnitt vergleichbar bleibt.
+  function abZoomFactor(video) {
+    const sel = $("ab-zoom");
+    const mode = sel ? sel.value : "fit";
+    if (!mode || mode === "fit") return 1;
+    const extra = parseFloat(mode) || 1;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh || !video.clientWidth || !video.clientHeight) return 1;
+    const fit = Math.min(video.clientWidth / vw, video.clientHeight / vh);
+    if (!(fit > 0)) return 1;
+    const dpr = window.devicePixelRatio || 1;
+    return extra / (fit * dpr);
+  }
+
+  function abApplyZoom() {
+    const sel = $("ab-zoom");
+    const zoomed = !!(sel && sel.value && sel.value !== "fit");
+    const wipe = ab.mode === "wipe";
+    Object.values(ab.sides).forEach((s) => {
+      const video = s && s.video;
+      if (!video) return;
+      video.controls = !wipe && !zoomed;
+      if (!zoomed || !video.videoWidth) {
+        if (!zoomed) video.style.transform = "";
+        return;
+      }
+      video.style.transform = `scale(${abZoomFactor(video)})`;
+    });
   }
 
   async function abLoadWeakSpots() {
@@ -10554,9 +10907,13 @@
         va.pause();
         vb.pause();
       }
-      // Laufende Drift korrigieren (engere Toleranz für sauberere Sync).
-      if (abSynced() && ab.sides.b.ready && Math.abs((abTime(ab.sides.b) - abOffsetB()) - cur) > 0.15) {
-        alignB(true);
+      // Drift in Filmzeit, nicht gegen die Fensterzeit. Sonst liegt der
+      // Testclip beim Original um den Szenenstart daneben und wird bei
+      // jedem timeupdate neu gespult (Flackern).
+      const sb = ab.sides.b;
+      const targetB = abTime(sa) + abOffsetB();
+      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > 0.25) {
+        alignB(false);
       }
     });
 
@@ -10587,6 +10944,16 @@
 
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
+    const zoomEl = $("ab-zoom");
+    if (zoomEl) zoomEl.addEventListener("change", abApplyZoom);
+    [va, vb].forEach((video) => {
+      video.addEventListener("loadedmetadata", abApplyZoom);
+      video.addEventListener("resize", abApplyZoom);
+    });
+    if (typeof ResizeObserver !== "undefined") {
+      const panes = $("ab-videos");
+      if (panes) new ResizeObserver(() => abApplyZoom()).observe(panes);
+    }
     const wrap = $("ab-videos");
     if (wrap) {
       let drag = false;

@@ -693,7 +693,7 @@
 
             <div class="opt-section">
               <h4 class="subsection">Encoder</h4>
-              <p class="hint">Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.</p>
+              <p class="hint">Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile. Über „Andere Steuerung“ bekommt eine zusätzliche Zeile eigenen Steuerungsmodus, eigene Testwerte und Zwei-Pass. Clip-Anzahl und Länge bleiben gemeinsam.</p>
               <div class="vt-enc-row" id="vt-enc-base">
                 <div class="vt-row-head"><span>Vergleich 1</span></div>
                 <div class="field">
@@ -780,6 +780,8 @@
           <div id="vmaf-archive-note" class="archive-note" style="display:none">
             Archiv-Ansicht – gespeicherter Vergleich.
             <span id="vmaf-archive-src" class="archive-src"></span>
+            <span id="vmaf-archive-applied" class="archive-src"></span>
+            <button class="btn btn-ghost btn-sm" id="btn-vmaf-apply" type="button">In die Maske übernehmen</button>
             <button class="btn btn-ghost btn-sm" id="btn-vmaf-live">Zur aktuellen Analyse</button>
           </div>
           <div id="vmaf-keep-source" class="keep-source-note" style="display:none">
@@ -2804,6 +2806,15 @@
                 <select id="ab-mode" style="width:auto">
                   <option value="side">Nebeneinander</option>
                   <option value="wipe">Wipe (geteiltes Bild)</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label style="font-size:11px" data-tip="Ganzes Bild passt die Datei ins Fenster. 1:1 zeigt die Mitte in echten Pixeln, passend zur Fenstergröße. 2× und 4× vergrößern genau diesen Ausschnitt.">Zoom</label>
+                <select id="ab-zoom" style="width:auto">
+                  <option value="fit">Ganzes Bild</option>
+                  <option value="1">1:1 Mitte</option>
+                  <option value="2">2× Mitte</option>
+                  <option value="4">4× Mitte</option>
                 </select>
               </div>
               <div class="field" style="margin:0">

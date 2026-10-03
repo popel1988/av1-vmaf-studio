@@ -872,7 +872,10 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
 .ab-videos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
 .ab-pane { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
-.ab-pane video { width: 100%; display: block; max-height: 60vh; background: #000; }
+.ab-pane video {
+  width: 100%; display: block; max-height: 60vh; background: #000;
+  object-fit: contain; transform-origin: center center;
+}
 .ab-tag {
   position: absolute; top: 8px; left: 8px; z-index: 2;
   background: rgba(0,0,0,.6); color: #fff; font-weight: 700;
@@ -1409,6 +1412,19 @@ input[type="range"]::-moz-range-thumb {
   font-size: 12px;
   font-weight: 600;
 }
+.vt-rate-toggle { grid-column: 1 / -1; margin: 0; }
+.vt-rate-extra {
+  display: none;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.vt-rate-extra.is-open { display: grid; }
+.vt-rate-extra .vt-row-two { grid-column: 1 / -1; margin: 0; }
 #vt-add-row { margin-top: 8px; }
 
 /* Kompakte Format-/Container-Auswahl (Super-Tool) als Pills nebeneinander */
@@ -1866,7 +1882,7 @@ input[type="range"]::-moz-range-thumb {
   .settings-grid,
   .settings-grid-3,
   #audio-encode-opts .settings-grid,
-  .vt-enc-row { grid-template-columns: 1fr; }
+  .vt-enc-row, .vt-rate-extra { grid-template-columns: 1fr; }
 }
 
 /* scrollbar */
@@ -2022,14 +2038,32 @@ input[type="range"]::-moz-range-thumb {
 @media (max-width: 720px) { .st-common-grid { grid-template-columns: 1fr; } }
 
 /* ----------------------------- Compact density -------------------------- */
+/* Kein margin an .field: das Encoding-Raster hat schon gap. Ein extra
+   margin-bottom hat den Kompaktmodus höher gemacht als die normale Ansicht. */
 [data-density="compact"] {
   --gap: 10px;
   --radius: 10px;
   --radius-sm: 6px;
 }
-[data-density="compact"] .card-body { padding: 12px 14px; }
-[data-density="compact"] .card-head { padding: 10px 14px; }
-[data-density="compact"] .settings .field { margin-bottom: 8px; }
+[data-density="compact"] .main { padding: 16px 18px; }
+[data-density="compact"] .sidebar { padding: 14px 12px; gap: 14px; }
+[data-density="compact"] .card-body { padding: 8px 10px; }
+[data-density="compact"] .card-head { padding: 8px 10px; }
+[data-density="compact"] .field label,
+[data-density="compact"] .theme-picker label {
+  margin-bottom: 3px;
+}
+[data-density="compact"] select,
+[data-density="compact"] input[type="text"],
+[data-density="compact"] input[type="number"],
+[data-density="compact"] input[type="password"],
+[data-density="compact"] input[type="search"] {
+  padding: 5px 8px;
+  font-size: 13px;
+}
+[data-density="compact"] .settings { gap: 8px; }
+[data-density="compact"] .settings-grid .field > label,
+[data-density="compact"] .settings-grid-3 .field > label { min-height: 0; }
 [data-density="compact"] .queue-table th,
 [data-density="compact"] .queue-table td,
 [data-density="compact"] .data-table th,
@@ -2039,13 +2073,14 @@ input[type="range"]::-moz-range-thumb {
 }
 [data-density="compact"] .btn { padding: 4px 10px; font-size: 12.5px; }
 [data-density="compact"] .nav-item { padding: 6px 10px; font-size: 13px; }
-[data-density="compact"] .hint { font-size: 11px; margin-top: 2px; }
+[data-density="compact"] .hint { font-size: 11px; margin-top: 2px; line-height: 1.35; }
 [data-density="compact"] .stat-grid { gap: 8px; }
 [data-density="compact"] .profile-row { gap: 6px; }
-[data-density="compact"] .opt-section { padding: 10px 12px; }
-[data-density="compact"] .settings-wide { gap: 10px; }
+[data-density="compact"] .opt-section { padding: 8px 10px; }
+[data-density="compact"] .subsection { margin: 0 0 6px; }
+[data-density="compact"] .settings-wide { gap: 8px; }
 [data-density="compact"] .settings-grid,
-[data-density="compact"] .settings-grid-3 { gap: 10px 12px; }
+[data-density="compact"] .settings-grid-3 { gap: 6px 10px; }
 [data-density="compact"] .faq-item summary { padding: 8px 12px; font-size: 13px; }
 [data-density="compact"] .faq-item .faq-body { padding: 0 12px 10px 2.2em; }
 

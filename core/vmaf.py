@@ -62,6 +62,8 @@ class VmafOptions:
     # Alte Ein-Achsen-Varianten. Neue Vergleiche nutzen rows.
     variants: list = field(default_factory=list)
     # Volle Zusatzzeilen: Plattform, Codec, Speed, B-Frames, AQ, Keyframe.
+    # Optional je Zeile: rate_mode, test_values, two_pass. Fehlen sie, gilt
+    # die gemeinsame Steuerung des Laufs.
     rows: list = field(default_factory=list)
 
 
@@ -87,6 +89,27 @@ _KEYINT_TAGS = {0: "Keyframe automatisch", 2: "2 s", 5: "5 s", 10: "10 s"}
 _TUNE_TAGS = {"auto": "Tune automatisch", "off": "Tune aus", "hq": "HQ", "uhq": "UHQ"}
 
 
+def _rate_override(raw: dict) -> tuple[str, tuple | None, bool | None]:
+    """Eigene Steuerung einer Vergleichszeile.
+
+    Leeres Tupel heißt: Modus ist gesetzt, aber keine Testwerte. None heißt:
+    die Zeile übernimmt Modus, Werte und Zwei-Pass des Laufs.
+    """
+    mode = str(raw.get("rate_mode") or "")
+    if mode not in ("cq", "bitrate", "abr"):
+        return "", None, None
+    vals: list[int] = []
+    for v in list(raw.get("test_values") or [])[:4]:
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            vals.append(n)
+    two = bool(raw.get("two_pass")) if mode in ("bitrate", "abr") else False
+    return mode, tuple(vals), two
+
+
 def _collect_runs(platform: str, codec: str, speed: str, b_frames: str,
                   encoders: list, variants: list,
                   aq_strength: int = 8, keyint_sec: int = 0,
@@ -94,27 +117,32 @@ def _collect_runs(platform: str, codec: str, speed: str, b_frames: str,
                   rows: list | None = None) -> list[tuple]:
     """Basiszeile, alte Zusatz-Encoder und volle Vergleichszeilen.
 
-    Rückgabe: (plattform, codec, speed, b_frames, aq, keyint, tune, anzeige-suffix).
+    Rückgabe: (plattform, codec, speed, b_frames, aq, keyint, tune,
+    anzeige-suffix, rate_mode, testwerte, two_pass).
+    rate_mode "" und testwerte None übernehmen die gemeinsame Steuerung.
     """
     runs: list[tuple] = []
     base_aq = max(1, min(15, int(aq_strength or 8)))
     base_ki = ff.normalize_keyint_sec(keyint_sec)
     base_tune = ff.normalize_nvenc_tune(nvenc_tune)
 
-    def add(p: str, c: str, sp: str, bf: str, aq: int, ki: int, tune: str) -> None:
+    def add(p: str, c: str, sp: str, bf: str, aq: int, ki: int, tune: str,
+            rate_mode: str = "", values: tuple | None = None,
+            two_pass: bool | None = None) -> None:
         enc = ff.encoder_name(p, c)
         native = ff.alias_to_native(enc, sp) if enc else sp
         mode = ff.normalize_b_frames(bf)
         strength = max(1, min(15, int(aq or 8)))
         gap = ff.normalize_keyint_sec(ki)
         mode_tune = ff.normalize_nvenc_tune(tune)
-        key = (p, c, native, mode, strength, gap, mode_tune)
-        if any(r[:7] == key for r in runs):
+        rm = rate_mode if rate_mode in ("cq", "bitrate", "abr") else ""
+        key = (p, c, native, mode, strength, gap, mode_tune, rm, values, two_pass)
+        if any((*r[:7], r[8], r[9], r[10]) == key for r in runs):
             return
         if not ff.encoder_available(p, c):
             logger.warning("Vergleichs-Encoder übersprungen (nicht verfügbar): %s/%s", p, c)
             return
-        runs.append((*key, ""))
+        runs.append((*key[:7], "", rm, values, two_pass))
 
     if ff.encoder_available(platform, codec):
         add(platform, codec, speed, b_frames, base_aq, base_ki, base_tune)
@@ -133,6 +161,7 @@ def _collect_runs(platform: str, codec: str, speed: str, b_frames: str,
     for raw in list(rows or [])[:6]:
         if not isinstance(raw, dict):
             continue
+        rm, vals, two = _rate_override(raw)
         add(
             str(raw.get("platform") or ""),
             str(raw.get("codec") or ""),
@@ -141,15 +170,16 @@ def _collect_runs(platform: str, codec: str, speed: str, b_frames: str,
             int(raw.get("aq_strength") or base_aq),
             int(raw.get("keyint_sec") or 0),
             str(raw.get("nvenc_tune") or base_tune),
+            rate_mode=rm, values=vals, two_pass=two,
         )
     if not runs:
         runs.append((
             platform, codec, speed, ff.normalize_b_frames(b_frames),
-            base_aq, base_ki, base_tune, "",
+            base_aq, base_ki, base_tune, "", "", None, None,
         ))
 
     tagged = []
-    for p, c, sp, bf, aq, ki, tune, _tag in runs:
+    for p, c, sp, bf, aq, ki, tune, _tag, rm, vals, two in runs:
         peers = [r for r in runs if r[0] == p and r[1] == c]
         parts = []
         if len({r[2] for r in peers}) > 1:
@@ -162,7 +192,7 @@ def _collect_runs(platform: str, codec: str, speed: str, b_frames: str,
             parts.append(_KEYINT_TAGS.get(ki, str(ki)))
         if len({r[6] for r in peers}) > 1:
             parts.append(_TUNE_TAGS.get(tune, tune))
-        tagged.append((p, c, sp, bf, aq, ki, tune, " · ".join(parts)))
+        tagged.append((p, c, sp, bf, aq, ki, tune, " · ".join(parts), rm, vals, two))
     return tagged
 
 
@@ -238,6 +268,7 @@ class VmafResult:
     keyint_sec: int = 0
     nvenc_tune: str = ""
     encoder_args: str = ""          # Flags ab -c:v, wie der Test-Encode sie bekam
+    two_pass: bool = False
 
     def to_dict(self) -> dict:
         d = {
@@ -254,6 +285,7 @@ class VmafResult:
             "keyint_sec": int(self.keyint_sec or 0),
             "nvenc_tune": self.nvenc_tune or "",
             "encoder_args": self.encoder_args or "",
+            "two_pass": bool(self.two_pass),
             "vmaf": round(self.vmaf, 2),
             "vmaf_score": round(quality_score(self.vmaf, self.vmaf_1pct, self.vmaf_hmean), 2),
             "clip_size_bytes": self.clip_size_bytes,
@@ -828,15 +860,40 @@ def analyze(
 
     # --- Fortschritts-Tracking --------------------------------------------
     n_samples = len(_sample_starts(info.duration, opts.clip_seconds, opts.samples))
+
+    def _mode_of(run) -> str:
+        rm = run[8] if len(run) > 8 else ""
+        return rm if rm in ("cq", "bitrate", "abr") else opts.rate_mode
+
+    def _vals_of(run) -> list[int]:
+        mode = _mode_of(run)
+        raw = run[9] if len(run) > 9 else None
+        if run[8] if len(run) > 8 else "":
+            if raw:
+                return [int(v) for v in raw if int(v) > 0]
+            return [20, 24, 28, 32] if mode == "cq" else [8000, 6000, 4000, 2000]
+        return list(values)
+
+    def _two_of(run) -> bool:
+        if _mode_of(run) not in ("bitrate", "abr"):
+            return False
+        flag = run[10] if len(run) > 10 else None
+        if flag is None:
+            return bool(opts.two_pass)
+        return bool(flag)
+
     # Einheiten je Sample: Encode + VMAF. CPU-Zwei-Pass zählt den ersten Lauf extra.
-    extra_pass = 1 if (use_bitrate and opts.two_pass) else 0
+    steps = 0
     units = 0
-    for p, *_rest in runs:
-        units += n_samples * (2 + (extra_pass if p == "cpu" else 0))
-    budget = {
-        "steps": max(1, len(runs) * len(values)),
-        "units": max(1, units * len(values)),
-    }
+    two_groups: dict[tuple, set] = {}
+    for run in runs:
+        vals_n = max(1, len(_vals_of(run)))
+        extra = 1 if (_two_of(run) and run[0] == "cpu") else 0
+        steps += vals_n
+        units += n_samples * (2 + extra) * vals_n
+        gk = (*run[:7], _mode_of(run))
+        two_groups.setdefault(gk, set()).add(_two_of(run))
+    budget = {"steps": max(1, steps), "units": max(1, units)}
     prog = {"done": 0, "step": 0}
 
     def emit(phase: str, fps=None, sub=None) -> None:
@@ -856,23 +913,34 @@ def analyze(
     def run_value(p: str, c: str, val: int, sp: str, bf: str,
                   tag: str = "", extra: bool = False,
                   aq: int | None = None, ki: int | None = None,
-                  tune: str = "auto") -> None:
+                  tune: str = "auto", rate_mode: str = "",
+                  row_two: bool | None = None, mark_two: bool = False) -> None:
         """Einen Qualitäts-/Bitrate-Punkt für einen Encoder testen."""
         nonlocal last_error
         aq_use = int(aq_strength if aq is None else aq)
         ki_use = int(keyint_sec if ki is None else ki)
         tune_use = ff.normalize_nvenc_tune(tune)
+        mode = rate_mode if rate_mode in ("cq", "bitrate", "abr") else opts.rate_mode
+        point_bitrate = mode in ("bitrate", "abr")
+        if row_two is None:
+            do_two = bool(point_bitrate and opts.two_pass)
+        else:
+            do_two = bool(point_bitrate and row_two)
         if any(r.platform == p and r.codec == c and r.encoder_speed == sp
                and r.b_frames == bf and int(r.aq_strength) == aq_use
                and int(r.keyint_sec) == ki_use
                and (r.nvenc_tune or "auto") == tune_use
+               and (r.rate_mode or "cq") == mode
+               and bool(r.two_pass) == do_two
                and int(r.value) == int(val)
                for r in analysis.results):
             return
         disp = _codec_disp(p, c)
         shown = f"{disp} · {tag}" if tag else disp
-        key = f"{p}_{c}_{sp}_{bf}_{aq_use}_{ki_use}_{tune_use}_{val}"
-        rate_lbl = _label(opts.rate_mode, val)
+        key = f"{p}_{c}_{sp}_{bf}_{aq_use}_{ki_use}_{tune_use}_{mode}_{int(do_two)}_{val}"
+        rate_lbl = _label(mode, val)
+        if mark_two and do_two:
+            rate_lbl += " · Zwei-Pass"
         if extra:
             rate_lbl += " · Zwischenwert"
         lbl = f"{shown} · {rate_lbl}" if (multi or tag) else rate_lbl
@@ -897,8 +965,8 @@ def analyze(
             smp = f" (Clip {si + 1}/{len(references)})" if len(references) > 1 else ""
             test_file = work / f"test_{skey}.mkv"
             passlog = str(work / f"pass_{skey}")
-            cpu_two = bool(use_bitrate and opts.two_pass and p == "cpu")
-            nv_two = bool(use_bitrate and opts.two_pass and p == "nvidia")
+            cpu_two = bool(do_two and p == "cpu")
+            nv_two = bool(do_two and p == "nvidia")
 
             def _test_cmd(pass_num: Optional[int] = None) -> list[str]:
                 kw = dict(
@@ -913,8 +981,8 @@ def analyze(
                     keyint_sec=ki_use,
                     nvenc_tune=tune_use,
                 )
-                if use_bitrate:
-                    kw["rate_mode"] = opts.rate_mode
+                if point_bitrate:
+                    kw["rate_mode"] = mode
                     kw["bitrate_kbps"] = val
                     quality = 28
                 else:
@@ -1046,7 +1114,8 @@ def analyze(
 
         analysis.results.append(VmafResult(
             value=val,
-            rate_mode=opts.rate_mode,
+            rate_mode=mode,
+            two_pass=do_two,
             label=lbl,
             codec=c,
             platform=p,
@@ -1093,13 +1162,20 @@ def analyze(
                     label=f"Ref Szene {si}"))
 
         base_pc = (runs[0][0], runs[0][1])
-        for p, c, sp, bf, aq, ki, tune, tag in runs:
-            offset = 0 if use_bitrate else _cq_offset(base_pc, (p, c))
-            for base_val in values:
+        for run in runs:
+            p, c, sp, bf, aq, ki, tune, tag = run[:8]
+            mode = _mode_of(run)
+            point_br = mode in ("bitrate", "abr")
+            # Eigene Testwerte nicht auf die CQ-Skala eines anderen Codecs schieben.
+            own_vals = bool((run[8] if len(run) > 8 else "") and (run[9] if len(run) > 9 else None))
+            offset = 0 if (point_br or own_vals) else _cq_offset(base_pc, (p, c))
+            mark_two = len(two_groups.get((*run[:7], mode), ())) > 1
+            for base_val in _vals_of(run):
                 if cancelled():
                     break
-                val = base_val if use_bitrate else max(1, min(63, base_val + offset))
-                run_value(p, c, val, sp, bf, tag, aq=aq, ki=ki, tune=tune)
+                val = base_val if point_br else max(1, min(63, base_val + offset))
+                run_value(p, c, val, sp, bf, tag, aq=aq, ki=ki, tune=tune,
+                          rate_mode=mode, row_two=_two_of(run), mark_two=mark_two)
             if cancelled():
                 break
 
@@ -1116,20 +1192,18 @@ def analyze(
                 for p, c, sp, bf, aq, ki, tune, mid in extras:
                     if cancelled():
                         break
-                    tag = next((t for rp, rc, rsp, rbf, raq, rki, rtune, t in runs
-                                if (rp, rc, rsp, rbf, raq, rki, rtune)
-                                == (p, c, sp, bf, aq, ki, tune)), "")
+                    tag = next((run[7] for run in runs
+                                if run[:7] == (p, c, sp, bf, aq, ki, tune)), "")
                     run_value(p, c, mid, sp, bf, tag, extra=True, aq=aq, ki=ki, tune=tune)
 
         if analysis.results:
-            if use_bitrate:
-                analysis.results.sort(
-                    key=lambda r: (r.platform, r.codec, r.encoder_speed, r.b_frames,
-                                   r.aq_strength, r.keyint_sec, r.nvenc_tune, -int(r.value)))
-            else:
-                analysis.results.sort(
-                    key=lambda r: (r.platform, r.codec, r.encoder_speed, r.b_frames,
-                                   r.aq_strength, r.keyint_sec, r.nvenc_tune, int(r.value)))
+            analysis.results.sort(
+                key=lambda r: (
+                    r.platform, r.codec, r.encoder_speed, r.b_frames,
+                    r.aq_strength, r.keyint_sec, r.nvenc_tune or "",
+                    r.rate_mode or "", int(bool(r.two_pass)),
+                    -int(r.value) if (r.rate_mode or "") in ("bitrate", "abr") else int(r.value),
+                ))
 
         _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
@@ -1748,6 +1822,7 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
             aq_strength=int(raw.get("aq_strength") or 0),
             keyint_sec=int(raw.get("keyint_sec") or 0),
             nvenc_tune=str(raw.get("nvenc_tune") or ""),
+            two_pass=bool(raw.get("two_pass")),
             vmaf_hmean=float(raw.get("vmaf_hmean") or 0),
             vmaf_1pct=float(raw.get("vmaf_1pct") or 0),
             psnr=float(raw.get("psnr") or 0),
@@ -1763,15 +1838,16 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
     _pick_recommended(picked, target_vmaf)
     flags = {
         (r.platform, r.codec, r.encoder_speed, r.b_frames,
-         int(r.aq_strength), int(r.keyint_sec), r.nvenc_tune or "", int(r.value)): r.recommended
+         int(r.aq_strength), int(r.keyint_sec), r.nvenc_tune or "",
+         r.rate_mode or "", int(bool(r.two_pass)), int(r.value)): r.recommended
         for r in picked.results
     }
     for raw, result in built:
         raw["recommended"] = bool(flags.get(
             (result.platform, result.codec, result.encoder_speed,
              result.b_frames, int(result.aq_strength), int(result.keyint_sec),
-             result.nvenc_tune or "",
-             int(result.value))))
+             result.nvenc_tune or "", result.rate_mode or "",
+             int(bool(result.two_pass)), int(result.value))))
     analysis["recommended_value"] = picked.recommended_value
     analysis["recommended_quality"] = picked.recommended_quality
     analysis["recommended_codec"] = picked.recommended_codec

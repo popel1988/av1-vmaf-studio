@@ -2087,15 +2087,33 @@ def _parse_rows(entries) -> list:
         aq = max(1, min(15, aq))
         ki = ff.normalize_keyint_sec(raw.get("keyint_sec"))
         tune = ff.normalize_nvenc_tune(raw.get("nvenc_tune", "auto"))
-        item = (p, c, sp, bf, aq, ki, tune)
+        rm = str(raw.get("rate_mode") or "")
+        if rm not in ("cq", "bitrate", "abr"):
+            rm = ""
+        vals: list[int] = []
+        if rm:
+            for v in list(raw.get("test_values") or [])[:4]:
+                try:
+                    n = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if n > 0:
+                    vals.append(n)
+        two = bool(raw.get("two_pass")) and rm in ("bitrate", "abr")
+        item = (p, c, sp, bf, aq, ki, tune, rm, tuple(vals), two)
         if item in seen:
             continue
         seen.add(item)
-        out.append({
+        entry = {
             "platform": p, "codec": c, "encoder_speed": sp,
             "b_frames": bf, "aq_strength": aq, "keyint_sec": ki,
             "nvenc_tune": tune,
-        })
+        }
+        if rm:
+            entry["rate_mode"] = rm
+            entry["test_values"] = vals
+            entry["two_pass"] = two
+        out.append(entry)
         if len(out) >= 6:
             break
     return out

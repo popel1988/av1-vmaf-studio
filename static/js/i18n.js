@@ -309,6 +309,13 @@
     "Testszenen": "Test scenes",
     "Nebeneinander": "Side by side",
     "Wipe (geteiltes Bild)": "Wipe (split image)",
+    "Zoom": "Zoom",
+    "Ganzes Bild": "Whole frame",
+    "1:1 Mitte": "1:1 center",
+    "2× Mitte": "2× center",
+    "4× Mitte": "4× center",
+    "Ganzes Bild passt die Datei ins Fenster. 1:1 zeigt die Mitte in echten Pixeln, passend zur Fenstergröße. 2× und 4× vergrößern genau diesen Ausschnitt.":
+      "Whole frame fits the file in the window. 1:1 shows the center at true pixels, matching the window size. 2× and 4× magnify that same crop.",
     "Immer Transcode (HLS)": "Always transcode (HLS)",
     "Ansicht": "View",
     "Wiedergabe": "Playback",
@@ -1166,6 +1173,10 @@
     "Abbrechen": "Cancel",
     "Quelle": "Source",
     "Ziel": "Target",
+    "Ist": "Actual",
+    "Einstellungen für einen neuen Vergleich übernommen.":
+      "Settings copied for a new comparison.",
+    "In die Maske übernehmen": "Copy into the form",
     "Schätzung": "Estimate",
     "Flags": "Flags",
     "existiert": "exists",
@@ -1800,8 +1811,12 @@
       "8 is the encoder default, which is strength 1.0. Higher protects flats and dark areas more; fine detail can give way a little. CPU H.264 and CPU HEVC only.",
 
     "Grundeinstellungen": "Shared settings",
-    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
-      "Each row is its own run. Platform, codec, speed, B-frames, tune, AQ and keyframe interval apply only to that row.",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile. Über „Andere Steuerung“ bekommt eine zusätzliche Zeile eigenen Steuerungsmodus, eigene Testwerte und Zwei-Pass. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Each row is its own run. Platform, codec, speed, B-frames, tune, AQ and keyframe interval apply only to that row. “Other rate control” gives an extra row its own rate mode, test values and two-pass. Clip count and length stay shared.",
+    "Andere Steuerung": "Other rate control",
+    "Steuerungsmodus, Testwerte und Zwei-Pass nur für diese Zeile. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Rate mode, test values and two-pass for this row only. Clip count and length stay shared.",
+    "Zwei-Pass": "Two-pass",
     "Vergleich 1": "Comparison 1",
     "Vergleich 2": "Comparison 2",
     "Vergleich 3": "Comparison 3",
@@ -1947,6 +1962,13 @@
     "Testszenen": "Escenas de prueba",
     "Nebeneinander": "Lado a lado",
     "Wipe (geteiltes Bild)": "Wipe (imagen dividida)",
+    "Zoom": "Zoom",
+    "Ganzes Bild": "Imagen completa",
+    "1:1 Mitte": "1:1 centro",
+    "2× Mitte": "2× centro",
+    "4× Mitte": "4× centro",
+    "Ganzes Bild passt die Datei ins Fenster. 1:1 zeigt die Mitte in echten Pixeln, passend zur Fenstergröße. 2× und 4× vergrößern genau diesen Ausschnitt.":
+      "La imagen completa cabe en la ventana. 1:1 muestra el centro en píxeles reales, según el tamaño de la ventana. 2× y 4× amplían ese mismo recorte.",
     "Immer Transcode (HLS)": "Siempre transcodificar (HLS)",
     "Ansicht": "Vista",
     "Wiedergabe": "Reproducción",
@@ -2647,6 +2669,10 @@
     "Abbrechen": "Cancelar",
     "Quelle": "Origen",
     "Ziel": "Destino",
+    "Ist": "Real",
+    "Einstellungen für einen neuen Vergleich übernommen.":
+      "Ajustes copiados para una comparación nueva.",
+    "In die Maske übernehmen": "Copiar al formulario",
     "Schätzung": "Estimación",
     "Flags": "Indicadores",
     "existiert": "existe",
@@ -3171,8 +3197,12 @@
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 es el valor del codificador, equivale a fuerza 1,0. Más alto protege más las áreas planas y las zonas oscuras; el detalle fino puede ceder un poco. Solo H.264 y HEVC en CPU.",
     "Grundeinstellungen": "Ajustes comunes",
-    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
-      "Cada fila es una pasada propia. Plataforma, códec, velocidad, B-frames, tune, AQ y distancia de keyframes valen solo para esa fila.",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile. Über „Andere Steuerung“ bekommt eine zusätzliche Zeile eigenen Steuerungsmodus, eigene Testwerte und Zwei-Pass. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Cada fila es una pasada propia. Plataforma, códec, velocidad, B-frames, tune, AQ y distancia de keyframes valen solo para esa fila. “Otro control” da a una fila extra su propio modo, valores de prueba y dos pasadas. El número de clips y la duración siguen siendo comunes.",
+    "Andere Steuerung": "Otro control",
+    "Steuerungsmodus, Testwerte und Zwei-Pass nur für diese Zeile. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Modo, valores de prueba y dos pasadas solo para esta fila. El número de clips y la duración siguen siendo comunes.",
+    "Zwei-Pass": "Dos pasadas",
     "Vergleich 1": "Comparación 1",
     "Vergleich 2": "Comparación 2",
     "Vergleich 3": "Comparación 3",
@@ -3310,6 +3340,13 @@
     "Testszenen": "Scènes de test",
     "Nebeneinander": "Côte à côte",
     "Wipe (geteiltes Bild)": "Wipe (image partagée)",
+    "Zoom": "Zoom",
+    "Ganzes Bild": "Image entière",
+    "1:1 Mitte": "1:1 centre",
+    "2× Mitte": "2× centre",
+    "4× Mitte": "4× centre",
+    "Ganzes Bild passt die Datei ins Fenster. 1:1 zeigt die Mitte in echten Pixeln, passend zur Fenstergröße. 2× und 4× vergrößern genau diesen Ausschnitt.":
+      "L'image entière tient dans la fenêtre. 1:1 montre le centre en pixels réels, selon la taille de la fenêtre. 2× et 4× agrandissent ce même extrait.",
     "Immer Transcode (HLS)": "Toujours transcoder (HLS)",
     "Ansicht": "Vue",
     "Wiedergabe": "Lecture",
@@ -4010,6 +4047,10 @@
     "Abbrechen": "Annuler",
     "Quelle": "Source",
     "Ziel": "Cible",
+    "Ist": "Réel",
+    "Einstellungen für einen neuen Vergleich übernommen.":
+      "Réglages repris pour une nouvelle comparaison.",
+    "In die Maske übernehmen": "Reprendre dans le formulaire",
     "Schätzung": "Estimation",
     "Flags": "Indicateurs",
     "existiert": "existe",
@@ -4537,8 +4578,12 @@
     "8 ist die Encoder-Vorgabe, das entspricht Stärke 1,0. Höher schützt Flächen und dunkle Stellen stärker, feines Detail kann etwas nachgeben. Nur CPU-H.264 und CPU-HEVC.":
       "8 est la valeur de l'encodeur, soit une force de 1,0. Plus haut protège davantage les aplats et les zones sombres ; le détail fin peut céder un peu. H.264 et HEVC CPU seulement.",
     "Grundeinstellungen": "Réglages communs",
-    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile.":
-      "Chaque ligne est une passe à part. Plateforme, codec, vitesse, B-frames, tune, AQ et intervalle de keyframes ne valent que pour cette ligne.",
+    "Jede Zeile ist ein eigener Lauf. Plattform, Codec, Speed, B-Frames, Tune, AQ und Keyframe-Abstand gelten nur für diese Zeile. Über „Andere Steuerung“ bekommt eine zusätzliche Zeile eigenen Steuerungsmodus, eigene Testwerte und Zwei-Pass. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Chaque ligne est une passe à part. Plateforme, codec, vitesse, B-frames, tune, AQ et intervalle de keyframes ne valent que pour cette ligne. « Autre contrôle » donne à une ligne en plus son propre mode, ses valeurs de test et le deux-passes. Le nombre de clips et la durée restent communs.",
+    "Andere Steuerung": "Autre contrôle",
+    "Steuerungsmodus, Testwerte und Zwei-Pass nur für diese Zeile. Clip-Anzahl und Länge bleiben gemeinsam.":
+      "Mode, valeurs de test et deux-passes pour cette ligne seulement. Le nombre de clips et la durée restent communs.",
+    "Zwei-Pass": "Deux passes",
     "Vergleich 1": "Comparaison 1",
     "Vergleich 2": "Comparaison 2",
     "Vergleich 3": "Comparaison 3",
