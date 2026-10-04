@@ -4255,7 +4255,7 @@
         <button class="btn small shot-compare" disabled>Auswahl vergleichen</button>
         ${grid === $("vmaf-screenshots") ? `<button class="btn small shot-ab" disabled title="Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.">Im A/B abspielen</button>` : ""}
       </div>
-      <div class="shot-gallery">
+      <div class="shot-gallery${tiles.length > 8 ? " is-many" : ""}">
         ${tiles.map((t) => {
           const cap = `${t.label} · ${t.sub}`;
           return `
@@ -5459,6 +5459,9 @@
     if (frame) frame.hidden = true;
     destroyNamedChart("vmafFrameChart");
     wrap.hidden = false;
+    requestAnimationFrame(() => {
+      wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     const vmaf = state.vmafShown;
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
     const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);

@@ -1626,6 +1626,7 @@ input[type="range"]::-moz-range-thumb {
 .shot-scene.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .shot-hint { font-size: 11px; color: var(--text-muted); flex: 1 1 auto; }
 .shot-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.shot-gallery.is-many { max-height: 460px; overflow: auto; padding-right: 4px; }
 .shot-tile { position: relative; border: 1px solid var(--border); border-radius: var(--radius-sm);
   overflow: hidden; background: var(--surface-2); }
 .shot-tile.recommended { border-color: var(--good); box-shadow: 0 0 12px color-mix(in srgb, var(--good) 25%, transparent); }
