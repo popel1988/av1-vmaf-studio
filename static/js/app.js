@@ -18,6 +18,7 @@
     currentPage: "encode",
     hasArchive: false, // es existieren archivierte VMAF-Vergleiche
     shotScene: null,   // aktuell gewählte Szene in der Screenshot-Galerie
+    clipPickIds: null, // angekreuzte Clips, gleich auf VMAF-Seite und in den Nerd-Daten
     chartScene: null,  // null = Gesamtschnitt, sonst Szenenindex in der VMAF-Grafik
     vmafShown: null,   // zuletzt gezeichnete Analyse (für Szenen-Umschaltung)
     stVmafId: null,    // Super-Tool-Zeile für Vergleichsbilder
@@ -88,7 +89,7 @@
     });
   }
 
-  function navTo(page) {
+  function navTo(page, opts) {
     // Beim Verlassen der A/B-Seite die Wiedergabe stoppen, damit im Hintergrund
     // kein Ton/Video weiterläuft.
     const abPages = ["abcompare", "vmafnerd"];
@@ -112,7 +113,16 @@
     if ((page === "encode" || page === "vmaf") && state.bitrateData) drawBitrateChart(state.bitrateData);
     if (page === "vmafnerd") {
       state.vmafNerd = true;
+      if (state.chartScene == null && state.shotScene != null) state.chartScene = state.shotScene;
+      if (state.vmafShown && !state.vmafSession && state.vmafShown.session) {
+        state.vmafSession = state.vmafShown.session;
+      }
+      if (!opts || !opts.keepAb) rememberScreenshotPicks();
       refreshNerdFrames();
+      if (!opts || !opts.keepAb) {
+        const picks = picksFromClipIds();
+        if (picks.length === 2 && !clipAbBlock(picks)) openClipAb(picks, { stay: true });
+      }
     }
     if (page === "vmafnerd" || page === "abcompare") syncAbChrome();
     if (page === "vmaf") {
@@ -3777,6 +3787,7 @@
     if (key === state.lastVmafKey) return;
 
     state.chartScene = null;
+    state.clipPickIds = null;
     showVmafChart(vmaf);
     fillVmafTable(vmaf);
     state.shotScene = null; // bei neuer Analyse mit erster Szene starten
@@ -3959,6 +3970,7 @@
         `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
       setSampleWindowNote(vmaf);
       state.chartScene = null;
+      state.clipPickIds = null;
       showVmafChart(vmaf);
       fillVmafTable(vmaf);
       state.shotScene = null;
@@ -4320,6 +4332,7 @@
       const n = picks.length;
       cmpBtn.disabled = n < 1;
       cmpBtn.textContent = n > 0 ? `Auswahl vergleichen (${n})` : "Auswahl vergleichen";
+      if (grid === $("vmaf-screenshots")) rememberScreenshotPicks();
       if (!abBtn) return;
       const why = clipAbBlock(picks);
       abBtn.disabled = !!why;
@@ -5491,6 +5504,8 @@
       if (empty) empty.hidden = false;
       const bar = $("nerd-scenes");
       if (bar) bar.innerHTML = "";
+      const picks = $("nerd-picks");
+      if (picks) picks.innerHTML = "";
       destroyNamedChart("vmafNerdChart");
       return;
     }
@@ -5498,6 +5513,7 @@
     if (empty) empty.hidden = true;
     renderNerdScenes(vmaf);
     fillNerdAbSelects(vmaf);
+    renderNerdPicks(vmaf);
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
     const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);
     const session = state.vmafSession;
@@ -10821,15 +10837,113 @@
   }
 
   function syncAbChrome() {
-    const onNerd = state.currentPage === "vmafnerd";
-    const bar = $("ab-from-nerd");
-    const intro = $("ab-intro");
-    const pickers = document.querySelector("#ab-card .ab-pickers");
-    const load = $("btn-ab-load");
-    if (bar) bar.hidden = !onNerd;
-    if (intro) intro.hidden = onNerd;
-    if (pickers) pickers.hidden = onNerd;
-    if (load) load.hidden = onNerd;
+    const card = $("ab-card");
+    if (card) card.classList.toggle("is-nerd", state.currentPage === "vmafnerd");
+  }
+
+  function screenshotAbPicks() {
+    const grid = $("vmaf-screenshots");
+    if (!grid) return [];
+    return [...grid.querySelectorAll(".shot-tile")].filter((t) => {
+      const box = t.querySelector(".shot-check input");
+      return box && box.checked;
+    }).map((t) => ({
+      label: t.dataset.cap || "",
+      kind: t.dataset.kind || "",
+      clip: t.dataset.clip || "",
+      start: Number(t.dataset.start) || 0,
+      len: Number(t.dataset.len) || 0,
+    }));
+  }
+
+  function idsForPicks(picks) {
+    const vmaf = state.vmafShown;
+    if (!vmaf || !picks) return [];
+    const choices = nerdAbChoices(vmaf, nerdAbScene(vmaf));
+    return picks.map((p) => {
+      if (p.kind === "ref") return "ref";
+      const hit = choices.find((c) => c.clip && p.clip && c.clip === p.clip);
+      return hit ? hit.id : "";
+    }).filter(Boolean);
+  }
+
+  function rememberScreenshotPicks() {
+    const ids = idsForPicks(screenshotAbPicks());
+    if (ids.length) state.clipPickIds = ids;
+  }
+
+  function picksFromClipIds() {
+    const vmaf = state.vmafShown;
+    if (!vmaf) return [];
+    const byId = {};
+    nerdAbChoices(vmaf, nerdAbScene(vmaf)).forEach((c) => { byId[c.id] = c; });
+    return (state.clipPickIds || []).map((id) => byId[id]).filter(Boolean).map((c) => ({
+      kind: c.kind,
+      clip: c.clip || "",
+      start: c.start,
+      len: c.len,
+      label: c.label,
+    }));
+  }
+
+  function renderNerdPicks(vmaf) {
+    const box = $("nerd-picks");
+    if (!box || !vmaf) return;
+    const choices = nerdAbChoices(vmaf, nerdAbScene(vmaf));
+    const on = new Set((state.clipPickIds || []).filter((id) => choices.some((c) => c.id === id)));
+    if (!choices.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = `<span class="nerd-picks-label">${tt("Vergleich")}</span>` + choices.map((c) =>
+      `<label class="check"><input type="checkbox" data-nerd-pick="${escapeHtml(c.id)}"${on.has(c.id) ? " checked" : ""}>` +
+      `<span>${escapeHtml(c.label)}</span></label>`
+    ).join("");
+    box.querySelectorAll("[data-nerd-pick]").forEach((el) => {
+      el.addEventListener("change", () => {
+        const id = el.getAttribute("data-nerd-pick");
+        const cur = (state.clipPickIds || []).filter((x) => choices.some((c) => c.id === x) && x !== id);
+        if (el.checked) cur.push(id);
+        state.clipPickIds = cur;
+        syncScreenshotChecks();
+        applyClipPicksToSelects();
+        const picks = picksFromClipIds();
+        if (picks.length === 2 && !clipAbBlock(picks)) openClipAb(picks, { stay: true });
+      });
+    });
+    applyClipPicksToSelects();
+  }
+
+  function applyClipPicksToSelects() {
+    const ids = state.clipPickIds || [];
+    const a = $("ab-nerd-a");
+    const b = $("ab-nerd-b");
+    if (!a || !b || ids.length < 2) return;
+    const has = (sel, id) => [...sel.options].some((o) => o.value === id);
+    if (has(a, ids[0])) a.value = ids[0];
+    if (has(b, ids[1])) b.value = ids[1];
+    const btn = $("btn-ab-nerd");
+    if (btn) btn.disabled = !a.value || !b.value || a.value === b.value;
+  }
+
+  function syncScreenshotChecks() {
+    const grid = $("vmaf-screenshots");
+    const vmaf = state.vmafShown;
+    if (!grid || !vmaf) return;
+    if (state.shotScene != null && state.shotScene !== nerdAbScene(vmaf)) return;
+    const on = new Set(state.clipPickIds || []);
+    const choices = nerdAbChoices(vmaf, nerdAbScene(vmaf));
+    grid.querySelectorAll(".shot-tile").forEach((tile) => {
+      const input = tile.querySelector(".shot-check input");
+      if (!input) return;
+      const kind = tile.dataset.kind || "";
+      const clip = tile.dataset.clip || "";
+      const hit = kind === "ref"
+        ? choices.find((c) => c.id === "ref")
+        : choices.find((c) => c.clip && c.clip === clip);
+      if (!hit) return;
+      input.checked = on.has(hit.id);
+    });
   }
 
   function nerdAbScene(vmaf) {
@@ -10931,6 +11045,7 @@
     const ca = byId[a.value];
     const cb = byId[b.value];
     if (!ca || !cb || ca.id === cb.id) return;
+    state.clipPickIds = [ca.id, cb.id];
     const toPick = (c) => ({
       kind: c.kind,
       clip: c.clip || "",
@@ -10965,7 +11080,7 @@
     return "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.";
   }
 
-  async function openClipAb(picks) {
+  async function openClipAb(picks, opts) {
     if (!ab.sides.a || !ab.sides.b) return;
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
@@ -10978,7 +11093,9 @@
     state.abJob = "";
     const off = $("ab-offset");
     if (off) off.value = "0";
-    navTo("vmafnerd");
+    const pickedIds = idsForPicks(picks);
+    if (pickedIds.length) state.clipPickIds = pickedIds;
+    if (!opts || !opts.stay) navTo("vmafnerd", { keepAb: true });
     abApplyMode();
     const badge = $("ab-badge");
     if (badge) badge.textContent = tt("Lädt …");

@@ -869,7 +869,14 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ed-cut-actions .btn { min-width: 0; }
 
 /* A/B-Vergleichsplayer */
-.ab-from-nerd { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.nerd-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 4px 0 12px; }
+.nerd-picks-label { font-size: 12px; color: var(--text-muted); }
+.nerd-picks .check { margin: 0; font-size: 13px; }
+.ab-from-nerd { display: none; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+#ab-card.is-nerd .ab-from-nerd { display: flex; }
+#ab-card.is-nerd .ab-pickers,
+#ab-card.is-nerd #ab-intro,
+#ab-card.is-nerd #btn-ab-load { display: none; }
 .ab-from-nerd label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .ab-from-nerd select { min-width: 180px; }
 .ab-from-nerd .hint { flex-basis: 100%; margin: 0; }
@@ -1478,6 +1485,7 @@ input[type="range"]::-moz-range-thumb {
 .nav-item span { width: 18px; text-align: center; }
 .nav-item:hover { background: var(--surface-2); color: var(--text); }
 .nav-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
+.nav-item.nav-sub { margin-left: 22px; padding-top: 7px; padding-bottom: 7px; font-size: 13px; }
 
 /* -------------------------------------------------------------- STATISTIK */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }

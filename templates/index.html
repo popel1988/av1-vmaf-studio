@@ -42,7 +42,7 @@
       <nav class="nav" id="nav">
         <button class="nav-item active" data-nav="encode"><span>▶</span> Encoding</button>
         <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
-        <button class="nav-item" data-nav="vmafnerd"><span>★</span> Nerd-Daten</button>
+        <button class="nav-item nav-sub" data-nav="vmafnerd"><span>★</span> Nerd-Daten</button>
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
         <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
         <button class="nav-item" data-nav="remux"><span>✂</span> Remux &amp; Bearbeiten</button>
@@ -859,6 +859,7 @@
           <div class="card-body">
             <p class="hint" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
             <div id="nerd-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+            <div id="nerd-picks" class="nerd-picks"></div>
             <div id="vmaf-nerd" class="vmaf-nerd" hidden>
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
