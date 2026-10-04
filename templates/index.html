@@ -42,6 +42,7 @@
       <nav class="nav" id="nav">
         <button class="nav-item active" data-nav="encode"><span>▶</span> Encoding</button>
         <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
+        <button class="nav-item" data-nav="vmafnerd"><span>★</span> Nerd-Daten</button>
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
         <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
         <button class="nav-item" data-nav="remux"><span>✂</span> Remux &amp; Bearbeiten</button>
@@ -794,14 +795,25 @@
           <div class="card-body vmaf-body">
             <div class="vmaf-charts">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
-              <div class="vmaf-chart-wrap">
-                <canvas id="vmaf-chart"></canvas>
+              <div id="vmaf-frame-wrap" class="vmaf-subchart vmaf-scene-wide" hidden>
+                <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
+                <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
+                  <canvas id="vmaf-frame-chart"></canvas>
+                </div>
+                <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               </div>
-              <p class="hint vmaf-curve-hint" id="vmaf-curve-hint" hidden>Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
-              <div id="vmaf-gap-wrap" class="vmaf-subchart" hidden>
-                <p class="vmaf-subchart-title">Abstand zum Gesamtschnitt (negativ = diese Szene liegt darunter)</p>
-                <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
-                  <canvas id="vmaf-gap-chart"></canvas>
+              <div class="vmaf-graph-pair">
+                <div>
+                  <div class="vmaf-chart-wrap">
+                    <canvas id="vmaf-chart"></canvas>
+                  </div>
+                  <p class="hint vmaf-curve-hint" id="vmaf-curve-hint" hidden>Nicht jedes Bild bekommt dieselbe Datenmenge. Deshalb liegen Mittel und 1%-Low auseinander. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
+                </div>
+                <div id="vmaf-gap-wrap" class="vmaf-subchart" hidden>
+                  <p class="vmaf-subchart-title">Abstand zum Gesamtschnitt (negativ = diese Szene liegt darunter)</p>
+                  <div class="vmaf-chart-wrap">
+                    <canvas id="vmaf-gap-chart"></canvas>
+                  </div>
                 </div>
               </div>
               <div class="vmaf-zoom" id="vmaf-zoom">
@@ -820,25 +832,7 @@
                 </label>
                 <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
               </div>
-              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
-              <div id="vmaf-frame-wrap" class="vmaf-subchart" hidden>
-                <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
-                <div class="vmaf-chart-wrap vmaf-chart-wrap-sm">
-                  <canvas id="vmaf-frame-chart"></canvas>
-                </div>
-                <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
-              </div>
-              <div id="vmaf-nerd" class="vmaf-nerd" hidden>
-              <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
-              <div class="vmaf-chart-wrap">
-                <canvas id="vmaf-nerd-chart"></canvas>
-              </div>
-              <div class="vmaf-nerd-floor">
-                <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>
-                <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
-              </div>
-              <div id="vmaf-nerd-body"></div>
-              </div>
+              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
             </div>
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">
@@ -853,6 +847,28 @@
               <p class="hint">Wähle eine Qualitätsstufe für den Encode:</p>
               <div id="vmaf-pick-btns" class="pick-btns"></div>
               <button class="btn btn-ghost btn-sm" id="btn-skip-encode">Nur Vergleich – kein Encode</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card span-3" id="vmaf-nerd-card" data-page="vmafnerd">
+          <div class="card-head">
+            <h3><span class="card-idx">★</span> Nerd-Daten</h3>
+            <button class="btn btn-ghost btn-sm" id="btn-nerd-back" type="button">Zur VMAF-Seite</button>
+          </div>
+          <div class="card-body">
+            <p class="hint" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
+            <div id="nerd-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+            <div id="vmaf-nerd" class="vmaf-nerd" hidden>
+              <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
+              <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
+                <canvas id="vmaf-nerd-chart"></canvas>
+              </div>
+              <div class="vmaf-nerd-floor">
+                <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>
+                <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
+              </div>
+              <div id="vmaf-nerd-body"></div>
             </div>
           </div>
         </section>
@@ -2765,13 +2781,19 @@
         </section>
 
         <!-- PAGE: A/B-Vergleichsplayer -->
-        <section class="card span-3" data-page="abcompare">
+        <section class="card span-3" id="ab-card" data-page="abcompare vmafnerd">
           <div class="card-head">
             <h3><span class="card-idx">🎞</span> A/B-Vergleichsplayer</h3>
             <span class="badge" id="ab-badge">—</span>
           </div>
           <div class="card-body">
-            <p class="hint">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
+            <div id="ab-from-nerd" class="ab-from-nerd" hidden>
+              <label>Video A <select id="ab-nerd-a"></select></label>
+              <label>Video B <select id="ab-nerd-b"></select></label>
+              <button class="btn btn-primary btn-sm" id="btn-ab-nerd" type="button" disabled>Diese Szene abspielen</button>
+              <p class="hint">A und B sind Clips aus diesem Vergleich. Die Szene ist die oben gewählte.</p>
+            </div>
+            <p class="hint" id="ab-intro">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
               (geteiltes Bild mit verschiebbarer Kante). Was der Browser nicht direkt abspielen
               kann, läuft über den HLS-Player des Studios (Server-Transcode). Aus den
               Job-Details kommt zusätzlich die Liste der schwächsten VMAF-Stellen, die sich
