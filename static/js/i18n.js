@@ -794,6 +794,8 @@
     "Für alle": "For all",
     "Szenen und Maße": "Scenes and measures",
     "Haken zeigt diese Zeile in den Graphen.": "The tick shows this row on the charts.",
+    "Der Graph zeigt je Abschnitt den tiefsten VMAF, nicht jeden Frame. Die Zahlen in der Tabelle gelten für alle Frames.":
+      "The chart shows the lowest VMAF of each stretch, not every frame. The numbers in the table cover every frame.",
     "Kurz": "Short",
     "Tief": "Deep",
     "Keyframe automatisch": "Keyframe automatic",
@@ -2362,6 +2364,8 @@
     "Für alle": "Para todos",
     "Szenen und Maße": "Escenas y medidas",
     "Haken zeigt diese Zeile in den Graphen.": "La casilla muestra esta fila en los gráficos.",
+    "Der Graph zeigt je Abschnitt den tiefsten VMAF, nicht jeden Frame. Die Zahlen in der Tabelle gelten für alle Frames.":
+      "El gráfico muestra el VMAF más bajo de cada tramo, no cada fotograma. Los números de la tabla valen para todos los fotogramas.",
     "Kurz": "Corto",
     "Tief": "Profundo",
     "Keyframe automatisch": "Keyframe automático",
@@ -3753,6 +3757,8 @@
     "Für alle": "Pour tous",
     "Szenen und Maße": "Scènes et mesures",
     "Haken zeigt diese Zeile in den Graphen.": "La case affiche cette ligne dans les graphiques.",
+    "Der Graph zeigt je Abschnitt den tiefsten VMAF, nicht jeden Frame. Die Zahlen in der Tabelle gelten für alle Frames.":
+      "Le graphique montre le VMAF le plus bas de chaque tronçon, pas chaque image. Les chiffres du tableau valent pour toutes les images.",
     "Kurz": "Court",
     "Tief": "Profond",
     "Keyframe automatisch": "Keyframe automatique",
