@@ -266,9 +266,24 @@ def _score_target(role: str, scores: list[float]) -> float:
     return ordered[n // 2]
 
 
+def _credits_end(head: float, tail: float, clip: float, credits_at: float) -> float:
+    """Harte Grenze am Abspann. Zu früh oder leer: die bisherige Grenze bleibt."""
+    try:
+        end = float(credits_at or 0)
+    except (TypeError, ValueError):
+        return tail
+    if end <= 0 or end < head + max(5.0, clip):
+        return tail
+    return min(tail, end)
+
+
 def pick_windows(bins: list[dict], duration: float, clip: float, count: int,
-                 min_pct: int = 10) -> list[dict]:
-    """Schwere, typische und ruhige Ausschnitte, ohne Überlappung."""
+                 min_pct: int = 10, credits_at: float = 0.0) -> list[dict]:
+    """Schwere, typische und ruhige Ausschnitte, ohne Überlappung.
+
+    ``credits_at`` ist die Filmzeit, ab der nichts mehr gewählt wird. Die
+    Rollen verteilen sich neu auf den Bereich davor.
+    """
     duration = float(duration or 0)
     clip = max(5.0, float(clip or 30))
     count = max(1, min(5, int(count or 1)))
@@ -277,6 +292,7 @@ def pick_windows(bins: list[dict], duration: float, clip: float, count: int,
     clip = min(clip, duration)
     floor = _picture_floor(bins, duration, min_pct)
     head, tail = _content_range(bins, duration, floor)
+    tail = _credits_end(head, tail, clip, credits_at)
     starts = []
     t = head
     while t + clip <= tail + 0.05:
@@ -334,16 +350,23 @@ def load_bins(path: Path, duration: float) -> tuple[list[dict], dict]:
 
 
 def profile(path: Path, duration: float, clip: float, samples: int,
-           min_pct: int = 10) -> dict:
+           min_pct: int = 10, credits_at: float = 0.0) -> dict:
     bins, stats = load_bins(path, duration)
     span = duration if duration > 0 else (bins[-1]["t"] + BIN_SEC if bins else 0)
     pct = _min_pct(min_pct)
+    try:
+        credits = float(credits_at or 0)
+    except (TypeError, ValueError):
+        credits = 0.0
+    if credits < 0:
+        credits = 0.0
     return {
         "bin_sec": BIN_SEC,
         "duration": round(span, 3),
         "bins": bins,
-        "windows": pick_windows(bins, span, clip, samples, pct),
+        "windows": pick_windows(bins, span, clip, samples, pct, credits),
         "floor_kbps": round(_picture_floor(bins, span, pct), 1),
         "min_pct": pct,
+        "credits_at": round(credits, 3),
         **stats,
     }

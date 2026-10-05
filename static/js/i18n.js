@@ -792,6 +792,13 @@
     "Mindestanteil": "Minimum share",
     "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
       "Floor for the quiet scene, as a percent of the median of the picture sections. Credits and logos below it do not count. Default 10.",
+    "Abspann ab": "Credits from",
+    "Filmzeit, ab der keine Testszenen mehr liegen. Leer lassen heißt automatische Grenze. Die Szenen werden im Film davor neu verteilt. Format hh:mm:ss.":
+      "Film time after which no test scenes are placed. Leave empty for the automatic end. Scenes are spread again across the film before that. Format hh:mm:ss.",
+    "zählt nicht": "not counted",
+    "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
+      "are left out: every setting scores VMAF 99 or higher there. Mean, 1% low and the recommendation ignore these scenes.",
+    "Gesamt": "Overall",
     "Bitrate wird gelesen …": "Reading bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Could not load the bitrate curve.",
     "Anteil unter": "Share under",
@@ -2370,6 +2377,13 @@
     "Mindestanteil": "Mínimo",
     "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
       "Suelo de la escena tranquila, en porcentaje de la mediana de los tramos de imagen. Por debajo no cuentan créditos ni logos. Por defecto 10.",
+    "Abspann ab": "Créditos desde",
+    "Filmzeit, ab der keine Testszenen mehr liegen. Leer lassen heißt automatische Grenze. Die Szenen werden im Film davor neu verteilt. Format hh:mm:ss.":
+      "Tiempo de película a partir del cual no hay escenas de prueba. Vacío usa el final automático. Las escenas se reparten de nuevo antes de esa marca. Formato hh:mm:ss.",
+    "zählt nicht": "no cuenta",
+    "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
+      "no cuentan: cada ajuste llega ahí a VMAF 99 o más. Media, 1% low y la recomendación las dejan fuera.",
+    "Gesamt": "Total",
     "Bitrate wird gelesen …": "Leyendo bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "No se pudo cargar la curva de bitrate.",
     "Anteil unter": "Porcentaje bajo",
@@ -3771,6 +3785,13 @@
     "Mindestanteil": "Part minimale",
     "Untergrenze für die ruhige Szene, in Prozent vom Median der Bildstellen. Darunter zählen Abspann und Logos nicht. Vorgabe 10.":
       "Plancher de la scène calme, en pourcentage de la médiane des passages d'image. En dessous, générique et logos ne comptent pas. Défaut 10.",
+    "Abspann ab": "Générique dès",
+    "Filmzeit, ab der keine Testszenen mehr liegen. Leer lassen heißt automatische Grenze. Die Szenen werden im Film davor neu verteilt. Format hh:mm:ss.":
+      "Temps du film à partir duquel aucune scène de test n'est placée. Vide garde la fin automatique. Les scènes sont redistribuées avant cette marque. Format hh:mm:ss.",
+    "zählt nicht": "non comptée",
+    "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
+      "ne comptent pas : chaque réglage y atteint un VMAF de 99 ou plus. Moyenne, 1 % low et recommandation les laissent de côté.",
+    "Gesamt": "Ensemble",
     "Bitrate wird gelesen …": "Lecture du débit …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Impossible de charger la courbe de débit.",
     "Anteil unter": "Part sous",

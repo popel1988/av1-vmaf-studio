@@ -749,6 +749,21 @@
     return n;
   }
 
+  function creditsAtSeconds() {
+    const el = $("credits-at");
+    const text = el ? String(el.value || "").trim() : "";
+    if (!text) return 0;
+    const parts = text.split(":");
+    if (parts.length > 3 || parts.some((p) => p === "" || Number.isNaN(Number(p)))) return 0;
+    const nums = parts.map(Number);
+    let sec = 0;
+    if (nums.length === 3) sec = nums[0] * 3600 + nums[1] * 60 + nums[2];
+    else if (nums.length === 2) sec = nums[0] * 60 + nums[1];
+    else sec = nums[0];
+    if (!(sec > 0)) return 0;
+    return Math.round(sec * 1000) / 1000;
+  }
+
   function bitrateQuery() {
     const page = state.currentPage;
     if (page === "vmaf") {
@@ -856,7 +871,9 @@
     const sum = $("bitrate-summary");
     if (sum) {
       const floorBit = vmafMarks && floor > 0 ? ` · Untergrenze ${floor.toFixed(1)} Mbit/s` : "";
-      sum.textContent = `Schnitt ${avg.toFixed(1)} Mbit/s · Spitze ${peak.toFixed(1)} Mbit/s · Faktor ${Number(data.peak_ratio).toFixed(1)}${floorBit}`;
+      const creditsBit = vmafMarks && Number(data.credits_at) > 0
+        ? ` · ${tt("Abspann ab")} ${fmtClock(data.credits_at)}` : "";
+      sum.textContent = `Schnitt ${avg.toFixed(1)} Mbit/s · Spitze ${peak.toFixed(1)} Mbit/s · Faktor ${Number(data.peak_ratio).toFixed(1)}${floorBit}${creditsBit}`;
     }
     const wins = $("bitrate-wins");
     if (wins) {
@@ -881,7 +898,7 @@
     const seq = state.bitrateSeq;
     try {
       const res = await fetch(
-        `/api/bitrate?path=${encodeURIComponent(path)}&samples=${q.samples}&clip=${q.clip}&min_pct=${sceneMinPct()}`);
+        `/api/bitrate?path=${encodeURIComponent(path)}&samples=${q.samples}&clip=${q.clip}&min_pct=${sceneMinPct()}&credits_at=${creditsAtSeconds()}`);
       const data = await res.json();
       if (state.bitrateFor !== path || seq !== state.bitrateSeq) return;
       if (data.error) {
@@ -907,11 +924,11 @@
         if (state.bitrateData && state.selected && !state.selected.isBatch) loadBitrateCurve();
       }, 400);
     };
-    ["vt-samples", "vt-clip", "opt-vmaf-samples", "opt-vmaf-clip", "st-samples", "st-clip", "scene-min-pct"].forEach((id) => {
+    ["vt-samples", "vt-clip", "opt-vmaf-samples", "opt-vmaf-clip", "st-samples", "st-clip", "scene-min-pct", "credits-at"].forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.addEventListener("change", refresh);
-      if (id.indexOf("clip") >= 0 || id === "scene-min-pct") el.addEventListener("input", refresh);
+      if (id.indexOf("clip") >= 0 || id === "scene-min-pct" || id === "credits-at") el.addEventListener("input", refresh);
     });
   }
 
@@ -2766,6 +2783,7 @@
       chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
       chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
       sample_mode: "even",
+      credits_at: creditsAtSeconds(),
     };
     if (vmaf) {
       out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
@@ -3106,6 +3124,7 @@
       samples: parseInt($("vt-samples").value, 10),
       sample_mode: sampleModeValue(),
       scene_min_pct: sceneMinPct(),
+      credits_at: creditsAtSeconds(),
       two_pass: !!($("vt-two-pass") && $("vt-two-pass").checked
         && ($("vt-rate-mode").value === "abr" || $("vt-rate-mode").value === "bitrate")),
       generate_screenshots: $("vt-screenshots").checked,
@@ -4048,6 +4067,7 @@
       screenshots: params.generate_screenshots !== false,
       sample_mode: params.sample_mode || "even",
       scene_min_pct: params.scene_min_pct || 10,
+      credits_at: Number(params.credits_at) || 0,
     };
     const setVal = (id, val) => {
       const el = $(id);
@@ -4086,6 +4106,8 @@
     const sampleBox = $("bitrate-sample-mode");
     if (sampleBox) sampleBox.checked = base.sample_mode === "bitrate";
     setVal("scene-min-pct", base.scene_min_pct);
+    const credits = $("credits-at");
+    if (credits) credits.value = base.credits_at ? fmtClock(base.credits_at) : "";
     applyLegacyBFrames(document.getElementById("vt-enc-base"));
 
     document.querySelectorAll("#vt-extra-rows .vt-enc-row").forEach((el) => el.remove());
@@ -4281,7 +4303,7 @@
       : "";
     const sceneTabs = scenes.length > 1
       ? `<div class="shot-scenes">${scenes.map((n) =>
-          `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">Szene ${n + 1}</button>`
+          `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">${escapeHtml(sceneTabText(vmaf, n))}</button>`
         ).join("")}</div>`
       : "";
 
@@ -4425,6 +4447,7 @@
     let p1 = null;
     let scene = null;
     (r.scene_scores || []).forEach((sc) => {
+      if (sc.idle) return;
       const v = Number(sc.p1);
       if (!Number.isFinite(v) || v <= 0) return;
       if (p1 == null || v < p1) {
@@ -4488,7 +4511,7 @@
     const avg = r.vmaf_1pct != null && Number(r.vmaf_1pct) > 0 ? Number(r.vmaf_1pct) : null;
     const min = worst.p1 != null ? worst.p1 : avg;
     if (min == null) return null;
-    const sceneCount = (r.scene_scores || []).filter((sc) => Number(sc.p1) > 0).length;
+    const sceneCount = (r.scene_scores || []).filter((sc) => !sc.idle && Number(sc.p1) > 0).length;
     return {
       avg,
       min,
@@ -4562,6 +4585,7 @@
       const perScene = (r.scene_scores || [])
         .map((sc) => {
           const bits = [`Szene ${sc.scene + 1}: ${Number(sc.vmaf).toFixed(1)}`];
+          if (sc.idle) bits.push(tt("zählt nicht"));
           if (sc.p1 != null) bits.push(`1%-Low ${Number(sc.p1).toFixed(1)}`);
           if (sc.hmean != null) bits.push(`H-Ø ${Number(sc.hmean).toFixed(1)}`);
           if (sc.xpsnr != null) {
@@ -4577,8 +4601,9 @@
       const floor = vmafSceneFloor(r, lo, vmafP1GapValue());
       const visible = (r.scene_scores || []).map((sc) => {
         const p = sc.p1 != null ? ` / 1% ${Number(sc.p1).toFixed(1)}` : "";
-        const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}`;
-        if (!vmafSceneP1Miss(sc, floor)) return escapeHtml(text);
+        const idle = sc.idle ? ` · ${tt("zählt nicht")}` : "";
+        const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}${idle}`;
+        if (sc.idle || !vmafSceneP1Miss(sc, floor)) return escapeHtml(text);
         const tip = `1%-Low ${Number(sc.p1).toFixed(1)} unter ${Math.round(floor)}`;
         return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
@@ -4957,6 +4982,35 @@
   }
 
   const CHART_PALETTE = ["#4f9dff", "#22c55e", "#f59e0b", "#e879f9", "#f43f5e", "#14b8a6"];
+
+  function sceneTabText(vmaf, n) {
+    const idle = (vmaf.results || []).some((r) =>
+      (r.scene_scores || []).some((s) => s && s.scene === n && s.idle));
+    const base = `${tt("Szene")} ${n + 1}`;
+    return idle ? `${base} · ${tt("zählt nicht")}` : base;
+  }
+
+  function renderIdleNote(vmaf) {
+    const nums = [];
+    const seen = new Set();
+    (vmaf && vmaf.results || []).forEach((r) => {
+      (r.scene_scores || []).forEach((s) => {
+        if (!s || !s.idle || s.scene == null || seen.has(s.scene)) return;
+        seen.add(s.scene);
+        nums.push(Number(s.scene) + 1);
+      });
+    });
+    nums.sort((a, b) => a - b);
+    const text = nums.length
+      ? `${nums.map((n) => `${tt("Szene")} ${n}`).join(", ")} ${tt("zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.")}`
+      : "";
+    ["vmaf-idle-note", "nerd-idle-note"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.hidden = !text;
+      el.textContent = text;
+    });
+  }
 
   function vmafSceneList(vmaf) {
     const set = new Set();
@@ -5484,8 +5538,9 @@
     }
     const cur = state.chartScene != null ? state.chartScene : scenes[0];
     bar.innerHTML = scenes.map((n) =>
-      `<button type="button" class="shot-scene ${cur === n ? "active" : ""}" data-nerd-scene="${n}">Szene ${n + 1}</button>`
+      `<button type="button" class="shot-scene ${cur === n ? "active" : ""}" data-nerd-scene="${n}">${escapeHtml(sceneTabText(vmaf, n))}</button>`
     ).join("");
+    renderIdleNote(vmaf);
     bar.querySelectorAll("[data-nerd-scene]").forEach((b) => {
       b.addEventListener("click", () => {
         state.chartScene = +b.getAttribute("data-nerd-scene");
@@ -6002,10 +6057,11 @@
     if (state.chartScene != null && !scenes.includes(state.chartScene))
       state.chartScene = null;
     const cur = state.chartScene;
-    bar.innerHTML = `<button type="button" class="shot-scene ${cur == null ? "active" : ""}" data-chart-scene="">Gesamt</button>`
+    bar.innerHTML = `<button type="button" class="shot-scene ${cur == null ? "active" : ""}" data-chart-scene="">${escapeHtml(tt("Gesamt"))}</button>`
       + scenes.map((n) =>
-        `<button type="button" class="shot-scene ${cur === n ? "active" : ""}" data-chart-scene="${n}">Szene ${n + 1}</button>`
+        `<button type="button" class="shot-scene ${cur === n ? "active" : ""}" data-chart-scene="${n}">${escapeHtml(sceneTabText(vmaf, n))}</button>`
       ).join("");
+    renderIdleNote(vmaf);
     bar.querySelectorAll("[data-chart-scene]").forEach((b) => {
       b.addEventListener("click", () => {
         const raw = b.getAttribute("data-chart-scene");
@@ -9357,6 +9413,7 @@
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.sample_mode = sampleModeValue("st-sample-mode");
       s.scene_min_pct = sceneMinPct();
+      s.credits_at = creditsAtSeconds();
       s.two_pass = !!($("st-two-pass") && $("st-two-pass").checked
         && (s.rate_mode === "abr" || s.rate_mode === "bitrate"));
       s.test_values = stTestValues();

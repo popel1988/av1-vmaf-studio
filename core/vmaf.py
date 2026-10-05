@@ -59,6 +59,8 @@ class VmafOptions:
     sample_windows: list = field(default_factory=list)
     # Nur Bitraten-Modus. CPU: zwei FFmpeg-Durchläufe. NVIDIA: Multipass.
     two_pass: bool = False
+    # Filmzeit in Sekunden, ab der keine Testszenen mehr liegen. 0 = automatisch.
+    credits_at: float = 0.0
     # Alte Ein-Achsen-Varianten. Neue Vergleiche nutzen rows.
     variants: list = field(default_factory=list)
     # Volle Zusatzzeilen: Plattform, Codec, Speed, B-Frames, AQ, Keyframe.
@@ -340,6 +342,8 @@ class VmafResult:
                 frames = s.get("frames") or []
                 if frames:
                     item["frames"] = frames
+                if s.get("idle"):
+                    item["idle"] = True
                 if s.get("kbps"):
                     item["kbps"] = int(s["kbps"])
                 if s.get("bitrate_sec"):
@@ -363,7 +367,8 @@ class VmafResult:
                         item["bitrate"] = packed_curve
                 packed.append(item)
             d["scene_scores"] = packed
-            vals = [s.get("vmaf") for s in self.scene_scores if s.get("vmaf") is not None]
+            vals = [s.get("vmaf") for s in self.scene_scores
+                    if s.get("vmaf") is not None and not s.get("idle")]
             if len(vals) > 1:
                 d["vmaf_min"] = round(min(vals), 2)
                 d["vmaf_max"] = round(max(vals), 2)
@@ -456,14 +461,23 @@ def _middle_start(duration: float, clip_seconds: int) -> float:
     return max(0.0, duration / 2.0 - clip_seconds / 2.0)
 
 
-def _sample_starts(duration: float, clip_seconds: int, count: int) -> list[tuple[float, float]]:
+def _sample_starts(duration: float, clip_seconds: int, count: int,
+                   credits_at: float = 0.0) -> list[tuple[float, float]]:
     """Startpositionen der Stichproben-Clips (start, clip_len).
 
     count=1 → nur Mitte. Bei mehreren gleichmäßig über den Film verteilt
     (max. 5). Ist der Film zu kurz für die gewünschte Cliplänge, werden die
     Ausschnitte verkürzt, statt auf eine einzige Mitte zusammenzufallen.
+    ``credits_at`` begrenzt das Ende: die Clips liegen davor und verteilen
+    sich neu über diesen kürzeren Bereich.
     """
     duration = float(duration or 0.0)
+    try:
+        end = float(credits_at or 0)
+    except (TypeError, ValueError):
+        end = 0.0
+    if end > 30 and (duration <= 0 or end < duration):
+        duration = end if duration <= 0 else min(duration, end)
     count = max(1, min(5, int(count or 1)))
     want = max(1.0, float(clip_seconds or 1))
     if duration <= 0:
@@ -859,7 +873,8 @@ def analyze(
     multi = len(runs) > 1
 
     # --- Fortschritts-Tracking --------------------------------------------
-    n_samples = len(_sample_starts(info.duration, opts.clip_seconds, opts.samples))
+    n_samples = len(_sample_starts(
+        info.duration, opts.clip_seconds, opts.samples, opts.credits_at))
 
     def _mode_of(run) -> str:
         rm = run[8] if len(run) > 8 else ""
@@ -1145,7 +1160,8 @@ def analyze(
         # Stichproben-Clips bestimmen und je eine (verlustfreie) Referenz ziehen.
         sample_specs = _coerce_starts(opts.sample_starts)
         if not sample_specs:
-            sample_specs = _sample_starts(info.duration, opts.clip_seconds, opts.samples)
+            sample_specs = _sample_starts(
+                info.duration, opts.clip_seconds, opts.samples, opts.credits_at)
         analysis.sample_windows = list(opts.sample_windows or [])
         analysis.sample_starts = [(float(s), float(l)) for s, l in sample_specs]
         references: list[tuple[Path, float, float]] = []
@@ -1205,6 +1221,7 @@ def analyze(
                     -int(r.value) if (r.rate_mode or "") in ("bitrate", "abr") else int(r.value),
                 ))
 
+        apply_idle_scenes(analysis.results)
         _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
@@ -1877,7 +1894,12 @@ def weak_spots(session: str, result_index: Optional[int] = None,
 
 
 def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
-    """Empfehlung mit den aktuellen Einstellungen neu setzen. Werte bleiben."""
+    """Empfehlung mit den aktuellen Einstellungen neu setzen. Werte bleiben.
+
+    Szenen, die bei jeder Stufe bei 99 oder darüber liegen, fallen vorher aus
+    Schnitt und 1%-Low. Die Szenenzeile bleibt stehen.
+    """
+    apply_idle_scenes(analysis.get("results") or [])
     built: list[tuple[dict, VmafResult]] = []
     for raw in analysis.get("results") or []:
         if not isinstance(raw, dict):
@@ -1968,6 +1990,14 @@ def load_session(name: str) -> Optional[dict]:
     analysis = data.get("analysis")
     if isinstance(analysis, dict):
         annotate_clips(data.get("session") or name, analysis)
+        # Anzeige korrigieren, ohne die Datei umzuschreiben. Neu einordnen speichert.
+        if apply_idle_scenes(analysis.get("results") or []):
+            params = data.get("params") or {}
+            try:
+                target = float(params.get("target_vmaf") or 0)
+            except (TypeError, ValueError):
+                target = 0.0
+            repick_analysis(analysis, target)
     return data
 
 
@@ -2055,14 +2085,142 @@ def _target_lo(target_vmaf: float) -> float:
     return float(app_settings.vmaf_target())
 
 
+# Szene zählt nicht mit, wenn jede Stufe dort mindestens so hoch liegt.
+# Darunter trennt sie die Einstellungen nicht (Abspann, Standbild).
+IDLE_VMAF = 99.0
+
+
+def _scene_rows(results) -> list[list]:
+    rows = []
+    for row in results or []:
+        scenes = row.get("scene_scores") if isinstance(row, dict) else getattr(row, "scene_scores", None)
+        if scenes:
+            rows.append(scenes)
+    return rows
+
+
+def idle_scene_ids(results) -> set[int]:
+    """Szenen, die bei jeder Stufe bei VMAF 99 oder darüber liegen.
+
+    Bleibt mindestens eine Szene übrig. Fehlt einer Stufe die Szene, bleibt sie drin.
+    """
+    rows = _scene_rows(results)
+    if not rows:
+        return set()
+    sets: list[set[int]] = []
+    for scenes in rows:
+        ids: set[int] = set()
+        for s in scenes:
+            if not isinstance(s, dict) or s.get("vmaf") is None:
+                continue
+            try:
+                ids.add(int(s.get("scene", 0)))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return set()
+        sets.append(ids)
+    common = set.intersection(*sets)
+    if len(common) < 2:
+        return set()
+    idle: set[int] = set()
+    for si in common:
+        vals: list[float] = []
+        for scenes in rows:
+            for s in scenes:
+                try:
+                    if int(s.get("scene", -1)) != si:
+                        continue
+                    vals.append(float(s.get("vmaf")))
+                except (TypeError, ValueError):
+                    continue
+                break
+        if vals and min(vals) >= IDLE_VMAF:
+            idle.add(si)
+    if not idle or len(idle) >= len(common):
+        return set()
+    return idle
+
+
+def _put_metric(row, name: str, value: float) -> None:
+    shown = round(float(value), 4 if name == "ssim" else 2)
+    if isinstance(row, dict):
+        row[name] = shown
+    else:
+        setattr(row, name, shown)
+
+
+def apply_idle_scenes(results) -> set[int]:
+    """Schnitt und 1%-Low ohne Szenen, die jede Stufe bei 99 oder darüber lassen.
+
+    Die Szenenzeile bleibt, mit ``idle``. Größe und Bitrate bleiben unverändert.
+    """
+    idle = idle_scene_ids(results)
+    if not idle:
+        return set()
+    pairs = (
+        ("vmaf", "vmaf"),
+        ("hmean", "vmaf_hmean"),
+        ("p1", "vmaf_1pct"),
+        ("psnr", "psnr"),
+        ("ssim", "ssim"),
+        ("xpsnr", "xpsnr"),
+    )
+    for row in results or []:
+        scenes = row.get("scene_scores") if isinstance(row, dict) else row.scene_scores
+        if not scenes:
+            continue
+        buckets: dict[str, list[float]] = {src: [] for src, _dest in pairs}
+        counted: list[dict] = []
+        for s in scenes:
+            if not isinstance(s, dict):
+                continue
+            try:
+                si = int(s.get("scene", 0))
+            except (TypeError, ValueError):
+                s["idle"] = False
+                continue
+            on = si in idle
+            s["idle"] = on
+            if on:
+                continue
+            counted.append(s)
+            for src, _dest in pairs:
+                raw = s.get(src)
+                if not raw:
+                    continue
+                try:
+                    buckets[src].append(float(raw))
+                except (TypeError, ValueError):
+                    continue
+        if not buckets["vmaf"]:
+            continue
+        for src, dest in pairs:
+            vals = buckets[src]
+            if vals:
+                _put_metric(row, dest, sum(vals) / len(vals))
+        if isinstance(row, dict):
+            row["vmaf_score"] = round(quality_score(
+                float(row.get("vmaf") or 0),
+                float(row.get("vmaf_1pct") or 0),
+                float(row.get("vmaf_hmean") or 0),
+            ), 2)
+            vm = [float(s["vmaf"]) for s in counted if s.get("vmaf") is not None]
+            if vm:
+                row["vmaf_min"] = round(min(vm), 2)
+                row["vmaf_max"] = round(max(vm), 2)
+    return idle
+
+
 def floor_p1(scene_scores, overall: float = 0.0, mean: float = 0.0) -> float:
     """1%-Low für den Floor: schwächste Szene, nicht der Schnitt der Szenen.
 
     Ohne Szenen-1%-Low (ältere Archive) bleibt der bisherige Gesamtwert.
+    Szenen, die bei jeder Stufe auf 99 oder darüber liegen, zählen nicht.
     """
     lows = []
     for s in scene_scores or []:
-        if not isinstance(s, dict):
+        if not isinstance(s, dict) or s.get("idle"):
             continue
         raw = s.get("p1")
         if raw:

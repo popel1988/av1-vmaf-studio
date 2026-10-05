@@ -182,6 +182,10 @@
                     <input type="number" id="scene-min-pct" min="5" max="60" step="1" value="10" />
                     %
                   </label>
+                  <label class="scene-min" data-page="vmaf supertool" data-tip="Filmzeit, ab der keine Testszenen mehr liegen. Leer lassen heißt automatische Grenze. Die Szenen werden im Film davor neu verteilt. Format hh:mm:ss.">
+                    Abspann ab
+                    <input type="text" id="credits-at" class="credits-at" placeholder="hh:mm:ss" spellcheck="false" />
+                  </label>
                 </div>
                 <p class="hint" data-page="vmaf">Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.</p>
                 <p class="hint" id="bitrate-summary"></p>
@@ -795,6 +799,7 @@
           <div class="card-body vmaf-body">
             <div class="vmaf-course">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+              <p class="hint" id="vmaf-idle-note" hidden></p>
               <div id="vmaf-frame-wrap" class="vmaf-subchart vmaf-scene-wide" hidden>
                 <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
@@ -850,6 +855,7 @@
             <p class="hint vmaf-course" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
             <div id="vmaf-nerd" class="vmaf-course" hidden>
               <div id="nerd-scenes" class="shot-scenes vmaf-chart-scenes"></div>
+              <p class="hint" id="nerd-idle-note" hidden></p>
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
                 <canvas id="vmaf-nerd-chart"></canvas>

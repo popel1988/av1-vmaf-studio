@@ -1828,6 +1828,7 @@ input[type="range"]::-moz-range-thumb {
 .bitrate-panel { margin-top: 12px; }
 .scene-min { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .scene-min input { width: 4.2rem; }
+.scene-min input.credits-at { width: 7.5rem; font-variant-numeric: tabular-nums; }
 .bitrate-wins { display: flex; flex-wrap: wrap; gap: 6px; }
 .bitrate-win { font-size: 12px; color: var(--text-muted); }
 .vmaf-nerd { min-width: 0; margin-top: 4px; }

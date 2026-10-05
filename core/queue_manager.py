@@ -104,6 +104,7 @@ class JobSettings:
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     sample_mode: str = "even"     # even | bitrate
     scene_min_pct: int = 10        # ruhige Szene mindestens so viel % vom Median
+    credits_at: float = 0.0        # Filmzeit (s), ab der keine Testszenen mehr liegen
     generate_screenshots: bool = True
     post_processing: str = "keep"
     container: str = "auto"        # auto | mkv | mp4 (Ausgabe-Container)
@@ -896,7 +897,8 @@ class QueueManager:
                     prof = bitrate_profile.profile(
                         Path(info.path), float(info.duration or 0),
                         s.clip_seconds, s.samples,
-                        getattr(s, "scene_min_pct", 10) or 10)
+                        getattr(s, "scene_min_pct", 10) or 10,
+                        getattr(s, "credits_at", 0) or 0)
                     sample_windows = list(prof.get("windows") or [])
                     sample_starts = [
                         (w["start"], w["length"]) for w in sample_windows
@@ -925,6 +927,7 @@ class QueueManager:
                 refine_midpoint=s.workflow != "compare_only",
                 sample_starts=sample_starts,
                 sample_windows=sample_windows,
+                credits_at=float(getattr(s, "credits_at", 0) or 0),
                 two_pass=bool(s.two_pass) and s.rate_mode in ("bitrate", "abr"),
             )
             analysis = vmaf_mod.analyze(
@@ -2033,6 +2036,7 @@ def build_job_settings(d: dict) -> JobSettings:
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         sample_mode="bitrate" if d.get("sample_mode") == "bitrate" else "even",
         scene_min_pct=max(5, min(60, int(d.get("scene_min_pct", 10) or 10))),
+        credits_at=max(0.0, min(48 * 3600.0, float(d.get("credits_at", 0) or 0))),
         generate_screenshots=bool(d.get("generate_screenshots", True)),
         post_processing=d.get("post_processing", "keep"),
         container=d.get("container", "auto") if d.get("container") in ("mkv", "mp4") else "auto",

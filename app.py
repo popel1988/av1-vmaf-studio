@@ -521,7 +521,8 @@ async def probe(path: str, disc_clip: str = ""):
 
 
 @app.get("/api/bitrate")
-async def bitrate_curve(path: str, samples: int = 3, clip: int = 30, min_pct: int = 10):
+async def bitrate_curve(path: str, samples: int = 3, clip: int = 30, min_pct: int = 10,
+                        credits_at: float = 0):
     """Bitrate-Verlauf aus Paketgrößen. Dekodiert nicht, Cache ab dem zweiten Mal."""
     target = _safe_resolve(path)
     if target is None or not target.is_file():
@@ -535,6 +536,7 @@ async def bitrate_curve(path: str, samples: int = 3, clip: int = 30, min_pct: in
             bitrate_profile.profile, target, float(info.duration or 0),
             max(5, min(120, int(clip or 30))), max(1, min(5, int(samples or 1))),
             max(5, min(60, int(min_pct or 10))),
+            max(0.0, min(48 * 3600.0, float(credits_at or 0))),
         )
     except Exception as e:
         logging.getLogger("vcompress.bitrate").warning("Bitrate-Verlauf fehlgeschlagen: %s", e)
@@ -593,6 +595,7 @@ class EnqueueRequest(BaseModel):
     samples: int = 1
     sample_mode: str = "even"       # even | bitrate
     scene_min_pct: int = 10          # ruhige Szene mindestens so viel % vom Median
+    credits_at: float = 0.0          # Filmzeit (s), ab der keine Testszenen mehr liegen
     generate_screenshots: bool = True
     post_processing: str = "keep"
     container: str = "auto"          # auto | mkv | mp4 (Ausgabe-Container)
