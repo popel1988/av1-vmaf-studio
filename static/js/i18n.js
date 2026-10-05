@@ -783,6 +783,8 @@
     "Zurücksetzen": "Reset",
     "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
       "Leave the height empty for the automatic range. Only the lower number, e.g. 85, shows 85 to 100. The window applies to the scene curve and the frame curve. A click on a legend entry hides that line.",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Leave the height empty for the automatic range. Only the lower number, e.g. 85, shows 85 to 100. The window applies to the frame curve. A click on a legend entry hides that line.",
     "Bitrate-Verlauf": "Bitrate curve",
     "VMAF-Szenen nach Bitrate": "VMAF scenes by bitrate",
     "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
@@ -2359,6 +2361,8 @@
     "Zurücksetzen": "Restablecer",
     "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
       "Vacío deja la altura automática. Solo el número inferior, p. ej. 85, muestra de 85 a 100. El recorte vale para la curva de la escena y la curva de frames. Un clic en la leyenda oculta esa línea.",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Vacío deja la altura automática. Solo el número inferior, p. ej. 85, muestra de 85 a 100. El recorte vale para la curva de frames. Un clic en la leyenda oculta esa línea.",
     "Bitrate-Verlauf": "Curva de bitrate",
     "VMAF-Szenen nach Bitrate": "Escenas VMAF según bitrate",
     "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":
@@ -3758,6 +3762,8 @@
     "Zurücksetzen": "Réinitialiser",
     "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf und die Frame-Kurve. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
       "Vide, la hauteur reste automatique. Seul le nombre du bas, p. ex. 85, affiche 85 à 100. L'extrait s'applique à la courbe de scène et à la courbe d'images. Un clic dans la légende masque cette ligne.",
+    "Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.":
+      "Vide, la hauteur reste automatique. Seul le nombre du bas, p. ex. 85, affiche 85 à 100. L'extrait s'applique à la courbe d'images. Un clic dans la légende masque cette ligne.",
     "Bitrate-Verlauf": "Courbe de débit",
     "VMAF-Szenen nach Bitrate": "Scènes VMAF selon le débit",
     "Liest die Paketgrößen des Videostreams und dekodiert nicht. Der erste Lauf kann dauern, danach kommt die Kurve aus dem Cache. Die Markierung ist der Vorschlag: schwere, typische und ruhige Stellen. Abspann und Logos unter der Untergrenze zählen nicht als ruhige Szene. Den Mindestanteil stellst du daneben ein, Vorgabe 10 % vom Median. Die Checkbox übernimmt den Vorschlag in den nächsten VMAF-Lauf.":

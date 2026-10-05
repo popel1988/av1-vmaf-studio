@@ -2066,10 +2066,12 @@ async def vmaf_clip(session: str, file: str):
 
 
 @app.get("/api/vmaf/frames")
-async def vmaf_frames(session: str, scene: int = 0):
-    """Jeden bewerteten Frame einer Szene aus dem libvmaf-Log."""
+async def vmaf_frames(session: str, scene: int = 0, full: int = 0):
+    """Frame-Verlauf einer Szene. Ohne full ist der Graph auf 400 Punkte gekürzt,
+    die Kennzahlen gelten weiter für jeden Frame."""
     from core import vmaf as vmaf_mod
-    data = vmaf_mod.scene_frame_logs(session, scene)
+    data = await asyncio.to_thread(
+        vmaf_mod.scene_frame_logs, session, scene, bool(full))
     if data is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     return data

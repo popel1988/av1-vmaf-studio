@@ -816,23 +816,6 @@
                   </div>
                 </div>
               </div>
-              <div class="vmaf-zoom" id="vmaf-zoom">
-                <label>VMAF-Höhe
-                  <input id="vmaf-zoom-ymin" type="number" min="0" max="100" step="1" inputmode="numeric">
-                  <span>–</span>
-                  <input id="vmaf-zoom-ymax" type="number" min="0" max="100" step="1" inputmode="numeric">
-                </label>
-                <label class="vmaf-zoom-x">Ausschnitt
-                  <span class="vmaf-range">
-                    <span class="vmaf-range-track" aria-hidden="true"><span class="vmaf-range-fill" id="vmaf-zoom-fill"></span></span>
-                    <input id="vmaf-zoom-x0" type="range" min="0" max="100" step="1" value="0" title="Anfang">
-                    <input id="vmaf-zoom-x1" type="range" min="0" max="100" step="1" value="100" title="Ende">
-                  </span>
-                  <span id="vmaf-zoom-xlabel">gesamt</span>
-                </label>
-                <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
-              </div>
-              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Szenenverlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
             </div>
             <div class="vmaf-table-wrap">
               <table class="data-table" id="vmaf-table">
@@ -854,7 +837,12 @@
         <section class="card span-3" id="vmaf-nerd-card" data-page="vmafnerd">
           <div class="card-head">
             <h3><span class="card-idx">★</span> Nerd-Daten</h3>
-            <button class="btn btn-ghost btn-sm" id="btn-nerd-back" type="button">Zur VMAF-Seite</button>
+            <div class="vmaf-head-right">
+              <select id="nerd-history" class="select select-sm" title="Früheren Vergleich ansehen">
+                <option value="">Aktuelle Analyse</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="btn-nerd-back" type="button">Zur VMAF-Seite</button>
+            </div>
           </div>
           <div class="card-body">
             <p class="hint" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
@@ -864,6 +852,36 @@
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
                 <canvas id="vmaf-nerd-chart"></canvas>
+              </div>
+              <div class="vmaf-zoom" id="vmaf-zoom">
+                <label>VMAF-Höhe
+                  <input id="vmaf-zoom-ymin" type="number" min="0" max="100" step="1" inputmode="numeric">
+                  <span>–</span>
+                  <input id="vmaf-zoom-ymax" type="number" min="0" max="100" step="1" inputmode="numeric">
+                </label>
+                <label class="vmaf-zoom-x">Ausschnitt
+                  <span class="vmaf-range">
+                    <span class="vmaf-range-track" aria-hidden="true"><span class="vmaf-range-fill" id="vmaf-zoom-fill"></span></span>
+                    <input id="vmaf-zoom-x0" type="range" min="0" max="100" step="1" value="0" title="Anfang">
+                    <input id="vmaf-zoom-x1" type="range" min="0" max="100" step="1" value="100" title="Ende">
+                  </span>
+                  <span id="vmaf-zoom-xlabel">gesamt</span>
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
+              </div>
+              <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
+              <div class="vmaf-graph-pair">
+                <div>
+                  <div class="vmaf-chart-wrap">
+                    <canvas id="nerd-std-chart"></canvas>
+                  </div>
+                </div>
+                <div id="nerd-gap-wrap" class="vmaf-subchart" hidden>
+                  <p class="vmaf-subchart-title">Abstand zum Gesamtschnitt (negativ = diese Szene liegt darunter)</p>
+                  <div class="vmaf-chart-wrap">
+                    <canvas id="nerd-gap-chart"></canvas>
+                  </div>
+                </div>
               </div>
               <div class="vmaf-nerd-floor">
                 <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>

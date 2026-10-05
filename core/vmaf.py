@@ -1642,7 +1642,51 @@ def _series_stats(frames: list[dict], clip_seconds: float) -> dict:
     return out
 
 
-def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
+def _dip_line(frames: list[dict], floor: float, frame_sec: float) -> str:
+    """Dieselbe Zeile wie in den Nerd-Daten. Gerechnet über alle Frames."""
+    n = len(frames)
+    if not n:
+        return ""
+    under = 0
+    longest = 0
+    cur = 0
+    start_at = 0
+    at = 0
+    for f in frames:
+        if float(f["vmaf"]) < floor:
+            under += 1
+            if cur == 0:
+                at = int(f["n"])
+            cur += 1
+            if cur > longest:
+                longest = cur
+                start_at = at
+        else:
+            cur = 0
+    pct = 100.0 * under / n
+    level = int(floor)
+    if longest > 0:
+        line = f"{pct:.1f} % unter {level} · längster Einbruch {longest} Frames ab Frame {start_at}"
+        if frame_sec > 0:
+            line += f" (~{longest * frame_sec:.2f} s)"
+        return line
+    return f"{pct:.1f} % unter {level} · kein Frame unter {level}"
+
+
+def _downsample_min(frames: list[dict], buckets: int = 400) -> list[dict]:
+    """Je Abschnitt den tiefsten Frame behalten. Die Tabelle nutzt die vollen Zahlen."""
+    n = len(frames)
+    if n <= buckets:
+        return frames
+    out = []
+    for b in range(buckets):
+        a = b * n // buckets
+        z = max(a + 1, (b + 1) * n // buckets)
+        out.append(min(frames[a:z], key=lambda f: float(f["vmaf"])))
+    return out
+
+
+def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[dict]:
     """Jeden bewerteten Frame einer Szene aus den libvmaf-Logs."""
     data = load_session(session)
     if data is None:
@@ -1693,13 +1737,18 @@ def scene_frame_logs(session: str, scene: int) -> Optional[dict]:
         worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
         n_frames = len(frames)
         frame_sec = (float(clip_seconds) / n_frames) if n_frames and clip_seconds > 0 else 0.0
+        dips = {
+            str(level): _dip_line(frames, float(level), frame_sec)
+            for level in range(80, 100)
+        }
         series.append({
             "label": raw.get("label") or "",
             "count": n_frames,
             "frame_sec": round(frame_sec, 5),
             "min": worst[0]["vmaf"] if worst else None,
             "min_frame": worst[0]["n"] if worst else None,
-            "frames": frames,
+            "frames": frames if full else _downsample_min(frames),
+            "dips": dips,
             "worst": worst,
             "stats": _series_stats(frames, clip_seconds),
         })

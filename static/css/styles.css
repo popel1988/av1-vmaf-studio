@@ -1773,7 +1773,8 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-body { display: flex; flex-direction: column; gap: 18px; }
 .vmaf-charts, .vmaf-table-wrap { min-width: 0; }
 .vmaf-graph-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-.vmaf-graph-pair:has(#vmaf-gap-wrap[hidden]) { grid-template-columns: 1fr; }
+.vmaf-graph-pair:has(#vmaf-gap-wrap[hidden]),
+.vmaf-graph-pair:has(#nerd-gap-wrap[hidden]) { grid-template-columns: 1fr; }
 .vmaf-graph-pair .vmaf-subchart { margin-top: 0; }
 #vmaf-table th, #vmaf-table td { padding: 4px 8px; vertical-align: top; }
 #vmaf-table .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }

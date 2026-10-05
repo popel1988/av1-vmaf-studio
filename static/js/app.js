@@ -119,6 +119,10 @@
       }
       if (!opts || !opts.keepAb) rememberScreenshotPicks();
       refreshNerdFrames();
+      if (state.vmafShown) {
+        try { drawChart(state.vmafShown); } catch (e) { /* Graph bleibt */ }
+        try { drawGapChart(state.vmafShown); } catch (e) { /* siehe oben */ }
+      }
       if (!opts || !opts.keepAb) {
         const picks = picksFromClipIds();
         if (picks.length === 2 && !clipAbBlock(picks)) openClipAb(picks, { stay: true });
@@ -3814,13 +3818,17 @@
 
   /* ------------------------------------------------ VMAF-VERLAUF (ARCHIV) */
   async function initVmafHistory() {
-    const sel = $("vmaf-history");
-    if (sel) {
-      sel.addEventListener("change", () => {
-        if (sel.value) showArchivedSession(sel.value);
-        else showLiveVmaf();
+    const onHistory = (sel) => {
+      const val = sel.value;
+      [$("vmaf-history"), $("nerd-history")].forEach((other) => {
+        if (other && other !== sel) other.value = val;
       });
-    }
+      if (val) showArchivedSession(val);
+      else showLiveVmaf();
+    };
+    [$("vmaf-history"), $("nerd-history")].forEach((sel) => {
+      if (sel) sel.addEventListener("change", () => onHistory(sel));
+    });
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
     const applyBtn = $("btn-vmaf-apply");
@@ -3885,21 +3893,24 @@
   }
 
   async function refreshVmafHistory() {
-    const sel = $("vmaf-history");
-    if (!sel) return;
+    const sels = [$("vmaf-history"), $("nerd-history")].filter(Boolean);
+    if (!sels.length) return;
     try {
       const r = await fetch("/api/vmaf/sessions");
       const data = await r.json();
       const sessions = data.sessions || [];
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">Aktuelle Analyse</option>' +
+      const html = '<option value="">Aktuelle Analyse</option>' +
         sessions.map((s) => {
           const d = s.created ? new Date(s.created * 1000) : null;
           const when = d ? `${d.toLocaleDateString()} ${d.toLocaleTimeString().slice(0,5)}` : "";
           const codec = s.multi_codec ? " · Multi-Codec" : "";
           return `<option value="${escapeHtml(s.session)}">${escapeHtml(s.title)} — ${when}${codec}</option>`;
         }).join("");
-      sel.value = cur; // Auswahl beibehalten, falls noch vorhanden
+      sels.forEach((sel) => {
+        const cur = sel.value;
+        sel.innerHTML = html;
+        if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+      });
       // Karte auch ohne Live-Analyse zeigen, wenn es Archive gibt.
       const had = state.hasArchive;
       state.hasArchive = sessions.length > 0;
@@ -4701,7 +4712,7 @@
       loadSceneBitrate(vmaf),
       session
         ? Promise.all(scenes.map((sc) =>
-          pull(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc}`)))
+          pull(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc}&full=1`)))
         : Promise.resolve([]),
       session
         ? Promise.all(scenes.map((sc) =>
@@ -4859,8 +4870,12 @@
       try { drawGapChart(vmaf); } catch (e) { /* siehe oben */ }
       try { drawFrameChart(vmaf); } catch (e) { /* siehe oben */ }
     }
-    if (state.currentPage === "vmafnerd" && state.nerdData) {
-      try { paintNerdChart(state.nerdData); } catch (e) { /* Tabelle bleibt */ }
+    if (vmaf && state.currentPage === "vmafnerd") {
+      try { drawChart(vmaf); } catch (e) { /* Graph bleibt, Haken gilt */ }
+      try { drawGapChart(vmaf); } catch (e) { /* siehe oben */ }
+      if (state.nerdData) {
+        try { paintNerdChart(state.nerdData); } catch (e) { /* Tabelle bleibt */ }
+      }
     }
   }
 
@@ -4975,10 +4990,10 @@
     drawChart(vmaf);
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
-    drawFrameChart(vmaf);
+    if (state.currentPage !== "vmafnerd") drawFrameChart(vmaf);
     Promise.all([loadSceneBitrate(vmaf), loadSourceBitrate(vmaf)]).then(() => {
       if (state.vmafShown !== vmaf) return;
-      drawFrameChart(vmaf);
+      if (state.currentPage !== "vmafnerd") drawFrameChart(vmaf);
       if (state.vmafNerd && state.nerdData) drawNerdFrames(state.nerdData);
     });
     refreshNerdFrames();
@@ -5001,9 +5016,13 @@
     };
   }
 
+  function pageCanvas(onVmaf, onNerd) {
+    return $(state.currentPage === "vmafnerd" ? onNerd : onVmaf);
+  }
+
   function drawGapChart(vmaf) {
-    const wrap = $("vmaf-gap-wrap");
-    const ctx = $("vmaf-gap-chart");
+    const wrap = pageCanvas("vmaf-gap-wrap", "nerd-gap-wrap");
+    const ctx = pageCanvas("vmaf-gap-chart", "nerd-gap-chart");
     destroyNamedChart("vmafGapChart");
     const scenes = vmafSceneList(vmaf);
     const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
@@ -5435,12 +5454,6 @@
         data: { datasets },
         options: opts,
       });
-      attachVmafZoom(state.vmafFrameChart, {
-        ySuggest: [80, 100],
-        xMode: "linear",
-        extent: datasetXExtent(datasets),
-        labelCount: 0,
-      });
       return;
     }
     const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
@@ -5457,12 +5470,6 @@
         datasets,
       },
       options: opts,
-    });
-    attachVmafZoom(state.vmafFrameChart, {
-      ySuggest: [80, 100],
-      xMode: "index",
-      extent: null,
-      labelCount: n,
     });
   }
 
@@ -5533,9 +5540,14 @@
     state.nerdKey = key;
     if (body) body.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
     fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${scene}`)
-      .then((r) => r.json())
-      .then((data) => {
+      .then((r) => r.json().then((data) => ({ ok: r.ok, data })).catch(() => ({ ok: false, data: null })))
+      .then((pack) => {
         if (state.nerdKey !== key || !state.vmafNerd) return;
+        const data = pack && pack.data;
+        if (!pack || !pack.ok || !data || data.error) {
+          if (body) body.innerHTML = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
+          return;
+        }
         state.nerdData = data;
         drawNerdFrames(data);
       })
@@ -5551,7 +5563,8 @@
     return Math.min(99, Math.max(80, Math.round(v)));
   }
 
-  function nerdDipText(frames, floor, frameSec) {
+  function nerdDipText(frames, floor, frameSec, dips) {
+    if (dips && dips[String(floor)]) return dips[String(floor)];
     const list = frames || [];
     const n = list.length;
     if (!n) return "";
@@ -5590,7 +5603,7 @@
     document.querySelectorAll("#vmaf-nerd-body .vmaf-nerd-dip, #vmaf-nerd-body .vmaf-nerd-dip-short").forEach((el) => {
       const s = series[Number(el.getAttribute("data-nerd-i"))];
       if (!s) return;
-      const full = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0);
+      const full = nerdDipText(s.frames, floor, Number(s.frame_sec) || 0, s.dips);
       el.textContent = el.classList.contains("vmaf-nerd-dip-short")
         ? full.split(" · ")[0]
         : full;
@@ -5682,15 +5695,22 @@
       if (!n) return;
       const color = CHART_PALETTE[i % CHART_PALETTE.length];
       const buckets = Math.min(maxPoints, n);
-      maxX = Math.max(maxX, n);
+      const fullCount = Number(s.count) || n;
+      maxX = Math.max(maxX, fullCount);
+      const vmafPoints = n <= maxPoints
+        ? frames.map((f, k) => ({
+          x: f.n != null ? Number(f.n) : k,
+          y: f.vmaf == null ? null : Number(f.vmaf),
+        }))
+        : nerdPick((k) => {
+          const v = frames[k] && frames[k].vmaf;
+          return v == null ? null : Number(v);
+        }, n, buckets, "min");
       datasets.push({
         label: key,
         nerdKey: key,
         parsing: false,
-        data: nerdPick((k) => {
-          const v = frames[k] && frames[k].vmaf;
-          return v == null ? null : Number(v);
-        }, n, buckets, "min"),
+        data: vmafPoints,
         borderColor: color,
         backgroundColor: "transparent",
         pointRadius: 0,
@@ -5710,10 +5730,15 @@
         nerdKey: key,
         parsing: false,
         yAxisID: "y1",
-        data: nerdPick((k) => {
-          const f = frames[k];
-          return !f || byN[f.n] == null ? null : byN[f.n];
-        }, n, buckets, "max"),
+        data: n <= maxPoints
+          ? frames.map((f, k) => ({
+            x: f.n != null ? Number(f.n) : k,
+            y: !f || byN[f.n] == null ? null : byN[f.n],
+          }))
+          : nerdPick((k) => {
+            const f = frames[k];
+            return !f || byN[f.n] == null ? null : byN[f.n];
+          }, n, buckets, "max"),
         borderColor: color,
         backgroundColor: "transparent",
         borderDash: [5, 4],
@@ -5815,7 +5840,7 @@
     const nerdScene = data && data.scene;
     const frameSec = Number(series[0] && series[0].frame_sec) || 0;
     const nerdHasOriginal = nerdScene != null && frameSec > 0 && sourceBinsFor(nerdScene).length > 0;
-    const coarse = series.some((s) => (s.frames || []).length > 400);
+    const coarse = series.some((s) => (Number(s.count) || 0) > (s.frames || []).length);
     if (!body) {
       try { paintNerdChart(data); } catch (e) { /* Canvas bleibt leer */ }
       return;
@@ -5835,8 +5860,8 @@
         return `<li>Frame ${f.n} · VMAF ${Number(f.vmaf).toFixed(2)}`
           + (extra ? ` · ${extra}` : "") + `</li>`;
       }).join("");
-      const dipFull = (s.frames || []).length
-        ? nerdDipText(s.frames, floor, Number(s.frame_sec) || 0)
+      const dipFull = (s.dips || (s.frames || []).length)
+        ? nerdDipText(s.frames, floor, Number(s.frame_sec) || 0, s.dips)
         : "";
       let psnr = "";
       if (st.psnr_mean != null) {
@@ -5892,7 +5917,9 @@
     });
     const floorLab = $("nerd-floor-val");
     if (floorLab) floorLab.textContent = String(floor);
-    try { paintNerdChart(data); } catch (e) { /* Tabelle bleibt sichtbar */ }
+    requestAnimationFrame(() => {
+      try { paintNerdChart(data); } catch (e) { /* Tabelle bleibt sichtbar */ }
+    });
   }
 
   function renderChartScenes(vmaf) {
@@ -5969,7 +5996,8 @@
     if (typeof Chart === "undefined") return;
     if (vmaf.multi_codec || resultHasSettingVariants(vmaf.results)) return drawChartMultiCodec(vmaf);
 
-    const ctx = $("vmaf-chart");
+    const ctx = pageCanvas("vmaf-chart", "nerd-std-chart");
+    if (!ctx) return;
     const col = chartColors();
     const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
     const scene = state.chartScene;
@@ -6100,13 +6128,16 @@
       },
     });
     state.vmafChart = mainChart;
-    attachVmafZoom(mainChart, { ySuggest: [80, 100], xMode: null });
+    if (state.currentPage === "vmafnerd") {
+      attachVmafZoom(mainChart, { ySuggest: [80, 100], xMode: null });
+    }
   }
 
   // Mehrere Codecs: faire Achse = VMAF (y) vs. Ersparnis % (x). Je Codec eine
   // Kurve; weiter oben-rechts = besser (mehr Qualität bei mehr Ersparnis).
   function drawChartMultiCodec(vmaf) {
-    const ctx = $("vmaf-chart");
+    const ctx = pageCanvas("vmaf-chart", "nerd-std-chart");
+    if (!ctx) return;
     const col = chartColors();
     const scene = state.chartScene;
     const sceneMode = scene != null;
@@ -6200,7 +6231,9 @@
       },
     });
     state.vmafChart = multiChart;
-    attachVmafZoom(multiChart, { ySuggest: [80, 100], xMode: null });
+    if (state.currentPage === "vmafnerd") {
+      attachVmafZoom(multiChart, { ySuggest: [80, 100], xMode: null });
+    }
   }
 
   function restyleChart() {
