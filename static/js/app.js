@@ -137,6 +137,10 @@
         drawFrameChart(state.vmafShown);
       }
     }
+    settleVmafCharts();
+  }
+
+  function settleVmafCharts() {
     requestAnimationFrame(() => {
       [state.vmafChart, state.vmafGapChart, state.vmafFrameChart, state.vmafNerdChart]
         .forEach((c) => { try { if (c) c.resize(); } catch (e) { /* Canvas noch ohne Maß */ } });
@@ -4958,6 +4962,33 @@
       body.querySelectorAll("[data-take]").forEach((b) =>
         b.addEventListener("click", () =>
           transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
+      body.querySelectorAll("tr").forEach((tr, idx) => {
+        const row = vmaf.results[idx];
+        if (!row) return;
+        const key = vmafResultKey(row);
+        tr.addEventListener("mouseenter", () => highlightVmafSeries(key));
+        tr.addEventListener("mouseleave", () => highlightVmafSeries(""));
+      });
+    });
+  }
+
+  function lineMatchesKey(ds, key) {
+    if (!key || !ds || ds.floorLine) return false;
+    if (ds.nerdKey && ds.nerdKey === key) return true;
+    const label = ds.label || "";
+    return label === key || label === key + " · Bitrate";
+  }
+
+  function highlightVmafSeries(key) {
+    [state.vmafFrameChart, state.vmafNerdChart, state.vmafGapChart].forEach((chart) => {
+      if (!chart) return;
+      chart.data.datasets.forEach((ds) => {
+        if (ds.floorLine) return;
+        if (ds._bw == null) ds._bw = ds.borderWidth || 1.5;
+        const on = !!(key && lineMatchesKey(ds, key));
+        ds.borderWidth = key ? (on ? ds._bw + 2.6 : Math.min(ds._bw, 1.15)) : ds._bw;
+      });
+      try { chart.update("none"); } catch (e) { /* Chart gerade neu */ }
     });
   }
 
@@ -5048,6 +5079,7 @@
       if (state.vmafNerd && state.nerdData) drawNerdFrames(state.nerdData);
     });
     refreshNerdFrames();
+    settleVmafCharts();
   }
 
   function lineChartOptions(col, yTitle) {
@@ -5370,6 +5402,87 @@
     };
   }
 
+  function ensureCourseHover() {
+    if (typeof Chart === "undefined" || Chart._courseHover) return;
+    const modes = Chart.Interaction && Chart.Interaction.modes;
+    const getPos = Chart.helpers && Chart.helpers.getRelativePosition;
+    if (!modes || !getPos) return;
+    modes.courseX = function (chart, e) {
+      const position = getPos(e, chart);
+      const items = [];
+      chart.data.datasets.forEach((ds, datasetIndex) => {
+        const meta = chart.getDatasetMeta(datasetIndex);
+        if (!meta || meta.hidden || ds.floorLine) return;
+        let best = null;
+        let bestPx = Infinity;
+        (meta.data || []).forEach((el, index) => {
+          if (!el || typeof el.getProps !== "function") return;
+          const point = el.getProps(["x"], true);
+          const px = Math.abs((point.x || 0) - position.x);
+          if (px < bestPx) {
+            bestPx = px;
+            best = { element: el, datasetIndex, index };
+          }
+        });
+        if (best && bestPx <= 18) items.push(best);
+      });
+      return items;
+    };
+    Chart._courseHover = true;
+  }
+
+  function nearestYAt(ds, x) {
+    if (!ds || x == null) return null;
+    let best = null;
+    let bestD = Infinity;
+    (ds.data || []).forEach((p) => {
+      if (!p || typeof p !== "object" || p.y == null || p.x == null) return;
+      const d = Math.abs(Number(p.x) - Number(x));
+      if (d < bestD) { bestD = d; best = Number(p.y); }
+    });
+    return Number.isFinite(best) ? best : null;
+  }
+
+  function courseTooltipOptions(titleOf) {
+    ensureCourseHover();
+    const tip = {
+      mode: (typeof Chart !== "undefined" && Chart._courseHover) ? "courseX" : "x",
+      intersect: false,
+      filter: (item) => {
+        const ds = item.dataset || {};
+        return !ds.floorLine && ds.yAxisID !== "y1";
+      },
+      callbacks: {
+        label: (item) => {
+          const ds = item.dataset || {};
+          const y = item.parsed ? item.parsed.y : null;
+          const x = item.parsed ? item.parsed.x : null;
+          const vmaf = y == null ? "—" : Number(y).toFixed(1);
+          let line = (ds.label || "") + ": " + vmaf + " VMAF";
+          const sets = (item.chart && item.chart.data && item.chart.data.datasets) || [];
+          const br = sets.find((d) => d && d.yAxisID === "y1" && !d.floorLine
+            && (d.nerdKey
+              ? d.nerdKey === ds.nerdKey
+              : d.label === (ds.label || "") + " · Bitrate"));
+          const text = fmtKbps(nearestYAt(br, x));
+          if (text) line += " · " + text;
+          return line;
+        },
+        afterBody: (items) => {
+          const first = items && items[0];
+          if (!first || !first.chart) return "";
+          const x = first.parsed ? first.parsed.x : null;
+          const sets = first.chart.data.datasets || [];
+          const orig = sets.find((d) => d && (d.nerdKey === "original" || d.label === tt("Original")));
+          const text = fmtKbps(nearestYAt(orig, x));
+          return text ? tt("Original") + ": " + text : "";
+        },
+      },
+    };
+    if (titleOf) tip.callbacks.title = titleOf;
+    return tip;
+  }
+
   function drawFrameChart(vmaf) {
     const wrap = $("vmaf-frame-wrap");
     const ctx = $("vmaf-frame-chart");
@@ -5464,42 +5577,9 @@
         grid: { drawOnChartArea: false },
         ticks: { color: col.muted },
       };
-      opts.interaction = { mode: "x", intersect: false };
-      opts.plugins.tooltip = {
-        mode: "x",
-        intersect: false,
-        filter: (item) => {
-          const ds = item.dataset || {};
-          if (ds.yAxisID !== "y1") return true;
-          return ds.label === tt("Original");
-        },
-        callbacks: {
-          label: (item) => {
-            const ds = item.dataset || {};
-            const y = item.parsed ? item.parsed.y : null;
-            const x = item.parsed ? item.parsed.x : null;
-            if (ds.yAxisID === "y1") {
-              const text = fmtKbps(y);
-              return (ds.label || tt("Original")) + (text ? ": " + text : "");
-            }
-            let line = (ds.label || "") + ": " + (y == null ? "—" : Number(y).toFixed(1));
-            const br = (item.chart.data.datasets || []).find(
-              (d) => d.label === (ds.label || "") + " · Bitrate");
-            if (br && x != null) {
-              let best = null;
-              let bestD = Infinity;
-              (br.data || []).forEach((p) => {
-                if (!p || p.y == null || p.x == null) return;
-                const dist = Math.abs(Number(p.x) - x);
-                if (dist < bestD) { bestD = dist; best = p.y; }
-              });
-              const text = fmtKbps(best);
-              if (text) line += " · " + text;
-            }
-            return line;
-          },
-        },
-      };
+      const tip = courseTooltipOptions();
+      opts.interaction = { mode: tip.mode, intersect: false };
+      opts.plugins.tooltip = tip;
       state.vmafFrameChart = new Chart(ctx, {
         type: "line",
         data: { datasets },
@@ -5865,7 +5945,11 @@
     const opts = lineChartOptions(col, "VMAF");
     opts.animation = false;
     opts.parsing = false;
-    opts.interaction = { mode: "nearest", axis: "x", intersect: false };
+    const tip = courseTooltipOptions((items) => {
+      const x = items[0] && items[0].parsed ? items[0].parsed.x : 0;
+      return "Frame " + Math.round(x);
+    });
+    opts.interaction = { mode: tip.mode, intersect: false };
     opts.plugins.legend.display = false;
     opts.scales.y.suggestedMin = 70;
     opts.scales.y.suggestedMax = 100;
@@ -5882,17 +5966,7 @@
         ticks: { color: col.muted },
       };
     }
-    opts.plugins.tooltip = {
-      mode: "nearest",
-      intersect: false,
-      filter: (item) => !(item.dataset && item.dataset.floorLine),
-      callbacks: {
-        title: (items) => {
-          const x = items[0] && items[0].parsed ? items[0].parsed.x : 0;
-          return "Frame " + Math.round(x);
-        },
-      },
-    };
+    opts.plugins.tooltip = tip;
     state.vmafNerdChart = new Chart(ctx, {
       type: "line",
       data: { datasets },
@@ -6197,7 +6271,7 @@
             position: "left",
             title: {
               display: true,
-              text: sceneMode ? `VMAF · Szene ${scene + 1}` : "VMAF",
+              text: sceneMode ? `VMAF · Szene ${scene + 1}` : tt("VMAF gesamt"),
               color: col.muted,
             },
             suggestedMin: 80, suggestedMax: 100,
@@ -6304,7 +6378,7 @@
           y: {
             title: {
               display: true,
-              text: sceneMode ? `VMAF · Szene ${scene + 1}` : "VMAF",
+              text: sceneMode ? `VMAF · Szene ${scene + 1}` : tt("VMAF gesamt"),
               color: col.muted,
             },
             suggestedMin: 80, suggestedMax: 100,

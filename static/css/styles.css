@@ -1778,19 +1778,26 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-body {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-areas:
+    "course table"
+    "graphs table"
+    "shots shots"
+    "actions actions";
   gap: 16px 18px;
   align-items: start;
 }
-.vmaf-course { grid-column: 1 / -1; min-width: 0; }
-.vmaf-side-main { grid-column: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
-.vmaf-table-wrap { grid-column: 2; min-width: 0; }
+.vmaf-course { grid-area: course; min-width: 0; }
+.vmaf-side-main { grid-area: graphs; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.vmaf-table-wrap { grid-area: table; min-width: 0; align-self: start; }
 .vmaf-course[hidden],
 .vmaf-side-main[hidden],
 .vmaf-table-wrap[hidden] { display: none !important; }
-.vmaf-body > .shot-wrap,
-.vmaf-body > .vmaf-actions { grid-column: 1 / -1; }
+.vmaf-body > .shot-wrap { grid-area: shots; min-width: 0; }
+.vmaf-body > .vmaf-actions { grid-area: actions; min-width: 0; }
 #vmaf-nerd-body { grid-column: auto; }
-.vmaf-graph-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.vmaf-graph-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; min-width: 0; }
+.vmaf-graph-pair > * { min-width: 0; }
+.vmaf-chart-wrap canvas { max-width: 100%; }
 .vmaf-graph-pair:has(#vmaf-gap-wrap[hidden]),
 .vmaf-graph-pair:has(#nerd-gap-wrap[hidden]) { grid-template-columns: 1fr; }
 .vmaf-graph-pair .vmaf-subchart { margin-top: 0; }
@@ -1860,12 +1867,15 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-nerd-worst li { margin: 2px 0; }
 #btn-vmaf-nerd.active { color: var(--accent); border-color: var(--accent); }
 @media (max-width: 900px) {
-  .vmaf-body { grid-template-columns: 1fr; }
-  .vmaf-course,
-  .vmaf-side-main,
-  .vmaf-table-wrap,
-  .vmaf-body > .shot-wrap,
-  .vmaf-body > .vmaf-actions { grid-column: 1; }
+  .vmaf-body {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "course"
+      "graphs"
+      "table"
+      "shots"
+      "actions";
+  }
   .vmaf-graph-pair { grid-template-columns: 1fr; }
 }
 

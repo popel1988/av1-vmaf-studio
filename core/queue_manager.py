@@ -175,7 +175,28 @@ class QueueItem:
     finished_at: float = 0.0
     duration: float = 0.0
 
+    def _normalize_live_vmaf(self) -> None:
+        """Alte Läufe: Szene mit VMAF ≥ 99 auf jeder Stufe aus Schnitt und Empfehlung."""
+        vmaf = self.vmaf
+        if not isinstance(vmaf, dict) or vmaf.get("_idle_applied"):
+            return
+        results = vmaf.get("results") or []
+        if not results:
+            vmaf["_idle_applied"] = True
+            return
+        idle = vmaf_mod.apply_idle_scenes(results)
+        if idle:
+            target = 0.0
+            if self.settings is not None:
+                try:
+                    target = float(self.settings.target_vmaf or 0)
+                except (TypeError, ValueError):
+                    target = 0.0
+            vmaf_mod.repick_analysis(vmaf, target)
+        vmaf["_idle_applied"] = True
+
     def to_dict(self) -> dict:
+        self._normalize_live_vmaf()
         # Laufende Dauer bei aktiven Jobs live mitzählen, sonst die Endzeit.
         if self.duration:
             dur = self.duration

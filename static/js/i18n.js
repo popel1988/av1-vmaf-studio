@@ -799,6 +799,7 @@
     "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
       "are left out: every setting scores VMAF 99 or higher there. Mean, 1% low and the recommendation ignore these scenes.",
     "Gesamt": "Overall",
+    "VMAF gesamt": "VMAF overall",
     "Bitrate wird gelesen …": "Reading bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Could not load the bitrate curve.",
     "Anteil unter": "Share under",
@@ -2384,6 +2385,7 @@
     "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
       "no cuentan: cada ajuste llega ahí a VMAF 99 o más. Media, 1% low y la recomendación las dejan fuera.",
     "Gesamt": "Total",
+    "VMAF gesamt": "VMAF total",
     "Bitrate wird gelesen …": "Leyendo bitrate …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "No se pudo cargar la curva de bitrate.",
     "Anteil unter": "Porcentaje bajo",
@@ -3792,6 +3794,7 @@
     "zählen nicht mit: bei jeder Stufe VMAF 99 oder darüber. Schnitt, 1%-Low und Empfehlung ohne diese Szenen.":
       "ne comptent pas : chaque réglage y atteint un VMAF de 99 ou plus. Moyenne, 1 % low et recommandation les laissent de côté.",
     "Gesamt": "Ensemble",
+    "VMAF gesamt": "VMAF global",
     "Bitrate wird gelesen …": "Lecture du débit …",
     "Bitrate-Verlauf konnte nicht geladen werden.": "Impossible de charger la courbe de débit.",
     "Anteil unter": "Part sous",
