@@ -1236,8 +1236,12 @@ tr.queue-row:hover { background: rgba(127,127,127,.08); }
 .track-sub .sub-flag { font-size: 11.5px; color: var(--text-muted); }
 .track-sub:has(.sub-track:not(:checked)) { opacity: .5; }
 
-/* VMAF-Tabelle: Aktions-Spalte mit „Empfohlen" + Übernehmen-Button */
-.vmaf-row-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+/* VMAF-Tabelle: Encoding-Knopf, bei der Empfehlung in dem Grün der Zeile */
+.vmaf-row-actions { display: flex; align-items: center; justify-content: flex-start; }
+.vmaf-row-actions .btn.is-rec {
+  background: var(--good); color: #04121a; border: none; font-weight: 600;
+}
+.vmaf-row-actions .btn.is-rec:hover { filter: brightness(1.08); }
 
 /* ----------------------------- SETTINGS --------------------------------- */
 .settings { display: flex; flex-direction: column; gap: 14px; }
@@ -1764,7 +1768,8 @@ input[type="range"]::-moz-range-thumb {
 .data-table td { padding: 11px 12px; border-bottom: 1px solid var(--border); }
 .data-table tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover { background: var(--surface-2); }
-.data-table tr.row-recommended { background: color-mix(in srgb, var(--good) 12%, transparent); }
+.data-table tr.row-recommended,
+.data-table tr.row-recommended:hover { background: color-mix(in srgb, var(--good) 12%, transparent); }
 .empty-row td { text-align: center; color: var(--text-muted); padding: 24px; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
@@ -1789,10 +1794,15 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-graph-pair:has(#vmaf-gap-wrap[hidden]),
 .vmaf-graph-pair:has(#nerd-gap-wrap[hidden]) { grid-template-columns: 1fr; }
 .vmaf-graph-pair .vmaf-subchart { margin-top: 0; }
-#vmaf-table th, #vmaf-table td { padding: 4px 8px; vertical-align: top; }
-#vmaf-table .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }
-#vmaf-table .vmaf-result-details summary { cursor: pointer; }
-#vmaf-table input[type="checkbox"] { margin: 2px 0 0; }
+.vmaf-table-wrap .data-table th,
+.vmaf-table-wrap .data-table td { padding: 4px 8px; vertical-align: top; }
+.vmaf-table-wrap .data-table th:last-child,
+.vmaf-table-wrap .data-table td.vmaf-row-actions {
+  width: 1%; white-space: nowrap; padding-left: 4px; padding-right: 4px;
+}
+.vmaf-table-wrap .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }
+.vmaf-table-wrap .vmaf-result-details summary { cursor: pointer; }
+.vmaf-table-wrap input[type="checkbox"] { margin: 2px 0 0; }
 .vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
 .vmaf-chart-scenes:empty { display: none; }
 .vmaf-chart-wrap { position: relative; height: 300px; min-width: 0; overflow: hidden; }

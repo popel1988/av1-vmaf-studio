@@ -4899,7 +4899,6 @@
       try { drawChart(vmaf); } catch (e) { /* Graph bleibt, Haken gilt */ }
       try { drawGapChart(vmaf); } catch (e) { /* siehe oben */ }
       if (state.nerdData) {
-        try { renderNerdWorst(state.nerdData.series || []); } catch (e) { /* Tabelle bleibt */ }
         try { paintNerdChart(state.nerdData); } catch (e) { /* Tabelle bleibt */ }
       }
     }
@@ -4937,10 +4936,7 @@
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td class="vmaf-row-actions">
-          ${r.recommended ? (vmaf.pick_warning
-            ? '<span class="badge recommended" title="' + escapeHtml(vmaf.pick_warning) + '">Empfohlen · Kompromiss</span>'
-            : '<span class="badge recommended">Empfohlen</span>') : ""}
-          <button class="btn btn-ghost btn-sm" data-take="${idx}" title="Diese Einstellung ins Encoding übernehmen">→ Encoding</button>
+          <button class="btn btn-sm ${r.recommended ? "is-rec" : "btn-ghost"}" data-take="${idx}" title="${escapeHtml(r.recommended && vmaf.pick_warning ? vmaf.pick_warning : "Diese Einstellung ins Encoding übernehmen")}">→ Encoding</button>
         </td>
       </tr>`;
     }).join("");
@@ -5602,18 +5598,13 @@
     }
     state.nerdKey = key;
     if (body) body.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
-    const worstBox = $("nerd-worst");
-    if (worstBox) worstBox.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
     fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${scene}`)
       .then((r) => r.json().then((data) => ({ ok: r.ok, data })).catch(() => ({ ok: false, data: null })))
       .then((pack) => {
         if (state.nerdKey !== key || !state.vmafNerd) return;
         const data = pack && pack.data;
         if (!pack || !pack.ok || !data || data.error) {
-          const fail = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
-          if (body) body.innerHTML = fail;
-          const worstFail = $("nerd-worst");
-          if (worstFail) worstFail.innerHTML = fail;
+          if (body) body.innerHTML = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
           return;
         }
         state.nerdData = data;
@@ -5920,13 +5911,9 @@
     destroyNamedChart("vmafNerdChart");
     const series = (data && data.series) || [];
     if (!series.length) {
-      const miss = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
-      if (body) body.innerHTML = miss;
-      const worstMiss = $("nerd-worst");
-      if (worstMiss) worstMiss.innerHTML = miss;
+      if (body) body.innerHTML = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
       return;
     }
-    renderNerdWorst(series);
     const col = chartColors();
     const nerdKeyOf = (s, i) => s.label || ("Serie " + (i + 1));
     const nerdOff = (key) => vmafRowOff(key);
@@ -6015,35 +6002,6 @@
       try { paintNerdChart(data); } catch (e) { /* Tabelle bleibt sichtbar */ }
       try { if (state.vmafNerdChart) state.vmafNerdChart.resize(); } catch (e) { /* noch ohne Maß */ }
     });
-  }
-
-  function renderNerdWorst(series) {
-    const box = $("nerd-worst");
-    if (!box) return;
-    const rows = [];
-    (series || []).forEach((s, i) => {
-      const key = s.label || ("Serie " + (i + 1));
-      if (vmafRowOff(key)) return;
-      const color = CHART_PALETTE[i % CHART_PALETTE.length];
-      (s.worst || []).forEach((f) => {
-        const extra = [
-          f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
-          f.ssim != null ? `SSIM ${Number(f.ssim).toFixed(3)}` : "",
-        ].filter(Boolean).join(" · ");
-        rows.push(
-          `<tr><td><span class="nerd-swatch" style="background:${color}"></span>${escapeHtml(key)}</td>`
-          + `<td>${f.n}</td><td>${Number(f.vmaf).toFixed(2)}</td><td>${escapeHtml(extra)}</td></tr>`
-        );
-      });
-    });
-    if (!rows.length) {
-      box.innerHTML = "";
-      return;
-    }
-    box.innerHTML = `<p class="vmaf-subchart-title">${escapeHtml(tt("schwächste Frames"))}</p>`
-      + `<table class="data-table vmaf-nerd-table"><thead><tr>`
-      + `<th>${escapeHtml(tt("Einstellung"))}</th><th>Frame</th><th>VMAF</th><th></th>`
-      + `</tr></thead><tbody>${rows.join("")}</tbody></table>`;
   }
 
   function renderChartScenes(vmaf) {
