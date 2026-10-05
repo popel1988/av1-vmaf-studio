@@ -1770,8 +1770,21 @@ input[type="range"]::-moz-range-thumb {
 .bad { color: var(--bad); }
 
 /* ------------------------------ VMAF CARD ------------------------------- */
-.vmaf-body { display: flex; flex-direction: column; gap: 18px; }
-.vmaf-charts, .vmaf-table-wrap { min-width: 0; }
+.vmaf-body {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px 18px;
+  align-items: start;
+}
+.vmaf-course { grid-column: 1 / -1; min-width: 0; }
+.vmaf-side-main { grid-column: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.vmaf-table-wrap { grid-column: 2; min-width: 0; }
+.vmaf-course[hidden],
+.vmaf-side-main[hidden],
+.vmaf-table-wrap[hidden] { display: none !important; }
+.vmaf-body > .shot-wrap,
+.vmaf-body > .vmaf-actions { grid-column: 1 / -1; }
+#vmaf-nerd-body { grid-column: auto; }
 .vmaf-graph-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .vmaf-graph-pair:has(#vmaf-gap-wrap[hidden]),
 .vmaf-graph-pair:has(#nerd-gap-wrap[hidden]) { grid-template-columns: 1fr; }
@@ -1836,6 +1849,12 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-nerd-worst li { margin: 2px 0; }
 #btn-vmaf-nerd.active { color: var(--accent); border-color: var(--accent); }
 @media (max-width: 900px) {
+  .vmaf-body { grid-template-columns: 1fr; }
+  .vmaf-course,
+  .vmaf-side-main,
+  .vmaf-table-wrap,
+  .vmaf-body > .shot-wrap,
+  .vmaf-body > .vmaf-actions { grid-column: 1; }
   .vmaf-graph-pair { grid-template-columns: 1fr; }
 }
 

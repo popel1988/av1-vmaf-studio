@@ -4874,6 +4874,7 @@
       try { drawChart(vmaf); } catch (e) { /* Graph bleibt, Haken gilt */ }
       try { drawGapChart(vmaf); } catch (e) { /* siehe oben */ }
       if (state.nerdData) {
+        try { renderNerdWorst(state.nerdData.series || []); } catch (e) { /* Tabelle bleibt */ }
         try { paintNerdChart(state.nerdData); } catch (e) { /* Tabelle bleibt */ }
       }
     }
@@ -4896,22 +4897,9 @@
 
   function fillVmafTable(vmaf) {
     syncKeepSourceBanner(vmaf);
-    const wrap = document.querySelector(".vmaf-table-wrap");
-    let sharedEl = $("vmaf-shared");
-    if (wrap && !sharedEl) {
-      sharedEl = document.createElement("p");
-      sharedEl.id = "vmaf-shared";
-      sharedEl.className = "vmaf-nerd-shared";
-      wrap.insertBefore(sharedEl, wrap.firstChild);
-    }
-    if (sharedEl) {
-      const shared = nerdSharedLine((vmaf.results || []).map((r) => ({ label: r.label || "" })));
-      sharedEl.hidden = !shared;
-      sharedEl.textContent = shared;
-    }
-    const body = $("vmaf-table").querySelector("tbody");
+    const shared = nerdSharedLine((vmaf.results || []).map((r) => ({ label: r.label || "" })));
     const tip = tt("Haken zeigt diese Zeile in den Graphen.");
-    body.innerHTML = vmaf.results.map((r, idx) => {
+    const html = vmaf.results.map((r, idx) => {
       const key = vmafResultKey(r);
       const bits = bitrateReport(r);
       const more = [bits, vmafCell(r)].filter(Boolean).join("<br>");
@@ -4931,12 +4919,25 @@
         </td>
       </tr>`;
     }).join("");
-    body.querySelectorAll("[data-vmaf-key]").forEach((box) => {
-      box.addEventListener("change", () => setVmafRowShown(box.getAttribute("data-vmaf-key"), box.checked));
+    document.querySelectorAll(".vmaf-table-wrap").forEach((wrap) => {
+      let sharedEl = wrap.querySelector(".vmaf-nerd-shared");
+      if (!sharedEl) {
+        sharedEl = document.createElement("p");
+        sharedEl.className = "vmaf-nerd-shared";
+        wrap.insertBefore(sharedEl, wrap.firstChild);
+      }
+      sharedEl.hidden = !shared;
+      sharedEl.textContent = shared;
+      const body = wrap.querySelector("tbody");
+      if (!body) return;
+      body.innerHTML = html;
+      body.querySelectorAll("[data-vmaf-key]").forEach((box) => {
+        box.addEventListener("change", () => setVmafRowShown(box.getAttribute("data-vmaf-key"), box.checked));
+      });
+      body.querySelectorAll("[data-take]").forEach((b) =>
+        b.addEventListener("click", () =>
+          transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
     });
-    body.querySelectorAll("[data-take]").forEach((b) =>
-      b.addEventListener("click", () =>
-        transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
   }
 
   function chartColors() {
@@ -5500,27 +5501,34 @@
     if (btn) btn.classList.toggle("active", !!state.vmafNerd);
     if (!wrap) return;
     const empty = $("vmaf-nerd-empty");
+    const side = $("nerd-side");
+    const rec = $("nerd-table-wrap");
+    const showRest = (on) => {
+      if (side) side.hidden = !on;
+      if (rec) rec.hidden = !on;
+    };
     if (!state.vmafNerd) {
       wrap.hidden = true;
+      showRest(false);
       destroyNamedChart("vmafNerdChart");
       return;
     }
     const vmaf = state.vmafShown;
     if (!vmaf || !state.vmafSession) {
       wrap.hidden = true;
+      showRest(false);
       if (empty) empty.hidden = false;
       const bar = $("nerd-scenes");
       if (bar) bar.innerHTML = "";
-      const picks = $("nerd-picks");
-      if (picks) picks.innerHTML = "";
       destroyNamedChart("vmafNerdChart");
       return;
     }
     wrap.hidden = false;
+    showRest(true);
     if (empty) empty.hidden = true;
     renderNerdScenes(vmaf);
     fillNerdAbSelects(vmaf);
-    renderNerdPicks(vmaf);
+    fillVmafTable(vmaf);
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
     const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);
     const session = state.vmafSession;
@@ -5539,13 +5547,18 @@
     }
     state.nerdKey = key;
     if (body) body.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
+    const worstBox = $("nerd-worst");
+    if (worstBox) worstBox.innerHTML = `<p class="hint">Frame-Log wird gelesen …</p>`;
     fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${scene}`)
       .then((r) => r.json().then((data) => ({ ok: r.ok, data })).catch(() => ({ ok: false, data: null })))
       .then((pack) => {
         if (state.nerdKey !== key || !state.vmafNerd) return;
         const data = pack && pack.data;
         if (!pack || !pack.ok || !data || data.error) {
-          if (body) body.innerHTML = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
+          const fail = `<p class="hint">Frame-Log konnte nicht geladen werden.</p>`;
+          if (body) body.innerHTML = fail;
+          const worstFail = $("nerd-worst");
+          if (worstFail) worstFail.innerHTML = fail;
           return;
         }
         state.nerdData = data;
@@ -5677,6 +5690,18 @@
     return out;
   }
 
+  function nerdFinite(points) {
+    const out = [];
+    (points || []).forEach((p) => {
+      if (!p || !Number.isFinite(Number(p.x)) || !Number.isFinite(Number(p.y))) return;
+      const x = Number(p.x);
+      const prev = out[out.length - 1];
+      if (prev && x <= prev.x) return;
+      out.push({ x, y: Number(p.y) });
+    });
+    return out;
+  }
+
   function paintNerdChart(data) {
     const ctx = $("vmaf-nerd-chart");
     destroyNamedChart("vmafNerdChart");
@@ -5697,7 +5722,7 @@
       const buckets = Math.min(maxPoints, n);
       const fullCount = Number(s.count) || n;
       maxX = Math.max(maxX, fullCount);
-      const vmafPoints = n <= maxPoints
+      const vmafPoints = nerdFinite(n <= maxPoints
         ? frames.map((f, k) => ({
           x: f.n != null ? Number(f.n) : k,
           y: f.vmaf == null ? null : Number(f.vmaf),
@@ -5705,18 +5730,21 @@
         : nerdPick((k) => {
           const v = frames[k] && frames[k].vmaf;
           return v == null ? null : Number(v);
-        }, n, buckets, "min");
+        }, n, buckets, "min"));
+      if (vmafPoints.length < 2) return;
       datasets.push({
         label: key,
         nerdKey: key,
         parsing: false,
+        normalized: true,
         data: vmafPoints,
         borderColor: color,
         backgroundColor: "transparent",
         pointRadius: 0,
+        pointHitRadius: 6,
         borderWidth: 1.4,
-        tension: 0.05,
-        spanGaps: true,
+        tension: 0,
+        spanGaps: false,
       });
       const result = state.vmafShown && nerdScene != null
         ? (state.vmafShown.results || []).find((r) => (r.label || "") === (s.label || ""))
@@ -5725,46 +5753,51 @@
       if (!bitrateIsFrame(sc)) return;
       const byN = {};
       sc.bitrate.forEach((b) => { byN[b.n] = Number(b.kbps); });
+      const brPoints = nerdFinite(n <= maxPoints
+        ? frames.map((f, k) => ({
+          x: f.n != null ? Number(f.n) : k,
+          y: !f || byN[f.n] == null ? null : byN[f.n],
+        }))
+        : nerdPick((k) => {
+          const f = frames[k];
+          return !f || byN[f.n] == null ? null : byN[f.n];
+        }, n, buckets, "max"));
+      if (brPoints.length < 2) return;
       datasets.push({
         label: key + " · Bitrate",
         nerdKey: key,
         parsing: false,
+        normalized: true,
         yAxisID: "y1",
-        data: n <= maxPoints
-          ? frames.map((f, k) => ({
-            x: f.n != null ? Number(f.n) : k,
-            y: !f || byN[f.n] == null ? null : byN[f.n],
-          }))
-          : nerdPick((k) => {
-            const f = frames[k];
-            return !f || byN[f.n] == null ? null : byN[f.n];
-          }, n, buckets, "max"),
+        data: brPoints,
         borderColor: color,
         backgroundColor: "transparent",
         borderDash: [5, 4],
         pointRadius: 0,
+        pointHitRadius: 0,
         borderWidth: 1.2,
-        tension: 0.05,
-        spanGaps: true,
+        tension: 0,
+        spanGaps: false,
       });
     });
     const frameSec = Number(series[0] && series[0].frame_sec) || 0;
     const srcBins = nerdScene != null ? sourceBinsFor(nerdScene) : [];
     const nSrc = Math.max(0, ...series.map((s) => (s.frames || []).length));
     if (!vmafRowOff("original") && srcBins.length && frameSec > 0 && nSrc > 0) {
-      let j = 0;
-      datasets.push(Object.assign(originalBitrateDataset(srcBins, col, []), {
-        nerdKey: "original",
-        parsing: false,
-        data: nerdPick((k) => {
-          const t = k * frameSec;
-          while (j + 1 < srcBins.length
-            && Math.abs(Number(srcBins[j + 1].t) - t) <= Math.abs(Number(srcBins[j].t) - t)) {
-            j += 1;
-          }
-          return Number(srcBins[j].kbps);
-        }, nSrc, Math.min(maxPoints, nSrc), "max"),
-      }));
+      const srcPoints = nerdFinite(srcBins.map((b) => ({
+        x: Number(b.t) / frameSec,
+        y: Number(b.kbps),
+      })));
+      if (srcPoints.length >= 2) {
+        datasets.push(Object.assign(originalBitrateDataset(srcBins, col, []), {
+          nerdKey: "original",
+          parsing: false,
+          normalized: true,
+          tension: 0,
+          spanGaps: false,
+          data: srcPoints,
+        }));
+      }
       maxX = Math.max(maxX, nSrc);
     }
     const floor = nerdFloorValue();
@@ -5772,6 +5805,7 @@
       label: tt("Schwelle " + floor),
       floorLine: true,
       parsing: false,
+      normalized: true,
       data: [{ x: 0, y: floor }, { x: maxX, y: floor }],
       borderColor: col.warn || "#fbbf24",
       backgroundColor: "transparent",
@@ -5785,6 +5819,7 @@
     const opts = lineChartOptions(col, "VMAF");
     opts.animation = false;
     opts.parsing = false;
+    opts.interaction = { mode: "nearest", axis: "x", intersect: false };
     opts.plugins.legend.display = false;
     opts.scales.y.suggestedMin = 70;
     opts.scales.y.suggestedMax = 100;
@@ -5802,6 +5837,8 @@
       };
     }
     opts.plugins.tooltip = {
+      mode: "nearest",
+      intersect: false,
       filter: (item) => !(item.dataset && item.dataset.floorLine),
       callbacks: {
         title: (items) => {
@@ -5828,11 +5865,13 @@
     destroyNamedChart("vmafNerdChart");
     const series = (data && data.series) || [];
     if (!series.length) {
-      if (body) {
-        body.innerHTML = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
-      }
+      const miss = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
+      if (body) body.innerHTML = miss;
+      const worstMiss = $("nerd-worst");
+      if (worstMiss) worstMiss.innerHTML = miss;
       return;
     }
+    renderNerdWorst(series);
     const col = chartColors();
     const nerdKeyOf = (s, i) => s.label || ("Serie " + (i + 1));
     const nerdOff = (key) => vmafRowOff(key);
@@ -5919,7 +5958,37 @@
     if (floorLab) floorLab.textContent = String(floor);
     requestAnimationFrame(() => {
       try { paintNerdChart(data); } catch (e) { /* Tabelle bleibt sichtbar */ }
+      try { if (state.vmafNerdChart) state.vmafNerdChart.resize(); } catch (e) { /* noch ohne Maß */ }
     });
+  }
+
+  function renderNerdWorst(series) {
+    const box = $("nerd-worst");
+    if (!box) return;
+    const rows = [];
+    (series || []).forEach((s, i) => {
+      const key = s.label || ("Serie " + (i + 1));
+      if (vmafRowOff(key)) return;
+      const color = CHART_PALETTE[i % CHART_PALETTE.length];
+      (s.worst || []).forEach((f) => {
+        const extra = [
+          f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
+          f.ssim != null ? `SSIM ${Number(f.ssim).toFixed(3)}` : "",
+        ].filter(Boolean).join(" · ");
+        rows.push(
+          `<tr><td><span class="nerd-swatch" style="background:${color}"></span>${escapeHtml(key)}</td>`
+          + `<td>${f.n}</td><td>${Number(f.vmaf).toFixed(2)}</td><td>${escapeHtml(extra)}</td></tr>`
+        );
+      });
+    });
+    if (!rows.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = `<p class="vmaf-subchart-title">${escapeHtml(tt("schwächste Frames"))}</p>`
+      + `<table class="data-table vmaf-nerd-table"><thead><tr>`
+      + `<th>${escapeHtml(tt("Einstellung"))}</th><th>Frame</th><th>VMAF</th><th></th>`
+      + `</tr></thead><tbody>${rows.join("")}</tbody></table>`;
   }
 
   function renderChartScenes(vmaf) {

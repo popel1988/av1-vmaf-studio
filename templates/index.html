@@ -793,7 +793,7 @@
           <div id="vmaf-pick-warning" class="keep-source-note" style="display:none"></div>
           <div id="vmaf-target-miss" class="keep-source-note" style="display:none"></div>
           <div class="card-body vmaf-body">
-            <div class="vmaf-charts">
+            <div class="vmaf-course">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
               <div id="vmaf-frame-wrap" class="vmaf-subchart vmaf-scene-wide" hidden>
                 <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
@@ -802,6 +802,8 @@
                 </div>
                 <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               </div>
+            </div>
+            <div class="vmaf-side-main">
               <div class="vmaf-graph-pair">
                 <div>
                   <div class="vmaf-chart-wrap">
@@ -844,11 +846,10 @@
               <button class="btn btn-ghost btn-sm" id="btn-nerd-back" type="button">Zur VMAF-Seite</button>
             </div>
           </div>
-          <div class="card-body">
-            <p class="hint" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
-            <div id="nerd-scenes" class="shot-scenes vmaf-chart-scenes"></div>
-            <div id="nerd-picks" class="nerd-picks"></div>
-            <div id="vmaf-nerd" class="vmaf-nerd" hidden>
+          <div class="card-body vmaf-body">
+            <p class="hint vmaf-course" id="vmaf-nerd-empty">Zuerst einen Vergleich auf der VMAF-Seite öffnen.</p>
+            <div id="vmaf-nerd" class="vmaf-course" hidden>
+              <div id="nerd-scenes" class="shot-scenes vmaf-chart-scenes"></div>
               <p class="vmaf-subchart-title" id="vmaf-nerd-title">Daten für Nerds</p>
               <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
                 <canvas id="vmaf-nerd-chart"></canvas>
@@ -870,6 +871,9 @@
                 <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
               </div>
               <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
+            </div>
+            <div class="vmaf-side-main" id="nerd-side">
+              <div id="nerd-worst"></div>
               <div class="vmaf-graph-pair">
                 <div>
                   <div class="vmaf-chart-wrap">
@@ -888,6 +892,14 @@
                 <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
               </div>
               <div id="vmaf-nerd-body"></div>
+            </div>
+            <div class="vmaf-table-wrap" id="nerd-table-wrap">
+              <table class="data-table" id="nerd-vmaf-table">
+                <thead>
+                  <tr><th></th><th>Einstellung</th><th>VMAF</th><th>Prognose</th><th>Ersparnis</th><th></th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
             </div>
           </div>
         </section>

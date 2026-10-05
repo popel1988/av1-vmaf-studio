@@ -1388,21 +1388,51 @@ def _encoder_args_text(cmd: list[str]) -> str:
 def _frame_log_name(platform: str, codec: str, value, scene,
                     speed: str = "", b_frames: str = "",
                     aq: int | None = None, keyint: int | None = None,
-                    tune: str | None = None) -> str:
+                    tune: str | None = None,
+                    rate_mode: str = "", two_pass: bool | None = None) -> str:
     try:
         val = int(value)
         sc = int(scene)
     except (TypeError, ValueError):
         return ""
-    # Speed, B-Frames, AQ und Keyframe gehören zum Dateinamen, sonst
-    # überschreiben sich zwei Läufe derselben Zeile bei gleichem CQ.
+    # Speed, B-Frames, AQ, Keyframe, Steuerungsmodus und Zwei-Pass gehören
+    # zum Dateinamen. Sonst überschreiben sich ABR, CBR und Zwei-Pass bei
+    # gleicher Bitrate, und der Leser findet die Datei nicht.
     extra = f"_{speed}_{b_frames}" if (speed or b_frames) else ""
     if extra and aq is not None:
         extra += f"_{int(aq)}_{int(keyint or 0)}"
     if extra and tune:
         extra += f"_{tune}"
-    name = f"vmaf_{platform}_{codec}{extra}_{val}_s{sc}.json"
+    mode = ""
+    if rate_mode:
+        mode = f"_{rate_mode}_{1 if two_pass else 0}"
+    name = f"vmaf_{platform}_{codec}{extra}{mode}_{val}_s{sc}.json"
     return name if _LOG_NAME.match(name) else ""
+
+
+def _frame_log_path(root, raw: dict, scene: int):
+    """Log-Datei eines Ergebnisses. Zuerst der aktuelle Name, dann der alte ohne Modus."""
+    aq = raw["aq_strength"] if isinstance(raw, dict) and "aq_strength" in raw else None
+    args = (
+        raw.get("platform") or "", raw.get("codec") or "",
+        raw.get("value", raw.get("quality")), scene,
+        raw.get("encoder_speed") or "", raw.get("b_frames") or "",
+        None if aq is None else int(aq),
+        None if aq is None else int(raw.get("keyint_sec") or 0),
+        raw.get("nvenc_tune") if "nvenc_tune" in raw else None,
+    )
+    mode = raw.get("rate_mode") or ""
+    names = [
+        _frame_log_name(*args, mode, bool(raw.get("two_pass"))),
+        _frame_log_name(*args),
+    ]
+    for name in names:
+        if not name:
+            continue
+        path = root / name
+        if path.is_file():
+            return path
+    return None
 
 
 def _pct(ordered: list[float], p: float) -> float:
@@ -1642,6 +1672,17 @@ def _series_stats(frames: list[dict], clip_seconds: float) -> dict:
     return out
 
 
+def _finite(value, ndigits: int):
+    """NaN und Inf würden die ganze JSON-Antwort ungültig machen."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return round(number, ndigits)
+
+
 def _dip_line(frames: list[dict], floor: float, frame_sec: float) -> str:
     """Dieselbe Zeile wie in den Nerd-Daten. Gerechnet über alle Frames."""
     n = len(frames)
@@ -1702,16 +1743,8 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
     for raw in analysis.get("results") or []:
         if not isinstance(raw, dict):
             continue
-        aq = raw["aq_strength"] if "aq_strength" in raw else None
-        name = _frame_log_name(
-            raw.get("platform") or "", raw.get("codec") or "",
-            raw.get("value", raw.get("quality")), scene,
-            raw.get("encoder_speed") or "", raw.get("b_frames") or "",
-            None if aq is None else int(aq),
-            None if aq is None else int(raw.get("keyint_sec") or 0),
-            raw.get("nvenc_tune") if "nvenc_tune" in raw else None)
-        path = root / name if name else None
-        if path is None or not path.is_file():
+        path = _frame_log_path(root, raw, scene)
+        if path is None:
             continue
         try:
             blob = json.loads(path.read_text(encoding="utf-8"))
@@ -1720,19 +1753,19 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
         frames = []
         for fr in blob.get("frames") or []:
             metrics = fr.get("metrics") or {}
-            vmaf = metrics.get("vmaf")
+            vmaf = _finite(metrics.get("vmaf"), 2)
             if vmaf is None:
                 continue
             item = {
                 "n": int(fr.get("frameNum") if fr.get("frameNum") is not None else len(frames)),
-                "vmaf": round(float(vmaf), 2),
+                "vmaf": vmaf,
             }
-            psnr = metrics.get("psnr_y", metrics.get("psnr"))
-            ssim = metrics.get("float_ssim", metrics.get("ssim"))
+            psnr = _finite(metrics.get("psnr_y", metrics.get("psnr")), 2)
+            ssim = _finite(metrics.get("float_ssim", metrics.get("ssim")), 4)
             if psnr is not None:
-                item["psnr"] = round(float(psnr), 2)
+                item["psnr"] = psnr
             if ssim is not None:
-                item["ssim"] = round(float(ssim), 4)
+                item["ssim"] = ssim
             frames.append(item)
         worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
         n_frames = len(frames)
@@ -1800,16 +1833,9 @@ def weak_spots(session: str, result_index: Optional[int] = None,
         if start is None:
             continue
         start = float(start)
-        aq = res["aq_strength"] if "aq_strength" in res else None
-        name = _frame_log_name(res.get("platform") or "", res.get("codec") or "",
-                               res.get("value", res.get("quality")), si,
-                               res.get("encoder_speed") or "", res.get("b_frames") or "",
-                               None if aq is None else int(aq),
-                               None if aq is None else int(res.get("keyint_sec") or 0),
-                               res.get("nvenc_tune") if "nvenc_tune" in res else None)
         frames = []
-        path = root / name if name else None
-        if path is not None and path.is_file():
+        path = _frame_log_path(root, res, si)
+        if path is not None:
             try:
                 blob = json.loads(path.read_text(encoding="utf-8"))
                 for fr in blob.get("frames") or []:
