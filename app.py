@@ -2569,6 +2569,7 @@ def _details_from_history(rec: dict) -> dict:
         "savings_percent": (round(saved / orig * 100, 1) if orig and saved else None),
         "speed_x": None, "avg_fps": None,
     }
+    steps = rec.get("steps") if isinstance(rec.get("steps"), list) else []
     out = None
     out_abs = rec.get("output_path") or ""
     if out_abs:
@@ -2592,7 +2593,8 @@ def _details_from_history(rec: dict) -> dict:
     return {"id": rec.get("id"), "title": rec.get("title") or "Details",
             "status": rec.get("status") or "—", "path": src_abs,
             "from_history": True, "settings": settings,
-            "source": src, "output": out, "stats": stats}
+            "source": src, "output": out, "stats": stats,
+            "steps": steps}
 
 
 @app.get("/api/queue/{item_id}/details")
@@ -2654,6 +2656,7 @@ async def queue_details(item_id: str):
         "settings": item.settings.__dict__ if item.settings else {},
         "vmaf_warning": item.vmaf_warning or "",
         "vmaf": item.vmaf,
+        "steps": item.to_dict().get("steps") or [],
     }
 
 

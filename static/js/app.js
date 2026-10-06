@@ -3515,15 +3515,35 @@
     return `<span class="codec-badge">${escapeHtml(badge)}</span>${det}${verify}${extra}`;
   }
 
+  function orderQueueItems(items) {
+    // Neueste Aktivität oben: fertig nach Endzeit, laufend nach Start, wartend nach Anlage.
+    const stamp = (it) => it.finished_at || it.started_at || it.created_at || 0;
+    return items.map((it, i) => ({ it, i })).sort((a, b) => {
+      const d = stamp(b.it) - stamp(a.it);
+      return d || (b.i - a.i);
+    }).map((x) => x.it);
+  }
+
+  function stepsHtml(steps) {
+    const list = Array.isArray(steps) ? steps.filter((s) => s && s.name) : [];
+    if (!list.length) return "";
+    const rows = list.map((s) => {
+      const cls = s.running ? " class=\"is-running\"" : "";
+      return `<li${cls}><span>${escapeHtml(s.name)}</span><span>${formatDuration(s.seconds)}</span></li>`;
+    }).join("");
+    return `<ul class="queue-steps">${rows}</ul>`;
+  }
+
   function renderQueueTable(items, activeIds) {
     const body = $("queue-body");
     const active = new Set(activeIds || []);
-    if (!items.length) {
+    const view = orderQueueItems(items);
+    if (!view.length) {
       body.innerHTML = '<tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>';
       return;
     }
     const DONE = ["fertig", "fehlgeschlagen", "abgebrochen"];
-    body.innerHTML = items.map((it) => {
+    body.innerHTML = view.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
       const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
       const cancelBtn = canCancel
@@ -3531,8 +3551,8 @@
       const requeueBtn = DONE.includes(it.status)
         ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Erneut einreihen">Erneut</button>` : "";
       const moveBtns = it.status === "wartend"
-        ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="Nach oben">↑</button>` +
-          `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="Nach unten">↓</button>` : "";
+        ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="${tt("Früher starten")}">↑</button>` +
+          `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="${tt("Später starten")}">↓</button>` : "";
       const err = it.error
         ? `<div class="queue-err" title="${escapeHtml(it.error)}">${escapeHtml(it.error.slice(0, 200))}${it.error.length > 200 ? " …" : ""}</div>`
         : "";
@@ -3558,7 +3578,7 @@
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
-        <td>${dur}${finished}</td>
+        <td>${dur}${finished}${stepsHtml(it.steps)}</td>
         <td class="good">${it.saved_human}</td>
         <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}</td>
       </tr>`;
@@ -3580,6 +3600,9 @@
         e.stopPropagation();
         fetch(`/api/queue/${b.dataset.move}/move?direction=${b.dataset.dir}`, { method: "POST" });
       });
+    });
+    body.querySelectorAll(".queue-steps").forEach((ul) => {
+      ul.addEventListener("click", (e) => e.stopPropagation());
     });
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
       tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
@@ -3756,6 +3779,7 @@
           <div class="bar-pct">${Math.round(pct)}%</div>
         </div>
         ${stats}
+        ${stepsHtml(job.steps)}
       </div>`;
   }
 
@@ -7008,6 +7032,7 @@
     const html = `
       ${d.vmaf_warning ? `<div class="keep-source-note" style="margin:0 0 12px">${escapeHtml(d.vmaf_warning)}</div>` : ""}
       <div class="stat-grid modal-stats">${statChips}</div>
+      ${stepsHtml(d.steps)}
       <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
       ${playToggle}
       <div id="modal-player">${player}</div>
@@ -7052,7 +7077,7 @@
         const when = j.finished ? new Date(j.finished * 1000).toLocaleString() : "—";
         const mode = histModeParts(j);
         const v = (mode.kind === "encode" && j.vmaf != null) ? Number(j.vmaf).toFixed(1) : "—";
-        return `<li>${escapeHtml(when)} · ${escapeHtml(mode.badge)} ${escapeHtml(mode.detail)} · VMAF ${v} · ${escapeHtml(j.status || "")}</li>`;
+        return `<li>${escapeHtml(when)} · ${escapeHtml(mode.badge)} ${escapeHtml(mode.detail)} · VMAF ${v} · ${escapeHtml(j.status || "")}${stepsHtml(j.steps)}</li>`;
       }).join("");
       const sessRows = sessions.slice(0, 5).map((s) =>
         `<li>${escapeHtml(s.title || s.session)} · ${escapeHtml(s.recommended_label || "")}` +
@@ -7326,7 +7351,7 @@
           <td>${formatBytes(j.original_size)}</td>
           <td>${formatBytes(j.output_size)}</td>
           <td class="${(j.saved_bytes || 0) >= 0 ? "good" : "bad"}">${formatBytes(j.saved_bytes)}</td>
-          <td>${formatDuration(j.duration || 0)}</td>
+          <td>${formatDuration(j.duration || 0)}${stepsHtml(j.steps)}</td>
           <td class="muted">${escapeHtml(when)}</td>
           <td>${escapeHtml(j.status || "")}</td>
           <td>

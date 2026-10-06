@@ -34,6 +34,7 @@ class VideoInfo:
     bit_rate: int  # bps (kann 0 sein)
     size_bytes: int
     # --- erweiterte Analyse (für die UI) ---
+    color_range: str = ""          # tv (16–235) oder pc (0–255); leer = unbekannt
     profile: str = ""
     level: str = ""
     fps: float = 0.0
@@ -85,6 +86,7 @@ class VideoInfo:
             "color_transfer": self.color_transfer,
             "color_primaries": self.color_primaries,
             "color_space": self.color_space,
+            "color_range": self.color_range,
             "is_4k": self.is_4k,
             "is_hdr": self.is_hdr,
             "bit_rate": self.bit_rate,
@@ -189,6 +191,7 @@ def probe_with_error(path: Path, input_args: Optional[list] = None,
         color_transfer=video.get("color_transfer", "") or "",
         color_primaries=video.get("color_primaries", "") or "",
         color_space=video.get("color_space", "") or "",
+        color_range=(video.get("color_range", "") or "").lower(),
         bit_rate=bit_rate,
         size_bytes=size_bytes,
         profile=str(video.get("profile", "") or ""),

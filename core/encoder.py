@@ -137,20 +137,80 @@ def build_video_filters(
     return ",".join(filters)
 
 
+def _range_flag(info: VideoInfo) -> str:
+    """Fernsehbereich (tv) oder PC-Bereich (pc). Unbekannt bleibt tv: Filme sind 16–235."""
+    v = (getattr(info, "color_range", "") or "").lower()
+    if v in ("pc", "jpeg", "full"):
+        return "pc"
+    return "tv"
+
+
+def _color_tuple(info: VideoInfo, *, tonemapped: bool,
+                 keep_hdr: bool) -> tuple[str, str, str, str]:
+    """Primaries, Transfer, Matrix, Bereich. Keine Pixelumrechnung."""
+    if tonemapped:
+        return "bt709", "bt709", "bt709", "tv"
+    if keep_hdr or info.is_hdr:
+        return (info.color_primaries or "bt2020",
+                info.color_transfer or "smpte2084",
+                info.color_space or "bt2020nc",
+                _range_flag(info))
+    return (info.color_primaries or "bt709",
+            info.color_transfer or "bt709",
+            info.color_space or "bt709",
+            _range_flag(info))
+
+
+def _setparams(prim: str, trc: str, space: str, rng: str) -> str:
+    """Nur die Kennung am Frame, keine Umrechnung der Helligkeit."""
+    limited = "full" if rng == "pc" else "limited"
+    return (f"setparams=range={limited}:color_primaries={prim}"
+            f":color_trc={trc}:colorspace={space}")
+
+
+def _with_setparams(vf: Optional[str], sp: str) -> str:
+    """Kennung vor dem HW-Upload, sonst am Ende der Kette."""
+    if not vf:
+        return sp
+    parts = vf.split(",")
+    for i, part in enumerate(parts):
+        if part.startswith("hwupload"):
+            parts.insert(i, sp)
+            return ",".join(parts)
+    return f"{vf},{sp}"
+
+
+def color_output_args(info: VideoInfo, *, tonemapped: bool, keep_hdr: bool) -> list[str]:
+    """Farbkennung der Ausgabe. Die Pixelwerte werden dabei nicht gestreckt.
+
+    Ohne diese Angabe markiert NVENC die Datei oft als vollen Bereich, obwohl
+    Schwarz bei 16 liegt. Der Player hebt die Schatten dann an.
+    Nach einem HDR→SDR-Tonemap gilt BT.709 im Fernsehbereich, passend zur
+    Filterkette (``zscale=r=tv``).
+    """
+    prim, trc, space, rng = _color_tuple(info, tonemapped=tonemapped, keep_hdr=keep_hdr)
+    return ["-colorspace", space, "-color_primaries", prim,
+            "-color_trc", trc, "-color_range", rng]
+
+
 def _hdr_output_args(info: VideoInfo, codec: str, enc: str) -> list[str]:
     """Farb-/HDR-Metadaten für den Output, damit HDR10/HLG erhalten bleibt.
 
-    Überträgt Primaries/Transfer/Matrix aus der Quelle und erzwingt 10-bit.
-    Dolby Vision wird dabei nicht rekonstruiert (nur der HDR10-Basislayer).
+    Überträgt Primaries/Transfer/Matrix und den Helligkeitsbereich aus der
+    Quelle und erzwingt 10-bit. Dolby Vision wird dabei nicht rekonstruiert
+    (nur der HDR10-Basislayer).
     """
     prim = info.color_primaries or "bt2020"
     trc = info.color_transfer or "smpte2084"
     space = info.color_space or "bt2020nc"
-    args = ["-colorspace", space, "-color_primaries", prim, "-color_trc", trc]
+    rng = _range_flag(info)
+    args = ["-colorspace", space, "-color_primaries", prim, "-color_trc", trc,
+            "-color_range", rng]
 
     if enc == "libx265":
+        x265_range = "full" if rng == "pc" else "limited"
         params = (f"colorprim={prim}:transfer={trc}:colormatrix={space}"
-                  ":hdr10=1:repeat-headers=1")
+                  f":range={x265_range}:hdr10=1:repeat-headers=1")
         args += ["-pix_fmt", "yuv420p10le", "-x265-params", params]
     elif enc in ("libsvtav1", "libx264", "libvpx-vp9"):
         args += ["-pix_fmt", "yuv420p10le"]
@@ -294,6 +354,15 @@ def build_encode_cmd(
                              preserve_hdr=keep_hdr, denoise=denoise,
                              sharpen=sharpen, grain=grain, deinterlace=deinterlace,
                              force_10bit=ten_bit, crop=crop)
+    tonemapped = bool(tonemap and info.is_hdr and not keep_hdr)
+    # setparams ändert keine Helligkeit, schreibt die Kennung aber in den Frame.
+    # NVENC liest die oft von dort und setzt sonst video_full_range_flag.
+    # Auf einer reinen CUDA-Surface gibt es keinen Software-Filter.
+    if not nvidia_cuda_frames:
+        prim, trc, space, rng = _color_tuple(
+            info, tonemapped=tonemapped, keep_hdr=keep_hdr)
+        sp = _setparams(prim, trc, space, rng)
+        vf = _with_setparams(vf, sp)
     if vf:
         cmd += ["-vf", vf]
 
@@ -313,6 +382,9 @@ def build_encode_cmd(
         cmd += _hdr_output_args(info, codec, enc)
     elif ten_bit:
         cmd += _ten_bit_output_args(codec, enc)
+        cmd += color_output_args(info, tonemapped=tonemapped, keep_hdr=False)
+    else:
+        cmd += color_output_args(info, tonemapped=tonemapped, keep_hdr=False)
 
     if enc == "libsvtav1":
         svt = "tune=0"
@@ -423,12 +495,15 @@ def mobile_output_args(info: VideoInfo, platform: str, mobile: dict, *,
     vf = build_video_filters(info, platform, height, True,
                              nvidia_cuda_frames=False, preserve_hdr=False,
                              deinterlace=deinterlace, force_10bit=False, crop=crop)
-    args: list[str] = []
-    if vf:
-        args += ["-vf", vf]
-    args += ["-map", "0:v:0", "-c:v", enc]
+    prim, trc, space, rng = _color_tuple(
+        info, tonemapped=bool(info.is_hdr), keep_hdr=False)
+    sp = _setparams(prim, trc, space, rng)
+    vf = _with_setparams(vf, sp)
+    args: list[str] = ["-vf", vf, "-map", "0:v:0", "-c:v", enc]
     args += ff.quality_args(platform, quality)
     args += ff.encoder_preset_args(enc, "fast")
+    args += ["-colorspace", space, "-color_primaries", prim,
+             "-color_trc", trc, "-color_range", rng]
     if enc == "libx264":
         args += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.1"]
     elif "nvenc" in enc:

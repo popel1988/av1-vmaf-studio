@@ -33,6 +33,76 @@ STATUS_DONE = "fertig"
 STATUS_FAILED = "fehlgeschlagen"
 STATUS_CANCELLED = "abgebrochen"
 
+
+def _end_step(item: "QueueItem") -> None:
+    """Laufenden Schritt abschließen und seine Dauer merken."""
+    name = str(getattr(item, "_step_name", "") or "")
+    t0 = float(getattr(item, "_step_t0", 0) or 0)
+    item._step_name = ""
+    item._step_t0 = 0.0
+    if not name or t0 <= 0:
+        return
+    secs = round(max(0.0, time.time() - t0), 1)
+    item.steps.append({"name": name, "seconds": secs})
+
+
+def _step_label(item: "QueueItem", fallback: str) -> str:
+    msg = str(getattr(item, "message", "") or "").replace("…", "").strip(" .")
+    return msg or fallback
+
+
+def _begin_step(item: "QueueItem", name: str) -> None:
+    """Neuen Schritt starten. Der vorherige wird dabei abgeschlossen."""
+    _end_step(item)
+    label = " ".join(str(name or "").split())
+    if not label:
+        return
+    item._step_name = label[:160]
+    item._step_t0 = time.time()
+
+
+def _steps_public(item: "QueueItem") -> list:
+    """Abgeschlossene Schritte plus den gerade laufenden, für die Anzeige."""
+    out = []
+    for raw in item.steps or []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            secs = round(max(0.0, float(raw.get("seconds") or 0)), 1)
+        except (TypeError, ValueError):
+            secs = 0.0
+        out.append({"name": name, "seconds": secs})
+    name = str(getattr(item, "_step_name", "") or "")
+    t0 = float(getattr(item, "_step_t0", 0) or 0)
+    if name and t0 > 0:
+        out.append({
+            "name": name,
+            "seconds": round(max(0.0, time.time() - t0), 1),
+            "running": True,
+        })
+    return out
+
+
+def _steps_from_saved(raw) -> list:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for step in raw:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            secs = round(max(0.0, float(step.get("seconds") or 0)), 1)
+        except (TypeError, ValueError):
+            secs = 0.0
+        out.append({"name": name[:160], "seconds": secs})
+    return out
+
 # Container-Endung je Zielcodec
 CONTAINER = {"av1": ".mkv", "hevc": ".mkv", "h264": ".mp4", "vp9": ".mkv"}
 
@@ -174,6 +244,7 @@ class QueueItem:
     started_at: float = 0.0
     finished_at: float = 0.0
     duration: float = 0.0
+    steps: list = field(default_factory=list)  # [{"name", "seconds"}] abgeschlossene Schritte
 
     def _normalize_live_vmaf(self) -> None:
         """Alte Läufe: Szene mit VMAF ≥ 99 auf jeder Stufe aus Schnitt und Empfehlung."""
@@ -237,6 +308,7 @@ class QueueItem:
             "finished_at": self.finished_at,
             "duration": round(dur, 1),
             "duration_human": ff.human_duration(dur) if dur else "—",
+            "steps": _steps_public(self),
         }
 
 
@@ -320,6 +392,7 @@ class QueueManager:
                 "started_at": it.started_at,
                 "finished_at": it.finished_at,
                 "duration": it.duration,
+                "steps": list(it.steps or []),
             }
             # „Auswahl"-Jobs: VMAF-Analyse mitsichern (kein erneuter Test).
             if it.status == STATUS_AWAITING and it.vmaf:
@@ -413,6 +486,7 @@ class QueueManager:
                     started_at=float(d.get("started_at", 0) or 0),
                     finished_at=float(d.get("finished_at", 0) or 0),
                     duration=float(d.get("duration", 0) or 0),
+                    steps=_steps_from_saved(d.get("steps")) if (is_terminal or is_awaiting) else [],
                 )
                 self._items.append(item)
                 restored += 1
@@ -760,6 +834,7 @@ class QueueManager:
                 from .bluray import unmount_iso
                 unmount_iso(mount)
                 item._iso_mount = None
+            _end_step(item)
             item.finished_at = time.time()
             item.duration = item.finished_at - started
             self._record_history(item, item.duration)
@@ -771,8 +846,10 @@ class QueueManager:
         try:
             from . import history
             encoded = item.status == STATUS_DONE and getattr(item, "output_size", 0)
-            if encoded or item.status == STATUS_FAILED:
+            traced = item.status == STATUS_DONE and (item.steps or item.vmaf)
+            if encoded or traced or item.status == STATUS_FAILED:
                 history.record_job(item, duration=duration)
+            if encoded or item.status == STATUS_FAILED:
                 try:
                     from . import notify
                     notify.notify_job(item)
@@ -894,7 +971,9 @@ class QueueManager:
         # damit alle drei dieselbe (beschnittene) Bildfläche nutzen.
         if s.autocrop and not item.crop:
             item.message = "Auto-Crop: schwarze Balken werden erkannt …"
+            _begin_step(item, "Auto-Crop")
             crop = ff.detect_crop(info)
+            _end_step(item)
             item.crop = crop
             if crop:
                 logger.info("Auto-Crop erkannt (%s): crop=%s (Quelle %dx%d)",
@@ -913,6 +992,7 @@ class QueueManager:
             if s.sample_mode == "bitrate":
                 item.message = "Bitrate-Verlauf der Quelle …"
                 self._refresh_global_msg()
+                _begin_step(item, "Bitrate-Verlauf")
                 try:
                     from . import bitrate_profile
                     prof = bitrate_profile.profile(
@@ -928,6 +1008,8 @@ class QueueManager:
                 except Exception as e:
                     logger.warning("Bitrate-Szenen nicht möglich (%s): %s", item.title, e)
                     item.message = "VMAF-Analyse läuft …"
+                finally:
+                    _end_step(item)
             self._refresh_global_msg()
             vmaf_opts = vmaf_mod.VmafOptions(
                 rate_mode=s.rate_mode,
@@ -951,21 +1033,25 @@ class QueueManager:
                 credits_at=float(getattr(s, "credits_at", 0) or 0),
                 two_pass=bool(s.two_pass) and s.rate_mode in ("bitrate", "abr"),
             )
-            analysis = vmaf_mod.analyze(
-                info, s.platform, s.codec, s.target_height, s.tonemap,
-                preserve_hdr=s.preserve_hdr,
-                film_grain=s.film_grain, denoise=s.denoise,
-                sharpen=s.sharpen, grain=s.grain, deinterlace=s.deinterlace,
-                aq_strength=s.aq_strength, crop=item.crop,
-                encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
-                b_frames=getattr(s, "b_frames", "auto") or "auto",
-                keyint_sec=getattr(s, "keyint_sec", 0) or 0,
-                nvenc_tune=getattr(s, "nvenc_tune", "auto") or "auto",
-                opts=vmaf_opts,
-                status=lambda m: setattr(item, "message", m),
-                cancelled=lambda: item.id in self._cancel_ids,
-                progress=lambda d: setattr(item, "progress", d),
-            )
+            try:
+                analysis = vmaf_mod.analyze(
+                    info, s.platform, s.codec, s.target_height, s.tonemap,
+                    preserve_hdr=s.preserve_hdr,
+                    film_grain=s.film_grain, denoise=s.denoise,
+                    sharpen=s.sharpen, grain=s.grain, deinterlace=s.deinterlace,
+                    aq_strength=s.aq_strength, crop=item.crop,
+                    encoder_speed=getattr(s, "encoder_speed", "balanced") or "balanced",
+                    b_frames=getattr(s, "b_frames", "auto") or "auto",
+                    keyint_sec=getattr(s, "keyint_sec", 0) or 0,
+                    nvenc_tune=getattr(s, "nvenc_tune", "auto") or "auto",
+                    opts=vmaf_opts,
+                    status=lambda m: setattr(item, "message", m),
+                    cancelled=lambda: item.id in self._cancel_ids,
+                    progress=lambda d: setattr(item, "progress", d),
+                    on_step=lambda name: _begin_step(item, name),
+                )
+            finally:
+                _end_step(item)
             item.progress = {}
             item.vmaf = analysis.to_dict()
             sess_name = _session_name(item)
@@ -1102,7 +1188,11 @@ class QueueManager:
                 break
             if not do_verify:
                 break
-            score = self._verify_output(item, s, info, out_path)
+            _begin_step(item, "Qualitätsprüfung")
+            try:
+                score = self._verify_output(item, s, info, out_path)
+            finally:
+                _end_step(item)
             item.vmaf_verify = score
             if (score is not None and score < s.verify_min
                     and s.verify_retry and attempt < max_attempts):
@@ -1166,6 +1256,7 @@ class QueueManager:
             if item.crop:
                 logger.info("Auto-Crop erkannt (%s): crop=%s", item.title, item.crop)
         item.message = "Chunked Adaptive Encoding …"
+        _begin_step(item, "Chunked Encode")
         self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1258,6 +1349,7 @@ class QueueManager:
 
         item.status = STATUS_RUNNING
         item.message = "Audio-Optimierung (Remux) …"
+        _begin_step(item, "Audio-Optimierung")
         self._refresh_global_msg()
         out_path = _output_path(item)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1344,6 +1436,7 @@ class QueueManager:
         s = item.settings
         item.status = STATUS_RUNNING
         item.message = label
+        _begin_step(item, label)
         self._refresh_global_msg()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         _log_job_start(item, info, out_path, label)
@@ -1501,11 +1594,15 @@ class QueueManager:
             outputs = []
             for idx, (cmd, out_path) in enumerate(cmds, start=1):
                 item.message = f"Ausschnitt {idx}/{len(cmds)} …"
+                _begin_step(item, f"Ausschnitt {idx}/{len(cmds)}")
                 _log_cmd(item, cmd)
                 runner = EncodeRunner()
                 with self._lock:
                     self._active[item.id] = runner
-                rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
+                try:
+                    rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
+                finally:
+                    _end_step(item)
                 if runner._cancel:
                     item.status = STATUS_CANCELLED
                     item.message = ""
@@ -1534,6 +1631,7 @@ class QueueManager:
         # Split erzeugt mehrere Dateien; Integritäts-/Nachbehandlung entfällt.
         item.status = STATUS_RUNNING
         item.message = "Splitten …"
+        _begin_step(item, "Splitten")
         self._refresh_global_msg()
         pattern.parent.mkdir(parents=True, exist_ok=True)
         _log_job_start(item, info, pattern, "Splitten")
@@ -1622,10 +1720,13 @@ class QueueManager:
                 passlog=passlog, **enc_kw,
             )
             item.message = "Zwei-Pass: Analyse-Durchlauf (1/2) …"
+            _begin_step(item, "Zwei-Pass · Analyse")
             _log_cmd(item, cmd, "Zwei-Pass 1/2")
             rc, stderr = runner.run(cmd, info.duration)
+            _end_step(item)
             if rc == 0 and not runner._cancel:
                 item.message = "Zwei-Pass: Encode-Durchlauf (2/2) …"
+                _begin_step(item, "Zwei-Pass · Encode")
                 cmd = build_encode_cmd(
                     info, out_path, s.platform, s.codec, s.quality,
                     s.target_height, s.tonemap, two_pass=True, pass_num=2,
@@ -1633,6 +1734,7 @@ class QueueManager:
                 )
                 _log_cmd(item, cmd, "Zwei-Pass 2/2")
                 rc, stderr = runner.run(cmd, info.duration)
+                _end_step(item)
             self._cleanup_passlog(passlog)
         elif s.two_pass and s.platform == "nvidia":
             cmd = build_encode_cmd(
@@ -1640,14 +1742,22 @@ class QueueManager:
                 s.target_height, s.tonemap, two_pass=True, **enc_kw,
             )
             _log_cmd(item, cmd)
-            rc, stderr = runner.run(cmd, info.duration)
+            _begin_step(item, _step_label(item, "Encode"))
+            try:
+                rc, stderr = runner.run(cmd, info.duration)
+            finally:
+                _end_step(item)
         else:
             cmd = build_encode_cmd(
                 info, out_path, s.platform, s.codec, s.quality,
                 s.target_height, s.tonemap, **enc_kw,
             )
             _log_cmd(item, cmd)
-            rc, stderr = runner.run(cmd, info.duration)
+            _begin_step(item, _step_label(item, "Encode"))
+            try:
+                rc, stderr = runner.run(cmd, info.duration)
+            finally:
+                _end_step(item)
         return rc, stderr, cmd, runner._cancel
 
     def _verify_output(self, item: "QueueItem", s: "JobSettings", info,
@@ -1676,6 +1786,14 @@ class QueueManager:
 
         if not (item.info and item.info.get("dolby_vision")):
             return  # Quelle hat kein Dolby Vision – nichts zu tun
+        _begin_step(item, "Dolby Vision")
+        try:
+            self._reinject_dv_work(item, out_path, dv)
+        finally:
+            _end_step(item)
+
+    def _reinject_dv_work(self, item: QueueItem, out_path: Path, dv) -> None:
+        import shutil
         if not dv.available():
             item.error = ("Dolby Vision: dovi_tool nicht verfügbar – "
                           "Ausgabe als HDR10 gespeichert.")
@@ -1725,6 +1843,15 @@ class QueueManager:
         )
         if reason in ("keine Quelle", "nicht beibehalten"):
             return
+        _begin_step(item, "HDR10+")
+        try:
+            self._reinject_hdr10plus_work(item, out_path, hdr10plus, reason, hdr)
+        finally:
+            _end_step(item)
+
+    def _reinject_hdr10plus_work(self, item: QueueItem, out_path: Path,
+                                 hdr10plus, reason: str, hdr: bool) -> None:
+        import shutil
         if reason:
             self._note_hdr10plus(item, f"HDR10+ nicht übernommen ({reason}) – HDR10 bleibt.")
             return
@@ -1733,6 +1860,7 @@ class QueueManager:
             return
         item.message = "HDR10+: Metadaten werden übernommen …"
         work = config.WORK_DIR / f"hdr10plus_{item.id}"
+        info = item.info or {}
         fps = float(info.get("fps") or 0.0)
         try:
             final, err = hdr10plus.reinject(
@@ -1779,8 +1907,12 @@ class QueueManager:
         if not need:
             return
         item.message = "Integritäts-Check (Stichproben) …"
-        expected = float(getattr(info, "duration", 0.0) or 0.0)
-        ok, msg = ff.verify_playable(out_path, expected)
+        _begin_step(item, "Integritäts-Check")
+        try:
+            expected = float(getattr(info, "duration", 0.0) or 0.0)
+            ok, msg = ff.verify_playable(out_path, expected)
+        finally:
+            _end_step(item)
         item.integrity_ok = ok
         item.integrity_msg = msg
         if ok:

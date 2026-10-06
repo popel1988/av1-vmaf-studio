@@ -1161,6 +1161,12 @@ button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, t
 .row-play:hover { border-color: var(--accent); color: var(--accent); }
 
 /* --- Queue: klickbare Zeilen für Detail-Ansicht --- */
+.queue-steps { list-style: none; margin: 4px 0 0; padding: 0; font-size: 11px;
+  color: var(--muted); max-height: 9.5rem; overflow: auto; }
+.queue-steps li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.35; }
+.queue-steps li span:first-child { min-width: 0; }
+.queue-steps li span:last-child { flex: none; font-variant-numeric: tabular-nums; }
+.queue-steps li.is-running { color: var(--text); }
 tr.queue-row { cursor: pointer; }
 tr.queue-row:hover { background: rgba(127,127,127,.08); }
 /* Alle Zellen mittig ausrichten, damit Badges/Buttons die Zeile nicht versetzen. */

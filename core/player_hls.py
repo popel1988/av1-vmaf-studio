@@ -872,6 +872,12 @@ def _hwaccel_decode_args(platform: str, source_codec: str = "") -> list[str]:
     return []
 
 
+_PLAYER_SDR_TAGS = (
+    "setparams=range=limited:color_primaries=bt709"
+    ":color_trc=bt709:colorspace=bt709"
+)
+
+
 def _player_sdr_8bit_filters(*, is_hdr: bool, target_codec: str) -> list[str]:
     """HDR/10-bit → 8-bit SDR für Browser-H.264 (NVENC kann kein 10-bit H.264)."""
     out: list[str] = []
@@ -883,6 +889,9 @@ def _player_sdr_8bit_filters(*, is_hdr: bool, target_codec: str) -> list[str]:
     else:
         # Auch SDR-10-bit (yuv420p10le) muss vor h264_nvenc auf 8-bit
         out.append("format=yuv420p")
+    # Kennung, keine Helligkeitsumrechnung: sonst setzt der Encoder oft
+    # vollen Bereich und der Browser hebt Schwarz an.
+    out.append(_PLAYER_SDR_TAGS)
     return out
 
 
@@ -1091,6 +1100,11 @@ def _build_hls_cmd(
             cmd += ["-force_key_frames", f"expr:gte(t,n_forced*{hls_time})"]
         if encoder == "libx264":
             cmd += ["-sc_threshold", "0"]
+        if (codec or "h264").lower() == "h264":
+            cmd += ["-colorspace", "bt709", "-color_primaries", "bt709",
+                    "-color_trc", "bt709", "-color_range", "tv"]
+        else:
+            cmd += ["-color_range", "tv"]
         cmd += ["-start_at_zero"]
 
     cmd += _audio_args(

@@ -843,6 +843,7 @@ def analyze(
     b_frames: str = "auto",
     keyint_sec: int = 0,
     nvenc_tune: str = "auto",
+    on_step: Optional[Callable[[str], None]] = None,
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -959,6 +960,8 @@ def analyze(
         if extra:
             rate_lbl += " · Zwischenwert"
         lbl = f"{shown} · {rate_lbl}" if (multi or tag) else rate_lbl
+        if on_step:
+            on_step(lbl)
         prog["step"] += 1
 
         total_size = 0
@@ -1169,6 +1172,8 @@ def analyze(
         dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
         for si, (start, clip_len) in enumerate(sample_specs):
             emit("reference")
+            if on_step:
+                on_step(f"Referenz · Szene {si + 1}")
             ref = _extract_reference(info, work, tonemap, start, clip_len, si,
                                      status, crop=crop)
             references.append((ref, start, clip_len))

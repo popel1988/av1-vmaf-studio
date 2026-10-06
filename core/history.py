@@ -37,6 +37,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN source_json TEXT")
     if "encode_seconds" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN encode_seconds REAL")
+    if "steps_json" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN steps_json TEXT")
 
 
 def job_kind_fields(settings) -> tuple[str, str, int]:
@@ -195,6 +197,7 @@ def record_job(item, duration: float = 0.0) -> None:
         str(getattr(item, "output_path", "") or ""),
         json.dumps(source_summary(getattr(item, "info", None)), ensure_ascii=False),
         float(getattr(item, "encode_seconds", 0.0) or 0.0),
+        _dump_steps(getattr(item, "steps", None)),
     )
     try:
         with _lock:
@@ -204,8 +207,8 @@ def record_job(item, duration: float = 0.0) -> None:
                 (id, title, path, status, platform, codec, rate_mode, quality,
                  vmaf, original_size, output_size, saved_bytes, duration,
                  created, finished, settings_json, output_path, source_json,
-                 encode_seconds)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 encode_seconds, steps_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row,
             )
@@ -479,7 +482,7 @@ def stats() -> dict:
             ).fetchall()
             avg_dur = _conn.execute(
                 "SELECT AVG(duration) a FROM jobs "
-                "WHERE status='fertig' AND duration > 0 LIMIT 1"
+                "WHERE status='fertig' AND output_size > 0 AND duration > 0 LIMIT 1"
             ).fetchone()
     except sqlite3.Error as e:
         logger.warning("Statistik konnte nicht gelesen werden: %s", e)
@@ -505,6 +508,50 @@ def stats() -> dict:
     }
 
 
+def _dump_steps(raw) -> str:
+    steps = []
+    if isinstance(raw, list):
+        for step in raw:
+            if not isinstance(step, dict):
+                continue
+            name = str(step.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                secs = round(max(0.0, float(step.get("seconds") or 0)), 1)
+            except (TypeError, ValueError):
+                secs = 0.0
+            steps.append({"name": name[:160], "seconds": secs})
+    try:
+        return json.dumps(steps, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return "[]"
+
+
+def _attach_steps(row: dict) -> dict:
+    raw = row.get("steps_json") or ""
+    steps = []
+    if raw:
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            parsed = []
+        if isinstance(parsed, list):
+            for step in parsed:
+                if not isinstance(step, dict):
+                    continue
+                name = str(step.get("name") or "").strip()
+                if not name:
+                    continue
+                try:
+                    secs = round(max(0.0, float(step.get("seconds") or 0)), 1)
+                except (TypeError, ValueError):
+                    secs = 0.0
+                steps.append({"name": name, "seconds": secs})
+    row["steps"] = steps
+    return row
+
+
 def recent(limit: int = 100) -> list[dict]:
     """Letzte Jobs (neueste zuerst)."""
     if _conn is None:
@@ -516,7 +563,7 @@ def recent(limit: int = 100) -> list[dict]:
             ).fetchall()
     except sqlite3.Error:
         return []
-    return [dict(r) for r in rows]
+    return [_attach_steps(dict(r)) for r in rows]
 
 
 def get(job_id: str) -> Optional[dict]:
@@ -528,7 +575,7 @@ def get(job_id: str) -> Optional[dict]:
             row = _conn.execute(
                 "SELECT * FROM jobs WHERE id=? LIMIT 1", (str(job_id),)
             ).fetchone()
-        return dict(row) if row else None
+        return _attach_steps(dict(row)) if row else None
     except sqlite3.Error:
         return None
 
@@ -542,11 +589,11 @@ def by_source(path: str, limit: int = 20) -> list[dict]:
             rows = _conn.execute(
                 "SELECT id, title, path, status, platform, codec, quality, "
                 "rate_mode, vmaf, original_size, output_size, saved_bytes, "
-                "duration, finished, output_path, settings_json FROM jobs "
+                "duration, finished, output_path, settings_json, steps_json FROM jobs "
                 "WHERE path=? ORDER BY finished DESC LIMIT ?",
                 (str(path), int(limit)),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_attach_steps(dict(r)) for r in rows]
     except sqlite3.Error:
         return []
 
