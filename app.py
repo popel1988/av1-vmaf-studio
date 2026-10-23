@@ -555,6 +555,12 @@ class EnqueueRequest(BaseModel):
     tonemap: bool = False
     hdr_mode: str = "tonemap"        # tonemap (HDR->SDR) | preserve (HDR behalten)
     dv_mode: str = ""                # DV-Quellen: preserve | hdr10 | tonemap (Vorrang vor hdr_mode)
+    tonemap_algo: str = "hable"      # hable | bt2390 | reinhard | mobius | gamma | clip | linear
+    tonemap_desat: float = 0.0       # 0 = Farben in den Spitzen behalten
+    tonemap_peak: float = 0.0        # 0 = Peak aus den Metadaten, sonst Nits
+    tonemap_engine: str = "cpu"      # cpu | libplacebo
+    deband: str = "off"              # off | light | medium | strong
+    svt_look: str = "standard"       # standard | detail, nur CPU-AV1
     preserve_dv: bool = False        # Legacy: Dolby-Vision-RPU beibehalten
     keep_subtitles: bool = True
     subtitle_per_track: bool = False
@@ -597,6 +603,7 @@ class EnqueueRequest(BaseModel):
     scene_min_pct: int = 10          # ruhige Szene mindestens so viel % vom Median
     credits_at: float = 0.0          # Filmzeit (s), ab der keine Testszenen mehr liegen
     generate_screenshots: bool = True
+    visual_only: bool = False        # Testclips ohne VMAF-Messung
     post_processing: str = "keep"
     container: str = "auto"          # auto | mkv | mp4 (Ausgabe-Container)
     suffix: str = "_av1"
@@ -2691,6 +2698,7 @@ class EncoderBenchStartRequest(BaseModel):
     clip_seconds: int = 12
     samples: int = 3
     anime: bool = False
+    mode: str = "vmaf"
 
 
 @app.get("/api/encoder-bench")

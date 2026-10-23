@@ -13,7 +13,10 @@ from typing import Callable, Optional
 
 from . import config
 from . import ffmpeg_utils as ff
-from .encoder import build_encode_cmd, EncodeRunner, _TONEMAP_CHAIN
+from .encoder import (
+    EncodeRunner, build_encode_cmd, tonemap_chain, tonemap_engine_for,
+    tonemap_placebo,
+)
 from .ffmpeg_utils import VideoInfo
 
 logger = logging.getLogger("vcompress.vmaf")
@@ -61,6 +64,8 @@ class VmafOptions:
     two_pass: bool = False
     # Filmzeit in Sekunden, ab der keine Testszenen mehr liegen. 0 = automatisch.
     credits_at: float = 0.0
+    # True: Testclips encodieren, libvmaf auslassen. Vergleich im A/B-Player.
+    visual_only: bool = False
     # Alte Ein-Achsen-Varianten. Neue Vergleiche nutzen rows.
     variants: list = field(default_factory=list)
     # Volle Zusatzzeilen: Plattform, Codec, Speed, B-Frames, AQ, Keyframe.
@@ -393,6 +398,7 @@ class VmafAnalysis:
     target_anchor: str = ""    # both | target | mean
     sample_windows: list = field(default_factory=list)
     sample_starts: list = field(default_factory=list)  # [(start, länge)] je Szene
+    visual_only: bool = False   # Clips ohne libvmaf, zum Abspielen im A/B-Player
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
@@ -412,6 +418,7 @@ class VmafAnalysis:
             "error": self.error,
             "keep_source": self.keep_source,
             "pick_warning": self.pick_warning,
+            "visual_only": self.visual_only,
             **({"target_lo": self.target_lo, "target_gap": self.target_gap,
                  "target_anchor": self.target_anchor}
                if self.target_lo else {}),
@@ -503,17 +510,29 @@ def _sample_starts(duration: float, clip_seconds: int, count: int,
 def _extract_reference(
     info: VideoInfo, work: Path, tonemap: bool, start: float, clip_len: float,
     idx: int, status: StatusCb, crop: str = "",
+    tonemap_algo: str = "hable", tonemap_desat: float = 0.0,
+    tonemap_peak: float = 0.0, tonemap_engine: str = "cpu",
+    platform: str = "cpu",
 ) -> Path:
     ref = work / f"reference_{idx}.mkv"
-    cmd = [config.FFMPEG, "-y", "-hide_banner", "-ss", str(start), "-t", str(clip_len),
-           "-i", str(info.path)]
+    use_placebo = (
+        tonemap and info.is_hdr
+        and tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
+    )
+    cmd = [config.FFMPEG, "-y", "-hide_banner"]
+    if use_placebo:
+        cmd += ["-init_hw_device", "vulkan"]
+    cmd += ["-ss", str(start), "-t", str(clip_len), "-i", str(info.path)]
     # Crop und Tonemap identisch zur Encode-Kette anwenden, damit der Vergleich
     # dieselbe (beschnittene/getonemappte) Bildfläche wie die Ausgabe nutzt.
     vf = []
     if crop:
         vf.append(f"crop={crop}")
     if tonemap and info.is_hdr:
-        vf.append(_TONEMAP_CHAIN)
+        if use_placebo:
+            vf.append(tonemap_placebo(tonemap_algo))
+        else:
+            vf.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
     if vf:
         cmd += ["-vf", ",".join(vf)]
     cmd += ["-an", "-sn", "-c:v", "ffv1", "-level", "3", str(ref)]
@@ -770,6 +789,37 @@ def _extract_frame(
     return out_rel if res.returncode == 0 and (config.PREVIEW_DIR / out_rel).exists() else ""
 
 
+def _extract_source_still(
+    info: VideoInfo, out_rel: str, at_sec: float, *,
+    tonemap: bool, crop: str, tonemap_algo: str, tonemap_desat: float,
+    tonemap_peak: float, tonemap_engine: str, platform: str,
+) -> str:
+    """Ein Standbild der Quelle an einer Filmzeit, mit derselben Tonemap wie der Encode."""
+    dest = config.PREVIEW_DIR / out_rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    use_placebo = (
+        tonemap and info.is_hdr
+        and tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
+    )
+    cmd = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
+    if use_placebo:
+        cmd += ["-init_hw_device", "vulkan"]
+    cmd += ["-ss", f"{max(0.0, float(at_sec)):.3f}", "-i", str(info.path)]
+    vf: list[str] = []
+    if crop:
+        vf.append(f"crop={crop}")
+    if tonemap and info.is_hdr:
+        if use_placebo:
+            vf.append(tonemap_placebo(tonemap_algo))
+        else:
+            vf.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
+    if vf:
+        cmd += ["-vf", ",".join(vf)]
+    cmd += ["-frames:v", "1", "-q:v", "2", str(dest)]
+    res = _run_logged(cmd, "Standbild Quelle")
+    return out_rel if res.returncode == 0 and dest.exists() else ""
+
+
 def measure_output_vmaf(
     info: VideoInfo,
     output: Path,
@@ -780,6 +830,11 @@ def measure_output_vmaf(
     clip_seconds: int = 15,
     anime: bool = False,
     crop: str = "",
+    tonemap_algo: str = "hable",
+    tonemap_desat: float = 0.0,
+    tonemap_peak: float = 0.0,
+    tonemap_engine: str = "cpu",
+    platform: str = "cpu",
     cancelled: Callable[[], bool] = lambda: False,
 ) -> Optional[float]:
     """Misst den echten VMAF der fertigen Ausgabedatei gegen die Quelle.
@@ -801,8 +856,11 @@ def measure_output_vmaf(
         for idx, (start, clip_len) in enumerate(specs):
             if cancelled():
                 break
-            ref = _extract_reference(info, work, tonemap, start, clip_len, idx,
-                                     None, crop=crop)
+            ref = _extract_reference(
+                info, work, tonemap, start, clip_len, idx, None, crop=crop,
+                tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
+                tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
+                platform=platform)
             dist = work / f"out_{idx}.mkv"
             # Denselben Ausschnitt verlustfrei aus der Ausgabe ziehen.
             _run_logged(
@@ -844,6 +902,12 @@ def analyze(
     keyint_sec: int = 0,
     nvenc_tune: str = "auto",
     on_step: Optional[Callable[[str], None]] = None,
+    tonemap_algo: str = "hable",
+    tonemap_desat: float = 0.0,
+    tonemap_peak: float = 0.0,
+    tonemap_engine: str = "cpu",
+    deband: str = "off",
+    svt_look: str = "standard",
 ) -> VmafAnalysis:
     opts = opts or VmafOptions()
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -855,9 +919,10 @@ def analyze(
 
     model_name, _ = _model_for(info, opts.anime)
     analysis = VmafAnalysis(
-        model=model_name,
+        model="" if opts.visual_only else model_name,
         rate_mode=opts.rate_mode,
         clip_seconds=opts.clip_seconds,
+        visual_only=bool(opts.visual_only),
     )
     use_bitrate = opts.rate_mode in ("bitrate", "abr")
     values = [v for v in opts.test_values[:4] if v > 0]
@@ -906,7 +971,9 @@ def analyze(
         vals_n = max(1, len(_vals_of(run)))
         extra = 1 if (_two_of(run) and run[0] == "cpu") else 0
         steps += vals_n
-        units += n_samples * (2 + extra) * vals_n
+        # Encode, und ohne reinen Sichtvergleich zusätzlich die VMAF-Messung.
+        measure = 0 if opts.visual_only else 1
+        units += n_samples * (1 + measure + extra) * vals_n
         gk = (*run[:7], _mode_of(run))
         two_groups.setdefault(gk, set()).add(_two_of(run))
     budget = {"steps": max(1, steps), "units": max(1, units)}
@@ -998,6 +1065,12 @@ def analyze(
                     b_frames=bf,
                     keyint_sec=ki_use,
                     nvenc_tune=tune_use,
+                    tonemap_algo=tonemap_algo,
+                    tonemap_desat=tonemap_desat,
+                    tonemap_peak=tonemap_peak,
+                    tonemap_engine=tonemap_engine,
+                    deband=deband,
+                    svt_look=svt_look,
                 )
                 if point_bitrate:
                     kw["rate_mode"] = mode
@@ -1051,41 +1124,43 @@ def analyze(
                 logger.warning("%s\nCMD: %s\nSTDERR:\n%s",
                                last_error, " ".join(cmd), enc_err)
                 continue
-            if status:
-                status(f"VMAF-Vergleich {shown} @ {rate_lbl}{smp} …")
-            emit("vmaf")
-
-            metrics = _vmaf_metrics(test_file, reference, info, work, skey,
-                                    neg=opts.anime, dims=dims, clip_len=clip_len)
-            prog["done"] += 1
-            emit("vmaf")
-
-            if metrics is None:
-                continue
-            score = metrics["vmaf"]
-            scores.append(score)
-            if metrics.get("hmean"):
-                hmeans.append(metrics["hmean"])
-            if metrics.get("p1"):
-                p1s.append(metrics["p1"])
-            if metrics.get("psnr"):
-                psnrs.append(metrics["psnr"])
-            if metrics.get("ssim"):
-                ssims.append(metrics["ssim"])
-            if metrics.get("xpsnr"):
-                xpsnrs.append(metrics["xpsnr"])
+            if opts.visual_only:
+                score = 0.0
+                metrics = None
+            else:
+                if status:
+                    status(f"VMAF-Vergleich {shown} @ {rate_lbl}{smp} …")
+                emit("vmaf")
+                metrics = _vmaf_metrics(test_file, reference, info, work, skey,
+                                        neg=opts.anime, dims=dims, clip_len=clip_len)
+                prog["done"] += 1
+                emit("vmaf")
+                if metrics is None:
+                    continue
+                score = metrics["vmaf"]
+                scores.append(score)
+                if metrics.get("hmean"):
+                    hmeans.append(metrics["hmean"])
+                if metrics.get("p1"):
+                    p1s.append(metrics["p1"])
+                if metrics.get("psnr"):
+                    psnrs.append(metrics["psnr"])
+                if metrics.get("ssim"):
+                    ssims.append(metrics["ssim"])
+                if metrics.get("xpsnr"):
+                    xpsnrs.append(metrics["xpsnr"])
             scene_scores.append({
                 "scene": si,
                 "start": float(start),      # Position im Film (s) – für Sprünge im Player
                 "length": float(clip_len),
                 "vmaf": score,
-                "hmean": metrics.get("hmean") or 0.0,
-                "p1": metrics.get("p1") or 0.0,
-                "psnr": metrics.get("psnr") or 0.0,
-                "ssim": metrics.get("ssim") or 0.0,
-                "xpsnr": metrics.get("xpsnr") or 0.0,
-                "xpsnr_min": metrics.get("xpsnr_min") or 0.0,
-                "frames": metrics.get("frames") or [],
+                "hmean": (metrics or {}).get("hmean") or 0.0,
+                "p1": (metrics or {}).get("p1") or 0.0,
+                "psnr": (metrics or {}).get("psnr") or 0.0,
+                "ssim": (metrics or {}).get("ssim") or 0.0,
+                "xpsnr": (metrics or {}).get("xpsnr") or 0.0,
+                "xpsnr_min": (metrics or {}).get("xpsnr_min") or 0.0,
+                "frames": (metrics or {}).get("frames") or [],
             })
             clip_bytes = test_file.stat().st_size
             total_size += clip_bytes
@@ -1114,10 +1189,14 @@ def analyze(
                     "kbps": scene_kbps,
                 })
 
-        if not scores or total_dur <= 0:
+        if opts.visual_only:
+            if not scene_scores or total_dur <= 0:
+                return
+            avg_score = 0.0
+        elif not scores or total_dur <= 0:
             return
-
-        avg_score = sum(scores) / len(scores)
+        else:
+            avg_score = sum(scores) / len(scores)
         # Test-Encodes sind video-only (`audio_mode=none`). Die echte Ausgabe
         # behält Ton/Untertitel – ohne den Aufschlag wirkt CQ 24 oft „kleiner
         # als die Quelle“, obwohl Video+Ton wächst.
@@ -1167,15 +1246,29 @@ def analyze(
                 info.duration, opts.clip_seconds, opts.samples, opts.credits_at)
         analysis.sample_windows = list(opts.sample_windows or [])
         analysis.sample_starts = [(float(s), float(l)) for s, l in sample_specs]
-        references: list[tuple[Path, float, float]] = []
+        references: list[tuple[Optional[Path], float, float]] = []
         ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
         dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
         for si, (start, clip_len) in enumerate(sample_specs):
+            if opts.visual_only:
+                references.append((None, start, clip_len))
+                if opts.generate_screenshots:
+                    ref_shots.append(_extract_source_still(
+                        info, f"{sess}/scene{si}_ref.jpg",
+                        float(start) + float(clip_len) / 2.0,
+                        tonemap=tonemap, crop=crop,
+                        tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
+                        tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
+                        platform=platform))
+                continue
             emit("reference")
             if on_step:
                 on_step(f"Referenz · Szene {si + 1}")
-            ref = _extract_reference(info, work, tonemap, start, clip_len, si,
-                                     status, crop=crop)
+            ref = _extract_reference(
+                info, work, tonemap, start, clip_len, si, status, crop=crop,
+                tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
+                tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
+                platform=platform)
             references.append((ref, start, clip_len))
             if opts.generate_screenshots:
                 ref_shots.append(_extract_frame(
@@ -1227,7 +1320,11 @@ def analyze(
                 ))
 
         apply_idle_scenes(analysis.results)
-        _pick_recommended(analysis, opts.target_vmaf)
+        if opts.visual_only:
+            analysis.recommended_value = None
+            analysis.recommended_quality = None
+        else:
+            _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
                           source_path=opts.source_path, params=opts.params)
@@ -1238,7 +1335,7 @@ def analyze(
                 "VMAF-Analyse ohne Ergebnis: alle Test-Encodes sind "
                 "fehlgeschlagen (Encoder/Plattform prüfen).")
     finally:
-        _finalize_work(work, sess)
+        _finalize_work(work, sess, keep_clips=True if opts.visual_only else None)
 
     return analysis
 
@@ -2439,7 +2536,7 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     analysis.recommended_platform = best.platform
 
 
-def _finalize_work(work: Path, item_id: str) -> None:
+def _finalize_work(work: Path, item_id: str, keep_clips: Optional[bool] = None) -> None:
     """VMAF-Arbeitsordner löschen oder dauerhaft unter vmaf/ ablegen."""
     if not work.exists():
         return
@@ -2451,7 +2548,8 @@ def _finalize_work(work: Path, item_id: str) -> None:
             ref.unlink(missing_ok=True)
         (work / "reference.mkv").unlink(missing_ok=True)
         from . import app_settings
-        if not app_settings.keep_vmaf_clips():
+        retain = app_settings.keep_vmaf_clips() if keep_clips is None else bool(keep_clips)
+        if not retain:
             for clip in work.glob("test_*.mkv"):
                 clip.unlink(missing_ok=True)
     except OSError:

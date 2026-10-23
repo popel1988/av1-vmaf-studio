@@ -1090,7 +1090,10 @@
     const isDv = !!(info && info.dolby_vision);
     if (hdrWrap) hdrWrap.style.display = isDv ? "none" : "";
     if (dvWrap) dvWrap.style.display = isDv ? "" : "none";
-    if (!isDv || !dvSel) return;
+    if (!isDv || !dvSel) {
+      syncTonemapPanels();
+      return;
+    }
 
     const platform = $("opt-platform") ? $("opt-platform").value : "";
     const prof = info.dv_profile || 0;
@@ -1117,6 +1120,7 @@
           + `${platform.toUpperCase()} ist keine DV-Übernahme möglich, `
           + `„Übernehmen" fällt auf HDR10 zurück. Für echtes DV: Plattform „CPU" `
           + `wählen (Profil 10.1) oder Codec HEVC nutzen (Profil 8.1).`;
+        syncTonemapPanels();
         return;
       }
       let conv = "";
@@ -1130,6 +1134,119 @@
         : `„Übernehmen" re-injiziert die RPU nach dem Encode (dovi_tool) → Ziel ${targetProfile} (${codecLabel}).`;
       dvHint.textContent = `${p} erkannt. ${how}${conv}${fallback}`;
     }
+    syncTonemapPanels();
+  }
+
+  function tonemapPayload(prefix) {
+    const algoEl = $(prefix + "-tonemap-algo");
+    const desatEl = $(prefix + "-tonemap-desat");
+    const peakEl = $(prefix + "-tonemap-peak");
+    let desat = desatEl ? parseFloat(desatEl.value) : 0;
+    if (!isFinite(desat)) desat = 0;
+    let peak = 0;
+    if (peakEl && String(peakEl.value).trim() !== "") {
+      peak = parseFloat(peakEl.value);
+      if (!isFinite(peak) || peak < 0) peak = 0;
+    }
+    const engineEl = $(prefix + "-tonemap-engine");
+    return {
+      tonemap_algo: algoEl ? algoEl.value : "hable",
+      tonemap_desat: Math.round(desat * 100) / 100,
+      tonemap_peak: peak,
+      tonemap_engine: engineEl ? engineEl.value : "cpu",
+    };
+  }
+
+  function paintTonemapDesat(prefix) {
+    const el = $(prefix + "-tonemap-desat");
+    const lab = $(prefix + "-tonemap-desat-val");
+    if (!el || !lab) return;
+    const n = parseFloat(el.value);
+    lab.textContent = (isFinite(n) ? n : 0).toFixed(1).replace(".", ",");
+  }
+
+  let tonemapSyncing = false;
+  function copyTonemap(from, to) {
+    if (tonemapSyncing) return;
+    tonemapSyncing = true;
+    ["tonemap-algo", "tonemap-desat", "tonemap-peak", "tonemap-engine"].forEach((id) => {
+      const a = $(from + "-" + id);
+      const b = $(to + "-" + id);
+      if (a && b && b.value !== a.value) b.value = a.value;
+    });
+    paintTonemapDesat(from);
+    paintTonemapDesat(to);
+    tonemapSyncing = false;
+  }
+
+  function tonemapChosen() {
+    const info = state.currentInfo;
+    if (!info || !info.is_hdr) return false;
+    if (info.dolby_vision) {
+      const dv = $("opt-dv-mode");
+      return !dv || dv.value === "tonemap";
+    }
+    const hdr = $("opt-hdr-mode");
+    return !hdr || hdr.value !== "preserve";
+  }
+
+  function syncTonemapEngine(prefix) {
+    const engine = $(prefix + "-tonemap-engine");
+    const box = $(prefix === "opt" ? "tonemap-opts" : prefix + "-tonemap-opts");
+    if (!box) return;
+    const cpuOnly = !engine || engine.value !== "libplacebo";
+    box.querySelectorAll(".tonemap-cpu-only").forEach((el) => {
+      el.hidden = !cpuOnly;
+    });
+  }
+
+  function syncTonemapPanels() {
+    const on = tonemapChosen();
+    ["tonemap-opts", "vt-tonemap-opts"].forEach((id) => {
+      const el = $(id);
+      if (el) el.hidden = !on;
+    });
+  }
+
+  function syncStTonemap() {
+    const el = $("st-tonemap-opts");
+    const d = $("st-dynamik") ? $("st-dynamik").value : "auto";
+    if (el) el.hidden = d === "preserve" || d === "hdr10";
+  }
+
+  function initTonemap() {
+    const hdr = $("opt-hdr-mode");
+    if (hdr) hdr.addEventListener("change", syncTonemapPanels);
+    const dv = $("opt-dv-mode");
+    if (dv) dv.addEventListener("change", syncTonemapPanels);
+    ["opt", "vt"].forEach((prefix) => {
+      const other = prefix === "opt" ? "vt" : "opt";
+      ["tonemap-algo", "tonemap-desat", "tonemap-peak", "tonemap-engine"].forEach((id) => {
+        const el = $(prefix + "-" + id);
+        if (!el) return;
+        const go = () => {
+          copyTonemap(prefix, other);
+          syncTonemapEngine(prefix);
+          syncTonemapEngine(other);
+        };
+        el.addEventListener("input", go);
+        el.addEventListener("change", go);
+      });
+    });
+    const stEngine = $("st-tonemap-engine");
+    if (stEngine) stEngine.addEventListener("change", () => syncTonemapEngine("st"));
+    const stDesat = $("st-tonemap-desat");
+    if (stDesat) {
+      const paint = () => paintTonemapDesat("st");
+      stDesat.addEventListener("input", paint);
+      stDesat.addEventListener("change", paint);
+    }
+    const stDyn = $("st-dynamik");
+    if (stDyn) stDyn.addEventListener("change", syncStTonemap);
+    ["opt", "vt", "st"].forEach(paintTonemapDesat);
+    ["opt", "vt", "st"].forEach(syncTonemapEngine);
+    syncTonemapPanels();
+    syncStTonemap();
   }
 
   function renderFileDetails(name, info) {
@@ -1734,6 +1851,7 @@
       // DV-Behandlung nur mitsenden, wenn die DV-Auswahl aktiv (= DV-Quelle) ist.
       dv_mode: ($("dv-mode-wrap") && $("dv-mode-wrap").style.display !== "none"
                 && $("opt-dv-mode")) ? $("opt-dv-mode").value : "",
+      ...tonemapPayload("opt"),
       keep_subtitles: subTracks === null
         ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
       subtitle_per_track: subTracks !== null,
@@ -1741,6 +1859,7 @@
       keep_chapters: $("opt-keep-chapters") ? $("opt-keep-chapters").checked : true,
       keep_metadata: $("opt-keep-metadata") ? $("opt-keep-metadata").checked : true,
       denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
+      deband: $("opt-deband") ? $("opt-deband").value : "off",
       sharpen: $("opt-sharpen") ? $("opt-sharpen").value : "off",
       grain: $("opt-grain") ? $("opt-grain").value : "off",
       deinterlace: $("opt-deinterlace") ? $("opt-deinterlace").value : "auto",
@@ -1749,6 +1868,7 @@
       nvenc_tune: $("opt-nvenc-tune") ? $("opt-nvenc-tune").value : "auto",
       keyint_sec: $("opt-keyint") ? (parseInt($("opt-keyint").value, 10) || 0) : 0,
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
+      svt_look: $("opt-svt-look") ? $("opt-svt-look").value : "standard",
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
       mobile_copy: $("opt-mobile-copy") ? $("opt-mobile-copy").checked : false,
       mobile_height: $("opt-mobile-height") ? parseInt($("opt-mobile-height").value, 10) : 720,
@@ -2345,11 +2465,34 @@
   function ebRateMode() {
     return ($("eb-rate") && $("eb-rate").value) || "cq";
   }
+  function ebMode() {
+    return ($("eb-mode") && $("eb-mode").value) === "speed" ? "speed" : "vmaf";
+  }
+  function ebIsSpeed(rows) {
+    return !!(rows && rows.some((r) => r && r.mode === "speed"));
+  }
+  function ebSyncMode() {
+    const speed = ebMode() === "speed";
+    const samples = $("eb-samples-field");
+    if (samples) samples.hidden = speed;
+    const anime = $("eb-anime-wrap");
+    if (anime) anime.hidden = speed;
+    const hint = $("eb-mode-hint");
+    if (hint) hint.hidden = !speed;
+    ebUpdateEstimate();
+  }
   function ebUpdateEstimate() {
     const el = $("eb-estimate");
     if (!el) return;
     const nClips = ebSelectedClipIds().length + ebExtra.length;
     const nSp = ebSelectedSpeeds().length;
+    if (ebMode() === "speed") {
+      const n = nClips * nSp;
+      el.textContent = n
+        ? `Ungefähr ${n} Encodes (${nClips} Clips × ${nSp} Speed-Stufen, ein Ausschnitt, ohne VMAF).`
+        : "Mindestens einen Clip und eine Speed-Stufe wählen.";
+      return;
+    }
     const nVal = ebParseValues().length || 0;
     const nSamp = parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 1;
     const n = nClips * nSp * nVal * nSamp;
@@ -2513,6 +2656,31 @@
     const wrap = $("eb-results");
     if (!wrap) return;
     if (!rows || !rows.length) { wrap.innerHTML = ""; return; }
+    if (ebIsSpeed(rows)) {
+      const body = rows.map((r) => {
+        if (r.error) {
+          return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="6" class="bad">${escapeHtml(r.error)}</td></tr>`;
+        }
+        const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
+        const spd = speedLabelFor(r.platform, r.codec, r.speed);
+        const fps = r.fps ? Number(r.fps).toFixed(1) : "—";
+        const rt = r.realtime ? (Number(r.realtime).toFixed(2) + "×") : "—";
+        return `<tr>
+          <td>${escapeHtml(r.clip || "")}</td>
+          <td>${escapeHtml(spd)}</td>
+          <td class="num">${escapeHtml(String(val))}</td>
+          <td class="num">${r.seconds != null ? Number(r.seconds).toFixed(1) + " s" : ""}</td>
+          <td class="num">${fps}</td>
+          <td class="num">${rt}</td>
+          <td class="num">${escapeHtml(r.size_human || "")}</td>
+        </tr>`;
+      }).join("");
+      wrap.innerHTML = `<div class="data-table-wrap"><table class="data-table enc-bench-table">
+        <thead><tr>
+          <th>Clip</th><th>Speed</th><th>Wert</th><th>Zeit</th><th>fps</th><th>Echtzeit</th><th>Größe</th>
+        </tr></thead><tbody>${body}</tbody></table></div>`;
+      return;
+    }
     const recSpeed = rec && rec.speed;
     const body = rows.map((r) => {
       if (r.error) {
@@ -2549,6 +2717,11 @@
   function ebRenderShots(rows, rec) {
     const grid = $("eb-screenshots");
     if (!grid) return;
+    if (ebIsSpeed(rows)) {
+      grid.innerHTML = "";
+      grid._shotKey = "";
+      return;
+    }
     const usable = (rows || []).filter((r) => !r.error && shotsOf(r).length);
     const sig = usable.map((r) =>
       (r.clip || "") + ":" + (r.speed || "") + ":" + (r.value || "") + ":"
@@ -2639,6 +2812,9 @@
     const codec = $("eb-codec");
     if (codec) codec.addEventListener("change", ebUpdateCodec);
     ebUpdateCodec();
+    const modeSel = $("eb-mode");
+    if (modeSel) modeSel.addEventListener("change", ebSyncMode);
+    ebSyncMode();
     const rate = $("eb-rate");
     if (rate) rate.addEventListener("change", ebFillValuesDefault);
     const vals = $("eb-values");
@@ -2722,7 +2898,8 @@
           keyint_sec: ($("eb-keyint") && parseInt($("eb-keyint").value, 10)) || 0,
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
-          anime: !!($("eb-anime") && $("eb-anime").checked),
+          anime: ebMode() === "speed" ? false : !!($("eb-anime") && $("eb-anime").checked),
+          mode: ebMode(),
         });
         ebEnsurePoll();
         ebRefresh();
@@ -3065,6 +3242,19 @@
     refreshVtAddButton();
 
     $("btn-vmaf-start").addEventListener("click", vtEnqueue);
+    const visual = $("vt-visual");
+    const shots = $("vt-screenshots");
+    const visualHint = $("vt-visual-hint");
+    const syncVisual = () => {
+      const on = !!(visual && visual.checked);
+      if (visualHint) visualHint.hidden = !on;
+      if (on && shots) shots.checked = true;
+    };
+    if (visual) visual.addEventListener("change", syncVisual);
+    if (shots) shots.addEventListener("change", () => {
+      if (visual && visual.checked) shots.checked = true;
+    });
+    syncVisual();
   }
 
   function vtUpdateCodecAvailability() {
@@ -3132,9 +3322,11 @@
       two_pass: !!($("vt-two-pass") && $("vt-two-pass").checked
         && ($("vt-rate-mode").value === "abr" || $("vt-rate-mode").value === "bitrate")),
       generate_screenshots: $("vt-screenshots").checked,
+      visual_only: !!($("vt-visual") && $("vt-visual").checked),
       suffix: "_" + $("vt-codec").value,
       encoder_speed: encoderSpeedValue("vt-enc-speed"),
       ...gatherOutputCommon(),
+      ...tonemapPayload("vt"),
       anime: $("vt-anime") ? $("vt-anime").checked : false,
       b_frames: ($("vt-b-frames") && $("vt-b-frames").value) || "auto",
       nvenc_tune: ($("vt-nvenc-tune") && $("vt-nvenc-tune").value) || "auto",
@@ -3167,7 +3359,8 @@
       const data = await res.json();
       $("selected-info").innerHTML = data.error
         ? `<span class="bad">${escapeHtml(data.error)}</span>`
-        : `<span class="good">VMAF-Vergleich gestartet (${data.added} Auftrag/Aufträge).</span>`;
+        : `<span class="good">${$("vt-visual") && $("vt-visual").checked
+          ? "Vergleich ohne VMAF gestartet" : "VMAF-Vergleich gestartet"} (${data.added} Auftrag/Aufträge).</span>`;
     } catch (e) {
       $("selected-info").innerHTML = `<span class="bad">Fehler: ${e}</span>`;
     } finally {
@@ -3830,7 +4023,14 @@
     }
     const key = target.id + ":" + vmaf.results.length + ":" + vmaf.recommended_quality + ":" + target.status + ":" + (vmaf.keep_source ? "1" : "0") + ":" + (vmaf.pick_warning ? "w" : "");
     showCard(card, true);
-    $("vmaf-model-badge").textContent = `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+    const visual = !!vmaf.visual_only;
+    $("vmaf-model-badge").textContent = visual
+      ? `Ohne VMAF · Clip: ${vmaf.clip_seconds || 30}s`
+      : `Modell: ${vmaf.model} · Clip: ${vmaf.clip_seconds || 30}s`;
+    const nerdBtn = $("btn-vmaf-nerd");
+    if (nerdBtn) nerdBtn.hidden = visual;
+    const repickBtn = $("btn-vmaf-repick");
+    if (repickBtn) repickBtn.hidden = visual;
     setSampleWindowNote(vmaf);
 
     // Nur neu rendern, wenn sich wirklich etwas geändert hat – sonst flackert
@@ -4304,11 +4504,14 @@
       if (s && s.enc) {
         const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
-        const bits = [`VMAF ${Number(v).toFixed(1)}`];
-        if (sceneScore && sceneScore.p1 != null)
-          bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
-        if (sceneScore && sceneScore.xpsnr != null)
-          bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
+        const bits = [];
+        if (!vmaf.visual_only) {
+          bits.push(`VMAF ${Number(v).toFixed(1)}`);
+          if (sceneScore && sceneScore.p1 != null)
+            bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
+          if (sceneScore && sceneScore.xpsnr != null)
+            bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
+        }
         const ist = bitrateReport(
           x.r, (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps);
         if (ist) bits.push(ist);
@@ -4933,6 +5136,7 @@
   }
 
   function vmafBrief(r) {
+    if (state.vmafShown && state.vmafShown.visual_only) return "—";
     const spread = vmafSpread(r);
     let s = `${Number(r.vmaf).toFixed(2)}`;
     if (spread) {
@@ -4954,9 +5158,10 @@
     const html = vmaf.results.map((r, idx) => {
       const key = vmafResultKey(r);
       const bits = bitrateReport(r);
-      const more = [bits, vmafCell(r)].filter(Boolean).join("<br>");
+      const more = [bits, vmaf.visual_only ? "" : vmafCell(r)].filter(Boolean).join("<br>");
+      const missed = !vmaf.visual_only && vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue());
       return `
-      <tr class="${r.recommended ? "row-recommended" : ""} ${vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue()) ? "row-target-miss" : ""}">
+      <tr class="${r.recommended ? "row-recommended" : ""} ${missed ? "row-target-miss" : ""}">
         <td><input type="checkbox" data-vmaf-key="${escapeHtml(key)}" title="${escapeHtml(tip)}"${vmafRowOff(key) ? "" : " checked"}></td>
         <td><span class="nerd-swatch" style="background:${vmafRowColor(r, idx)}"></span>${escapeHtml(key)}
           <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details></td>
@@ -5091,6 +5296,20 @@
 
   function showVmafChart(vmaf) {
     state.vmafShown = vmaf;
+    const course = document.querySelector(".vmaf-course");
+    const pair = document.querySelector(".vmaf-graph-pair");
+    const visualNote = $("vmaf-visual-note");
+    if (vmaf && vmaf.visual_only) {
+      if (course) course.hidden = true;
+      if (pair) pair.hidden = true;
+      if (visualNote) visualNote.hidden = false;
+      const curveHintOff = $("vmaf-curve-hint");
+      if (curveHintOff) curveHintOff.hidden = true;
+      return;
+    }
+    if (course) course.hidden = false;
+    if (pair) pair.hidden = false;
+    if (visualNote) visualNote.hidden = true;
     const curveHint = $("vmaf-curve-hint");
     if (curveHint) curveHint.hidden = false;
     drawChart(vmaf);
@@ -7211,6 +7430,14 @@
     }
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
+    if (s.tonemap_engine) set("opt-tonemap-engine", s.tonemap_engine, "change");
+    if (s.tonemap_algo) set("opt-tonemap-algo", s.tonemap_algo, "change");
+    if (s.tonemap_desat !== undefined && s.tonemap_desat !== null) {
+      set("opt-tonemap-desat", s.tonemap_desat);
+    }
+    if (s.tonemap_peak !== undefined && s.tonemap_peak !== null) {
+      set("opt-tonemap-peak", s.tonemap_peak ? String(s.tonemap_peak) : "");
+    }
     if (s.dv_mode) {
       const dvSel = $("opt-dv-mode");
       if (dvSel) { dvSel.value = s.dv_mode; dvSel.dataset.userset = "1"; }
@@ -7219,6 +7446,7 @@
     set("opt-keep-chapters", s.keep_chapters);
     set("opt-keep-metadata", s.keep_metadata);
     set("opt-denoise", s.denoise, "change");
+    if (s.deband) set("opt-deband", s.deband, "change");
     set("opt-sharpen", s.sharpen || "off", "change");
     set("opt-grain", s.grain || "off", "change");
     set("opt-deinterlace", s.deinterlace || "auto", "change");
@@ -7234,6 +7462,7 @@
       set("opt-keyint", String(s.keyint_sec));
     }
     set("opt-film-grain", s.film_grain);
+    if (s.svt_look) set("opt-svt-look", s.svt_look, "change");
     set("opt-two-pass", s.two_pass);
     if (s.mobile_copy !== undefined) set("opt-mobile-copy", s.mobile_copy);
     if (s.mobile_height) set("opt-mobile-height", s.mobile_height);
@@ -9451,6 +9680,9 @@
       rate_mode: "cq",
       anime: $("st-anime") ? $("st-anime").checked : false,
       dynamik: $("st-dynamik") ? $("st-dynamik").value : "auto",
+      ...tonemapPayload("st"),
+      deband: $("st-deband") ? $("st-deband").value : "off",
+      svt_look: $("st-svt-look") ? $("st-svt-look").value : "standard",
       audio_languages: $("st-audio-langs") ? $("st-audio-langs").value.trim() : "",
       subtitle_languages: $("st-sub-langs") ? $("st-sub-langs").value.trim() : "",
       remux_only: $("st-remux-only") ? $("st-remux-only").checked : false,
@@ -12189,6 +12421,7 @@
     initVmafP1Gap();
     initEncoderSpeed();
     initEncoderBench();
+    initTonemap();
     initGlobalSearch();
     const sizeT = $("opt-size-target");
     if (sizeT) sizeT.addEventListener("change", refreshSizeTargetHint);

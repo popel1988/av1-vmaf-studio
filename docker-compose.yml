@@ -48,7 +48,7 @@ services:
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics
       # This image is based on CUDA 12.6 (Ubuntu 24.04). If the host Nvidia
       # driver is older than that runtime, the nvidia-container-toolkit may
       # refuse to start with a CUDA version error. Uncomment the next line to

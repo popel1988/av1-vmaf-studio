@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -230,6 +231,7 @@ _state: dict = {
     "rows": [],
     "recommendation": None,
     "error": "",
+    "mode": "vmaf",
 }
 
 
@@ -573,7 +575,8 @@ def start_bench(cfg: dict) -> Optional[str]:
         if _state.get("running"):
             return "Es läuft bereits ein Test oder Download."
         _state.update(running=True, phase="bench", message="Start …",
-                      percent=0, rows=[], recommendation=None, error="")
+                      percent=0, rows=[], recommendation=None, error="",
+                      mode=str(cfg.get("mode") or "vmaf"))
         _cancel.clear()
         global _thread
         _thread = threading.Thread(target=_run_bench, args=(cfg,), daemon=True)
@@ -595,6 +598,121 @@ def _resolve_extras(paths: list[str]) -> list[dict]:
             "why": "Eigene Datei aus der Bibliothek",
         })
     return out
+
+
+_SPEED_X = re.compile(r"([\d.]+)x")
+
+
+def _speed_one(
+    info, job: dict, platform: str, codec: str, speed: str,
+    rate_mode: str, value: int, clip_seconds: int,
+    b_frames: str, nvenc_tune: str, aq_strength: int, keyint_sec: int,
+) -> dict:
+    """Ein Ausschnitt, ohne VMAF. Liefert Encode-Zeit, fps und Echtzeitfaktor."""
+    from .encoder import EncodeRunner, build_encode_cmd
+
+    length = float(clip_seconds)
+    dur = float(getattr(info, "duration", 0) or 0)
+    start = 0.0
+    if dur > length + 1:
+        start = max(0.0, (dur - length) / 2.0)
+    elif dur > 1:
+        length = dur
+    work = config.WORK_DIR / "encoder_bench_speed"
+    work.mkdir(parents=True, exist_ok=True)
+    out = work / f"{job['id']}_{speed}.mkv"
+    point = rate_mode in ("abr", "bitrate")
+    cmd = build_encode_cmd(
+        info, out, platform, codec,
+        28 if point else int(value),
+        None, False,
+        duration_limit=length,
+        start_at=start if start > 0 else None,
+        rate_mode=rate_mode,
+        bitrate_kbps=int(value) if point else None,
+        include_progress=True,
+        audio_mode="none",
+        preserve_hdr=bool(getattr(info, "is_hdr", False)),
+        encoder_speed=speed,
+        b_frames=b_frames,
+        nvenc_tune=nvenc_tune,
+        aq_strength=aq_strength,
+        keyint_sec=keyint_sec,
+    )
+    last_fps = 0.0
+    last_speed = ""
+    runner = EncodeRunner()
+
+    def on_progress(prog) -> None:
+        nonlocal last_fps, last_speed
+        if prog.fps:
+            last_fps = float(prog.fps)
+        if prog.speed:
+            last_speed = str(prog.speed)
+        if _cancel.is_set():
+            runner.cancel()
+
+    runner.on_progress = on_progress
+    t0 = time.time()
+    code, err = 1, ""
+    size = 0
+    try:
+        code, err = runner.run(cmd, length)
+        if out.is_file():
+            size = out.stat().st_size
+    finally:
+        try:
+            if out.is_file():
+                out.unlink()
+        except OSError:
+            pass
+    elapsed = round(time.time() - t0, 2)
+    base = {
+        "clip_id": job["id"], "clip": job["title"], "kind": job["kind"],
+        "speed": speed, "mode": "speed", "platform": platform, "codec": codec,
+        "rate_mode": rate_mode, "value": int(value), "seconds": elapsed,
+    }
+    if _cancel.is_set():
+        base["cancelled"] = True
+        return base
+    if code != 0 or size <= 0:
+        tail = (err or "").strip().splitlines()
+        msg = tail[-1] if tail else f"Encode fehlgeschlagen (Code {code})"
+        base["error"] = msg[:240]
+        return base
+    realtime = 0.0
+    match = _SPEED_X.search(last_speed or "")
+    if match:
+        realtime = round(float(match.group(1)), 2)
+    elif elapsed > 0 and length > 0:
+        realtime = round(length / elapsed, 2)
+    fps = round(last_fps, 1) if last_fps else 0.0
+    if not fps and elapsed > 0 and getattr(info, "fps", 0) and length:
+        fps = round((float(info.fps) * length) / elapsed, 1)
+    base.update({
+        "fps": fps,
+        "realtime": realtime,
+        "size_bytes": size,
+        "size_human": ff.human_size(size),
+    })
+    return base
+
+
+def _recommend_speed(rows: list[dict], enc: str) -> dict:
+    ok = [r for r in rows if r.get("realtime") and r.get("speed") and not r.get("error")]
+    if not ok:
+        return {"reason": "Kein abgeschlossener Geschwindigkeitslauf."}
+    best = max(ok, key=lambda r: float(r["realtime"]))
+    label = speed_label(enc, str(best["speed"])) if enc else str(best["speed"])
+    fps = best.get("fps") or 0
+    rt = best.get("realtime") or 0
+    return {
+        "reason": (
+            f"Schnellste Stufe in diesem Lauf: {label}, "
+            f"{rt:g}× Echtzeit, {fps:g} Bilder/s. "
+            "Das ist eine reine Zeitmessung, keine Qualitätsvorgabe."
+        ),
+    }
 
 
 def _run_bench(cfg: dict) -> None:
@@ -645,6 +763,14 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
     except (TypeError, ValueError):
         aq_strength = 8
     keyint_sec = ff.normalize_keyint_sec(cfg.get("keyint_sec", 0))
+    mode = str(cfg.get("mode") or "vmaf")
+    if mode not in ("vmaf", "speed"):
+        mode = "vmaf"
+    if mode == "speed":
+        values = values[:1]
+        samples = 1
+        anime = False
+    _set(mode=mode)
 
     jobs: list[dict] = []
     for cid in cfg.get("clip_ids") or []:
@@ -693,7 +819,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
         if info is None:
             rows.append({
                 "clip_id": job["id"], "clip": job["title"], "kind": job["kind"],
-                "error": "ffprobe fehlgeschlagen",
+                "mode": mode, "error": "ffprobe fehlgeschlagen",
             })
             done += len(speeds)
             continue
@@ -704,6 +830,17 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
             done += 1
             _set(percent=round((done - 1) / total * 100, 1),
                  message=f"{job['title']} · {speed} ({done}/{total}) …")
+            if mode == "speed":
+                row = _speed_one(
+                    info, job, platform, codec, speed, rate_mode, values[0],
+                    clip_seconds, b_frames, nvenc_tune, aq_strength, keyint_sec,
+                )
+                if row.get("cancelled") or _cancel.is_set():
+                    _set(running=False, phase="idle", message="Abgebrochen.", percent=0)
+                    return
+                rows.append(row)
+                _set(rows=list(rows), percent=round(done / total * 100, 1))
+                continue
             opts = vmaf_mod.VmafOptions(
                 rate_mode=rate_mode,
                 test_values=list(values),
@@ -746,6 +883,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                     "clip_id": job["id"],
                     "clip": job["title"],
                     "kind": job["kind"],
+                    "mode": "vmaf",
                     "speed": speed,
                     "rate_mode": r.rate_mode,
                     "value": r.value,
@@ -775,7 +913,10 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 })
             _set(rows=list(rows), percent=round(done / total * 100, 1))
 
-    rec = _recommend(rows, speeds, values[0] if values else 28, enc)
+    if mode == "speed":
+        rec = _recommend_speed(rows, enc)
+    else:
+        rec = _recommend(rows, speeds, values[0] if values else 28, enc)
     payload = {
         "rows": rows,
         "recommendation": rec,
@@ -787,6 +928,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
         "speeds": speeds,
         "clip_seconds": clip_seconds,
         "samples": samples,
+        "mode": mode,
         "finished_at": time.time(),
     }
     try:

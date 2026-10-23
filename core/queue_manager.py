@@ -20,7 +20,11 @@ from typing import Optional
 from . import config
 from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
-from .encoder import EncodeProgress, EncodeRunner, build_encode_cmd
+from .encoder import (
+    EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, build_encode_cmd,
+    normalize_deband, normalize_svt_look, normalize_tonemap_algo,
+    normalize_tonemap_desat, normalize_tonemap_engine, normalize_tonemap_peak,
+)
 from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
 
 logger = logging.getLogger("vcompress.queue")
@@ -114,6 +118,12 @@ class JobSettings:
     quality: int = 28
     target_height: Optional[int] = None
     tonemap: bool = False
+    tonemap_algo: str = "hable"     # hable | bt2390 | reinhard | mobius | gamma | clip | linear
+    tonemap_desat: float = 0.0      # 0 = Farben in den Spitzen behalten
+    tonemap_peak: float = 0.0       # 0 = Peak aus den Metadaten, sonst Nits
+    tonemap_engine: str = "cpu"     # cpu | libplacebo
+    deband: str = "off"             # off | light | medium | strong
+    svt_look: str = "standard"      # standard | detail (nur CPU-AV1)
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
     preserve_dv: bool = False        # Dolby-Vision-RPU nach Encode re-injizieren (HEVC 8.1 / AV1 10.1)
     keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
@@ -176,6 +186,7 @@ class JobSettings:
     scene_min_pct: int = 10        # ruhige Szene mindestens so viel % vom Median
     credits_at: float = 0.0        # Filmzeit (s), ab der keine Testszenen mehr liegen
     generate_screenshots: bool = True
+    visual_only: bool = False      # Testclips ohne libvmaf, Vergleich im A/B-Player
     post_processing: str = "keep"
     container: str = "auto"        # auto | mkv | mp4 (Ausgabe-Container)
     suffix: str = "_av1"
@@ -986,7 +997,8 @@ class QueueManager:
             do_vmaf = s.vmaf_check and item.group_id not in self._group_quality
         if do_vmaf:
             item.status = STATUS_ANALYZING
-            item.message = "VMAF-Analyse läuft …"
+            item.message = ("Testclips ohne VMAF …" if s.visual_only
+                            else "VMAF-Analyse läuft …")
             sample_starts = []
             sample_windows = []
             if s.sample_mode == "bitrate":
@@ -1016,7 +1028,8 @@ class QueueManager:
                 test_values=list(s.test_values),
                 clip_seconds=s.clip_seconds,
                 samples=s.samples,
-                generate_screenshots=s.generate_screenshots,
+                generate_screenshots=s.generate_screenshots or s.visual_only,
+                visual_only=s.visual_only,
                 item_id=item.id,
                 session_name=_session_name(item),
                 source_title=item.title,
@@ -1044,6 +1057,12 @@ class QueueManager:
                     b_frames=getattr(s, "b_frames", "auto") or "auto",
                     keyint_sec=getattr(s, "keyint_sec", 0) or 0,
                     nvenc_tune=getattr(s, "nvenc_tune", "auto") or "auto",
+                    tonemap_algo=s.tonemap_algo,
+                    tonemap_desat=s.tonemap_desat,
+                    tonemap_peak=s.tonemap_peak,
+                    tonemap_engine=s.tonemap_engine,
+                    deband=s.deband,
+                    svt_look=s.svt_look,
                     opts=vmaf_opts,
                     status=lambda m: setattr(item, "message", m),
                     cancelled=lambda: item.id in self._cancel_ids,
@@ -1273,6 +1292,12 @@ class QueueManager:
             "b_frames": getattr(s, "b_frames", "auto") or "auto",
             "nvenc_tune": getattr(s, "nvenc_tune", "auto") or "auto",
             "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
+            "tonemap_algo": s.tonemap_algo,
+            "tonemap_desat": s.tonemap_desat,
+            "tonemap_peak": s.tonemap_peak,
+            "tonemap_engine": s.tonemap_engine,
+            "deband": s.deband,
+            "svt_look": s.svt_look,
             "force_10bit": s.anime,
             "crop": item.crop,
             "audio_mode": s.audio_mode,
@@ -1686,6 +1711,12 @@ class QueueManager:
             "b_frames": getattr(s, "b_frames", "auto") or "auto",
             "nvenc_tune": getattr(s, "nvenc_tune", "auto") or "auto",
             "keyint_sec": getattr(s, "keyint_sec", 0) or 0,
+            "tonemap_algo": s.tonemap_algo,
+            "tonemap_desat": s.tonemap_desat,
+            "tonemap_peak": s.tonemap_peak,
+            "tonemap_engine": s.tonemap_engine,
+            "deband": s.deband,
+            "svt_look": s.svt_look,
         }
         mobile_path = _mobile_output_path(item, out_path)
         if mobile_path is not None:
@@ -1771,6 +1802,11 @@ class QueueManager:
                 samples=min(3, max(1, s.samples)),
                 clip_seconds=config.VERIFY_CLIP_SECONDS,
                 anime=s.anime, crop=item.crop,
+                tonemap_algo=s.tonemap_algo,
+                tonemap_desat=s.tonemap_desat,
+                tonemap_peak=s.tonemap_peak,
+                tonemap_engine=s.tonemap_engine,
+                platform=s.platform,
             )
             if score is not None:
                 logger.info("Guardrail-VMAF %.2f (%s)", score, item.title)
@@ -1923,7 +1959,6 @@ class QueueManager:
             logger.warning("Integritäts-Check fehlgeschlagen (%s): %s",
                            item.title, msg)
 
-    @staticmethod
     def _vmaf_chose_quality(self, item: QueueItem, s: "JobSettings") -> bool:
         """True, wenn die Qualität aus einer VMAF-Empfehlung stammt (auch Folgedateien)."""
         if s.vmaf_check or float(s.target_vmaf or 0) > 0:
@@ -2145,6 +2180,12 @@ def build_job_settings(d: dict) -> JobSettings:
         quality=int(d.get("quality", 28) or 28),
         target_height=d.get("target_height"),
         tonemap=tonemap,
+        tonemap_algo=normalize_tonemap_algo(d.get("tonemap_algo", "hable")),
+        tonemap_desat=normalize_tonemap_desat(d.get("tonemap_desat", 0)),
+        tonemap_peak=normalize_tonemap_peak(d.get("tonemap_peak", 0)),
+        tonemap_engine=normalize_tonemap_engine(d.get("tonemap_engine", "cpu")),
+        deband=normalize_deband(d.get("deband", "off")),
+        svt_look=normalize_svt_look(d.get("svt_look", "standard")),
         preserve_hdr=preserve_hdr,
         preserve_dv=preserve_dv,
         keep_subtitles=bool(d.get("keep_subtitles", True)),
@@ -2191,6 +2232,7 @@ def build_job_settings(d: dict) -> JobSettings:
         scene_min_pct=max(5, min(60, int(d.get("scene_min_pct", 10) or 10))),
         credits_at=max(0.0, min(48 * 3600.0, float(d.get("credits_at", 0) or 0))),
         generate_screenshots=bool(d.get("generate_screenshots", True)),
+        visual_only=bool(d.get("visual_only", False)),
         post_processing=d.get("post_processing", "keep"),
         container=d.get("container", "auto") if d.get("container") in ("mkv", "mp4") else "auto",
         suffix=d.get("suffix", "_" + codec),
@@ -2404,7 +2446,18 @@ def _describe_dynamic(s: JobSettings) -> str:
     if getattr(s, "preserve_hdr", False):
         return "HDR10/HLG erhalten"
     if getattr(s, "tonemap", False):
-        return "HDR→SDR (Tonemapping)"
+        name = TONEMAP_ALGO_LABELS.get(getattr(s, "tonemap_algo", "hable"), "Hable")
+        extra = []
+        desat = float(getattr(s, "tonemap_desat", 0) or 0)
+        peak = float(getattr(s, "tonemap_peak", 0) or 0)
+        if desat:
+            extra.append(f"Entsättigung {desat:g}")
+        if peak:
+            extra.append(f"Peak {peak:g} nits")
+        if getattr(s, "tonemap_engine", "cpu") == "libplacebo":
+            extra.append("libplacebo")
+        tail = f", {', '.join(extra)}" if extra else ""
+        return f"HDR→SDR ({name}{tail})"
     return "unverändert (SDR / keine HDR-Behandlung)"
 
 

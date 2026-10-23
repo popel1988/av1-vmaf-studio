@@ -21,7 +21,7 @@ FROM ${CUDA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics \
     PYTHONUNBUFFERED=1 \
     MEDIA_DIR=/media \
     VMAF_MODEL_DIR=/usr/local/share/model

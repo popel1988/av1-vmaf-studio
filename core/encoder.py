@@ -15,12 +15,139 @@ from typing import Callable, Optional
 from . import ffmpeg_utils as ff
 from .ffmpeg_utils import VideoInfo
 
-# Standard-Tonemapping-Kette HDR (PQ/HLG) -> SDR (BT.709), Software.
-_TONEMAP_CHAIN = (
-    "zscale=t=linear:npl=100,format=gbrpf32le,"
-    "zscale=p=bt709,tonemap=tonemap=hable:desat=0,"
-    "zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
-)
+# Kurven des Software-Filters ``tonemap`` in diesem FFmpeg. Hable bleibt die
+# Vorgabe. BT.2390 kennt ``tonemap_opencl`` nicht, der CPU-Filter schon.
+_TONEMAP_ALGOS = ("hable", "bt2390", "reinhard", "mobius", "gamma", "clip", "linear")
+TONEMAP_ALGO_LABELS = {
+    "hable": "Hable",
+    "bt2390": "BT.2390",
+    "reinhard": "Reinhard",
+    "mobius": "Mobius",
+    "gamma": "Gamma",
+    "clip": "Clip",
+    "linear": "Linear",
+}
+
+
+def normalize_tonemap_algo(value: str) -> str:
+    v = str(value or "hable").strip().lower()
+    return v if v in _TONEMAP_ALGOS else "hable"
+
+
+def normalize_tonemap_desat(value) -> float:
+    """0 lässt die Farben in den Spitzen stehen. Obergrenze 2."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if v != v:
+        return 0.0
+    return round(max(0.0, min(2.0, v)), 2)
+
+
+def normalize_tonemap_peak(value) -> float:
+    """0 heißt: Peak aus den Metadaten. Sonst Nits, gedeckelt bei 10000."""
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if v != v or v <= 0:
+        return 0.0
+    return round(min(10000.0, v), 1)
+
+
+def tonemap_chain(algo: str = "hable", desat: float = 0.0, peak: float = 0.0) -> str:
+    """HDR (PQ/HLG) -> SDR (BT.709) auf der CPU. NVIDIA encodiert danach."""
+    algo = normalize_tonemap_algo(algo)
+    desat = normalize_tonemap_desat(desat)
+    peak = normalize_tonemap_peak(peak)
+    tone = f"tonemap=tonemap={algo}:desat={desat:g}"
+    if peak > 0:
+        tone += f":peak={peak:g}"
+    return (
+        "zscale=t=linear:npl=100,format=gbrpf32le,"
+        f"zscale=p=bt709,{tone},"
+        "zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+    )
+
+
+# Bisherige Kette: Hable, keine Entsättigung, Peak aus den Metadaten.
+_TONEMAP_CHAIN = tonemap_chain()
+
+_TONEMAP_ENGINES = ("cpu", "libplacebo")
+_PLACEBO_CURVE = {
+    "hable": "hable",
+    "bt2390": "bt.2390",
+    "reinhard": "reinhard",
+    "mobius": "mobius",
+    "gamma": "gamma",
+    "clip": "clip",
+    "linear": "linear",
+}
+# gradfun: Stärke:Radius. Wirkt auf SDR-Bilder, auch ohne Tonemap.
+_DEBAND = {
+    "light": "gradfun=1.2:16",
+    "medium": "gradfun=1.6:16",
+    "strong": "gradfun=2.0:16",
+}
+_SVT_LOOKS = ("standard", "detail")
+
+
+def normalize_tonemap_engine(value: str) -> str:
+    v = str(value or "cpu").strip().lower()
+    return v if v in _TONEMAP_ENGINES else "cpu"
+
+
+def tonemap_engine_for(engine: str, platform: str) -> str:
+    """libplacebo nur auf CPU und NVIDIA. Intel/AMD behalten die CPU-Kurve."""
+    engine = normalize_tonemap_engine(engine)
+    if engine == "libplacebo" and (platform or "cpu") not in ("cpu", "nvidia"):
+        return "cpu"
+    return engine
+
+
+def normalize_deband(value: str) -> str:
+    v = str(value or "off").strip().lower()
+    return v if v in _DEBAND else "off"
+
+
+def normalize_svt_look(value: str) -> str:
+    v = str(value or "standard").strip().lower()
+    return v if v in _SVT_LOOKS else "standard"
+
+
+def tonemap_placebo(algo: str) -> str:
+    """HDR nach SDR auf Vulkan. Peak kommt aus den Metadaten, Bild für Bild."""
+    curve = _PLACEBO_CURVE[normalize_tonemap_algo(algo)]
+    return (
+        f"libplacebo=tonemapping={curve}:colorspace=bt709"
+        ":color_primaries=bt709:color_trc=bt709:range=limited"
+        ":format=yuv420p:peak_detect=1"
+    )
+
+
+def svt_param_string(film_grain: int = 0, look: str = "standard",
+                     keep_hdr: bool = False) -> str:
+    """Mainline-SVT. ``detail`` nutzt Parameter, die SVT-AV1-HDR in die Hauptlinie gebracht hat.
+
+    Tune 6, die PQ-Kurve 3 und ``--noise`` gibt es nur im Fork, nicht hier.
+    """
+    parts = ["tune=0"]
+    if normalize_svt_look(look) == "detail":
+        parts += [
+            "enable-variance-boost=1",
+            "variance-boost-strength=2",
+            "ac-bias=1",
+            "sharpness=1",
+            "tf-strength=1",
+        ]
+        if keep_hdr:
+            parts.append("luminance-qp-bias=20")
+    grain = max(0, min(50, int(film_grain or 0)))
+    if grain > 0:
+        parts.append(f"film-grain={grain}")
+        parts.append("film-grain-denoise=0")
+    return ":".join(parts)
 
 # Denoise-Stufen (hqdn3d: luma_spatial:chroma_spatial:luma_tmp:chroma_tmp)
 _DENOISE = {
@@ -70,6 +197,11 @@ def build_video_filters(
     deinterlace: str = "auto",
     force_10bit: bool = False,
     crop: str = "",
+    tonemap_algo: str = "hable",
+    tonemap_desat: float = 0.0,
+    tonemap_peak: float = 0.0,
+    tonemap_engine: str = "cpu",
+    deband: str = "off",
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
@@ -106,8 +238,16 @@ def build_video_filters(
     if crop:
         filters.append(f"crop={crop}")
 
+    engine = tonemap_engine_for(tonemap_engine, platform)
     if tonemap and info.is_hdr:
-        filters.append(_TONEMAP_CHAIN)
+        if engine == "libplacebo":
+            filters.append(tonemap_placebo(tonemap_algo))
+        else:
+            filters.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
+
+    deband_f = _DEBAND.get(normalize_deband(deband), "")
+    if deband_f:
+        filters.append(deband_f)
 
     if denoise in _DENOISE:
         filters.append(_DENOISE[denoise])
@@ -290,6 +430,12 @@ def build_encode_cmd(
     keyint_sec: int = 0,
     nvenc_tune: str = "auto",
     mobile: Optional[dict] = None,
+    tonemap_algo: str = "hable",
+    tonemap_desat: float = 0.0,
+    tonemap_peak: float = 0.0,
+    tonemap_engine: str = "cpu",
+    deband: str = "off",
+    svt_look: str = "standard",
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
 
@@ -310,8 +456,9 @@ def build_encode_cmd(
     deint_on = bool(deinterlace_filter(deinterlace, bool(getattr(info, "interlaced", False))))
     # Die Mobile-Fassung braucht Software-Filter (Tonemap/Scale) und damit
     # Frames im RAM; eine reine CUDA-Pipeline kommt dann nicht in Frage.
+    deband_on = normalize_deband(deband) in _DEBAND
     software_filters = (denoise_on or sharpen_on or grain_on or deint_on
-                        or bool(crop) or bool(mobile))
+                        or bool(crop) or bool(mobile) or deband_on)
     nvidia_cuda_frames = False
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
@@ -341,6 +488,11 @@ def build_encode_cmd(
                 "-init_hw_device", "qsv=qs@va",
                 "-filter_hw_device", "qs"]
 
+    mobile_tonemap = bool(mobile) and info.is_hdr
+    if (tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
+            and info.is_hdr and (tonemap or mobile_tonemap)):
+        cmd += ["-init_hw_device", "vulkan"]
+
     if start_at is not None:
         cmd += ["-ss", str(start_at)]
 
@@ -353,7 +505,10 @@ def build_encode_cmd(
                              nvidia_cuda_frames=nvidia_cuda_frames,
                              preserve_hdr=keep_hdr, denoise=denoise,
                              sharpen=sharpen, grain=grain, deinterlace=deinterlace,
-                             force_10bit=ten_bit, crop=crop)
+                             force_10bit=ten_bit, crop=crop,
+                             tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
+                             tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
+                             deband=deband)
     tonemapped = bool(tonemap and info.is_hdr and not keep_hdr)
     # setparams ändert keine Helligkeit, schreibt die Kennung aber in den Frame.
     # NVENC liest die oft von dort und setzt sonst video_full_range_flag.
@@ -387,9 +542,7 @@ def build_encode_cmd(
         cmd += color_output_args(info, tonemapped=tonemapped, keep_hdr=False)
 
     if enc == "libsvtav1":
-        svt = "tune=0"
-        if film_grain > 0:
-            svt += f":film-grain={int(film_grain)}:film-grain-denoise=0"
+        svt = svt_param_string(film_grain, svt_look, keep_hdr=keep_hdr)
         cmd += ff.encoder_preset_args(enc, encoder_speed)
         cmd += ["-svtav1-params", svt]
         # Dolby Vision (Profil 10.1) nativ einbetten: FFmpeg liest die DV-RPU der
@@ -475,13 +628,21 @@ def build_encode_cmd(
         cmd += [str(output)]
     if mobile and pass_num != 1:
         cmd += mobile_output_args(info, platform, mobile, deinterlace=deinterlace,
-                                  crop=crop, keep_chapters=keep_chapters)
+                                  crop=crop, keep_chapters=keep_chapters,
+                                  tonemap_algo=tonemap_algo,
+                                  tonemap_desat=tonemap_desat,
+                                  tonemap_peak=tonemap_peak,
+                                  tonemap_engine=tonemap_engine,
+                                  deband=deband)
     return cmd
 
 
 def mobile_output_args(info: VideoInfo, platform: str, mobile: dict, *,
                        deinterlace: str = "auto", crop: str = "",
-                       keep_chapters: bool = True) -> list[str]:
+                       keep_chapters: bool = True,
+                       tonemap_algo: str = "hable", tonemap_desat: float = 0.0,
+                       tonemap_peak: float = 0.0, tonemap_engine: str = "cpu",
+                       deband: str = "off") -> list[str]:
     """Zweite Ausgabe am selben Input: H.264, 8-bit SDR, AAC-Stereo, MP4.
 
     Ausgabeoptionen (``-vf``, ``-c:v``, ``-map``) gelten in FFmpeg je Ausgabedatei;
@@ -494,7 +655,10 @@ def mobile_output_args(info: VideoInfo, platform: str, mobile: dict, *,
     # Tonemap bei HDR-Quellen immer (H.264 fürs Handy ist SDR), 8-bit, kein 10-bit.
     vf = build_video_filters(info, platform, height, True,
                              nvidia_cuda_frames=False, preserve_hdr=False,
-                             deinterlace=deinterlace, force_10bit=False, crop=crop)
+                             deinterlace=deinterlace, force_10bit=False, crop=crop,
+                             tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
+                             tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
+                             deband=deband)
     prim, trc, space, rng = _color_tuple(
         info, tonemapped=bool(info.is_hdr), keep_hdr=False)
     sp = _setparams(prim, trc, space, rng)

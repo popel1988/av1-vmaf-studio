@@ -577,6 +577,39 @@
     "Zielauflösung": "Target resolution",
     "Original beibehalten": "Keep original",
     "HDR-Behandlung": "HDR handling",
+    "Tonemap-Kurve": "Tone-map curve",
+    "Hable (bisher, Mitten heller)": "Hable (previous, brighter midtones)",
+    "BT.2390 (Broadcast)": "BT.2390 (broadcast)",
+    "Clip (hart abschneiden)": "Clip (hard cut)",
+    "Entsättigung der Spitzen:": "Highlight desaturation:",
+    "Quell-Peak (nits)": "Source peak (nits)",
+    "aus Metadaten": "from metadata",
+    "Tonemap-Engine": "Tone-map engine",
+    "CPU (zscale + tonemap)": "CPU (zscale + tonemap)",
+    "libplacebo (Vulkan)": "libplacebo (Vulkan)",
+    "CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.":
+      "CPU filters zscale and tonemap. libplacebo runs on Vulkan and reads the peak frame by frame. Intel and AMD stay on the CPU curve.",
+    "Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.":
+      "Curve from HDR to SDR. Hable is the previous default and lifts the midtones. BT.2390 stays closer to the HDR brightness.",
+    "Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.":
+      "Pulls color out of the brightest spots toward white. 0 keeps the colors.",
+    "Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.":
+      "Source highlight peak in nits. Empty means: from the file metadata.",
+    "Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.":
+      "The same curve for the encode, the mobile copy, and the VMAF reference. The CPU runs zscale and tonemap. libplacebo runs on Vulkan, and peak and desaturation do not apply then.",
+    "Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg.":
+      "Applies to every file converted to SDR, including auto for Dolby Vision profile 5. The same curve in the VMAF tests. libplacebo skips peak and desaturation.",
+    "Deband": "Deband",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe. Der VMAF-Vergleich übernimmt diese Stufe von hier.":
+      "Smooths bands in skies and gradients. Off is the default. The VMAF comparison takes this level from here.",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe.":
+      "Smooths bands in skies and gradients. Off is the default.",
+    "SVT-Look": "SVT look",
+    "Detail (mehr Feinstruktur)": "Detail (more fine structure)",
+    "Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.":
+      "CPU AV1 only. Detail lifts fine structure. The encoder stays the bundled SVT, not the SVT-AV1-HDR fork.",
+    "Nur AV1 auf der CPU. Standard ist die bisherige Vorgabe. Der VMAF-Vergleich übernimmt den Look von hier.":
+      "CPU AV1 only. Standard is the previous default. The VMAF comparison takes the look from here.",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (tone mapping)",
     "HDR beibehalten (10-bit)": "Keep HDR (10-bit)",
     "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
@@ -765,6 +798,14 @@
       "All encoders available on this system. More encoders = longer comparison.",
     "Screenshots für optischen Vergleich erstellen": "Create screenshots for visual comparison",
     "Screenshots für optischen Vergleich": "Screenshots for visual comparison",
+    "Nur Clips, ohne VMAF": "Clips only, no VMAF",
+    "Encodiert die Testclips und lässt die Messung weg. In der Szenengalerie zwei Bilder wählen und im A/B-Player vergleichen.":
+      "Encodes the test clips and skips the measurement. Pick two stills in the scene gallery and compare them in the A/B player.",
+    "Ohne VMAF. Die Testclips liegen in der Galerie. Zwei auswählen und im A/B-Player abspielen.":
+      "No VMAF. The test clips are in the gallery. Select two and play them in the A/B player.",
+    "Ohne VMAF": "No VMAF",
+    "Vergleich ohne VMAF gestartet": "Comparison without VMAF started",
+    "Testclips ohne VMAF …": "Test clips without VMAF …",
     "VMAF-Vergleich starten": "Start VMAF comparison",
     "VMAF-Analyse & Größenprognose": "VMAF Analysis & Size Prediction",
     "Aktuelle Analyse": "Current analysis",
@@ -1492,6 +1533,10 @@
       "SDR is a normal TV/monitor picture (limited contrast). HDR10 has static metadata for the whole file (MaxCLL/MaxFALL) and 10-bit PQ. HLG is broadcast HDR, often without extra metadata, and is still watchable on many SDR TVs. HDR10+ adds per-scene brightness data on top of HDR10. When HDR is kept and the target is HEVC, the studio writes that data back after the encode. AV1 and H.264 keep only static HDR10.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "For HDR sources without Dolby Vision: “Keep HDR” holds 10-bit and the metadata. “Tone-mapping” converts to SDR – any display can play it, contrast is lost. VMAF tests are then tonemapped the same way so scores stay fair.",
+    "Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan. Intel und AMD bleiben bei der CPU-Kurve. Dieses FFmpeg hat keinen CUDA-Tonemap. Referenz und Testclips nutzen dieselbe Kurve.":
+      "You set the tone-mapping curve in Encoding, the VMAF comparison, and the Super Tool. Hable is the previous default and lifts the midtones. BT.2390 stays closer to the HDR brightness. Reinhard, Mobius, Gamma, Clip, and Linear are the other curves. The CPU engine runs zscale and tonemap, NVIDIA encodes afterwards. libplacebo runs the same curve on Vulkan. Intel and AMD stay on the CPU curve. This FFmpeg has no CUDA tone map. Reference and test clips use the same curve.",
+    "Deband glättet Streifen in Verläufen und steht neben dem Denoise. Der SVT-Look „Detail“ gilt nur für AV1 auf der CPU und bleibt standardmäßig aus. Das ist das mitgelieferte SVT mit ein paar Parametern aus der Hauptlinie, nicht der SVT-AV1-HDR-Fork.":
+      "Deband smooths bands in gradients and sits next to denoise. The SVT look “Detail” applies only to CPU AV1 and stays off by default. That is the bundled SVT with a few mainline parameters, not the SVT-AV1-HDR fork.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "What are Dolby Vision profiles 5, 7 and 8?",
     "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
       "Dolby Vision (DV) has a dynamic layer (RPU): brightness and colour are adjusted per scene or frame. The profile describes how that is stored in the file.",
@@ -1605,12 +1650,12 @@
       "Warning: a faster tier searches less thoroughly. The file is often larger / less bit-efficient. VMAF scores apply only to this exact tier.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Warning: much longer, especially AV1 on the CPU. Very slow can take many hours on movies. Do not combine with high parallelism.",
-    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
-      "Settings → Encoder speed includes an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "Diagnostics, under the self-test, has an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default. Speed mode encodes one excerpt per tier and reports encode time, frames per second and the realtime factor, without VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "How do I find a matching encoder speed tier?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "The encoder test under Settings downloads reference clips (fixed, free sources): ~40 s 4K excerpts of Big Buck Bunny, Sintel, Tears of Steel and Charge via Wikimedia, plus 4K material at 30/50/60 fps (NASA, Menger, nature) and a Jellyfin UHD test file at about 150 Mbps (CC-BY-SA, Gnattu). The old 10-second 1080p demos are only fallbacks if a mirror is down. You can add up to four files from your library.",
+    "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "The encoder test under Diagnostics downloads reference clips (fixed, free sources): ~40 s 4K excerpts of Big Buck Bunny, Sintel, Tears of Steel and Charge via Wikimedia, plus 4K material at 30/50/60 fps (NASA, Menger, nature) and a Jellyfin UHD test file at about 150 Mbps (CC-BY-SA, Gnattu). The old 10-second 1080p demos are only fallbacks if a mirror is down. You can add up to four files from your library.",
     "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
       "Finds a matching speed tier: clips of different picture types (4K animation, film CGI, live action, motion, high bitrate) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources: 4K excerpts of the Blender films (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K clips at 30/50/60 fps plus Jellyfin test videos (UHD, ~150 Mbps, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animation 4K (flats, banding)",
@@ -1654,6 +1699,11 @@
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "It is a compromise hint for this exact encoder (platform × codec), not for every machine. “Very slow” is unchecked on purpose – CPU AV1 in particular can take a long time. Downloads use the allowlist only, not an arbitrary URL.",
     "Encoder-Test (VMAF)": "Encoder test (VMAF)",
+    "Encoder-Test": "Encoder test",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Measures the selected encoder on reference clips or one of your own files. VMAF compares the speed tiers by picture quality. Speed encodes one excerpt per tier and shows time, frames per second and the realtime factor, without a quality measurement.",
+    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
+      "One excerpt per speed tier, only the first entered value. The time is encode time only.",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Finds a matching speed tier: short clips of different picture types (animation, film CGI, live action, lots of motion, handheld) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":
@@ -2200,6 +2250,39 @@
     "Zielauflösung": "Resolución de destino",
     "Original beibehalten": "Mantener original",
     "HDR-Behandlung": "Tratamiento de HDR",
+    "Tonemap-Kurve": "Curva de tonos",
+    "Hable (bisher, Mitten heller)": "Hable (anterior, medios más claros)",
+    "BT.2390 (Broadcast)": "BT.2390 (broadcast)",
+    "Clip (hart abschneiden)": "Clip (corte duro)",
+    "Entsättigung der Spitzen:": "Desaturación de las luces:",
+    "Quell-Peak (nits)": "Pico de la fuente (nits)",
+    "aus Metadaten": "de los metadatos",
+    "Tonemap-Engine": "Motor de tonos",
+    "CPU (zscale + tonemap)": "CPU (zscale + tonemap)",
+    "libplacebo (Vulkan)": "libplacebo (Vulkan)",
+    "CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.":
+      "Filtros de CPU zscale y tonemap. libplacebo calcula en Vulkan y lee el pico imagen a imagen. Intel y AMD se quedan en la curva de la CPU.",
+    "Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.":
+      "Curva de HDR a SDR. Hable es el valor anterior y aclara los medios tonos. BT.2390 se queda más cerca del brillo HDR.",
+    "Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.":
+      "Quita color de las zonas más claras hacia el blanco. 0 deja los colores.",
+    "Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.":
+      "Pico de brillo de la fuente en nits. Vacío significa: desde los metadatos del archivo.",
+    "Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.":
+      "La misma curva para el encode, la copia móvil y la referencia VMAF. La CPU calcula zscale y tonemap. libplacebo calcula en Vulkan; el pico y la desaturación no se aplican entonces.",
+    "Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg.":
+      "Vale para cada archivo que se pasa a SDR, también en automático con Dolby Vision perfil 5. La misma curva en las pruebas VMAF. libplacebo omite el pico y la desaturación.",
+    "Deband": "Deband",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe. Der VMAF-Vergleich übernimmt diese Stufe von hier.":
+      "Suaviza bandas en cielos y degradados. Apagado es el valor por defecto. La comparación VMAF toma este nivel de aquí.",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe.":
+      "Suaviza bandas en cielos y degradados. Apagado es el valor por defecto.",
+    "SVT-Look": "Aspecto SVT",
+    "Detail (mehr Feinstruktur)": "Detalle (más estructura fina)",
+    "Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.":
+      "Solo AV1 en la CPU. Detalle realza la estructura fina. El codificador sigue siendo el SVT incluido, no el fork SVT-AV1-HDR.",
+    "Nur AV1 auf der CPU. Standard ist die bisherige Vorgabe. Der VMAF-Vergleich übernimmt den Look von hier.":
+      "Solo AV1 en la CPU. Estándar es el valor anterior. La comparación VMAF toma el aspecto de aquí.",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (mapeo de tonos)",
     "HDR beibehalten (10-bit)": "Mantener HDR (10 bits)",
     "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
@@ -2353,6 +2436,14 @@
     "Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.": "Todos los codificadores disponibles en este sistema. Más codificadores = comparación más larga.",
     "Screenshots für optischen Vergleich erstellen": "Crear capturas para comparación visual",
     "Screenshots für optischen Vergleich": "Capturas para comparación visual",
+    "Nur Clips, ohne VMAF": "Solo clips, sin VMAF",
+    "Encodiert die Testclips und lässt die Messung weg. In der Szenengalerie zwei Bilder wählen und im A/B-Player vergleichen.":
+      "Codifica los clips de prueba y omite la medición. Elige dos imágenes en la galería y compáralas en el reproductor A/B.",
+    "Ohne VMAF. Die Testclips liegen in der Galerie. Zwei auswählen und im A/B-Player abspielen.":
+      "Sin VMAF. Los clips de prueba están en la galería. Elige dos y reprodúcelos en el reproductor A/B.",
+    "Ohne VMAF": "Sin VMAF",
+    "Vergleich ohne VMAF gestartet": "Comparación sin VMAF iniciada",
+    "Testclips ohne VMAF …": "Clips de prueba sin VMAF …",
     "VMAF-Vergleich starten": "Iniciar comparación VMAF",
     "VMAF-Analyse & Größenprognose": "Análisis VMAF y predicción de tamaño",
     "Aktuelle Analyse": "Análisis actual",
@@ -2914,6 +3005,10 @@
       "SDR es la imagen normal de TV/monitor (contraste limitado). HDR10 tiene metadatos estáticos para todo el archivo (MaxCLL/MaxFALL) y PQ de 10 bit. HLG es HDR de emisión, a menudo sin metadatos extra, y se ve en muchos televisores SDR. HDR10+ añade datos de brillo por escena sobre HDR10. Si se mantiene el HDR y el destino es HEVC, el estudio vuelve a escribir esos datos después del encode. AV1 y H.264 conservan solo el HDR10 estático.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "En fuentes HDR sin Dolby Vision: «Mantener HDR» conserva 10 bit y los metadatos. «Tone-mapping» convierte a SDR: cualquier pantalla lo reproduce, se pierde contraste. Las pruebas VMAF se tone-mapean igual para que las puntuaciones no salgan torcidas.",
+    "Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan. Intel und AMD bleiben bei der CPU-Kurve. Dieses FFmpeg hat keinen CUDA-Tonemap. Referenz und Testclips nutzen dieselbe Kurve.":
+      "La curva del mapeo de tonos se elige en la codificación, en la comparación VMAF y en la Superherramienta. Hable es el valor anterior y aclara los medios tonos. BT.2390 se queda más cerca del brillo HDR. Reinhard, Mobius, Gamma, Clip y Linear son las demás curvas. El motor de CPU calcula zscale y tonemap, NVIDIA codifica después. libplacebo calcula la misma curva en Vulkan. Intel y AMD se quedan en la curva de la CPU. Este FFmpeg no tiene un tonemap CUDA. La referencia y los clips de prueba usan la misma curva.",
+    "Deband glättet Streifen in Verläufen und steht neben dem Denoise. Der SVT-Look „Detail“ gilt nur für AV1 auf der CPU und bleibt standardmäßig aus. Das ist das mitgelieferte SVT mit ein paar Parametern aus der Hauptlinie, nicht der SVT-AV1-HDR-Fork.":
+      "Deband suaviza bandas en degradados y está junto al denoise. El aspecto SVT «Detalle» solo vale para AV1 en la CPU y queda apagado por defecto. Es el SVT incluido con unos parámetros de la línea principal, no el fork SVT-AV1-HDR.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "¿Qué son los perfiles Dolby Vision 5, 7 y 8?",
     "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
       "Dolby Vision (DV) tiene una capa dinámica (RPU): brillo y color se ajustan por escena o fotograma. El perfil dice cómo está guardado en el archivo.",
@@ -3026,12 +3121,12 @@
       "Atención: un nivel más rápido busca menos a fondo. El archivo suele ser más grande o menos eficiente. Los valores VMAF valen solo para ese nivel.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Atención: mucho más lento, sobre todo AV1 en CPU. Muy lento puede llevar muchas horas en películas. No combinar con alta paralelidad.",
-    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
-      "En Ajustes → Encoder-Speed hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "En Diagnóstico, bajo la autocomprobación, hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna. El modo velocidad codifica un fragmento por nivel y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "¿Cómo encuentro el nivel de velocidad adecuado?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "La prueba de encoder en Ajustes descarga clips de referencia (fuentes fijas y libres): extractos 4K de ~40 s de Big Buck Bunny, Sintel, Tears of Steel y Charge vía Wikimedia, más material 4K a 30/50/60 fps (NASA, Menger, naturaleza) y un vídeo de prueba Jellyfin en UHD a unos 150 Mbit/s (CC-BY-SA, Gnattu). Las demos antiguas de 10 s en 1080p solo son reserva si un espejo falla. Puedes añadir hasta cuatro archivos de tu biblioteca.",
+    "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "La prueba de encoder en Diagnóstico descarga clips de referencia (fuentes fijas y libres): extractos 4K de ~40 s de Big Buck Bunny, Sintel, Tears of Steel y Charge vía Wikimedia, más material 4K a 30/50/60 fps (NASA, Menger, naturaleza) y un vídeo de prueba Jellyfin en UHD a unos 150 Mbit/s (CC-BY-SA, Gnattu). Las demos antiguas de 10 s en 1080p solo son reserva si un espejo falla. Puedes añadir hasta cuatro archivos de tu biblioteca.",
     "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
       "Encuentra un nivel de velocidad adecuado: clips de distintos tipos de imagen (animación 4K, CGI de cine, acción real, movimiento, alto bitrate) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres: extractos 4K de las películas Blender (Big Buck Bunny, Sintel, Tears of Steel, Charge), clips 4K a 30/50/60 fps más vídeos de prueba Jellyfin (UHD, ~150 Mbit/s, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animación 4K (planos, banding)",
@@ -3075,6 +3170,11 @@
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "Es una pista de compromiso para ese encoder concreto (plataforma × códec), no para todos los equipos. «Muy lento» no está marcado a propósito: el AV1 en CPU puede tardar mucho. Las descargas solo usan la lista permitida, no una URL arbitraria.",
     "Encoder-Test (VMAF)": "Prueba de encoder (VMAF)",
+    "Encoder-Test": "Prueba de encoder",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Mide el encoder elegido con clips de referencia o un archivo propio. VMAF compara los niveles de velocidad por calidad de imagen. Velocidad codifica un fragmento por nivel y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin medición de calidad.",
+    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
+      "Un fragmento por nivel de velocidad, solo el primer valor indicado. El tiempo es solo el de la codificación.",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Encuentra un nivel de velocidad adecuado: clips cortos de distintos tipos de imagen (animación, CGI de cine, acción real, mucho movimiento, cámara en mano) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":
@@ -3611,6 +3711,39 @@
     "Zielauflösung": "Résolution cible",
     "Original beibehalten": "Conserver l'original",
     "HDR-Behandlung": "Traitement HDR",
+    "Tonemap-Kurve": "Courbe de tone map",
+    "Hable (bisher, Mitten heller)": "Hable (précédent, tons moyens plus clairs)",
+    "BT.2390 (Broadcast)": "BT.2390 (broadcast)",
+    "Clip (hart abschneiden)": "Clip (coupure nette)",
+    "Entsättigung der Spitzen:": "Désaturation des hautes lumières :",
+    "Quell-Peak (nits)": "Pic de la source (nits)",
+    "aus Metadaten": "depuis les métadonnées",
+    "Tonemap-Engine": "Moteur de tone map",
+    "CPU (zscale + tonemap)": "CPU (zscale + tonemap)",
+    "libplacebo (Vulkan)": "libplacebo (Vulkan)",
+    "CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.":
+      "Filtres CPU zscale et tonemap. libplacebo calcule sur Vulkan et lit le pic image par image. Intel et AMD restent sur la courbe CPU.",
+    "Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.":
+      "Courbe HDR vers SDR. Hable est le réglage d'origine et éclaircit les tons moyens. BT.2390 reste plus proche de la luminosité HDR.",
+    "Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.":
+      "Retire la couleur des zones les plus claires vers le blanc. 0 garde les couleurs.",
+    "Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.":
+      "Pic de luminosité de la source en nits. Vide signifie : depuis les métadonnées du fichier.",
+    "Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.":
+      "La même courbe pour l'encodage, la copie mobile et la référence VMAF. Le CPU calcule zscale et tonemap. libplacebo calcule sur Vulkan, le pic et la désaturation ne s'appliquent alors pas.",
+    "Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg.":
+      "S'applique à chaque fichier converti en SDR, y compris l'automatique pour le Dolby Vision profil 5. La même courbe dans les tests VMAF. libplacebo ignore le pic et la désaturation.",
+    "Deband": "Deband",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe. Der VMAF-Vergleich übernimmt diese Stufe von hier.":
+      "Lisse les bandes dans les ciels et les dégradés. Désactivé est le réglage d'origine. La comparaison VMAF reprend ce niveau d'ici.",
+    "Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe.":
+      "Lisse les bandes dans les ciels et les dégradés. Désactivé est le réglage d'origine.",
+    "SVT-Look": "Look SVT",
+    "Detail (mehr Feinstruktur)": "Détail (plus de structure fine)",
+    "Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.":
+      "AV1 sur CPU seulement. Détail relève la structure fine. L'encodeur reste le SVT fourni, pas le fork SVT-AV1-HDR.",
+    "Nur AV1 auf der CPU. Standard ist die bisherige Vorgabe. Der VMAF-Vergleich übernimmt den Look von hier.":
+      "AV1 sur CPU seulement. Standard est le réglage d'origine. La comparaison VMAF reprend le look d'ici.",
     "HDR → SDR (Tone-Mapping)": "HDR → SDR (mappage tonal)",
     "HDR beibehalten (10-bit)": "Conserver le HDR (10 bits)",
     "Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein.":
@@ -3764,6 +3897,14 @@
     "Alle auf diesem System verfügbaren Encoder. Mehr Encoder = längerer Vergleich.": "Tous les encodeurs disponibles sur ce système. Plus d'encodeurs = comparaison plus longue.",
     "Screenshots für optischen Vergleich erstellen": "Créer des captures pour comparaison visuelle",
     "Screenshots für optischen Vergleich": "Captures pour comparaison visuelle",
+    "Nur Clips, ohne VMAF": "Clips seulement, sans VMAF",
+    "Encodiert die Testclips und lässt die Messung weg. In der Szenengalerie zwei Bilder wählen und im A/B-Player vergleichen.":
+      "Encode les clips de test et laisse la mesure de côté. Choisis deux images dans la galerie et compare-les dans le lecteur A/B.",
+    "Ohne VMAF. Die Testclips liegen in der Galerie. Zwei auswählen und im A/B-Player abspielen.":
+      "Sans VMAF. Les clips de test sont dans la galerie. Sélectionne-en deux et lis-les dans le lecteur A/B.",
+    "Ohne VMAF": "Sans VMAF",
+    "Vergleich ohne VMAF gestartet": "Comparaison sans VMAF lancée",
+    "Testclips ohne VMAF …": "Clips de test sans VMAF …",
     "VMAF-Vergleich starten": "Lancer la comparaison VMAF",
     "VMAF-Analyse & Größenprognose": "Analyse VMAF et prévision de taille",
     "Aktuelle Analyse": "Analyse actuelle",
@@ -4328,6 +4469,10 @@
       "Le SDR est l'image TV/moniteur normale (contraste limité). Le HDR10 a des métadonnées statiques pour tout le fichier (MaxCLL/MaxFALL) et du PQ 10 bit. Le HLG est du HDR broadcast, souvent sans métadonnées extra, encore regardable sur beaucoup de TV SDR. Le HDR10+ ajoute des données de luminosité par scène au HDR10. Si le HDR est conservé et que la cible est HEVC, le studio réécrit ces données après l'encodage. AV1 et H.264 ne gardent que le HDR10 statique.",
     "Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.":
       "Pour les sources HDR sans Dolby Vision : « Conserver le HDR » garde le 10 bit et les métadonnées. Le « tone-mapping » convertit en SDR – tout écran peut le lire, le contraste est perdu. Les tests VMAF sont alors tone-mappés de la même façon pour que les scores restent justes.",
+    "Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan. Intel und AMD bleiben bei der CPU-Kurve. Dieses FFmpeg hat keinen CUDA-Tonemap. Referenz und Testclips nutzen dieselbe Kurve.":
+      "La courbe de tone-mapping se règle dans l'encodage, la comparaison VMAF et le Super-outil. Hable est le réglage d'origine et éclaircit les tons moyens. BT.2390 reste plus proche de la luminosité HDR. Reinhard, Mobius, Gamma, Clip et Linear sont les autres courbes. Le moteur CPU calcule zscale et tonemap, NVIDIA encode ensuite. libplacebo calcule la même courbe sur Vulkan. Intel et AMD restent sur la courbe CPU. Ce FFmpeg n'a pas de tone map CUDA. La référence et les clips de test utilisent la même courbe.",
+    "Deband glättet Streifen in Verläufen und steht neben dem Denoise. Der SVT-Look „Detail“ gilt nur für AV1 auf der CPU und bleibt standardmäßig aus. Das ist das mitgelieferte SVT mit ein paar Parametern aus der Hauptlinie, nicht der SVT-AV1-HDR-Fork.":
+      "Deband lisse les bandes dans les dégradés et se place à côté du denoise. Le look SVT « Détail » ne vaut que pour l'AV1 sur CPU et reste désactivé par défaut. C'est le SVT fourni avec quelques paramètres de la ligne principale, pas le fork SVT-AV1-HDR.",
     "Was sind Dolby-Vision-Profile 5, 7 und 8?": "Que sont les profils Dolby Vision 5, 7 et 8 ?",
     "Dolby Vision (DV) hat eine dynamische Schicht (RPU): Helligkeit und Farbe werden pro Szene oder Frame nachjustiert. Das Profil sagt, wie das in der Datei liegt.":
       "Dolby Vision (DV) a une couche dynamique (RPU) : luminosité et couleur sont ajustées par scène ou image. Le profil décrit comment c'est stocké dans le fichier.",
@@ -4440,12 +4585,12 @@
       "Attention : un cran plus rapide cherche moins à fond. Le fichier est souvent plus lourd / moins efficace. Les scores VMAF ne valent que pour ce cran.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Attention : nettement plus long, surtout l'AV1 sur CPU. Très lent peut prendre des heures sur un film. Ne pas combiner avec une forte parallélisation.",
-    "Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.":
-      "Dans Paramètres → Encoder-Speed, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "Sous Diagnostic, sous l'autotest, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne. Le mode vitesse encode un extrait par cran et affiche le temps, les images par seconde et le facteur temps réel, sans VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "Comment trouver le cran de vitesse d'encodeur adapté ?",
-    "Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
-      "Le test d'encodeur dans Paramètres télécharge des clips de référence (sources fixes et libres) : extraits 4K d'environ 40 s de Big Buck Bunny, Sintel, Tears of Steel et Charge via Wikimedia, plus du 4K à 30/50/60 fps (NASA, Menger, nature) et un fichier de test Jellyfin en UHD à environ 150 Mbit/s (CC-BY-SA, Gnattu). Les anciennes démos 1080p de 10 s ne servent plus que de repli si un miroir est down. Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque.",
+    "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
+      "Le test d'encodeur sous Diagnostic télécharge des clips de référence (sources fixes et libres) : extraits 4K d'environ 40 s de Big Buck Bunny, Sintel, Tears of Steel et Charge via Wikimedia, plus du 4K à 30/50/60 fps (NASA, Menger, nature) et un fichier de test Jellyfin en UHD à environ 150 Mbit/s (CC-BY-SA, Gnattu). Les anciennes démos 1080p de 10 s ne servent plus que de repli si un miroir est down. Tu peux ajouter jusqu'à quatre fichiers de ta bibliothèque.",
     "Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge), 4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos (UHD, ~150 Mbit/s, CC-BY-SA).":
       "Trouve un cran de vitesse adapté : des clips de types d'image différents (animation 4K, CGI film, prise de vue réelle, mouvement, haut débit) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres : extraits 4K des films Blender (Big Buck Bunny, Sintel, Tears of Steel, Charge), clips 4K à 30/50/60 fps plus les vidéos de test Jellyfin (UHD, ~150 Mbit/s, CC-BY-SA).",
     "Animation 4K (Flächen, Banding)": "Animation 4K (aplats, banding)",
@@ -4489,6 +4634,11 @@
     "Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. „Sehr langsam“ ist absichtlich nicht vorausgewählt – besonders CPU-AV1 kann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.":
       "C'est un indice de compromis pour cet encodeur précis (plateforme × codec), pas pour toutes les machines. « Très lent » n'est pas coché exprès – l'AV1 CPU surtout peut durer longtemps. Les téléchargements passent uniquement par la liste autorisée, pas par une URL libre.",
     "Encoder-Test (VMAF)": "Test d'encodeur (VMAF)",
+    "Encoder-Test": "Test d'encodeur",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Mesure l'encodeur choisi sur des clips de référence ou un fichier à toi. Le VMAF compare les crans de vitesse par qualité d'image. Vitesse encode un extrait par cran et affiche le temps, les images par seconde et le facteur temps réel, sans mesure de qualité.",
+    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
+      "Un extrait par cran de vitesse, seulement la première valeur saisie. Le temps est uniquement celui de l'encodage.",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Trouve un cran de vitesse adapté : de courts clips de types d'image différents (animation, CGI film, prise de vue réelle, beaucoup de mouvement, caméra à la main) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":

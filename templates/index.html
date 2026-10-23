@@ -277,6 +277,36 @@
                     <p class="hint" id="dv-mode-hint"></p>
                   </div>
                 </div>
+                <div class="tonemap-opts" id="tonemap-opts" hidden>
+                  <div class="field">
+                    <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                    <select id="opt-tonemap-engine">
+                      <option value="cpu">CPU (zscale + tonemap)</option>
+                      <option value="libplacebo">libplacebo (Vulkan)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-tip="Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.">Tonemap-Kurve</label>
+                    <select id="opt-tonemap-algo">
+                      <option value="hable">Hable (bisher, Mitten heller)</option>
+                      <option value="bt2390">BT.2390 (Broadcast)</option>
+                      <option value="reinhard">Reinhard</option>
+                      <option value="mobius">Mobius</option>
+                      <option value="gamma">Gamma</option>
+                      <option value="clip">Clip (hart abschneiden)</option>
+                      <option value="linear">Linear</option>
+                    </select>
+                  </div>
+                  <div class="field tonemap-cpu-only">
+                    <label data-tip="Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.">Entsättigung der Spitzen: <strong id="opt-tonemap-desat-val">0,0</strong></label>
+                    <input type="range" id="opt-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+                  </div>
+                  <div class="field tonemap-cpu-only">
+                    <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
+                    <input type="number" id="opt-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
+                  </div>
+                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.</p>
+                </div>
                 <div class="field">
                   <label data-tip="CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.">Steuerungsmodus</label>
                   <select id="opt-rate-mode">
@@ -304,6 +334,15 @@
                 <div class="field">
                   <label>Rauschminderung (Denoise)</label>
                   <select id="opt-denoise">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe. Der VMAF-Vergleich übernimmt diese Stufe von hier.">Deband</label>
+                  <select id="opt-deband">
                     <option value="off">Aus</option>
                     <option value="light">Leicht</option>
                     <option value="medium">Mittel</option>
@@ -376,6 +415,14 @@
                   <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
                   <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
                   <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
+                </div>
+                <div class="field">
+                  <label data-tip="Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.">SVT-Look</label>
+                  <select id="opt-svt-look">
+                    <option value="standard">Standard</option>
+                    <option value="detail">Detail (mehr Feinstruktur)</option>
+                  </select>
+                  <p class="hint">Nur AV1 auf der CPU. Standard ist die bisherige Vorgabe. Der VMAF-Vergleich übernimmt den Look von hier.</p>
                 </div>
               </div>
               <div id="enc-vmaf-config" style="display:none;margin-top:12px">
@@ -678,8 +725,42 @@
                   <label>Vergleichsclip-Länge: <strong id="vt-clip-val">30</strong> Sek.</label>
                   <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
                 </div>
+                <div class="tonemap-opts" id="vt-tonemap-opts" hidden>
+                  <div class="field">
+                    <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                    <select id="vt-tonemap-engine">
+                      <option value="cpu">CPU (zscale + tonemap)</option>
+                      <option value="libplacebo">libplacebo (Vulkan)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-tip="Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.">Tonemap-Kurve</label>
+                    <select id="vt-tonemap-algo">
+                      <option value="hable">Hable (bisher, Mitten heller)</option>
+                      <option value="bt2390">BT.2390 (Broadcast)</option>
+                      <option value="reinhard">Reinhard</option>
+                      <option value="mobius">Mobius</option>
+                      <option value="gamma">Gamma</option>
+                      <option value="clip">Clip (hart abschneiden)</option>
+                      <option value="linear">Linear</option>
+                    </select>
+                  </div>
+                  <div class="field tonemap-cpu-only">
+                    <label data-tip="Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.">Entsättigung der Spitzen: <strong id="vt-tonemap-desat-val">0,0</strong></label>
+                    <input type="range" id="vt-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+                  </div>
+                  <div class="field tonemap-cpu-only">
+                    <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
+                    <input type="number" id="vt-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
+                  </div>
+                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.</p>
+                </div>
               </div>
               <div class="fmt-checks" style="margin-top:10px">
+                <label class="check">
+                  <input type="checkbox" id="vt-visual" />
+                  <span>Nur Clips, ohne VMAF</span>
+                </label>
                 <label class="check">
                   <input type="checkbox" id="vt-screenshots" checked />
                   <span>Screenshots für optischen Vergleich</span>
@@ -693,6 +774,7 @@
                   <span>Zwei-Pass für die Testclips</span>
                 </label>
               </div>
+              <p class="hint" id="vt-visual-hint" hidden>Encodiert die Testclips und lässt die Messung weg. In der Szenengalerie zwei Bilder wählen und im A/B-Player vergleichen.</p>
               <p class="hint">Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.</p>
             </div>
 
@@ -796,6 +878,7 @@
           </div>
           <div id="vmaf-pick-warning" class="keep-source-note" style="display:none"></div>
           <div id="vmaf-target-miss" class="keep-source-note" style="display:none"></div>
+          <p class="hint" id="vmaf-visual-note" hidden>Ohne VMAF. Die Testclips liegen in der Galerie. Zwei auswählen und im A/B-Player abspielen.</p>
           <div class="card-body vmaf-body">
             <div class="vmaf-course">
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
@@ -1365,6 +1448,54 @@
                 DV-Reinjektion (Profil 8.1) gilt nur für HEVC bzw. AV1 auf der CPU.</p>
               <p class="hint"><a href="#faq-hdr" class="faq-jump">FAQ: SDR, HDR und Dolby-Vision-Profile</a></p>
             </div>
+            <div class="tonemap-opts" id="st-tonemap-opts">
+              <div class="field">
+                <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                <select id="st-tonemap-engine">
+                  <option value="cpu">CPU (zscale + tonemap)</option>
+                  <option value="libplacebo">libplacebo (Vulkan)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-tip="Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.">Tonemap-Kurve</label>
+                <select id="st-tonemap-algo">
+                  <option value="hable">Hable (bisher, Mitten heller)</option>
+                  <option value="bt2390">BT.2390 (Broadcast)</option>
+                  <option value="reinhard">Reinhard</option>
+                  <option value="mobius">Mobius</option>
+                  <option value="gamma">Gamma</option>
+                  <option value="clip">Clip (hart abschneiden)</option>
+                  <option value="linear">Linear</option>
+                </select>
+              </div>
+              <div class="field tonemap-cpu-only">
+                <label data-tip="Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.">Entsättigung der Spitzen: <strong id="st-tonemap-desat-val">0,0</strong></label>
+                <input type="range" id="st-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+              </div>
+              <div class="field tonemap-cpu-only">
+                <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
+                <input type="number" id="st-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
+              </div>
+              <p class="hint tonemap-hint">Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg.</p>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label data-tip="Glättet Streifen in Himmel und Verläufen. Aus ist die Vorgabe.">Deband</label>
+                <select id="st-deband">
+                  <option value="off">Aus</option>
+                  <option value="light">Leicht</option>
+                  <option value="medium">Mittel</option>
+                  <option value="strong">Stark</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-tip="Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.">SVT-Look</label>
+                <select id="st-svt-look">
+                  <option value="standard">Standard</option>
+                  <option value="detail">Detail (mehr Feinstruktur)</option>
+                </select>
+              </div>
+            </div>
 
             <div class="field-row" id="st-quality-field" style="display:none">
               <div class="field">
@@ -1623,125 +1754,6 @@
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-enc-speed-save">Speichern</button>
             </div>
-
-            <div class="divider"></div>
-            <h4 class="subsection">Encoder-Test (VMAF)</h4>
-            <p class="hint">Findet eine passende Speed-Stufe: Clips unterschiedlicher Bildarten
-              (4K-Animation, Film-CGI, Live-Action, Bewegung, hohe Bitrate) werden mit allen
-              Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten
-              encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen.
-              Die Referenzclips kommen von festen, freien Quellen: 4K-Ausschnitte
-              der Blender-Filme (Big Buck Bunny, Sintel, Tears of Steel, Charge),
-              4K-Clips mit 30/50/60 fps plus Jellyfin-Testvideos
-              (UHD, ~150 Mbit/s, CC-BY-SA).
-              <a href="#faq-enc-bench" class="faq-jump">FAQ</a></p>
-
-            <div id="eb-clips" class="enc-bench-clips"></div>
-            <div class="lib-actions">
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-download">Ausgewählte Clips laden</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-add">Eigene Datei aus der Bibliothek</button>
-            </div>
-            <div id="eb-extras" class="enc-bench-extras"></div>
-
-            <div class="settings-grid">
-              <div class="field enc-bench-speeds-field">
-                <label>Speed-Stufen zum Vergleich</label>
-                <p class="hint" id="eb-speed-hint">Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.</p>
-                <div id="eb-speeds" class="enc-bench-speeds"></div>
-                <div class="lib-actions">
-                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-default">Standard (schnell / ausgewogen / langsam)</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-all">Alle Stufen</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Steuerung</label>
-                <select id="eb-rate">
-                  <option value="cq" selected>CQ / CRF / QP</option>
-                  <option value="abr">ABR (kbit/s)</option>
-                  <option value="bitrate">CBR (kbit/s)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Werte (kommagetrennt, max. 4)</label>
-                <input type="text" id="eb-values" value="24, 28, 32" placeholder="z. B. 24, 28, 32" />
-              </div>
-              <div class="field">
-                <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
-                <select id="eb-b-frames">
-                  <option value="auto">Automatisch (empfohlen)</option>
-                  <option value="off">Aus, Lookahead 32</option>
-                  <option value="short">Kurz, 2 B-Frames</option>
-                  <option value="medium">Mittel, 4 B-Frames</option>
-                  <option value="deep">Tief, 7 hierarchisch</option>
-                </select>
-              </div>
-              <div class="field">
-                <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
-                <select id="eb-nvenc-tune">
-                  <option value="auto">Automatisch (empfohlen)</option>
-                  <option value="uhq">UHQ</option>
-                  <option value="hq">HQ</option>
-                  <option value="off">Aus</option>
-                </select>
-              </div>
-              <div class="field" id="eb-aq-field">
-                <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="eb-aq-val">8</strong></label>
-                <input type="range" id="eb-aq-strength" min="1" max="15" value="8" />
-              </div>
-              <div class="field">
-                <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
-                <select id="eb-keyint">
-                  <option value="0">Automatisch</option>
-                  <option value="2">Kurz, etwa 2 Sekunden</option>
-                  <option value="5">Mittel, etwa 5 Sekunden</option>
-                  <option value="10">Lang, etwa 10 Sekunden</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>GPU / Plattform</label>
-                <select id="eb-platform">
-                  {% for p in platform_options %}
-                  <option value="{{ p.value }}">{{ p.label }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <div class="field">
-                <label>Codec</label>
-                <select id="eb-codec">
-                  <option value="av1">AV1</option>
-                  <option value="hevc">HEVC / H.265</option>
-                  <option value="h264">H.264</option>
-                  <option value="vp9">VP9 (nur CPU)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Stichproben (Szenen)</label>
-                <select id="eb-samples">
-                  {{ vmaf_sample_options("3") }}
-                </select>
-              </div>
-              <div class="field">
-                <label>Clip-Länge (Sekunden)</label>
-                <input type="number" id="eb-seconds" min="5" max="60" value="12" />
-              </div>
-            </div>
-            <label class="check"><input type="checkbox" id="eb-anime" /><span>Anime-Modus (VMAF-NEG, 10-bit)</span></label>
-            <p class="hint" id="eb-estimate"></p>
-
-            <div class="lib-actions">
-              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-start">Test starten</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-cancel" disabled>Abbrechen</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-clear" disabled>Ergebnisse leeren</button>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-apply" style="display:none">Empfehlung übernehmen und speichern</button>
-            </div>
-            <div class="enc-bench-progress">
-              <div class="bar-track"><div class="bar-fill" id="eb-bar-fill"></div></div>
-              <span class="bar-pct" id="eb-pct">0 %</span>
-            </div>
-            <p class="hint" id="eb-msg"></p>
-            <div class="enc-bench-rec" id="eb-rec" style="display:none"></div>
-            <div id="eb-results"></div>
-            <div id="eb-screenshots" class="shot-wrap"></div>
           </div>
         </section>
 
@@ -2918,8 +2930,133 @@
               <span id="diag-progress" class="muted"></span>
             </div>
             <div id="diag-report"></div>
+
+            <div class="divider"></div>
+            <h4 class="subsection">Encoder-Test</h4>
+            <p class="hint">Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei.
+              VMAF vergleicht die Speed-Stufen über die Bildqualität.
+              Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.
+              <a href="#faq-enc-bench" class="faq-jump">FAQ</a></p>
+
+            <div class="field" style="max-width:280px;margin-top:12px">
+              <label>Art</label>
+              <select id="eb-mode">
+                <option value="vmaf">VMAF-Vergleich</option>
+                <option value="speed">Geschwindigkeit</option>
+              </select>
+            </div>
+            <p class="hint" id="eb-mode-hint" hidden>Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.</p>
+
+<div id="eb-clips" class="enc-bench-clips"></div>
+            <div class="lib-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-download">Ausgewählte Clips laden</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-add">Eigene Datei aus der Bibliothek</button>
+            </div>
+            <div id="eb-extras" class="enc-bench-extras"></div>
+
+            <div class="settings-grid">
+              <div class="field enc-bench-speeds-field">
+                <label>Speed-Stufen zum Vergleich</label>
+                <p class="hint" id="eb-speed-hint">Hängt vom Encoder ab (SVT 0–13, x264/x265 ultrafast–placebo, NVENC p1–p7, QSV veryfast–veryslow). VAAPI hat kein extra Preset.</p>
+                <div id="eb-speeds" class="enc-bench-speeds"></div>
+                <div class="lib-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-default">Standard (schnell / ausgewogen / langsam)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-all">Alle Stufen</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Steuerung</label>
+                <select id="eb-rate">
+                  <option value="cq" selected>CQ / CRF / QP</option>
+                  <option value="abr">ABR (kbit/s)</option>
+                  <option value="bitrate">CBR (kbit/s)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Werte (kommagetrennt, max. 4)</label>
+                <input type="text" id="eb-values" value="24, 28, 32" placeholder="z. B. 24, 28, 32" />
+              </div>
+              <div class="field">
+                <label data-tip="Nur NVIDIA. Automatisch nimmt bei CQ die Pyramide der Linie und bei Bitrate zwei B-Frames.">B-Frames (NVIDIA)</label>
+                <select id="eb-b-frames">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="off">Aus, Lookahead 32</option>
+                  <option value="short">Kurz, 2 B-Frames</option>
+                  <option value="medium">Mittel, 4 B-Frames</option>
+                  <option value="deep">Tief, 7 hierarchisch</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-tip="Nur NVIDIA HEVC und AV1. UHQ glättet über mehrere Frames. Aus lässt den Tune weg.">Tune (NVIDIA)</label>
+                <select id="eb-nvenc-tune">
+                  <option value="auto">Automatisch (empfohlen)</option>
+                  <option value="uhq">UHQ</option>
+                  <option value="hq">HQ</option>
+                  <option value="off">Aus</option>
+                </select>
+              </div>
+              <div class="field" id="eb-aq-field">
+                <label data-tip="Bits im Bild umverteilen: flache Flächen feiner, detailreiche Stellen dürfen gröber. 8 ist die Vorgabe.">AQ-Stärke (NVIDIA): <strong id="eb-aq-val">8</strong></label>
+                <input type="range" id="eb-aq-strength" min="1" max="15" value="8" />
+              </div>
+              <div class="field">
+                <label data-tip="Maximaler Abstand zwischen Keyframes. Kurz spult schneller, lang spart Bits.">Keyframe-Abstand</label>
+                <select id="eb-keyint">
+                  <option value="0">Automatisch</option>
+                  <option value="2">Kurz, etwa 2 Sekunden</option>
+                  <option value="5">Mittel, etwa 5 Sekunden</option>
+                  <option value="10">Lang, etwa 10 Sekunden</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>GPU / Plattform</label>
+                <select id="eb-platform">
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label>Codec</label>
+                <select id="eb-codec">
+                  <option value="av1">AV1</option>
+                  <option value="hevc">HEVC / H.265</option>
+                  <option value="h264">H.264</option>
+                  <option value="vp9">VP9 (nur CPU)</option>
+                </select>
+              </div>
+              <div class="field" id="eb-samples-field">
+                <label>Stichproben (Szenen)</label>
+                <select id="eb-samples">
+                  {{ vmaf_sample_options("3") }}
+                </select>
+              </div>
+              <div class="field">
+                <label>Clip-Länge (Sekunden)</label>
+                <input type="number" id="eb-seconds" min="5" max="60" value="12" />
+              </div>
+            </div>
+            <label class="check" id="eb-anime-wrap"><input type="checkbox" id="eb-anime" /><span>Anime-Modus (VMAF-NEG, 10-bit)</span></label>
+            <p class="hint" id="eb-estimate"></p>
+
+            <div class="lib-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-start">Test starten</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-cancel" disabled>Abbrechen</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-clear" disabled>Ergebnisse leeren</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-eb-apply" style="display:none">Empfehlung übernehmen und speichern</button>
+            </div>
+            <div class="enc-bench-progress">
+              <div class="bar-track"><div class="bar-fill" id="eb-bar-fill"></div></div>
+              <span class="bar-pct" id="eb-pct">0 %</span>
+            </div>
+            <p class="hint" id="eb-msg"></p>
+            <div class="enc-bench-rec" id="eb-rec" style="display:none"></div>
+            <div id="eb-results"></div>
+            <div id="eb-screenshots" class="shot-wrap"></div>
           </div>
         </section>
+
+        
 
         <!-- PAGE: FAQ / Technik -->
         <section class="card span-3" data-page="faq">
@@ -3013,13 +3150,13 @@
                 <p>x264 und x265 ändern den Lookahead zwischen CQ, ABR und CBR nicht, deshalb stehen dort dreimal dieselben Frames. Bei SVT sind ABR und CBR auf jeder Stufe 58. Die 73 bei SVT und CQ gelten unter 8K. Ab Preset 9, ab Preset 8 bei 1080p und höher, und bei 8K auch auf den langsamen Presets, sind es bei CQ 41 Frames.</p>
                 <p>NVIDIA. Aus: 32 Frames, ohne -bf. Lehnt die Karte 32 ab, bleibt der Lookahead bei 31. Kurz (2 B-Frames): 29. Mittel (4): 27. Tief (7 hierarchisch): 24, nur AV1 auf latest, sonst fällt Tief auf 4 B-Frames und 27 Frames zurück. Automatisch nimmt bei CQ auf latest und AV1 die 24, sonst bei CQ die 27, bei ABR und CBR die 29.</p>
                 <p>VP9 bleibt bei 25 Frames, die Speed-Stufe ändert das nicht. QSV und VAAPI haben keinen Frame-Lookahead, den das Studio setzt.</p>
-                <p>Unter Einstellungen → Encoder-Speed gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen.</p>
+                <p>Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-enc-bench">
               <summary>Wie finde ich die passende Encoder-Speed-Stufe?</summary>
               <div class="faq-body">
-                <p>Der Encoder-Test unter Einstellungen lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.</p>
+                <p>Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.</p>
                 <p>Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).</p>
                 <p>Die Empfehlung nutzt nicht nur den Mittelwert: Score = 55 % Mittel + 35 % 1%-Low + 10 % harmonisches Mittel. Mittel 95 bei 1%-Low 79 würde sich wie 95 anfühlen – tut es nicht; die schlechtesten Frames (Action, Dunkel, Banding) zählen extra. Die nächstlangsamere Stufe wird genommen, wenn der Score klar steigt und die Zeit nicht explodiert – oder wenn das 1%-Low zu niedrig war und sich spürbar hebt. Native Presets des gewählten Encoders (z. B. SVT 0–13, NVENC p1–p7), nicht nur fünf Aliase.</p>
                 <p>Es ist ein Kompromiss-Hinweis für genau diesen Encoder (Plattform × Codec), nicht für alle Geräte. Standard sind schnell/ausgewogen/langsam; „Alle Stufen“ testet wirklich jedes Preset – CPU-AV1 kann dann lange dauern. Downloads gehen nur über die Allowlist, nicht über eine beliebige URL.</p>
@@ -3056,6 +3193,8 @@
               <div class="faq-body">
                 <p>SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.</p>
                 <p>Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.</p>
+                <p>Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan. Intel und AMD bleiben bei der CPU-Kurve. Dieses FFmpeg hat keinen CUDA-Tonemap. Referenz und Testclips nutzen dieselbe Kurve.</p>
+                <p>Deband glättet Streifen in Verläufen und steht neben dem Denoise. Der SVT-Look „Detail“ gilt nur für AV1 auf der CPU und bleibt standardmäßig aus. Das ist das mitgelieferte SVT mit ein paar Parametern aus der Hauptlinie, nicht der SVT-AV1-HDR-Fork.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-dv-profiles">
