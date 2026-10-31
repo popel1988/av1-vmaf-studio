@@ -599,6 +599,7 @@ class EnqueueRequest(BaseModel):
     test_values: list[int] = [20, 24, 28, 32]
     clip_seconds: int = 30
     samples: int = 1
+    ssimulacra2_frames: int = 3
     sample_mode: str = "even"       # even | bitrate
     scene_min_pct: int = 10          # ruhige Szene mindestens so viel % vom Median
     credits_at: float = 0.0          # Filmzeit (s), ab der keine Testszenen mehr liegen
@@ -1299,6 +1300,15 @@ async def approve(item_id: str, req: ApproveRequest):
 @app.post("/api/queue/{item_id}/skip")
 async def skip_encode(item_id: str):
     return {"ok": queue.skip_encode(item_id)}
+
+
+class DvDecisionRequest(BaseModel):
+    action: str = "hdr10"  # hdr10 | tonemap | disable_filters | cancel
+
+
+@app.post("/api/queue/{item_id}/dv-decision")
+async def dv_decision(item_id: str, req: DvDecisionRequest):
+    return {"ok": queue.resolve_dv_prompt(item_id, req.action)}
 
 
 @app.get("/api/preview/{path:path}")
@@ -2597,6 +2607,16 @@ def _details_from_history(rec: dict) -> dict:
             settings = _json.loads(raw) if isinstance(raw, str) else dict(raw)
         except (TypeError, ValueError):
             settings = {}
+    src_info = {}
+    sraw = rec.get("source_json") or ""
+    if sraw:
+        import json as _json
+        try:
+            src_info = _json.loads(sraw) if isinstance(sraw, str) else dict(sraw)
+        except (TypeError, ValueError):
+            src_info = {}
+    if src and not src.get("info") and src_info:
+        src["info"] = src_info
     return {"id": rec.get("id"), "title": rec.get("title") or "Details",
             "status": rec.get("status") or "—", "path": src_abs,
             "from_history": True, "settings": settings,
@@ -2634,6 +2654,8 @@ async def queue_details(item_id: str):
         return entry
 
     src = _pack(item.path)
+    if src and not src.get("info") and item.info:
+        src["info"] = item.info
     out = _pack(item.output_path)
 
     # Encode-Kennzahlen: Geschwindigkeit (x-fach), Ø FPS, Ersparnis.
@@ -2662,6 +2684,7 @@ async def queue_details(item_id: str):
         "path": item.path, "source": src, "output": out, "stats": stats,
         "settings": item.settings.__dict__ if item.settings else {},
         "vmaf_warning": item.vmaf_warning or "",
+        "dv_prompt": item.dv_prompt,
         "vmaf": item.vmaf,
         "steps": item.to_dict().get("steps") or [],
     }
@@ -2697,6 +2720,7 @@ class EncoderBenchStartRequest(BaseModel):
     keyint_sec: int = 0
     clip_seconds: int = 12
     samples: int = 3
+    ssimulacra2_frames: int = 3
     anime: bool = False
     mode: str = "vmaf"
 

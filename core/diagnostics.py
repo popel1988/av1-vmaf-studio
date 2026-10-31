@@ -60,6 +60,11 @@ def _tools_section() -> dict:
         "im FFmpeg-Build enthalten" if _ffmpeg_has_filter("libvmaf")
         else "fehlt – VMAF-Analyse nicht möglich"))
 
+    s2 = Path(config.SSIMULACRA2)
+    checks.append(_check(
+        "SSIMULACRA2", "ok" if s2.is_file() else "warn",
+        str(s2) if s2.is_file() else "nicht gefunden – Standbild-Vergleich entfällt"))
+
     try:
         from . import dolby_vision as dv
         if dv.available():

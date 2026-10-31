@@ -122,6 +122,22 @@ RUN wget -q "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR
     && rm -rf /tmp/hdr10plus /tmp/hdr10plus_tool.tar.gz \
     && /usr/local/bin/hdr10plus_tool --version
 
+# ------------------------------------------------------------- SSIMULACRA2
+# Standbild-Vergleich Quelle gegen Encode. Statisches Binary aus dem
+# libjxl-Release (devtools), kein eigener Compiler-Lauf.
+ARG SSIMULACRA2_VERSION=v0.11.1
+RUN wget -q "https://github.com/libjxl/libjxl/releases/download/${SSIMULACRA2_VERSION}/jxl-linux-x86_64-static-${SSIMULACRA2_VERSION}.tar.gz" \
+        -O /tmp/jxl.tgz \
+    && tar -xf /tmp/jxl.tgz -C /tmp \
+    && install -m 0755 /tmp/tools/ssimulacra2 /usr/local/bin/ssimulacra2 \
+    && rm -rf /tmp/jxl.tgz /tmp/tools \
+    && /usr/local/bin/ffmpeg -y -hide_banner -loglevel error \
+        -f lavfi -i color=c=black:s=32x32 -frames:v 1 /tmp/s2a.png \
+    && cp /tmp/s2a.png /tmp/s2b.png \
+    && score="$(/usr/local/bin/ssimulacra2 /tmp/s2a.png /tmp/s2b.png)" \
+    && python3 -c 'import sys; v=float(sys.argv[1]); assert v > 90, v' "$score" \
+    && rm -f /tmp/s2a.png /tmp/s2b.png
+
 # ------------------------------------------------------------- VMAF-Modelle
 # libvmaf liegt im FFmpeg-Build. Die JSON-Dateien kommen extra.
 # Default ist VMAF v1 (Tag latest). latest-legacy setzt die v0.6.1-Dateinamen

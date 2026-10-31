@@ -66,6 +66,8 @@ class VmafOptions:
     credits_at: float = 0.0
     # True: Testclips encodieren, libvmaf auslassen. Vergleich im A/B-Player.
     visual_only: bool = False
+    # Standbilder je Stichprobe für SSIMULACRA2 (1 = nur Mitte, bis 7).
+    ssimulacra2_frames: int = 3
     # Alte Ein-Achsen-Varianten. Neue Vergleiche nutzen rows.
     variants: list = field(default_factory=list)
     # Volle Zusatzzeilen: Plattform, Codec, Speed, B-Frames, AQ, Keyframe.
@@ -264,6 +266,8 @@ class VmafResult:
     psnr: float = 0.0
     ssim: float = 0.0
     xpsnr: float = 0.0        # XPSNR (dB, 4:1:1 über Y/U/V gewichtet), FFmpeg ≥ 7.1
+    cambi: Optional[float] = None          # Banding, höher = mehr; None = nicht gemessen
+    ssimulacra2: Optional[float] = None    # ein Standbild je Szene, höher = besser
     screenshot_ref: str = ""            # Szene 0 (Rückwärtskompatibilität)
     screenshot_enc: str = ""
     screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
@@ -314,6 +318,23 @@ class VmafResult:
             d["ssim"] = round(self.ssim, 4)
         if self.xpsnr:
             d["xpsnr"] = round(self.xpsnr, 2)
+        if self.cambi is not None:
+            d["cambi"] = round(float(self.cambi), 2)
+        if self.ssimulacra2 is not None:
+            d["ssimulacra2"] = round(float(self.ssimulacra2), 2)
+            mins = [
+                float(s["ssimulacra2_min"]) for s in (self.scene_scores or [])
+                if isinstance(s, dict) and s.get("ssimulacra2_min") is not None
+                and not s.get("idle")
+            ]
+            if mins:
+                d["ssimulacra2_min"] = round(min(mins), 2)
+            counts = [
+                int(s["ssimulacra2_n"]) for s in (self.scene_scores or [])
+                if isinstance(s, dict) and s.get("ssimulacra2_n")
+            ]
+            if counts:
+                d["ssimulacra2_n"] = max(counts)
         if self.screenshot_ref:
             d["screenshot_ref"] = f"/api/preview/{self.screenshot_ref}"
         if self.screenshot_enc:
@@ -344,6 +365,16 @@ class VmafResult:
                     raw = s.get(key)
                     if raw:
                         item[key] = round(float(raw), nd)
+                if s.get("cambi") is not None:
+                    item["cambi"] = round(float(s["cambi"]), 2)
+                if s.get("cambi_max") is not None:
+                    item["cambi_max"] = round(float(s["cambi_max"]), 2)
+                if s.get("ssimulacra2") is not None:
+                    item["ssimulacra2"] = round(float(s["ssimulacra2"]), 2)
+                if s.get("ssimulacra2_min") is not None:
+                    item["ssimulacra2_min"] = round(float(s["ssimulacra2_min"]), 2)
+                if s.get("ssimulacra2_n"):
+                    item["ssimulacra2_n"] = int(s["ssimulacra2_n"])
                 frames = s.get("frames") or []
                 if frames:
                     item["frames"] = frames
@@ -700,7 +731,7 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         if f.get("metrics") and f["metrics"].get("vmaf") is not None
     ]
     xp = data.get("xpsnr") or {}
-    return {
+    out = {
         "vmaf": float(mean),
         "hmean": float(vm.get("harmonic_mean") or 0.0),
         "min": float(vm.get("min") or 0.0),
@@ -711,6 +742,12 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "xpsnr_min": float(xp.get("xpsnr_min") or 0.0),
         "frames": _downsample_vmaf(series),
     }
+    cambi_pool = pooled.get("cambi")
+    if isinstance(cambi_pool, dict) and cambi_pool.get("mean") is not None:
+        out["cambi"] = float(cambi_pool["mean"])
+        if cambi_pool.get("max") is not None:
+            out["cambi_max"] = float(cambi_pool["max"])
+    return out
 
 
 def _downsample_vmaf(vals: list[float], n: int = 80) -> list[float]:
@@ -734,19 +771,27 @@ def _vmaf_metrics(
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     clip_len: float = 0.0,
 ) -> Optional[dict]:
-    """Vollständige Metriken (VMAF + PSNR + SSIM + XPSNR + 1%-Low) für einen Vergleich.
+    """Vollständige Metriken (VMAF + PSNR + SSIM + CAMBI + XPSNR + 1%-Low) für einen Vergleich.
 
-    PSNR/SSIM werden über die libvmaf-`feature`-Option mitberechnet, XPSNR im
-    selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Schlägt der Lauf fehl
-    (ältere Builds), wird stufenweise zurückgefallen – die Kern-Metrik bleibt so
-    immer verfügbar.
+    PSNR, SSIM und CAMBI laufen über die libvmaf-`feature`-Option, XPSNR im
+    selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Fehlt CAMBI im Build,
+    fällt der Lauf auf PSNR/SSIM zurück. Die Kern-Metrik bleibt so verfügbar.
     """
+    features_cambi = "feature=name=psnr|name=float_ssim|name=cambi:"
     features = "feature=name=psnr|name=float_ssim:"
     data = None
     if xpsnr_available():
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features, clip_len=clip_len, with_xpsnr=True)
+                            features=features_cambi, clip_len=clip_len, with_xpsnr=True)
     metrics = _metrics_from_json(data) if data else None
+    if metrics is None:
+        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                            features=features_cambi, clip_len=clip_len)
+        metrics = _metrics_from_json(data) if data else None
+    if metrics is None and xpsnr_available():
+        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
+                            features=features, clip_len=clip_len, with_xpsnr=True)
+        metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
                             features=features, clip_len=clip_len)
@@ -787,6 +832,101 @@ def _extract_frame(
     base += ["-q:v", "2", str(config.PREVIEW_DIR / out_rel)]
     res = _run_logged(base, f"Screenshot {label}")
     return out_rel if res.returncode == 0 and (config.PREVIEW_DIR / out_rel).exists() else ""
+
+
+_s2_ok: Optional[bool] = None
+
+
+def _ssimulacra2_ok() -> bool:
+    global _s2_ok
+    if _s2_ok is None:
+        path = Path(config.SSIMULACRA2)
+        _s2_ok = path.is_file()
+    return bool(_s2_ok)
+
+
+def _png_at(src: Path, dest: Path, at_sec: float, fps: float) -> bool:
+    """Ein PNG an einer Zeit im Clip. Frame-Index, damit Quelle und Encode dasselbe Bild treffen."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
+    if fps and fps > 0:
+        frame_no = max(0, int(round(fps * max(0.0, at_sec))))
+        cmd += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-vsync", "0"]
+    else:
+        cmd += ["-ss", f"{max(0.0, at_sec):.3f}", "-frames:v", "1"]
+    cmd += [str(dest)]
+    res = _run_logged(cmd, "SSIMULACRA2-Frame")
+    return res.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
+
+
+def _s2_frame_count(n: int) -> int:
+    try:
+        v = int(n)
+    except (TypeError, ValueError):
+        v = 3
+    return max(1, min(7, v))
+
+
+def _s2_times(clip_len: float, n: int) -> list[float]:
+    """Gleichmäßig im Clip, nicht auf den Schnittkanten. 1 bleibt die Mitte."""
+    count = _s2_frame_count(n)
+    length = max(0.0, float(clip_len or 0))
+    return [length * (i / (count + 1)) for i in range(1, count + 1)]
+
+
+def _ssimulacra2_pair(ref_png: Path, dist_png: Path) -> Optional[float]:
+    proc = subprocess.run(
+        [config.SSIMULACRA2, str(ref_png), str(dist_png)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=180, check=False,
+    )
+    if proc.returncode != 0:
+        tail = ((proc.stderr or proc.stdout or "").strip().splitlines())
+        logger.warning("SSIMULACRA2 fehlgeschlagen: %s", tail[-1] if tail else proc.returncode)
+        return None
+    parts = (proc.stdout or "").strip().split()
+    if not parts:
+        return None
+    return float(parts[-1])
+
+
+def _ssimulacra2_clip(
+    reference: Path, distorted: Path, work: Path, key: str,
+    clip_len: float, fps: float, frames: int = 3,
+) -> Optional[dict]:
+    """Mehrere Standbilder je Stichprobe. Höher ist besser, bis 100."""
+    if not _ssimulacra2_ok():
+        return None
+    scores: list[float] = []
+    times = _s2_times(clip_len, frames)
+    try:
+        for i, at in enumerate(times):
+            ref_png = work / f"s2_{key}_{i}_ref.png"
+            dist_png = work / f"s2_{key}_{i}_enc.png"
+            try:
+                if not _png_at(reference, ref_png, at, fps):
+                    continue
+                if not _png_at(distorted, dist_png, at, fps):
+                    continue
+                score = _ssimulacra2_pair(ref_png, dist_png)
+                if score is not None:
+                    scores.append(score)
+            finally:
+                for path in (ref_png, dist_png):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        logger.warning("SSIMULACRA2: %s", exc)
+        return None
+    if not scores:
+        return None
+    return {
+        "mean": sum(scores) / len(scores),
+        "min": min(scores),
+        "n": len(scores),
+    }
 
 
 def _extract_source_still(
@@ -1039,6 +1179,8 @@ def analyze(
         psnrs: list[float] = []
         ssims: list[float] = []
         xpsnrs: list[float] = []
+        cambis: list[float] = []
+        s2s: list[float] = []
         shots: list[dict] = []
         scene_scores: list[dict] = []
         enc_args = ""
@@ -1149,7 +1291,20 @@ def analyze(
                     ssims.append(metrics["ssim"])
                 if metrics.get("xpsnr"):
                     xpsnrs.append(metrics["xpsnr"])
-            scene_scores.append({
+                if metrics.get("cambi") is not None:
+                    cambis.append(float(metrics["cambi"]))
+                if reference is not None:
+                    if status:
+                        status(f"SSIMULACRA2 {shown} @ {rate_lbl}{smp} …")
+                    s2 = _ssimulacra2_clip(
+                        reference, test_file, work, skey, clip_len,
+                        float(info.fps or 0), opts.ssimulacra2_frames)
+                    if s2 is not None:
+                        metrics["ssimulacra2"] = s2["mean"]
+                        metrics["ssimulacra2_min"] = s2["min"]
+                        metrics["ssimulacra2_n"] = s2["n"]
+                        s2s.append(s2["mean"])
+            scene = {
                 "scene": si,
                 "start": float(start),      # Position im Film (s) – für Sprünge im Player
                 "length": float(clip_len),
@@ -1161,7 +1316,18 @@ def analyze(
                 "xpsnr": (metrics or {}).get("xpsnr") or 0.0,
                 "xpsnr_min": (metrics or {}).get("xpsnr_min") or 0.0,
                 "frames": (metrics or {}).get("frames") or [],
-            })
+            }
+            if metrics and metrics.get("cambi") is not None:
+                scene["cambi"] = metrics["cambi"]
+            if metrics and metrics.get("cambi_max") is not None:
+                scene["cambi_max"] = metrics["cambi_max"]
+            if metrics and metrics.get("ssimulacra2") is not None:
+                scene["ssimulacra2"] = metrics["ssimulacra2"]
+            if metrics and metrics.get("ssimulacra2_min") is not None:
+                scene["ssimulacra2_min"] = metrics["ssimulacra2_min"]
+            if metrics and metrics.get("ssimulacra2_n"):
+                scene["ssimulacra2_n"] = int(metrics["ssimulacra2_n"])
+            scene_scores.append(scene)
             clip_bytes = test_file.stat().st_size
             total_size += clip_bytes
             total_dur += clip_len
@@ -1222,6 +1388,8 @@ def analyze(
             psnr=_avg(psnrs),
             ssim=_avg(ssims),
             xpsnr=_avg(xpsnrs),
+            cambi=_avg(cambis) if cambis else None,
+            ssimulacra2=_avg(s2s) if s2s else None,
             clip_size_bytes=total_size,
             predicted_size_bytes=predicted,
             savings_percent=savings,
@@ -2267,6 +2435,8 @@ def apply_idle_scenes(results) -> set[int]:
         ("psnr", "psnr"),
         ("ssim", "ssim"),
         ("xpsnr", "xpsnr"),
+        ("cambi", "cambi"),
+        ("ssimulacra2", "ssimulacra2"),
     )
     for row in results or []:
         scenes = row.get("scene_scores") if isinstance(row, dict) else row.scene_scores
@@ -2289,7 +2459,10 @@ def apply_idle_scenes(results) -> set[int]:
             counted.append(s)
             for src, _dest in pairs:
                 raw = s.get(src)
-                if not raw:
+                if src in ("cambi", "ssimulacra2"):
+                    if raw is None:
+                        continue
+                elif not raw:
                     continue
                 try:
                     buckets[src].append(float(raw))

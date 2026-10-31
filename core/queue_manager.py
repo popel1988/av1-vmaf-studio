@@ -22,8 +22,9 @@ from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
 from .encoder import (
     EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, build_encode_cmd,
-    normalize_deband, normalize_svt_look, normalize_tonemap_algo,
-    normalize_tonemap_desat, normalize_tonemap_engine, normalize_tonemap_peak,
+    deinterlace_filter, normalize_deband, normalize_svt_look,
+    normalize_tonemap_algo, normalize_tonemap_desat, normalize_tonemap_engine,
+    normalize_tonemap_peak,
 )
 from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
 
@@ -182,6 +183,7 @@ class JobSettings:
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
+    ssimulacra2_frames: int = 3    # Standbilder je Stichprobe für SSIMULACRA2
     sample_mode: str = "even"     # even | bitrate
     scene_min_pct: int = 10        # ruhige Szene mindestens so viel % vom Median
     credits_at: float = 0.0        # Filmzeit (s), ab der keine Testszenen mehr liegen
@@ -251,6 +253,8 @@ class QueueItem:
     crop: str = ""                       # erkannter Auto-Crop "w:h:x:y" (leer = kein)
     message: str = ""
     vmaf_warning: str = ""               # 1%-Low verfehlt, Ersparnis-Vorrang
+    dv_prompt: Optional[dict] = None     # Rückfrage nach fehlgeschlagenem DV-Vorabtest
+    dv_checked: bool = False             # DV-Vorabtest für diesen Job bereits erledigt
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -314,6 +318,7 @@ class QueueItem:
             "extra_outputs": list(self.extra_outputs or []),
             "eta_estimate": self.eta_estimate,
             "vmaf_warning": self.vmaf_warning,
+            "dv_prompt": self.dv_prompt,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -405,9 +410,11 @@ class QueueManager:
                 "duration": it.duration,
                 "steps": list(it.steps or []),
             }
-            # „Auswahl"-Jobs: VMAF-Analyse mitsichern (kein erneuter Test).
+            # „Auswahl"-Jobs: VMAF-Analyse bzw. DV-Rückfrage mitsichern.
             if it.status == STATUS_AWAITING and it.vmaf:
                 entry["vmaf"] = it.vmaf
+            if it.status == STATUS_AWAITING and it.dv_prompt:
+                entry["dv_prompt"] = it.dv_prompt
             # Fertige mit VMAF-Ergebnis ebenfalls behalten (Anzeige/Erneut).
             elif it.status in self._TERMINAL_STATES and it.vmaf:
                 entry["vmaf"] = it.vmaf
@@ -458,9 +465,10 @@ class QueueManager:
                 raw = d.get("settings", {}) or {}
                 s = JobSettings(**{k: v for k, v in raw.items() if k in fields})
                 saved_vmaf = d.get("vmaf")
+                saved_dv_prompt = d.get("dv_prompt") if isinstance(d.get("dv_prompt"), dict) else None
                 is_awaiting = (status == STATUS_AWAITING
-                               and isinstance(saved_vmaf, dict)
-                               and saved_vmaf.get("results"))
+                               and ((isinstance(saved_vmaf, dict) and saved_vmaf.get("results"))
+                                    or bool(saved_dv_prompt)))
                 if is_terminal:
                     final_status = status
                 elif is_awaiting:
@@ -493,6 +501,7 @@ class QueueManager:
                     caps_failed=bool(d.get("caps_failed")),
                     crop=str(d.get("crop") or ""),
                     vmaf_warning=str(d.get("vmaf_warning") or ""),
+                    dv_prompt=saved_dv_prompt if is_awaiting else None,
                     created_at=float(d.get("created_at", time.time())),
                     started_at=float(d.get("started_at", 0) or 0),
                     finished_at=float(d.get("finished_at", 0) or 0),
@@ -662,6 +671,75 @@ class QueueManager:
                     self._wake.set()
                     return True
         return False
+
+    def resolve_dv_prompt(self, item_id: str, action: str) -> bool:
+        """Nutzerentscheidung nach fehlgeschlagenem Dolby-Vision-Vorabtest."""
+        with self._lock:
+            item = next((i for i in self._items if i.id == item_id), None)
+            if not item or item.status != STATUS_AWAITING or not item.dv_prompt:
+                return False
+            s = item.settings
+            if action == "hdr10":
+                s.preserve_dv = False
+                s.preserve_hdr = True
+                s.tonemap = False
+                item.dv_prompt = None
+                item.dv_checked = True
+                item.error = ""
+                item.vmaf_warning = "Dolby Vision nicht möglich – als HDR10 fortgesetzt."
+                item.message = "Fortsetzen als HDR10 …"
+                item.status = STATUS_WAITING
+                for other in self._items:
+                    if (other.id != item.id and other.group_id == item.group_id
+                            and other.status == STATUS_WAITING):
+                        other.settings.preserve_dv = False
+                        other.settings.preserve_hdr = True
+                        other.settings.tonemap = False
+                        other.dv_checked = True
+            elif action == "tonemap":
+                s.preserve_dv = False
+                s.preserve_hdr = False
+                s.tonemap = True
+                item.dv_prompt = None
+                item.dv_checked = True
+                item.error = ""
+                item.vmaf_warning = (
+                    "Dolby Vision nicht möglich – mit HDR→SDR-Tonemapping fortgesetzt."
+                )
+                item.message = "Fortsetzen mit Tonemapping (SDR) …"
+                item.status = STATUS_WAITING
+                for other in self._items:
+                    if (other.id != item.id and other.group_id == item.group_id
+                            and other.status == STATUS_WAITING):
+                        other.settings.preserve_dv = False
+                        other.settings.preserve_hdr = False
+                        other.settings.tonemap = True
+                        other.dv_checked = True
+            elif action == "disable_filters":
+                s.target_height = None
+                s.autocrop = False
+                item.crop = ""
+                s.denoise = "off"
+                s.deband = "off"
+                s.sharpen = "off"
+                s.grain = "off"
+                s.deinterlace = "off"
+                s.mobile_copy = False
+                item.dv_prompt = None
+                item.dv_checked = False
+                item.error = ""
+                item.vmaf_warning = "Videofilter für Dolby Vision abgeschaltet."
+                item.message = "Filter abgeschaltet – prüfe Dolby Vision …"
+                item.status = STATUS_WAITING
+            elif action == "cancel":
+                item.dv_prompt = None
+                item.status = STATUS_CANCELLED
+                self._group_skip.add(item.group_id)
+            else:
+                return False
+        self._persist()
+        self._wake.set()
+        return True
 
     @staticmethod
     def _apply_vmaf_choice(settings: JobSettings, res: dict) -> None:
@@ -992,6 +1070,11 @@ class QueueManager:
             else:
                 logger.info("Auto-Crop: keine nennenswerten Balken (%s)", item.title)
 
+        # --- Dolby-Vision-Vorabtest (1 s Mini-Encode vor VMAF/Encode) ---------
+        if not s.compare_encoders and not s.compare_rows:
+            if not self._ensure_dv_preflight(item, s, info):
+                return
+
         # --- VMAF-Test (optional, repräsentativ pro Gruppe) -------------------
         with self._lock:
             do_vmaf = s.vmaf_check and item.group_id not in self._group_quality
@@ -1028,6 +1111,7 @@ class QueueManager:
                 test_values=list(s.test_values),
                 clip_seconds=s.clip_seconds,
                 samples=s.samples,
+                ssimulacra2_frames=getattr(s, "ssimulacra2_frames", 3) or 3,
                 generate_screenshots=s.generate_screenshots or s.visual_only,
                 visual_only=s.visual_only,
                 item_id=item.id,
@@ -1153,6 +1237,10 @@ class QueueManager:
                 logger.info("Größenziel %s: %s", item.title, msg)
                 item.message = msg
 
+        # --- Dolby-Vision-Vorabtest (falls nach VMAF-Vergleich noch offen) ----
+        if not self._ensure_dv_preflight(item, s, info):
+            return
+
         # --- Haupt-Encode -----------------------------------------------------
         item.status = STATUS_RUNNING
         qlabel = _quality_label(s)
@@ -1274,6 +1362,8 @@ class QueueManager:
             item.crop = ff.detect_crop(info)
             if item.crop:
                 logger.info("Auto-Crop erkannt (%s): crop=%s", item.title, item.crop)
+        if not self._ensure_dv_preflight(item, s, info):
+            return
         item.message = "Chunked Adaptive Encoding …"
         _begin_step(item, "Chunked Encode")
         self._refresh_global_msg()
@@ -1283,6 +1373,7 @@ class QueueManager:
 
         enc_kw = {
             "preserve_hdr": s.preserve_hdr,
+            "preserve_dv": s.preserve_dv,
             "film_grain": s.film_grain,
             "denoise": s.denoise,
             "sharpen": s.sharpen,
@@ -1815,6 +1906,195 @@ class QueueManager:
             logger.warning("Guardrail-Messung fehlgeschlagen (%s): %s", item.title, e)
             return None
 
+    def _ensure_dv_preflight(self, item: QueueItem, s: "JobSettings", info) -> bool:
+        """Prüft vor dem Encode per ~1-s-Mini-Encode, ob Dolby Vision erhalten bleibt.
+
+        Schlägt der Test fehl (oder blockieren Filter bei AV1-DV die RPU),
+        pausiert der Job im Status ``auswahl`` mit ``item.dv_prompt``, damit der
+        Nutzer zwischen HDR10-Fallback, SDR-Tonemapping, Filter-Abschaltung
+        oder Abbruch wählen kann.
+        """
+        if (not getattr(s, "preserve_dv", False)
+                or not getattr(info, "dolby_vision", False)
+                or s.workflow == "compare_only"
+                or getattr(item, "dv_checked", False)):
+            return True
+        prompt = self._run_dv_preflight(item, s, info)
+        if prompt is None:
+            item.dv_checked = True
+            item.dv_prompt = None
+            return True
+        if prompt.get("cancelled"):
+            item.status = STATUS_CANCELLED
+            item.message = "Abgebrochen."
+            return False
+        item.dv_prompt = prompt
+        item.status = STATUS_AWAITING
+        item.vmaf_warning = str(prompt.get("reason") or "Dolby Vision nicht möglich.")
+        item.message = "Auswahl nötig: Dolby Vision nicht möglich"
+        logger.warning("DV-Vorabtest nicht bestanden (%s): %s",
+                       item.title, item.vmaf_warning)
+        self._persist()
+        return False
+
+    def _run_dv_preflight(self, item: QueueItem, s: "JobSettings", info) -> Optional[dict]:
+        """Führt den Dolby-Vision-Vorabtest durch. None = DV funktioniert."""
+        import shutil
+        from . import dolby_vision as dv
+
+        prof = int(getattr(info, "dv_profile", 0) or 0)
+        if s.codec == "av1":
+            if s.platform != "cpu":
+                return {
+                    "reason": (
+                        f"AV1-Dolby-Vision kann nur der CPU-Encoder (SVT-AV1) einbetten "
+                        f"(gewählt: {s.platform.upper()})."
+                    ),
+                    "can_disable_filters": False,
+                    "dv_profile": prof,
+                }
+            blockers: list[str] = []
+            if s.target_height and info.height and s.target_height < info.height:
+                blockers.append(f"Skalierung ({s.target_height}p)")
+            if item.crop:
+                blockers.append(f"Auto-Crop ({item.crop})")
+            if normalize_deband(s.deband) in ("light", "medium", "strong"):
+                blockers.append(f"Deband ({s.deband})")
+            if s.denoise in ("light", "medium", "strong"):
+                blockers.append(f"Denoise ({s.denoise})")
+            if s.sharpen in ("light", "medium", "strong"):
+                blockers.append(f"Schärfen ({s.sharpen})")
+            if s.grain in ("light", "medium", "strong"):
+                blockers.append(f"Körnung ({s.grain})")
+            if deinterlace_filter(s.deinterlace, bool(getattr(info, "interlaced", False))):
+                blockers.append("Deinterlacing")
+            if s.mobile_copy:
+                blockers.append("Mobile-Fassung")
+            if blockers:
+                return {
+                    "reason": (
+                        f"AV1-Dolby-Vision ist mit aktiven Videofiltern nicht möglich "
+                        f"({', '.join(blockers)}), weil FFmpeg im Filtergraph die "
+                        f"Dolby-Vision-RPU verwirft."
+                    ),
+                    "can_disable_filters": True,
+                    "blockers": blockers,
+                    "dv_profile": prof,
+                }
+        elif s.codec == "hevc":
+            if not dv.available():
+                return {
+                    "reason": (
+                        "dovi_tool ist nicht verfügbar – die Dolby-Vision-RPU kann "
+                        "nach dem HEVC-Encode nicht re-injiziert werden."
+                    ),
+                    "can_disable_filters": False,
+                    "dv_profile": prof,
+                }
+        else:
+            return {
+                "reason": f"Codec {s.codec.upper()} unterstützt keine Dolby-Vision-Übernahme.",
+                "can_disable_filters": False,
+                "dv_profile": prof,
+            }
+
+        item.status = STATUS_RUNNING
+        item.message = "Dolby-Vision-Vorabtest (Mini-Encode, 1 s) …"
+        self._refresh_global_msg()
+        _begin_step(item, "DV-Vorabtest")
+        work = config.WORK_DIR / f"dv_preflight_{item.id}"
+        try:
+            work.mkdir(parents=True, exist_ok=True)
+            cont = _container_ext(s).lstrip(".")
+            test_out = work / f"preflight.{cont}"
+            is_br = s.rate_mode in ("bitrate", "abr")
+            cmd = build_encode_cmd(
+                info, test_out, s.platform, s.codec,
+                28 if is_br else s.quality,
+                s.target_height, s.tonemap,
+                duration_limit=1.0,
+                rate_mode=s.rate_mode,
+                bitrate_kbps=int(s.quality or 6000) if is_br else None,
+                include_progress=True,
+                audio_mode="none",
+                preserve_hdr=s.preserve_hdr,
+                preserve_dv=s.preserve_dv,
+                keep_subtitles=False,
+                keep_chapters=False,
+                keep_metadata=s.keep_metadata,
+                film_grain=s.film_grain,
+                denoise=s.denoise,
+                sharpen=s.sharpen,
+                grain=s.grain,
+                deinterlace=s.deinterlace,
+                aq_strength=s.aq_strength,
+                force_10bit=s.anime,
+                two_pass=False,
+                container=cont,
+                crop=item.crop,
+                encoder_speed="fastest",
+                b_frames=getattr(s, "b_frames", "auto") or "auto",
+                keyint_sec=getattr(s, "keyint_sec", 0) or 0,
+                nvenc_tune=getattr(s, "nvenc_tune", "auto") or "auto",
+                tonemap_algo=s.tonemap_algo,
+                tonemap_desat=s.tonemap_desat,
+                tonemap_peak=s.tonemap_peak,
+                tonemap_engine=s.tonemap_engine,
+                deband=s.deband,
+                svt_look=s.svt_look,
+            )
+            runner = EncodeRunner()
+            with self._lock:
+                self._active[item.id] = runner
+            rc, stderr = runner.run(cmd, 1.0)
+            if runner._cancel or item.id in self._cancel_ids:
+                return {"cancelled": True}
+            if rc != 0 or not test_out.is_file() or test_out.stat().st_size == 0:
+                lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+                detail = lines[-1] if lines else f"FFmpeg Exit {rc}"
+                return {
+                    "reason": f"Dolby-Vision-Vorabtest (Mini-Encode) fehlgeschlagen: {detail[:240]}",
+                    "can_disable_filters": False,
+                    "dv_profile": prof,
+                }
+            if s.codec == "hevc":
+                src_codec = (
+                    "av1" if str(getattr(info, "codec", "") or "").lower() in ("av1", "libaom-av1")
+                    else "hevc"
+                )
+                final, err = dv.reinject(
+                    Path(info.path), test_out, work / "dv",
+                    source_codec=src_codec, target_codec="hevc",
+                    profile=prof, fps=float(getattr(info, "fps", 0.0) or 0.0),
+                    duration_limit=3.0,
+                )
+                if not final or not final.is_file():
+                    return {
+                        "reason": (
+                            f"Dolby-Vision-Vorabtest (dovi_tool) fehlgeschlagen: "
+                            f"{err or 'Reinjektion fehlgeschlagen'}"
+                        ),
+                        "can_disable_filters": False,
+                        "dv_profile": prof,
+                    }
+                test_out = final
+
+            probed, perr = probe_with_error(test_out)
+            if probed is None or not probed.dolby_vision:
+                got = probed.hdr_type if probed else (perr or "unbekannt")
+                return {
+                    "reason": (
+                        f"Der 1-Sekunden-Vorabtest hat kein Dolby Vision in der "
+                        f"Ausgabe erzeugt (Ergebnis: {got})."
+                    ),
+                    "can_disable_filters": False,
+                    "dv_profile": prof,
+                }
+            return None
+        finally:
+            _end_step(item)
+            shutil.rmtree(work, ignore_errors=True)
+
     def _reinject_dv(self, item: QueueItem, out_path: Path) -> None:
         """DV-RPU nach dem Encode übernehmen (HEVC->8.1 / AV1->10.1, best-effort)."""
         import shutil
@@ -2228,6 +2508,7 @@ def build_job_settings(d: dict) -> JobSettings:
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
+        ssimulacra2_frames=max(1, min(7, int(d.get("ssimulacra2_frames", 3) or 3))),
         sample_mode="bitrate" if d.get("sample_mode") == "bitrate" else "even",
         scene_min_pct=max(5, min(60, int(d.get("scene_min_pct", 10) or 10))),
         credits_at=max(0.0, min(48 * 3600.0, float(d.get("credits_at", 0) or 0))),

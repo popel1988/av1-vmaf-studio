@@ -22,6 +22,12 @@
                       <option value="4"{% if selected == "4" %} selected{% endif %}>4 Szenen</option>
                       <option value="5"{% if selected == "5" %} selected{% endif %}>5 Szenen</option>
   {% endmacro %}
+  {% macro s2_frame_options(selected="3") %}
+                      <option value="1"{% if selected == "1" %} selected{% endif %}>1 – nur Mitte</option>
+                      <option value="3"{% if selected == "3" %} selected{% endif %}>3 – über die Szene</option>
+                      <option value="5"{% if selected == "5" %} selected{% endif %}>5</option>
+                      <option value="7"{% if selected == "7" %} selected{% endif %}>7</option>
+  {% endmacro %}
   <div class="app">
     <!-- ============================= SIDEBAR ============================= -->
     <aside class="sidebar">
@@ -447,6 +453,12 @@
                     </select>
                   </div>
                   <div class="field">
+                    <label>SSIMULACRA2-Bilder je Szene</label>
+                    <select id="opt-s2-frames">
+                      {{ s2_frame_options("3") }}
+                    </select>
+                  </div>
+                  <div class="field">
                     <label>Vergleichsclip-Länge: <strong id="opt-vmaf-clip-val">20</strong> Sek.</label>
                     <input type="range" id="opt-vmaf-clip" min="5" max="120" value="20" step="5" />
                   </div>
@@ -710,6 +722,13 @@
                     {{ vmaf_sample_options("1") }}
                   </select>
                   <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
+                </div>
+                <div class="field">
+                  <label>SSIMULACRA2-Bilder je Szene</label>
+                  <select id="vt-s2-frames">
+                    {{ s2_frame_options("3") }}
+                  </select>
+                  <p class="hint">Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.</p>
                 </div>
                 <div class="field">
                   <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
@@ -1401,6 +1420,12 @@
                   <label>Szenen-Stichproben</label>
                   <select id="st-samples">
                     {{ vmaf_sample_options("1") }}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>SSIMULACRA2-Bilder je Szene</label>
+                  <select id="st-s2-frames">
+                    {{ s2_frame_options("3") }}
                   </select>
                 </div>
               </div>
@@ -2935,7 +2960,7 @@
             <h4 class="subsection">Encoder-Test</h4>
             <p class="hint">Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei.
               VMAF vergleicht die Speed-Stufen über die Bildqualität.
-              Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.
+              Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.
               <a href="#faq-enc-bench" class="faq-jump">FAQ</a></p>
 
             <div class="field" style="max-width:280px;margin-top:12px">
@@ -2945,7 +2970,7 @@
                 <option value="speed">Geschwindigkeit</option>
               </select>
             </div>
-            <p class="hint" id="eb-mode-hint" hidden>Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.</p>
+            <p class="hint" id="eb-mode-hint" hidden>Dieselbe Datei wird je Bitrate einmal encodiert, mit der gespeicherten Speed-Vorgabe. Die Zeit ist die reine Encode-Zeit.</p>
 
 <div id="eb-clips" class="enc-bench-clips"></div>
             <div class="lib-actions">
@@ -2964,7 +2989,7 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="btn-eb-speeds-all">Alle Stufen</button>
                 </div>
               </div>
-              <div class="field">
+              <div class="field" id="eb-rate-field">
                 <label>Steuerung</label>
                 <select id="eb-rate">
                   <option value="cq" selected>CQ / CRF / QP</option>
@@ -2973,7 +2998,7 @@
                 </select>
               </div>
               <div class="field">
-                <label>Werte (kommagetrennt, max. 4)</label>
+                <label id="eb-values-label">Werte (kommagetrennt, max. 4)</label>
                 <input type="text" id="eb-values" value="24, 28, 32" placeholder="z. B. 24, 28, 32" />
               </div>
               <div class="field">
@@ -3029,6 +3054,12 @@
                 <label>Stichproben (Szenen)</label>
                 <select id="eb-samples">
                   {{ vmaf_sample_options("3") }}
+                </select>
+              </div>
+              <div class="field" id="eb-s2-field">
+                <label>SSIMULACRA2-Bilder je Szene</label>
+                <select id="eb-s2-frames">
+                  {{ s2_frame_options("3") }}
                 </select>
               </div>
               <div class="field">
@@ -3150,7 +3181,7 @@
                 <p>x264 und x265 ändern den Lookahead zwischen CQ, ABR und CBR nicht, deshalb stehen dort dreimal dieselben Frames. Bei SVT sind ABR und CBR auf jeder Stufe 58. Die 73 bei SVT und CQ gelten unter 8K. Ab Preset 9, ab Preset 8 bei 1080p und höher, und bei 8K auch auf den langsamen Presets, sind es bei CQ 41 Frames.</p>
                 <p>NVIDIA. Aus: 32 Frames, ohne -bf. Lehnt die Karte 32 ab, bleibt der Lookahead bei 31. Kurz (2 B-Frames): 29. Mittel (4): 27. Tief (7 hierarchisch): 24, nur AV1 auf latest, sonst fällt Tief auf 4 B-Frames und 27 Frames zurück. Automatisch nimmt bei CQ auf latest und AV1 die 24, sonst bei CQ die 27, bei ABR und CBR die 29.</p>
                 <p>VP9 bleibt bei 25 Frames, die Speed-Stufe ändert das nicht. QSV und VAAPI haben keinen Frame-Lookahead, den das Studio setzt.</p>
-                <p>Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.</p>
+                <p>Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-enc-bench">
@@ -3312,6 +3343,18 @@
               <summary>Was ist XPSNR neben VMAF?</summary>
               <div class="faq-body">
                 <p>XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-cambi">
+              <summary>Was ist CAMBI neben VMAF?</summary>
+              <div class="faq-body">
+                <p>CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-ssimulacra2">
+              <summary>Was ist SSIMULACRA2 neben VMAF?</summary>
+              <div class="faq-body">
+                <p>SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-history-suggest">

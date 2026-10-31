@@ -39,6 +39,9 @@ DOVI_TOOL = _resolve_binary("dovi_tool")
 # hdr10plus_tool: HDR10+-Szenenmetadaten nach einem HEVC-Encode zurückschreiben.
 HDR10PLUS_TOOL = _resolve_binary("hdr10plus_tool")
 
+# SSIMULACRA2: Wahrnehmungsvergleich eines Standbilds, Quelle gegen Encode.
+SSIMULACRA2 = _resolve_binary("ssimulacra2")
+
 # --- Optionaler Zugriffsschutz -----------------------------------------------
 # Ist APP_PASSWORD gesetzt, verlangt die App einen Login. Ohne Variable läuft
 # alles offen wie bisher (Standardverhalten).

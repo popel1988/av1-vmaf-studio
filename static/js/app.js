@@ -2460,7 +2460,8 @@
   }
   function ebParseValues() {
     const raw = ($("eb-values") && $("eb-values").value) || "";
-    return raw.split(/[,;\s]+/).map((s) => parseInt(s, 10)).filter((n) => n > 0).slice(0, 4);
+    const cap = ebMode() === "speed" ? 8 : 4;
+    return raw.split(/[,;\s]+/).map((s) => parseInt(s, 10)).filter((n) => n > 0).slice(0, cap);
   }
   function ebRateMode() {
     return ($("eb-rate") && $("eb-rate").value) || "cq";
@@ -2473,12 +2474,36 @@
   }
   function ebSyncMode() {
     const speed = ebMode() === "speed";
-    const samples = $("eb-samples-field");
-    if (samples) samples.hidden = speed;
+    ["eb-speeds", "eb-rate", "eb-b-frames", "eb-nvenc-tune", "eb-aq-strength", "eb-keyint", "eb-samples", "eb-s2-frames", "eb-seconds"].forEach((id) => {
+      const el = $(id);
+      const field = el && el.closest(".field");
+      if (field) field.hidden = speed;
+    });
     const anime = $("eb-anime-wrap");
     if (anime) anime.hidden = speed;
     const hint = $("eb-mode-hint");
     if (hint) hint.hidden = !speed;
+    const label = $("eb-values-label");
+    if (label) {
+      label.textContent = speed
+        ? "Bitraten (kbit/s, kommagetrennt)"
+        : "Werte (kommagetrennt, max. 4)";
+    }
+    const vals = $("eb-values");
+    if (vals) {
+      if (speed) {
+        const nums = (vals.value || "").split(/[,;\s]+/).map((s) => parseInt(s, 10)).filter((n) => n > 0);
+        if (!vals.dataset.vmafValues && (!nums.length || nums.every((n) => n < 1000))) {
+          vals.dataset.vmafValues = vals.value;
+          vals.value = "4000, 8000, 12000";
+        }
+        vals.placeholder = "z. B. 4000, 8000, 12000";
+      } else if (vals.dataset.vmafValues) {
+        vals.value = vals.dataset.vmafValues;
+        delete vals.dataset.vmafValues;
+        vals.placeholder = ebRateMode() === "cq" ? "z. B. 24, 28, 32" : "z. B. 8000, 6000, 4000";
+      }
+    }
     ebUpdateEstimate();
   }
   function ebUpdateEstimate() {
@@ -2487,10 +2512,11 @@
     const nClips = ebSelectedClipIds().length + ebExtra.length;
     const nSp = ebSelectedSpeeds().length;
     if (ebMode() === "speed") {
-      const n = nClips * nSp;
+      const nVal = ebParseValues().length;
+      const n = nClips * nVal;
       el.textContent = n
-        ? `Ungefähr ${n} Encodes (${nClips} Clips × ${nSp} Speed-Stufen, ein Ausschnitt, ohne VMAF).`
-        : "Mindestens einen Clip und eine Speed-Stufe wählen.";
+        ? `Ungefähr ${n} Encodes (${nClips} Dateien × ${nVal} Bitraten, ein Ausschnitt, ohne VMAF).`
+        : "Mindestens eine Datei und eine Bitrate wählen.";
       return;
     }
     const nVal = ebParseValues().length || 0;
@@ -2659,15 +2685,13 @@
     if (ebIsSpeed(rows)) {
       const body = rows.map((r) => {
         if (r.error) {
-          return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="6" class="bad">${escapeHtml(r.error)}</td></tr>`;
+          return `<tr><td>${escapeHtml(r.clip || "")}</td><td colspan="5" class="bad">${escapeHtml(r.error)}</td></tr>`;
         }
-        const val = r.rate_mode === "cq" ? ("CQ " + r.value) : (r.value + " kbit/s");
-        const spd = speedLabelFor(r.platform, r.codec, r.speed);
+        const val = r.value + " kbit/s";
         const fps = r.fps ? Number(r.fps).toFixed(1) : "—";
         const rt = r.realtime ? (Number(r.realtime).toFixed(2) + "×") : "—";
         return `<tr>
           <td>${escapeHtml(r.clip || "")}</td>
-          <td>${escapeHtml(spd)}</td>
           <td class="num">${escapeHtml(String(val))}</td>
           <td class="num">${r.seconds != null ? Number(r.seconds).toFixed(1) + " s" : ""}</td>
           <td class="num">${fps}</td>
@@ -2677,7 +2701,7 @@
       }).join("");
       wrap.innerHTML = `<div class="data-table-wrap"><table class="data-table enc-bench-table">
         <thead><tr>
-          <th>Clip</th><th>Speed</th><th>Wert</th><th>Zeit</th><th>fps</th><th>Echtzeit</th><th>Größe</th>
+          <th>Clip</th><th>Bitrate</th><th>Zeit</th><th>fps</th><th>Echtzeit</th><th>Größe</th>
         </tr></thead><tbody>${body}</tbody></table></div>`;
       return;
     }
@@ -2878,18 +2902,22 @@
       }
       const platform = ($("eb-platform") && $("eb-platform").value) || "cpu";
       const codec = ($("eb-codec") && $("eb-codec").value) || "av1";
-      if (!speeds.length) {
+      const speedMode = ebMode() === "speed";
+      if (speedMode) {
+        if (!values.length) { alert("Mindestens eine Bitrate in kbit/s angeben."); return; }
+        speeds = ["balanced"];
+      } else if (!speeds.length) {
         if (speedPresetsFor(platform, codec).length) {
           alert("Mindestens eine Speed-Stufe wählen.");
           return;
         }
         speeds = ["balanced"];
       }
-      if (!values.length) { alert("Mindestens einen CQ- oder Bitrate-Wert angeben."); return; }
+      if (!speedMode && !values.length) { alert("Mindestens einen CQ- oder Bitrate-Wert angeben."); return; }
       try {
         await ebPost("/api/encoder-bench/start", {
           clip_ids, extra_paths, speeds,
-          rate_mode: ebRateMode(),
+          rate_mode: speedMode ? "abr" : ebRateMode(),
           values,
           platform, codec,
           b_frames: ($("eb-b-frames") && $("eb-b-frames").value) || "auto",
@@ -2898,6 +2926,7 @@
           keyint_sec: ($("eb-keyint") && parseInt($("eb-keyint").value, 10)) || 0,
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
+          ssimulacra2_frames: parseInt(($("eb-s2-frames") && $("eb-s2-frames").value) || "3", 10) || 3,
           anime: ebMode() === "speed" ? false : !!($("eb-anime") && $("eb-anime").checked),
           mode: ebMode(),
         });
@@ -2970,6 +2999,7 @@
       out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
       out.clip_seconds = $("opt-vmaf-clip") ? parseInt($("opt-vmaf-clip").value, 10) || 20 : 20;
       out.samples = $("opt-vmaf-samples") ? parseInt($("opt-vmaf-samples").value, 10) || 1 : 1;
+      out.ssimulacra2_frames = $("opt-s2-frames") ? parseInt($("opt-s2-frames").value, 10) || 3 : 3;
       out.test_values = encTestValues();
       out.generate_screenshots = $("opt-vmaf-shots") ? $("opt-vmaf-shots").checked : false;
       if (rateMode !== "cq" && out.test_values[0]) out.quality = out.test_values[0];
@@ -3316,6 +3346,7 @@
       test_values: vtGatherTestValues(),
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
+      ssimulacra2_frames: parseInt(($("vt-s2-frames") && $("vt-s2-frames").value) || "3", 10) || 3,
       sample_mode: sampleModeValue(),
       scene_min_pct: sceneMinPct(),
       credits_at: creditsAtSeconds(),
@@ -3727,6 +3758,52 @@
     return `<ul class="queue-steps">${rows}</ul>`;
   }
 
+  async function dvDecision(itemId, action) {
+    if (!itemId || !action) return;
+    await fetch(`/api/queue/${encodeURIComponent(itemId)}/dv-decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    fetchQueue();
+  }
+
+  function dvPromptButtonsHtml(itemId, prompt) {
+    if (!prompt) return "";
+    const prof5 = Number(prompt.dv_profile) === 5;
+    const p5Note = prof5
+      ? `<div class="muted" style="margin-bottom:6px">${tt("Hinweis: DV Profil 5 hat keinen HDR10-Basislayer – ohne DV ist SDR (Tonemap) meist die sichere Wahl.")}</div>`
+      : "";
+    const fixBtn = prompt.can_disable_filters
+      ? `<button class="btn btn-primary btn-sm" data-dv-act="disable_filters" data-dv-id="${escapeHtml(itemId)}">${tt("Filter aus & mit DV fortsetzen")}</button>`
+      : "";
+    const hdrCls = (!prompt.can_disable_filters && !prof5) ? "btn-primary" : "btn-ghost";
+    const sdrCls = (!prompt.can_disable_filters && prof5) ? "btn-primary" : "btn-ghost";
+    return `<div class="dv-prompt-actions" style="margin-top:6px">${p5Note}<div class="lib-actions" style="gap:6px;flex-wrap:wrap">
+      ${fixBtn}
+      <button class="btn ${hdrCls} btn-sm" data-dv-act="hdr10" data-dv-id="${escapeHtml(itemId)}">${tt("Als HDR10 fortsetzen")}</button>
+      <button class="btn ${sdrCls} btn-sm" data-dv-act="tonemap" data-dv-id="${escapeHtml(itemId)}">${tt("Als SDR (Tonemap) fortsetzen")}</button>
+      <button class="btn btn-ghost btn-sm" data-dv-edit="${escapeHtml(itemId)}">${tt("Einstellungen ändern")}</button>
+    </div></div>`;
+  }
+
+  function bindDvPromptButtons(root) {
+    if (!root) return;
+    root.querySelectorAll("[data-dv-act]").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await dvDecision(b.dataset.dvId, b.dataset.dvAct);
+        if ($("app-modal") && $("app-modal").style.display !== "none") closeModal();
+      });
+    });
+    root.querySelectorAll("[data-dv-edit]").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        reopenJobById(b.dataset.dvEdit);
+      });
+    });
+  }
+
   function renderQueueTable(items, activeIds) {
     const body = $("queue-body");
     const active = new Set(activeIds || []);
@@ -3742,7 +3819,7 @@
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
       const requeueBtn = DONE.includes(it.status)
-        ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Erneut einreihen">Erneut</button>` : "";
+        ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Mit diesen Einstellungen öffnen">Erneut</button>` : "";
       const moveBtns = it.status === "wartend"
         ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="${tt("Früher starten")}">↑</button>` +
           `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="${tt("Später starten")}">↓</button>` : "";
@@ -3751,6 +3828,9 @@
         : "";
       const warn = it.vmaf_warning
         ? `<div class="queue-warn" title="${escapeHtml(it.vmaf_warning)}">${escapeHtml(it.vmaf_warning)}</div>`
+        : "";
+      const dvBox = (it.status === "auswahl" && it.dv_prompt)
+        ? dvPromptButtonsHtml(it.id, it.dv_prompt)
         : "";
       const extraOut = (it.extra_outputs || []).length
         ? `<div class="muted" style="font-size:11px" title="${escapeHtml(it.extra_outputs.join("\n"))}">+ ${tt("Mobile-Fassung")}</div>`
@@ -3767,7 +3847,7 @@
       const finished = DONE.includes(it.status) && it.finished_at
         ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
       return `<tr class="queue-row" data-details="${it.id}" title="Details / ffprobe anzeigen">
-        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${extraOut}</td>
+        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${dvBox}${extraOut}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
         <td>${settingsLabel(it)}</td>
@@ -3785,7 +3865,7 @@
     body.querySelectorAll("[data-requeue]").forEach((b) => {
       b.addEventListener("click", (e) => {
         e.stopPropagation();
-        requeueJob(b.dataset.requeue, false);
+        reopenJobById(b.dataset.requeue);
       });
     });
     body.querySelectorAll("[data-move]").forEach((b) => {
@@ -3797,6 +3877,7 @@
     body.querySelectorAll(".queue-steps").forEach((ul) => {
       ul.addEventListener("click", (e) => e.stopPropagation());
     });
+    bindDvPromptButtons(body);
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
       tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
     });
@@ -3866,8 +3947,131 @@
     }
   }
 
+  async function reopenJobById(id) {
+    if (!id) return;
+    try {
+      const r = await fetch(`/api/queue/${encodeURIComponent(id)}/details`);
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        alert(d.error || ("HTTP " + r.status));
+        return;
+      }
+      await reopenJobWithSettings(d);
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  function applySuperToolJob(s) {
+    if (!s) return;
+    const set = (id, val, ev) => {
+      const el = $(id);
+      if (!el || val === undefined || val === null) return;
+      if (el.type === "checkbox") el.checked = !!val; else el.value = val;
+      el.dispatchEvent(new Event(ev || (el.tagName === "SELECT" ? "change" : "input")));
+    };
+    set("st-platform", s.platform, "change");
+    set("st-codec", s.codec, "change");
+    if (s.encoder_speed) set("st-enc-speed", s.encoder_speed, "change");
+    if (s.b_frames) set("st-b-frames", s.b_frames);
+    applyLegacyBFrames($("st-b-frames"));
+    if (s.nvenc_tune) set("st-nvenc-tune", s.nvenc_tune);
+    if (s.aq_strength) {
+      set("st-aq-strength", s.aq_strength);
+      const lab = $("st-aq-val");
+      if (lab) lab.textContent = String(s.aq_strength);
+    }
+    if (s.keyint_sec !== undefined && s.keyint_sec !== null) {
+      set("st-keyint", String(s.keyint_sec));
+    }
+    const mode = s.vmaf_check
+      ? (Number(s.target_vmaf) > 0 ? "target_vmaf" : "representative")
+      : "fixed";
+    set("st-mode", mode, "change");
+    if (mode === "target_vmaf" && s.target_vmaf) {
+      set("st-target", s.target_vmaf);
+      if ($("st-target-val")) $("st-target-val").textContent = String(s.target_vmaf);
+    }
+    if (mode === "fixed") {
+      set("st-rate-mode", s.rate_mode || "cq", "change");
+      if ((s.rate_mode || "cq") === "cq") set("st-quality", s.quality);
+      else set("st-bitrate", s.quality);
+    } else {
+      set("st-vmaf-rate", s.rate_mode || "cq", "change");
+      if (s.clip_seconds) set("st-clip", s.clip_seconds);
+      if (s.samples) set("st-samples", String(s.samples));
+      if (s.ssimulacra2_frames) set("st-s2-frames", String(s.ssimulacra2_frames));
+      set("st-sample-mode", s.sample_mode === "bitrate", "change");
+      set("st-two-pass", !!s.two_pass);
+      const grid = [...document.querySelectorAll("#st-test-grid .st-test-val")];
+      const vals = Array.isArray(s.test_values) ? s.test_values : [];
+      if (grid.length && vals.length) {
+        grid.forEach((inp, i) => { inp.value = vals[i] != null ? vals[i] : ""; });
+      }
+      syncVmafRate(false);
+    }
+    set("st-anime", !!s.anime);
+    const dyn = s.tonemap
+      ? "tonemap"
+      : (s.preserve_dv ? "preserve" : (s.preserve_hdr ? "hdr10" : "auto"));
+    set("st-dynamik", dyn, "change");
+    if (s.tonemap_engine) set("st-tonemap-engine", s.tonemap_engine, "change");
+    if (s.tonemap_algo) set("st-tonemap-algo", s.tonemap_algo, "change");
+    if (s.tonemap_desat !== undefined && s.tonemap_desat !== null) {
+      set("st-tonemap-desat", s.tonemap_desat);
+    }
+    if (s.tonemap_peak !== undefined && s.tonemap_peak !== null) {
+      set("st-tonemap-peak", s.tonemap_peak ? String(s.tonemap_peak) : "");
+    }
+    if (s.deband) set("st-deband", s.deband, "change");
+    if (s.svt_look) set("st-svt-look", s.svt_look, "change");
+    if (s.post_processing) set("st-post", s.post_processing, "change");
+    if (s.audio_mode) set("st-audio-mode", s.audio_mode, "change");
+    if (s.out_mode !== undefined) set("st-out-mode", s.out_mode, "change");
+    if (s.out_subdir !== undefined) set("st-out-subdir", s.out_subdir);
+    if (s.name_pattern !== undefined) set("st-name-pattern", s.name_pattern);
+    if (s.on_duplicate !== undefined) set("st-on-duplicate", s.on_duplicate);
+    if (s.max_output_mb !== undefined) set("st-max-output-mb", s.max_output_mb);
+    if (s.max_video_bitrate_kbps !== undefined) set("st-max-bitrate", s.max_video_bitrate_kbps);
+    if (s.size_target_mb !== undefined) set("st-size-target", s.size_target_mb);
+  }
+
+  function stRowFromInfo(rel, name, info) {
+    const m = info || {};
+    const res = m.resolution || ((m.width && m.height) ? `${m.width}x${m.height}` : "—");
+    return {
+      path: rel,
+      name: name || rel,
+      size_bytes: m.size_bytes || 0,
+      size_human: m.size_human || "—",
+      container: String(m.container || "—").split(",")[0],
+      codec: m.codec || "?",
+      resolution: res,
+      height: m.height || 0,
+      video_bitrate: m.video_bitrate || 0,
+      video_bitrate_human: m.video_bitrate_human || "—",
+      hdr_type: m.hdr_type || "",
+      is_hdr: !!m.is_hdr,
+      dolby_vision: !!m.dolby_vision,
+      dv_profile: m.dv_profile || 0,
+      audio: m.audio || [],
+      subtitles: m.subtitles || [],
+      duration_human: m.duration_human || "—",
+    };
+  }
+
   async function reopenJobWithSettings(d) {
-    const s = (d && d.settings) || {};
+    const raw = (d && d.settings) || {};
+    const s = { ...raw };
+    if (!s.hdr_mode) {
+      if (s.preserve_hdr || s.preserve_dv) s.hdr_mode = "preserve";
+      else if (s.tonemap) s.hdr_mode = "tonemap";
+    }
+    if (!s.dv_mode) {
+      if (s.preserve_dv) s.dv_mode = "preserve";
+      else if (s.preserve_hdr && !s.tonemap) s.dv_mode = "hdr10";
+      else if (s.tonemap) s.dv_mode = "tonemap";
+    }
     const rel = (d.source && d.source.rel) || null;
     const name = (d.source && d.source.name)
       || (d.path ? String(d.path).split(/[/\\]/).pop() : "") || "Datei";
@@ -3884,6 +4088,61 @@
           $("remux-start-info").innerHTML =
             `<span class="bad">${escapeHtml(String(e))}</span>`;
         }
+      }
+      return;
+    }
+    if (s.workflow === "compare_only") {
+      navTo("vmaf");
+      if (rel) {
+        try {
+          await selectFile({ rel, name, size_human: "" });
+        } catch (_) {
+          state.selected = { path: rel, name, isBatch: false };
+          if (typeof enableActionButtons === "function") enableActionButtons();
+        }
+      }
+      applyProfile(s);
+      applyArchivedVmaf({ analysis: (d && d.vmaf) || {}, params: s });
+      const vis = $("vt-visual");
+      if (vis) {
+        vis.checked = !!s.visual_only;
+        vis.dispatchEvent(new Event("change"));
+      }
+      return;
+    }
+    if (s.batch_id) {
+      navTo("supertool");
+      applySuperToolJob(s);
+      if (rel) {
+        const dir = String(rel).includes("/") ? String(rel).replace(/\/[^/]+$/, "") : "";
+        stLoadDir(dir);
+        let info = (d.source && d.source.info) || null;
+        if (!info) {
+          try {
+            const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(rel)}`)).json();
+            if (pr && !pr.error) info = pr;
+          } catch (_) { /* ohne Probe */ }
+        }
+        state.stTracks = {};
+        renderSuperMatches([stRowFromInfo(rel, name, info)]);
+        if (Array.isArray(s.audio_tracks) && s.audio_tracks.length) {
+          const aSel = stTrackSel(rel, "audio");
+          aSel.clear();
+          s.audio_tracks.forEach((idx) => aSel.add(Number(idx)));
+        }
+        if (s.subtitle_per_track && Array.isArray(s.subtitle_track_settings)) {
+          const sSel = stTrackSel(rel, "subs");
+          sSel.clear();
+          s.subtitle_track_settings.forEach((t) => {
+            if (t && t.index != null) sSel.add(Number(t.index));
+          });
+        }
+        stUpdateRowButtons();
+        stRenderCommon(state.stRows || []);
+        const startBtn = $("btn-st-start");
+        if (startBtn) startBtn.disabled = false;
+        const badge = $("st-scan-badge");
+        if (badge) badge.textContent = "1 Treffer";
       }
       return;
     }
@@ -4328,6 +4587,7 @@
       if (shown) shown.textContent = clip.value;
     }
     setVal("vt-samples", base.samples);
+    setVal("vt-s2-frames", base.ssimulacra2_frames || 3);
     if ($("vt-two-pass")) $("vt-two-pass").checked = !!base.two_pass;
     if ($("vt-anime")) $("vt-anime").checked = !!base.anime;
     if ($("vt-screenshots")) $("vt-screenshots").checked = !!base.screenshots;
@@ -4511,6 +4771,14 @@
             bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
           if (sceneScore && sceneScore.xpsnr != null)
             bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
+          if (sceneScore && sceneScore.cambi != null)
+            bits.push(`CAMBI ${Number(sceneScore.cambi).toFixed(2)}`);
+          if (sceneScore && sceneScore.ssimulacra2 != null) {
+            const mn = sceneScore.ssimulacra2_min != null
+              ? ` min ${Number(sceneScore.ssimulacra2_min).toFixed(1)}` : "";
+            const n = sceneScore.ssimulacra2_n ? ` · ${sceneScore.ssimulacra2_n} Bilder` : "";
+            bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${mn}${n}`);
+          }
         }
         const ist = bitrateReport(
           x.r, (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps);
@@ -4824,6 +5092,17 @@
               ? ` (min ${Number(sc.xpsnr_min).toFixed(1)})` : "";
             bits.push(`XPSNR ${Number(sc.xpsnr).toFixed(1)} dB${mn}`);
           }
+          if (sc.cambi != null) {
+            const mn = sc.cambi_max != null
+              ? ` (max ${Number(sc.cambi_max).toFixed(2)})` : "";
+            bits.push(`CAMBI ${Number(sc.cambi).toFixed(2)}${mn}`);
+          }
+          if (sc.ssimulacra2 != null) {
+            const mn = sc.ssimulacra2_min != null
+              ? ` (min ${Number(sc.ssimulacra2_min).toFixed(1)})` : "";
+            const n = sc.ssimulacra2_n ? `, ${sc.ssimulacra2_n} Bilder` : "";
+            bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${mn}${n}`);
+          }
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
           return bits.join(" · ");
@@ -4868,9 +5147,14 @@
     const qual = [];
     if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
     if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
+    if (r.cambi != null) qual.push(`CAMBI ${Number(r.cambi).toFixed(2)}`);
+    if (r.ssimulacra2 != null) {
+      const mn = r.ssimulacra2_min != null ? ` (min ${Number(r.ssimulacra2_min).toFixed(1)})` : "";
+      qual.push(`SSIMULACRA2 ${Number(r.ssimulacra2).toFixed(1)}${mn}`);
+    }
     if (pill || qual.length) {
       s += `<br>${pill}${qual.length
-        ? `<span class="muted" title="${escapeHtml("PSNR/SSIM: klassische Signalmaße, nur zur Orientierung.")}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
+        ? `<span class="muted" title="${escapeHtml("PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.")}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
         : ""}`;
     }
     const lo = vmafTargetLo(state.vmafShown);
@@ -4984,7 +5268,7 @@
       lines.push("");
       lines.push(line([
         "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
-        "H-Mittel", "PSNR", "XPSNR", "SSIM", "Ersparnis %", "Prognose Bytes",
+        "H-Mittel", "PSNR", "XPSNR", "SSIM", "CAMBI", "SSIMULACRA2", "Ersparnis %", "Prognose Bytes",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -4992,7 +5276,8 @@
           r.label || ("Q" + r.quality), r.platform || "", r.codec || "",
           r.value != null ? r.value : r.quality,
           num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
-          num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4), num(r.savings_percent, 1),
+          num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4),
+          num(r.cambi, 2), num(r.ssimulacra2, 1), num(r.savings_percent, 1),
           r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
           ...settingCells(r),
         ]));
@@ -5000,7 +5285,7 @@
       lines.push("");
       lines.push(line([
         "Szene", "Start s", "Länge s", "Einstellung", "VMAF", "1%-Low", "H-Mittel",
-        "PSNR", "XPSNR", "SSIM", "kbit/s",
+        "PSNR", "XPSNR", "SSIM", "CAMBI", "SSIMULACRA2", "kbit/s",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -5011,6 +5296,7 @@
             r.label || ("Q" + r.quality),
             num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
             num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4),
+            num(sc.cambi, 2), num(sc.ssimulacra2, 1),
             sc.kbps ? Math.round(sc.kbps) : "",
             ...settingCells(r),
           ]));
@@ -7246,10 +7532,13 @@
            data-a="${escapeHtml(d.source.rel)}" data-b="${escapeHtml(d.output.rel)}">
            🎞 ${tt("Vorher/Nachher im Vergleichsplayer")}</button>` : "";
     const requeueBtn = `<button class="btn btn-ghost btn-sm" id="modal-requeue">${tt("Erneut")}</button>` +
-      `<button class="btn btn-ghost btn-sm" id="modal-requeue-edit">${tt("Erneut mit …")}</button>`;
+      `<button class="btn btn-ghost btn-sm" id="modal-requeue-now">${tt("Sofort einreihen")}</button>`;
 
+    const dvModalBox = (d.status === "auswahl" && d.dv_prompt)
+      ? `<div class="keep-source-note" style="margin:0 0 12px">${escapeHtml(d.dv_prompt.reason || d.vmaf_warning || "")}${dvPromptButtonsHtml(id, d.dv_prompt)}</div>`
+      : (d.vmaf_warning ? `<div class="keep-source-note" style="margin:0 0 12px">${escapeHtml(d.vmaf_warning)}</div>` : "");
     const html = `
-      ${d.vmaf_warning ? `<div class="keep-source-note" style="margin:0 0 12px">${escapeHtml(d.vmaf_warning)}</div>` : ""}
+      ${dvModalBox}
       <div class="stat-grid modal-stats">${statChips}</div>
       ${stepsHtml(d.steps)}
       <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
@@ -7274,9 +7563,10 @@
     if (ab) ab.addEventListener("click", () =>
       openAbCompare("media", ab.dataset.a, "media", ab.dataset.b, { job: id }));
     const rq = $("modal-requeue");
-    if (rq) rq.addEventListener("click", () => requeueJob(id, !!d.from_history));
-    const rqe = $("modal-requeue-edit");
-    if (rqe) rqe.addEventListener("click", () => reopenJobWithSettings(d));
+    if (rq) rq.addEventListener("click", () => reopenJobWithSettings(d));
+    const rqn = $("modal-requeue-now");
+    if (rqn) rqn.addEventListener("click", () => requeueJob(id, !!d.from_history));
+    bindDvPromptButtons(body);
     loadVmafBySource(d.path || "", "modal-vmaf-hist");
   }
 
@@ -7416,6 +7706,7 @@
         $("opt-vmaf-clip-val").textContent = $("opt-vmaf-clip").value;
       }
       if (s.samples) set("opt-vmaf-samples", String(s.samples));
+      if (s.ssimulacra2_frames) set("opt-s2-frames", String(s.ssimulacra2_frames));
       if (s.generate_screenshots !== undefined) set("opt-vmaf-shots", s.generate_screenshots);
       const grid = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")];
       const vals = Array.isArray(s.test_values) ? s.test_values : [];
@@ -7585,7 +7876,7 @@
           <td>${escapeHtml(j.status || "")}</td>
           <td>
             <button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button>
-            <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Erneut einreihen">Erneut</button>
+            <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Mit diesen Einstellungen öffnen">Erneut</button>
           </td>
         </tr>`; }).join("") :
         '<tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>';
@@ -7600,7 +7891,7 @@
         el.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          requeueJob(el.dataset.id, true);
+          reopenJobById(el.dataset.id);
         });
       });
     }
@@ -9700,6 +9991,7 @@
       s.rate_mode = $("st-vmaf-rate") ? $("st-vmaf-rate").value : "cq";
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
+      s.ssimulacra2_frames = parseInt(($("st-s2-frames") && $("st-s2-frames").value) || "3", 10) || 3;
       s.sample_mode = sampleModeValue("st-sample-mode");
       s.scene_min_pct = sceneMinPct();
       s.credits_at = creditsAtSeconds();

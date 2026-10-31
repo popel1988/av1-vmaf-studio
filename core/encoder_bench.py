@@ -620,7 +620,7 @@ def _speed_one(
         length = dur
     work = config.WORK_DIR / "encoder_bench_speed"
     work.mkdir(parents=True, exist_ok=True)
-    out = work / f"{job['id']}_{speed}.mkv"
+    out = work / f"{job['id']}_{speed}_{value}.mkv"
     point = rate_mode in ("abr", "bitrate")
     cmd = build_encode_cmd(
         info, out, platform, codec,
@@ -698,19 +698,28 @@ def _speed_one(
     return base
 
 
+def _fmt_speed_row(row: dict) -> str:
+    fps = row.get("fps") or 0
+    rt = row.get("realtime") or 0
+    return f"{int(row['value'])} kbit/s, {rt:g}× Echtzeit, {fps:g} Bilder/s"
+
+
 def _recommend_speed(rows: list[dict], enc: str) -> dict:
-    ok = [r for r in rows if r.get("realtime") and r.get("speed") and not r.get("error")]
+    ok = [r for r in rows if r.get("realtime") and r.get("value") and not r.get("error")]
     if not ok:
         return {"reason": "Kein abgeschlossener Geschwindigkeitslauf."}
-    best = max(ok, key=lambda r: float(r["realtime"]))
-    label = speed_label(enc, str(best["speed"])) if enc else str(best["speed"])
-    fps = best.get("fps") or 0
-    rt = best.get("realtime") or 0
+    fastest = max(ok, key=lambda r: float(r["realtime"]))
+    slowest = min(ok, key=lambda r: float(r["realtime"]))
+    if fastest.get("value") == slowest.get("value"):
+        detail = _fmt_speed_row(fastest)
+    else:
+        detail = f"am schnellsten {_fmt_speed_row(fastest)}, am langsamsten {_fmt_speed_row(slowest)}"
+    preset = speed_label(enc, str(fastest.get("speed") or "")) if enc else ""
+    extra = f" Speed-Vorgabe in diesem Lauf: {preset}." if preset else ""
     return {
         "reason": (
-            f"Schnellste Stufe in diesem Lauf: {label}, "
-            f"{rt:g}× Echtzeit, {fps:g} Bilder/s. "
-            "Das ist eine reine Zeitmessung, keine Qualitätsvorgabe."
+            f"Reine Zeitmessung über die Bitraten: {detail}.{extra} "
+            "Die gespeicherte Speed-Vorgabe bleibt unverändert."
         ),
     }
 
@@ -755,6 +764,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
         values = [24, 28, 32] if rate_mode == "cq" else [8000, 6000, 4000]
     clip_seconds = max(5, min(60, int(cfg.get("clip_seconds") or 12)))
     samples = max(1, min(5, int(cfg.get("samples") or 3)))
+    s2_frames = max(1, min(7, int(cfg.get("ssimulacra2_frames") or 3)))
     anime = bool(cfg.get("anime"))
     b_frames = ff.normalize_b_frames(cfg.get("b_frames", "auto"))
     nvenc_tune = ff.normalize_nvenc_tune(cfg.get("nvenc_tune", "auto"))
@@ -767,7 +777,27 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
     if mode not in ("vmaf", "speed"):
         mode = "vmaf"
     if mode == "speed":
-        values = values[:1]
+        from . import app_settings
+        preset = normalize_encoder_speed(app_settings.encoder_speed())
+        speeds = [alias_to_native(enc, preset)] if natives else [preset]
+        rate_mode = "abr"
+        seen: list[int] = []
+        for raw in cfg.get("values") or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n < 100 or n in seen:
+                continue
+            seen.append(n)
+            if len(seen) >= 8:
+                break
+        values = seen
+        if not values:
+            _set(running=False, phase="error",
+                 error="Mindestens eine Bitrate in kbit/s angeben.",
+                 message="Zum Beispiel 4000, 8000, 12000.")
+            return
         samples = 1
         anime = False
     _set(mode=mode)
@@ -807,7 +837,8 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
 
     _set(phase="bench", message="Start …", percent=0)
 
-    total = max(1, len(jobs) * len(speeds))
+    units: list = list(values) if mode == "speed" else list(speeds)
+    total = max(1, len(jobs) * len(units))
     done = 0
     rows: list[dict] = []
 
@@ -821,18 +852,20 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 "clip_id": job["id"], "clip": job["title"], "kind": job["kind"],
                 "mode": mode, "error": "ffprobe fehlgeschlagen",
             })
-            done += len(speeds)
+            done += len(units)
             continue
-        for speed in speeds:
+        for unit in units:
             if _cancel.is_set():
                 _set(running=False, phase="idle", message="Abgebrochen.", percent=0)
                 return
             done += 1
-            _set(percent=round((done - 1) / total * 100, 1),
-                 message=f"{job['title']} · {speed} ({done}/{total}) …")
             if mode == "speed":
+                speed = speeds[0]
+                value = int(unit)
+                _set(percent=round((done - 1) / total * 100, 1),
+                     message=f"{job['title']} · {value} kbit/s ({done}/{total}) …")
                 row = _speed_one(
-                    info, job, platform, codec, speed, rate_mode, values[0],
+                    info, job, platform, codec, speed, "abr", value,
                     clip_seconds, b_frames, nvenc_tune, aq_strength, keyint_sec,
                 )
                 if row.get("cancelled") or _cancel.is_set():
@@ -841,11 +874,15 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 rows.append(row)
                 _set(rows=list(rows), percent=round(done / total * 100, 1))
                 continue
+            speed = str(unit)
+            _set(percent=round((done - 1) / total * 100, 1),
+                 message=f"{job['title']} · {speed} ({done}/{total}) …")
             opts = vmaf_mod.VmafOptions(
                 rate_mode=rate_mode,
                 test_values=list(values),
                 clip_seconds=clip_seconds,
                 samples=samples,
+                ssimulacra2_frames=s2_frames,
                 generate_screenshots=True,
                 session_name=f"bench_{job['id']}_{speed}",
                 source_title=job["title"],

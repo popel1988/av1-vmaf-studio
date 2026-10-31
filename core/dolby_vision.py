@@ -78,16 +78,19 @@ def _run(cmd: list[str], label: str) -> bool:
     return res.returncode == 0
 
 
-def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0) -> bool:
+def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
+                 duration_limit: Optional[float] = None) -> bool:
     """RPU-Schicht aus der (Dolby-Vision-)Quelle in eine .bin extrahieren.
 
     ffmpeg liefert den Elementarstream (HEVC-Annex-B bzw. AV1-OBU) via Pipe an
     dovi_tool. `mode` konvertiert die RPU dabei (z. B. Profil 7 -> 8.1).
     """
     fmt, bsf = _es_args(source_codec)
-    ff_cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error",
-              "-i", str(source), "-map", "0:v:0", "-c:v", "copy",
-              *bsf, "-f", fmt, "-"]
+    ff_cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error"]
+    if duration_limit and duration_limit > 0:
+        ff_cmd += ["-t", f"{float(duration_limit):.3f}"]
+    ff_cmd += ["-i", str(source), "-map", "0:v:0", "-c:v", "copy",
+               *bsf, "-f", fmt, "-"]
     dv_cmd = [config.DOVI_TOOL]
     if mode:
         dv_cmd += ["-m", str(mode)]
@@ -113,6 +116,7 @@ def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0) -> b
 def reinject(source: Path, encoded: Path, work_dir: Path, *,
              source_codec: str = "hevc", target_codec: str = "hevc",
              profile: int = 0, fps: float = 0.0,
+             duration_limit: Optional[float] = None,
              status: StatusCb = None) -> tuple[Optional[Path], str]:
     """DV-RPU aus `source` in den `encoded`-Stream re-injizieren und remuxen.
 
@@ -136,7 +140,7 @@ def reinject(source: Path, encoded: Path, work_dir: Path, *,
         if status:
             conv = f" (Profil {profile} → 8.1)" if mode else ""
             status(f"Dolby Vision: RPU wird aus der Quelle extrahiert{conv} …")
-        if not _extract_rpu(source, source_codec, rpu, mode):
+        if not _extract_rpu(source, source_codec, rpu, mode, duration_limit=duration_limit):
             return None, "RPU-Extraktion fehlgeschlagen"
 
         if status:

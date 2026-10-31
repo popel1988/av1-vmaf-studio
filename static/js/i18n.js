@@ -266,6 +266,21 @@
       "What is XPSNR next to VMAF?",
     "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
       "XPSNR is a perceptually weighted PSNR from the FFmpeg filter xpsnr (FFmpeg 7.1+, in both image channels). It needs no models and runs in the same pass as libvmaf – the decoded frames are split to both filters, no second decode. Shown is the weighted value (4·Y + U + V) / 6 in dB. Roughly: 36 dB and up is good, 40 dB and up very good. Frames identical to the source (infinite PSNR) are excluded from the mean. The recommendation still follows VMAF; XPSNR is the second opinion, for example when VMAF gets too friendly with grain or sharpening.",
+    "Was ist CAMBI neben VMAF?":
+      "What is CAMBI next to VMAF?",
+    "CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.":
+      "CAMBI looks for banding, stepped areas in gradients. It runs in the same libvmaf pass as VMAF, PSNR and SSIM. Higher means more banding. The number is the average across the samples and does not change the recommendation.",
+    "Was ist SSIMULACRA2 neben VMAF?":
+      "What is SSIMULACRA2 next to VMAF?",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compares several stills per sample, spaced across the clip, source against encode. The default is 3 images, adjustable from 1 to 7. Shown is the average, higher is closer to the source: roughly 50 medium, 70 high, 90 nearly lossless, 100 identical. It does not change the recommendation.",
+    "SSIMULACRA2-Bilder je Szene": "SSIMULACRA2 stills per scene",
+    "1 – nur Mitte": "1 – middle only",
+    "3 – über die Szene": "3 – across the scene",
+    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
+      "Spaced across each sample clip. Higher is closer to the source.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
+      "PSNR and SSIM are classic signal measures. CAMBI measures banding, higher means more steps. SSIMULACRA2 is the average of several stills per scene, min is the weakest of them. Higher is closer to the source. The recommendation stays with VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "Where do the suggestion and runtime “from history” come from?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -1260,6 +1275,14 @@
     "Keine Vorschau.": "No preview.",
     "Erneut": "Again",
     "Erneut mit …": "Again with …",
+    "Sofort einreihen": "Queue right away",
+    "Mit diesen Einstellungen öffnen": "Open with these settings",
+    "Filter aus & mit DV fortsetzen": "Disable filters & continue with DV",
+    "Als HDR10 fortsetzen": "Continue as HDR10",
+    "Als SDR (Tonemap) fortsetzen": "Continue as SDR (tone map)",
+    "Einstellungen ändern": "Edit settings",
+    "Hinweis: DV Profil 5 hat keinen HDR10-Basislayer – ohne DV ist SDR (Tonemap) meist die sichere Wahl.":
+      "Note: DV Profile 5 has no HDR10 base layer – without DV, SDR (tone map) is usually the safer choice.",
     "Native Wiedergabe (volle Dauer & Suche). Tonspur wird vom Browser direkt gelesen.": "Native playback (full duration & seeking). Audio is read directly by the browser.",
     "Live-Remux (Ton → AAC): Dauer aus Analyse. Zum Springen den Schieberegler darunter nutzen (Neustart ab Position).": "Live remux (audio → AAC): duration from analysis. Use the slider below to seek (restarts from that position).",
     "Erneut einreihen": "Re-enqueue",
@@ -1650,8 +1673,8 @@
       "Warning: a faster tier searches less thoroughly. The file is often larger / less bit-efficient. VMAF scores apply only to this exact tier.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Warning: much longer, especially AV1 on the CPU. Very slow can take many hours on movies. Do not combine with high parallelism.",
-    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
-      "Diagnostics, under the self-test, has an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default. Speed mode encodes one excerpt per tier and reports encode time, frames per second and the realtime factor, without VMAF.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "Diagnostics, under the self-test, has an encoder test: several picture types (animation, CGI, live action, motion, handheld) plus your own files, several speed tiers and optional CQ/ABR values, compared with VMAF. You can apply the recommendation as the default. Speed mode encodes the same file at the entered bitrates and reports encode time, frames per second and the realtime factor, without VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "How do I find a matching encoder speed tier?",
     "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
@@ -1700,10 +1723,11 @@
       "It is a compromise hint for this exact encoder (platform × codec), not for every machine. “Very slow” is unchecked on purpose – CPU AV1 in particular can take a long time. Downloads use the allowlist only, not an arbitrary URL.",
     "Encoder-Test (VMAF)": "Encoder test (VMAF)",
     "Encoder-Test": "Encoder test",
-    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
-      "Measures the selected encoder on reference clips or one of your own files. VMAF compares the speed tiers by picture quality. Speed encodes one excerpt per tier and shows time, frames per second and the realtime factor, without a quality measurement.",
-    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
-      "One excerpt per speed tier, only the first entered value. The time is encode time only.",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Measures the selected encoder on reference clips or one of your own files. VMAF compares the speed tiers by picture quality. Speed encodes the same file at the entered bitrates and shows time, frames per second and the realtime factor, without a quality measurement.",
+    "Dieselbe Datei wird je Bitrate einmal encodiert, mit der gespeicherten Speed-Vorgabe. Die Zeit ist die reine Encode-Zeit.":
+      "The same file is encoded once per bitrate, using the saved speed preset. The time is encode time only.",
+    "Bitraten (kbit/s, kommagetrennt)": "Bitrates (kbit/s, comma-separated)",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Finds a matching speed tier: short clips of different picture types (animation, film CGI, live action, lots of motion, handheld) are encoded with all presets of the selected encoder (not just 5 aliases) and optional CQ/ABR values, then compared with VMAF. Default is a normal VMAF with 3 scenes. Reference clips come from fixed, free sources (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":
@@ -2003,6 +2027,21 @@
       "¿Qué es XPSNR junto a VMAF?",
     "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
       "XPSNR es un PSNR ponderado perceptualmente del filtro FFmpeg xpsnr (FFmpeg 7.1+, en ambas líneas de imagen). No necesita modelos y corre en la misma pasada que libvmaf: los fotogramas decodificados se reparten a ambos filtros, sin segunda decodificación. Se muestra el valor ponderado (4·Y + U + V) / 6 en dB. A grandes rasgos: desde 36 dB bien, desde 40 dB muy bien. Los fotogramas idénticos a la fuente (PSNR infinito) no entran en la media. La recomendación sigue basándose en VMAF; XPSNR es la segunda opinión, por ejemplo cuando VMAF es demasiado amable con el grano o el enfoque.",
+    "Was ist CAMBI neben VMAF?":
+      "¿Qué es CAMBI junto a VMAF?",
+    "CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.":
+      "CAMBI busca banding, zonas escalonadas en degradados. Corre en la misma pasada de libvmaf que VMAF, PSNR y SSIM. Más alto significa más bandas. El número es la media de las muestras y no cambia la recomendación.",
+    "Was ist SSIMULACRA2 neben VMAF?":
+      "¿Qué es SSIMULACRA2 junto a VMAF?",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compara varias imágenes por muestra, repartidas por el clip, fuente contra codificado. El valor por defecto son 3 imágenes, ajustable de 1 a 7. Se muestra la media, más alto está más cerca de la fuente: unos 50 medio, 70 alto, 90 casi sin pérdida, 100 idéntico. No cambia la recomendación.",
+    "SSIMULACRA2-Bilder je Szene": "Imágenes SSIMULACRA2 por escena",
+    "1 – nur Mitte": "1 – solo el centro",
+    "3 – über die Szene": "3 – a lo largo de la escena",
+    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
+      "Repartidas por cada clip de muestra. Más alto está más cerca de la fuente.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
+      "PSNR y SSIM son medidas de señal clásicas. CAMBI mide el banding, más alto significa más bandas. SSIMULACRA2 es la media de varias imágenes por escena, min es la más débil. Más alto está más cerca de la fuente. La recomendación sigue siendo VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "¿De dónde salen la sugerencia y la duración «del historial»?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -2839,6 +2878,14 @@
     "Keine Vorschau.": "Sin vista previa.",
     "Erneut": "De nuevo",
     "Erneut mit …": "De nuevo con …",
+    "Sofort einreihen": "Encolar ahora",
+    "Mit diesen Einstellungen öffnen": "Abrir con estos ajustes",
+    "Filter aus & mit DV fortsetzen": "Desactivar filtros y seguir con DV",
+    "Als HDR10 fortsetzen": "Continuar como HDR10",
+    "Als SDR (Tonemap) fortsetzen": "Continuar como SDR (tonemap)",
+    "Einstellungen ändern": "Cambiar ajustes",
+    "Hinweis: DV Profil 5 hat keinen HDR10-Basislayer – ohne DV ist SDR (Tonemap) meist die sichere Wahl.":
+      "Nota: DV Perfil 5 no tiene capa base HDR10 – sin DV, SDR (tonemap) suele ser la opción segura.",
     "Native Wiedergabe (volle Dauer & Suche). Tonspur wird vom Browser direkt gelesen.": "Reproducción nativa (duración y búsqueda completas). El audio lo lee el navegador directamente.",
     "Live-Remux (Ton → AAC): Dauer aus Analyse. Zum Springen den Schieberegler darunter nutzen (Neustart ab Position).": "Remux en vivo (audio → AAC): duración del análisis. Use el control deslizante inferior para saltar (reinicia desde esa posición).",
     "Erneut einreihen": "Volver a encolar",
@@ -3121,8 +3168,8 @@
       "Atención: un nivel más rápido busca menos a fondo. El archivo suele ser más grande o menos eficiente. Los valores VMAF valen solo para ese nivel.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Atención: mucho más lento, sobre todo AV1 en CPU. Muy lento puede llevar muchas horas en películas. No combinar con alta paralelidad.",
-    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
-      "En Diagnóstico, bajo la autocomprobación, hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna. El modo velocidad codifica un fragmento por nivel y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin VMAF.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "En Diagnóstico, bajo la autocomprobación, hay una prueba de encoder: varios tipos de imagen (animación, CGI, acción real, movimiento, cámara en mano) más archivos propios, varios niveles de velocidad y opcionalmente varios valores CQ/ABR, comparados con VMAF. Puedes aplicar la recomendación como consigna. El modo velocidad codifica el mismo archivo en las tasas indicadas y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "¿Cómo encuentro el nivel de velocidad adecuado?",
     "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
@@ -3171,10 +3218,11 @@
       "Es una pista de compromiso para ese encoder concreto (plataforma × códec), no para todos los equipos. «Muy lento» no está marcado a propósito: el AV1 en CPU puede tardar mucho. Las descargas solo usan la lista permitida, no una URL arbitraria.",
     "Encoder-Test (VMAF)": "Prueba de encoder (VMAF)",
     "Encoder-Test": "Prueba de encoder",
-    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
-      "Mide el encoder elegido con clips de referencia o un archivo propio. VMAF compara los niveles de velocidad por calidad de imagen. Velocidad codifica un fragmento por nivel y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin medición de calidad.",
-    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
-      "Un fragmento por nivel de velocidad, solo el primer valor indicado. El tiempo es solo el de la codificación.",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Mide el encoder elegido con clips de referencia o un archivo propio. VMAF compara los niveles de velocidad por calidad de imagen. Velocidad codifica el mismo archivo en las tasas indicadas y muestra tiempo, fotogramas por segundo y el factor de tiempo real, sin medición de calidad.",
+    "Dieselbe Datei wird je Bitrate einmal encodiert, mit der gespeicherten Speed-Vorgabe. Die Zeit ist die reine Encode-Zeit.":
+      "El mismo archivo se codifica una vez por tasa, con la velocidad guardada. El tiempo es solo el de la codificación.",
+    "Bitraten (kbit/s, kommagetrennt)": "Tasas (kbit/s, separadas por comas)",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Encuentra un nivel de velocidad adecuado: clips cortos de distintos tipos de imagen (animación, CGI de cine, acción real, mucho movimiento, cámara en mano) se codifican con todos los presets del encoder elegido (no solo 5 alias) y opcionalmente varios valores CQ/ABR, y se comparan con VMAF. El valor por defecto es un VMAF normal con 3 escenas. Los clips de referencia vienen de fuentes fijas y libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":
@@ -3464,6 +3512,21 @@
       "Qu'est-ce que XPSNR à côté de VMAF ?",
     "XPSNR ist ein wahrnehmungsgewichtetes PSNR aus dem FFmpeg-Filter xpsnr (ab FFmpeg 7.1, in beiden Image-Linien). Es braucht keine Modelle und läuft im selben Durchgang wie libvmaf – die dekodierten Bilder werden per split an beide Filter gegeben, kein zweiter Decode. Angezeigt wird der gewichtete Wert (4·Y + U + V) / 6 in dB. Grob: ab 36 dB gut, ab 40 dB sehr gut. Bilder, die der Quelle exakt gleichen (unendliches PSNR), fließen nicht in den Mittelwert ein. Die Empfehlung richtet sich weiterhin nach VMAF; XPSNR ist die zweite Meinung, etwa wenn VMAF bei Korn oder Schärfung zu freundlich wird.":
       "XPSNR est un PSNR pondéré perceptuellement issu du filtre FFmpeg xpsnr (FFmpeg 7.1+, dans les deux lignes d'image). Il n'a besoin d'aucun modèle et tourne dans la même passe que libvmaf : les images décodées sont réparties vers les deux filtres, sans second décodage. La valeur affichée est la pondération (4·Y + U + V) / 6 en dB. En gros : à partir de 36 dB bon, à partir de 40 dB très bon. Les images identiques à la source (PSNR infini) n'entrent pas dans la moyenne. La recommandation suit toujours VMAF ; XPSNR est le second avis, par exemple quand VMAF devient trop indulgent avec le grain ou l'accentuation.",
+    "Was ist CAMBI neben VMAF?":
+      "Qu'est-ce que CAMBI à côté du VMAF ?",
+    "CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.":
+      "CAMBI cherche le banding, des aplats en escalier dans les dégradés. Il tourne dans la même passe libvmaf que VMAF, PSNR et SSIM. Plus haut veut dire plus de bandes. Le nombre est la moyenne des échantillons et ne change pas la recommandation.",
+    "Was ist SSIMULACRA2 neben VMAF?":
+      "Qu'est-ce que SSIMULACRA2 à côté du VMAF ?",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compare plusieurs images par échantillon, réparties sur le clip, source contre encode. La valeur par défaut est 3 images, réglable de 1 à 7. Affiché : la moyenne, plus haut est plus proche de la source : environ 50 moyen, 70 élevé, 90 presque sans perte, 100 identique. Cela ne change pas la recommandation.",
+    "SSIMULACRA2-Bilder je Szene": "Images SSIMULACRA2 par scène",
+    "1 – nur Mitte": "1 – seulement le milieu",
+    "3 – über die Szene": "3 – sur la scène",
+    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
+      "Réparties sur chaque clip d'échantillon. Plus haut est plus proche de la source.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
+      "PSNR et SSIM sont des mesures de signal classiques. CAMBI mesure le banding, plus haut veut dire plus de bandes. SSIMULACRA2 est la moyenne de plusieurs images par scène, min est la plus faible. Plus haut est plus proche de la source. La recommandation reste le VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "D'où viennent la suggestion et la durée « d'après l'historique » ?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -4300,6 +4363,14 @@
     "Keine Vorschau.": "Pas d'aperçu.",
     "Erneut": "Relancer",
     "Erneut mit …": "Relancer avec …",
+    "Sofort einreihen": "Mettre en file tout de suite",
+    "Mit diesen Einstellungen öffnen": "Ouvrir avec ces réglages",
+    "Filter aus & mit DV fortsetzen": "Désactiver les filtres et continuer avec DV",
+    "Als HDR10 fortsetzen": "Continuer en HDR10",
+    "Als SDR (Tonemap) fortsetzen": "Continuer en SDR (tonemap)",
+    "Einstellungen ändern": "Modifier les réglages",
+    "Hinweis: DV Profil 5 hat keinen HDR10-Basislayer – ohne DV ist SDR (Tonemap) meist die sichere Wahl.":
+      "Note : le profil DV 5 n'a pas de couche de base HDR10 – sans DV, le SDR (tonemap) est généralement le choix sûr.",
     "Native Wiedergabe (volle Dauer & Suche). Tonspur wird vom Browser direkt gelesen.": "Lecture native (durée et recherche complètes). L’audio est lu directement par le navigateur.",
     "Live-Remux (Ton → AAC): Dauer aus Analyse. Zum Springen den Schieberegler darunter nutzen (Neustart ab Position).": "Remux live (audio → AAC) : durée issue de l’analyse. Utilisez le curseur en dessous pour sauter (redémarre à cette position).",
     "Erneut einreihen": "Remettre en file",
@@ -4585,8 +4656,8 @@
       "Attention : un cran plus rapide cherche moins à fond. Le fichier est souvent plus lourd / moins efficace. Les scores VMAF ne valent que pour ce cran.",
     "Achtung: deutlich länger, besonders AV1 auf der CPU. Sehr langsam kann bei Filmen viele Stunden dauern. Nicht mit hoher Parallelität kombinieren.":
       "Attention : nettement plus long, surtout l'AV1 sur CPU. Très lent peut prendre des heures sur un film. Ne pas combiner avec une forte parallélisation.",
-    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
-      "Sous Diagnostic, sous l'autotest, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne. Le mode vitesse encode un extrait par cran et affiche le temps, les images par seconde et le facteur temps réel, sans VMAF.",
+    "Unter Diagnose, unter dem Selbsttest, gibt es einen Encoder-Test: mehrere Bildarten (Animation, CGI, Live-Action, Bewegung, Handkamera) plus eigene Dateien, mehrere Speed-Stufen und optional mehrere CQ-/ABR-Werte, Vergleich per VMAF. Die Empfehlung kannst du als Vorgabe übernehmen. Die Art Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Encode-Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne VMAF.":
+      "Sous Diagnostic, sous l'autotest, un test d'encodeur compare plusieurs types d'image (animation, CGI, prise de vue réelle, mouvement, caméra à la main) plus tes propres fichiers, plusieurs crans de vitesse et éventuellement plusieurs valeurs CQ/ABR, via le VMAF. Tu peux appliquer la recommandation comme consigne. Le mode vitesse encode le même fichier aux débits indiqués et affiche le temps, les images par seconde et le facteur temps réel, sans VMAF.",
     "Wie finde ich die passende Encoder-Speed-Stufe?":
       "Comment trouver le cran de vitesse d'encodeur adapté ?",
     "Der Encoder-Test unter Diagnose lädt Referenzclips (feste, freie Quellen): 4K-Ausschnitte (~40 s) von Big Buck Bunny, Sintel, Tears of Steel und Charge über Wikimedia, plus 4K-Material mit 30/50/60 fps (NASA, Menger, Natur) und ein Jellyfin-Testvideo in UHD bei etwa 150 Mbit/s (CC-BY-SA, Gnattu). Die alten 10-Sekunden-1080p-Demos sind nur noch Fallback, falls ein Spiegel ausfällt. Du kannst zusätzlich bis zu vier Dateien aus deiner Bibliothek nehmen.":
@@ -4635,10 +4706,11 @@
       "C'est un indice de compromis pour cet encodeur précis (plateforme × codec), pas pour toutes les machines. « Très lent » n'est pas coché exprès – l'AV1 CPU surtout peut durer longtemps. Les téléchargements passent uniquement par la liste autorisée, pas par une URL libre.",
     "Encoder-Test (VMAF)": "Test d'encodeur (VMAF)",
     "Encoder-Test": "Test d'encodeur",
-    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert je Stufe einen Ausschnitt und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
-      "Mesure l'encodeur choisi sur des clips de référence ou un fichier à toi. Le VMAF compare les crans de vitesse par qualité d'image. Vitesse encode un extrait par cran et affiche le temps, les images par seconde et le facteur temps réel, sans mesure de qualité.",
-    "Ein Ausschnitt je Speed-Stufe, nur der erste eingetragene Wert. Die Zeit ist die reine Encode-Zeit.":
-      "Un extrait par cran de vitesse, seulement la première valeur saisie. Le temps est uniquement celui de l'encodage.",
+    "Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei. VMAF vergleicht die Speed-Stufen über die Bildqualität. Geschwindigkeit encodiert dieselbe Datei in den angegebenen Bitraten und zeigt Zeit, Bilder pro Sekunde und das Vielfache der Echtzeit, ohne Messung.":
+      "Mesure l'encodeur choisi sur des clips de référence ou un fichier à toi. Le VMAF compare les crans de vitesse par qualité d'image. Vitesse encode le même fichier aux débits indiqués et affiche le temps, les images par seconde et le facteur temps réel, sans mesure de qualité.",
+    "Dieselbe Datei wird je Bitrate einmal encodiert, mit der gespeicherten Speed-Vorgabe. Die Zeit ist die reine Encode-Zeit.":
+      "Le même fichier est encodé une fois par débit, avec le cran de vitesse enregistré. Le temps est uniquement celui de l'encodage.",
+    "Bitraten (kbit/s, kommagetrennt)": "Débits (kbit/s, séparés par des virgules)",
     "Findet eine passende Speed-Stufe: kurze Clips unterschiedlicher Bildarten (Animation, Film-CGI, Live-Action, viel Bewegung, Handkamera) werden mit allen Presets des gewählten Encoders (nicht nur 5 Aliase) und optional mehreren CQ-/ABR-Werten encodiert und per VMAF verglichen. Standard ist ein normales VMAF mit 3 Szenen. Die Referenzclips kommen von festen, freien Quellen (Blender CC-BY, Intel CC-BY, Wikimedia).":
       "Trouve un cran de vitesse adapté : de courts clips de types d'image différents (animation, CGI film, prise de vue réelle, beaucoup de mouvement, caméra à la main) sont encodés avec tous les presets de l'encodeur choisi (pas seulement 5 alias) et éventuellement plusieurs valeurs CQ/ABR, puis comparés en VMAF. Par défaut, un VMAF normal à 3 scènes. Les clips de référence viennent de sources fixes et libres (Blender CC-BY, Intel CC-BY, Wikimedia).",
     "Pro Clip und Speed-Stufe läuft ein VMAF wie im VMAF-Tool (Standard: 3 Szenen, einstellbar 1–5). Kurze Demo-Clips werden automatisch in kürzere Ausschnitte geteilt, statt auf eine Mitte zusammenzufallen. Du wählst CQ oder ABR/CBR und bis zu vier Werte. Die Tabelle zeigt VMAF-Mittel, 1%-Low, Clip-Größe, erwartete Ersparnis (Prognose vs. Quelle) und Zeit. Darunter erscheinen Vergleichsbilder je Clip und Szene (Original vs. Encode).":

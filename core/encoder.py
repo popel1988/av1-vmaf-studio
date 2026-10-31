@@ -510,10 +510,19 @@ def build_encode_cmd(
                              tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
                              deband=deband)
     tonemapped = bool(tonemap and info.is_hdr and not keep_hdr)
+    enc = ff.encoder_name(platform, codec)
+    av1_dv = bool(
+        enc == "libsvtav1" and preserve_dv and info.dolby_vision
+        and not tonemap and not downscale and not software_filters
+    )
     # setparams ändert keine Helligkeit, schreibt die Kennung aber in den Frame.
     # NVENC liest die oft von dort und setzt sonst video_full_range_flag.
     # Auf einer reinen CUDA-Surface gibt es keinen Software-Filter.
-    if not nvidia_cuda_frames:
+    # WICHTIG für AV1-Dolby-Vision: Sobald FFmpeg einen Filtergraph anlegt,
+    # übernimmt es beim Öffnen des Encoders nur globale Frame-Side-Data;
+    # AV_FRAME_DATA_DOVI_METADATA fällt dabei weg und libsvtav1 schaltet
+    # Dolby Vision stumm ab. Ohne Filtergraph bleibt die RPU erhalten.
+    if not nvidia_cuda_frames and not av1_dv:
         prim, trc, space, rng = _color_tuple(
             info, tonemapped=tonemapped, keep_hdr=keep_hdr)
         sp = _setparams(prim, trc, space, rng)
@@ -521,7 +530,6 @@ def build_encode_cmd(
     if vf:
         cmd += ["-vf", vf]
 
-    enc = ff.encoder_name(platform, codec)
     cmd += ["-c:v", enc]
     # HEVC in MP4 braucht das hvc1-Tag für breite Player-Kompatibilität (Apple).
     if container == "mp4" and codec == "hevc":
@@ -548,11 +556,14 @@ def build_encode_cmd(
         # Dolby Vision (Profil 10.1) nativ einbetten: FFmpeg liest die DV-RPU der
         # Quelle als Frame-Side-Data, libsvtav1 schreibt sie als T.35-Metadaten-
         # OBUs mit. Das ist der EINZIGE Weg zu AV1-DV (dovi_tool kann kein AV1).
-        # Voraussetzung: DV-Quelle, kein Tonemapping und KEIN Downscale – der
-        # Scale-Filter verwirft die DV-Side-Data, wodurch der Encode sonst
-        # abbräche. Bei Downscale bleibt der HDR10-Basislayer erhalten.
-        if preserve_dv and info.dolby_vision and not tonemap and not downscale:
-            cmd += ["-dolbyvision", "auto"]
+        # Voraussetzung: DV-Quelle, kein Tonemapping, kein Downscale und kein
+        # Videofilter – jeder Filtergraph verwirft in FFmpeg beim Öffnen des
+        # Encoders die nicht-globale DV-Side-Data. "1" statt "auto", damit
+        # FFmpeg bei fehlender RPU nicht stumm nur HDR10 schreibt.
+        if av1_dv:
+            cmd += ["-dolbyvision", "1"]
+            if container == "mp4":
+                cmd += ["-strict", "unofficial"]
     elif enc.startswith("libx"):
         cmd += ff.encoder_preset_args(enc, encoder_speed)
     elif enc == "libvpx-vp9":
