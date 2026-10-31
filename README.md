@@ -199,21 +199,23 @@ HDR handling depends on the source and is chosen per job.
 
 The engine and the curve are set in Encoding, the VMAF Tool, and the Super Tool.
 Encode, mobile copy, VMAF reference, and source stills share that choice. The
-full player has the same controls and restarts the preview at the current
-position when one of them changes. Jellyfin-FFmpeg is used for that preview
-only when the selected engine is CUDA, OpenCL, VAAPI, or tonemapx. CPU and
-libplacebo stay on BtbN. Direct play and remux show the file unchanged. The
-editor and the A/B player stay on the CPU Hable chain.
+full player and the standalone A/B player have the same live controls and
+restart the preview at the current position when one of them changes. In the
+standalone A/B player you can load the same source into A and B and configure
+separate tone-mapping and picture filters per side. Jellyfin-FFmpeg is used for
+that preview only when the selected engine is CUDA, OpenCL, VAAPI, or tonemapx.
+CPU and libplacebo stay on BtbN. Direct play and remux show the file unchanged.
+The editor and the VMAF-nerd clip compare stay on the CPU Hable chain.
 If the Jellyfin binary or the needed filter is missing, the job uses the CPU
 chain. A Dolby Vision preserve stays on BtbN as well.
 
 | Engine | Where it runs | Binary |
 |--------|----------------|--------|
-| **CPU** (`zscale` + `tonemap`) | Default. Hable, desaturation 0, peak from metadata. | BtbN |
+| **CPU** (`zscale` + `tonemap`) | Default. Hable, desaturation 0, peak from metadata. Does not support `bt2390` (falls back to Hable). | BtbN |
 | **libplacebo** | Vulkan, on CPU and NVIDIA. Peak and desaturation do not apply. | BtbN |
 | **CUDA** | NVIDIA only. Stays on the GPU when the encode has no crop, deinterlace, deband, denoise, sharpen, grain, or mobile copy, and it is not a seeked clip. Otherwise the frames go through memory, then `hwupload_cuda`. | Jellyfin-FFmpeg |
 | **OpenCL** | Every platform. Intel and AMD map OpenCL from the VAAPI or QSV device. | Jellyfin-FFmpeg |
-| **VAAPI** | AMD, and Intel in VAAPI mode. Intel in QSV mode falls back to the CPU chain. | Jellyfin-FFmpeg |
+| **VAAPI** | AMD, and Intel in VAAPI mode. Uses the driver's fixed tone-map curve (peak and desaturation apply). Intel in QSV mode falls back to the CPU chain. | Jellyfin-FFmpeg |
 | **tonemapx** | CPU, SIMD. | Jellyfin-FFmpeg |
 
 Curves: **Hable** (default here), BT.2390, Reinhard, Mobius, Gamma, Clip, Linear.

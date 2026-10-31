@@ -1194,7 +1194,35 @@
     const engine = $(prefix + "-tonemap-engine");
     const box = $(prefix === "opt" ? "tonemap-opts" : prefix + "-tonemap-opts");
     if (!box) return;
-    const cpuOnly = !engine || engine.value !== "libplacebo";
+    const platEl = $(prefix + "-platform");
+    const plat = (platEl && platEl.value) ? platEl.value : "cpu";
+    if (engine) {
+      [...engine.options].forEach((opt) => {
+        let ok = true;
+        if (opt.value === "libplacebo") ok = plat === "cpu" || plat === "nvidia";
+        else if (opt.value === "cuda") ok = plat === "nvidia";
+        else if (opt.value === "vaapi") ok = plat === "amd" || plat === "intel";
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (engine.selectedOptions[0] && engine.selectedOptions[0].disabled) {
+        engine.value = "cpu";
+      }
+    }
+    const engVal = engine ? engine.value : "cpu";
+    const algo = $(prefix + "-tonemap-algo");
+    if (algo) {
+      algo.disabled = engVal === "vaapi";
+      [...algo.options].forEach((opt) => {
+        const ok = !(engVal === "cpu" && opt.value === "bt2390");
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (algo.selectedOptions[0] && algo.selectedOptions[0].disabled) {
+        algo.value = "hable";
+      }
+    }
+    const cpuOnly = engVal !== "libplacebo";
     box.querySelectorAll(".tonemap-cpu-only").forEach((el) => {
       el.hidden = !cpuOnly;
     });
@@ -1474,7 +1502,10 @@
       syncEncVmafRate(false);
     }
 
-    $("opt-platform").addEventListener("change", updateCodecAvailability);
+    $("opt-platform").addEventListener("change", () => {
+      updateCodecAvailability();
+      syncTonemapEngine("opt");
+    });
     $("opt-codec").addEventListener("change", updateCodecAvailability);
     updateCodecAvailability();
 
@@ -3262,6 +3293,7 @@
 
     $("vt-platform").addEventListener("change", () => {
       vtUpdateCodecAvailability();
+      syncTonemapEngine("vt");
     });
     $("vt-codec").addEventListener("change", () => {
       vtUpdateCodecAvailability();
@@ -4440,6 +4472,7 @@
     const tb = $("vmaf-table") && $("vmaf-table").querySelector("tbody");
     if (tb) tb.innerHTML = "";
     const sc = $("vmaf-screenshots"); if (sc) sc.innerHTML = "";
+    const nsc = $("nerd-screenshots"); if (nsc) nsc.innerHTML = "";
     const note = $("vmaf-archive-note"); if (note) note.style.display = "none";
     syncKeepSourceBanner(null);
     const badge = $("vmaf-model-badge");
@@ -4492,6 +4525,7 @@
       fillVmafTable(vmaf);
       state.shotScene = null;
       renderScreenshots(vmaf);
+      if (state.vmafNerd) refreshNerdFrames();
       state.vmafArchiveData = data;
       const applied = $("vmaf-archive-applied");
       if (applied) applied.textContent = "";
@@ -4718,6 +4752,10 @@
   function renderScreenshots(vmaf, gridEl) {
     const grid = gridEl || $("vmaf-screenshots");
     if (!grid) return;
+    const isMain = grid === $("vmaf-screenshots");
+    const isNerd = grid === $("nerd-screenshots");
+    const isMainOrNerd = isMain || isNerd;
+    const fullDetail = !isMain;
     const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
     const all = (vmaf.results || [])
       .map((r) => ({ r, shots: shotsOf(r) }))
@@ -4737,12 +4775,29 @@
     if (ui.scene == null || !scenes.includes(ui.scene))
       ui.scene = scenes[0];
     const sc = ui.scene;
-    if (grid === $("vmaf-screenshots")) state.shotScene = sc;
+    if (isMainOrNerd) state.shotScene = sc;
+
+    let maxS2Stills = 0;
+    if (fullDetail) {
+      results.forEach((x) => {
+        const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
+        if (s && Array.isArray(s.ssimulacra2_pairs)) {
+          const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
+          if (valid > maxS2Stills) maxS2Stills = valid;
+        }
+      });
+    }
+    if (!fullDetail || ui.s2Idx == null || ui.s2Idx >= maxS2Stills) ui.s2Idx = -1;
 
     let refSrc = "";
     results.forEach((x) => {
       const s = x.shots.find((sh) => sh.scene === sc);
-      if (s && s.ref && !refSrc) refSrc = s.ref;
+      if (ui.s2Idx >= 0) {
+        const scObj = (x.r.scene_scores || []).find((v) => v.scene === sc);
+        const pair = scObj && Array.isArray(scObj.ssimulacra2_pairs) ? scObj.ssimulacra2_pairs[ui.s2Idx] : null;
+        if (pair && pair.ref && !refSrc) refSrc = pair.ref;
+      }
+      if (!refSrc && s && s.ref) refSrc = s.ref;
     });
 
     let sceneStart = 0;
@@ -4756,41 +4811,56 @@
     const tiles = [];
     if (refSrc)
       tiles.push({
-        src: refSrc, label: "Original", sub: `Szene ${sc + 1}`, ref: true,
+        src: refSrc,
+        label: "Original",
+        sub: ui.s2Idx >= 0 ? `Szene ${sc + 1} · S2-Bild ${ui.s2Idx + 1}` : `Szene ${sc + 1}`,
+        ref: true,
         start: sceneStart, len: sceneLen,
       });
     results.forEach((x) => {
       const s = x.shots.find((sh) => sh.scene === sc);
       if (s && s.enc) {
         const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
+        const s2Pair = (ui.s2Idx >= 0 && sceneScore && Array.isArray(sceneScore.ssimulacra2_pairs))
+          ? sceneScore.ssimulacra2_pairs[ui.s2Idx]
+          : null;
+        const encSrc = (s2Pair && s2Pair.enc) ? s2Pair.enc : s.enc;
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
         const bits = [];
         if (!vmaf.visual_only) {
           bits.push(`VMAF ${Number(v).toFixed(1)}`);
           if (sceneScore && sceneScore.p1 != null)
             bits.push(`1% ${Number(sceneScore.p1).toFixed(1)}`);
-          if (sceneScore && sceneScore.xpsnr != null)
-            bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
-          if (sceneScore && sceneScore.cambi != null)
-            bits.push(`CAMBI ${Number(sceneScore.cambi).toFixed(2)}`);
-          if (sceneScore && sceneScore.ssimulacra2 != null) {
-            const m = ssimulacra2Mark(sceneScore.ssimulacra2);
-            const mn = sceneScore.ssimulacra2_min != null
-              ? ` min ${Number(sceneScore.ssimulacra2_min).toFixed(1)}` : "";
-            const n = sceneScore.ssimulacra2_n ? ` · ${sceneScore.ssimulacra2_n} Bilder` : "";
-            const word = m.word ? ` (${m.word})` : "";
-            bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${word}${mn}${n}`);
+          if (fullDetail) {
+            if (sceneScore && sceneScore.xpsnr != null)
+              bits.push(`XPSNR ${Number(sceneScore.xpsnr).toFixed(1)}`);
+            if (sceneScore && sceneScore.cambi != null)
+              bits.push(`CAMBI ${Number(sceneScore.cambi).toFixed(2)}`);
+            if (s2Pair && s2Pair.score != null) {
+              const m = ssimulacra2Mark(s2Pair.score);
+              const word = m.word ? ` (${m.word})` : "";
+              bits.push(`S2-Bild ${ui.s2Idx + 1}: ${Number(s2Pair.score).toFixed(1)}${word}`);
+            } else if (sceneScore && sceneScore.ssimulacra2 != null) {
+              const m = ssimulacra2Mark(sceneScore.ssimulacra2, sceneScore.ssimulacra2_min);
+              const mn = sceneScore.ssimulacra2_min != null
+                ? ` min ${Number(sceneScore.ssimulacra2_min).toFixed(1)}` : "";
+              const vals = Array.isArray(sceneScore.ssimulacra2_scores) && sceneScore.ssimulacra2_scores.length > 1
+                ? ` [${sceneScore.ssimulacra2_scores.map((val) => Number(val).toFixed(1)).join("/")}]`
+                : (sceneScore.ssimulacra2_n ? ` · ${sceneScore.ssimulacra2_n} Bilder` : "");
+              const word = m.word ? ` (${m.word})` : "";
+              bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${word}${mn}${vals}`);
+            }
           }
         }
         const ist = bitrateReport(
           x.r, (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps);
         if (ist) bits.push(ist);
         tiles.push({
-          src: s.enc,
+          src: encSrc,
           label: x.r.label || ("Q" + x.r.quality),
           sub: bits.join(" · "),
           recommended: x.r.recommended,
-          clip: (grid === $("vmaf-screenshots") && s.clip) ? s.clip : "",
+          clip: (isMainOrNerd && s.clip) ? s.clip : "",
           start: sceneStart, len: sceneLen,
         });
       }
@@ -4807,13 +4877,24 @@
           `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">${escapeHtml(sceneTabText(vmaf, n))}</button>`
         ).join("")}</div>`
       : "";
+    const s2Tabs = (fullDetail && maxS2Stills > 1)
+      ? `<div class="shot-scenes" title="SSIMULACRA2-Vergleichsbilder dieser Szene">`
+        + `<button class="shot-scene ${ui.s2Idx < 0 ? "active" : ""}" data-s2="-1">Szenenmitte</button>`
+        + Array.from({ length: maxS2Stills }, (_, idx) =>
+            `<button class="shot-scene ${ui.s2Idx === idx ? "active" : ""}" data-s2="${idx}">S2-Bild ${idx + 1}</button>`
+          ).join("")
+        + `</div>`
+      : "";
+    const nerdHint = (isMain && !vmaf.visual_only)
+      ? ` · <button type="button" class="btn btn-ghost btn-sm shot-to-nerd">Alle S2-Bilder &amp; Details → Daten für Nerds</button>`
+      : "";
 
     grid.innerHTML = `
       <div class="shot-toolbar">
-        ${groupTabs}${sceneTabs}
-        <span class="shot-hint">Bilder ankreuzen und vergleichen – oder anklicken zum Vergrößern.</span>
+        ${groupTabs}${sceneTabs}${s2Tabs}
+        <span class="shot-hint">Bilder ankreuzen und vergleichen (mit Wipe-Schieber) – oder ein Bild direkt anklicken.${nerdHint}</span>
         <button class="btn small shot-compare" disabled>Auswahl vergleichen</button>
-        ${grid === $("vmaf-screenshots") ? `<button class="btn small shot-ab" disabled title="Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.">Im A/B abspielen</button>` : ""}
+        ${isMainOrNerd ? `<button class="btn small shot-ab" disabled title="Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.">Im A/B abspielen</button>` : ""}
       </div>
       <div class="shot-gallery${tiles.length > 8 ? " is-many" : ""}">
         ${tiles.map((t) => {
@@ -4836,16 +4917,25 @@
     grid.querySelectorAll(".shot-scene[data-scene]").forEach((b) =>
       b.addEventListener("click", () => {
         ui.scene = +b.dataset.scene;
-        if (grid === $("vmaf-screenshots")) {
+        if (isMainOrNerd) {
           state.chartScene = ui.scene;
           showVmafChart(vmaf);
         }
         renderScreenshots(vmaf, grid);
       }));
+    const toNerdBtn = grid.querySelector(".shot-to-nerd");
+    if (toNerdBtn) {
+      toNerdBtn.addEventListener("click", () => navTo("vmafnerd"));
+    }
     grid.querySelectorAll(".shot-scene[data-group]").forEach((b) =>
       b.addEventListener("click", () => {
         ui.group = b.dataset.group;
         ui.scene = null;
+        renderScreenshots(vmaf, grid);
+      }));
+    grid.querySelectorAll(".shot-scene[data-s2]").forEach((b) =>
+      b.addEventListener("click", () => {
+        ui.s2Idx = parseInt(b.dataset.s2, 10);
         renderScreenshots(vmaf, grid);
       }));
 
@@ -4866,7 +4956,10 @@
       const n = picks.length;
       cmpBtn.disabled = n < 1;
       cmpBtn.textContent = n > 0 ? `Auswahl vergleichen (${n})` : "Auswahl vergleichen";
-      if (grid === $("vmaf-screenshots")) rememberScreenshotPicks();
+      if (isMainOrNerd) {
+        const pickedIds = idsForPicks(picks);
+        if (pickedIds.length) state.clipPickIds = pickedIds;
+      }
       if (!abBtn) return;
       const why = clipAbBlock(picks);
       abBtn.disabled = !!why;
@@ -4887,7 +4980,18 @@
     grid.querySelectorAll(".shot-tile img").forEach((img) =>
       img.addEventListener("click", () => {
         const tile = img.closest(".shot-tile");
-        openGallery([{ src: tile.dataset.src, label: tile.dataset.cap }]);
+        const clicked = { src: tile.dataset.src, label: tile.dataset.cap };
+        if (tile.dataset.kind !== "ref") {
+          const refTile = grid.querySelector('.shot-tile[data-kind="ref"]');
+          if (refTile && refTile.dataset.src && refTile.dataset.src !== clicked.src) {
+            openGallery([
+              { src: refTile.dataset.src, label: refTile.dataset.cap || "Original" },
+              clicked,
+            ]);
+            return;
+          }
+        }
+        openGallery([clicked]);
       }));
     grid.querySelectorAll(".shot-play").forEach((btn) =>
       btn.addEventListener("click", (e) => {
@@ -4905,7 +5009,7 @@
     updateCmp();
   }
 
-  // Öffnet beliebig viele Bilder nebeneinander (Referenz + gewählte Qualitäten).
+  // Öffnet beliebig viele Bilder (mit interaktivem Wipe-/Umschalt-Vergleich ab 2 Bildern).
   function openGallery(items) {
     let box = $("lightbox");
     if (!box) {
@@ -4913,20 +5017,178 @@
       box.id = "lightbox";
       box.className = "lightbox";
       box.innerHTML =
+        '<div class="lightbox-toolbar" id="lightbox-toolbar"></div>' +
+        '<div class="lightbox-stage" id="lightbox-stage"></div>' +
         '<div class="lightbox-grid"></div>' +
-        '<div class="lightbox-hint">Klick oder Esc zum Schließen</div>';
+        '<div class="lightbox-hint">Klick auf Hintergrund oder Esc zum Schließen</div>';
       document.body.appendChild(box);
-      box.addEventListener("click", closeLightbox);
+      box.addEventListener("click", (ev) => {
+        if (ev.target === box || ev.target.classList.contains("lightbox-hint")) {
+          closeLightbox();
+        }
+      });
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeLightbox();
       });
     }
+    const bar = box.querySelector("#lightbox-toolbar");
+    const stage = box.querySelector("#lightbox-stage");
     const gal = box.querySelector(".lightbox-grid");
-    gal.dataset.count = Math.min(items.length, 6);
-    gal.innerHTML = items.map((it) =>
-      `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
-      `<img src="${it.src}" alt="" /></figure>`
-    ).join("");
+    const canCompare = items.length >= 2;
+    let mode = canCompare ? "wipe" : "grid";
+    let idxA = 0;
+    let idxB = 1;
+    let wipePos = 50;
+    let flipSide = 0;
+
+    const renderView = () => {
+      if (!canCompare) {
+        if (bar) bar.style.display = "none";
+        if (stage) { stage.style.display = "none"; stage.innerHTML = ""; }
+        gal.style.display = "grid";
+        gal.dataset.count = 1;
+        gal.innerHTML = items.map((it) =>
+          `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
+          `<img src="${it.src}" alt="" /></figure>`
+        ).join("");
+        return;
+      }
+
+      const optHtml = items.map((it, i) =>
+        `<option value="${i}">${escapeHtml(it.label || ("Bild " + (i + 1)))}</option>`
+      ).join("");
+      bar.style.display = "flex";
+      bar.innerHTML = `
+        <div class="lb-modes">
+          <button type="button" class="btn btn-sm ${mode === "wipe" ? "btn-primary" : "btn-ghost"}" data-lb-mode="wipe">${escapeHtml(tt("Wipe-Schieber"))}</button>
+          <button type="button" class="btn btn-sm ${mode === "flip" ? "btn-primary" : "btn-ghost"}" data-lb-mode="flip">${escapeHtml(tt("Hin & Her (A/B)"))}</button>
+          <button type="button" class="btn btn-sm ${mode === "grid" ? "btn-primary" : "btn-ghost"}" data-lb-mode="grid">${escapeHtml(tt("Nebeneinander"))}</button>
+        </div>
+        ${mode !== "grid" ? `
+        <div class="lb-selectors">
+          <label>A <select id="lb-sel-a">${optHtml}</select></label>
+          <button type="button" class="btn btn-ghost btn-sm" id="lb-swap" title="A und B tauschen">⇄</button>
+          <label>B <select id="lb-sel-b">${optHtml}</select></label>
+        </div>` : ""}
+        <button type="button" class="btn btn-ghost btn-sm" id="lb-close">✕</button>
+      `;
+
+      bar.querySelectorAll("[data-lb-mode]").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          mode = b.dataset.lbMode;
+          renderView();
+        }));
+      const closeBtn = bar.querySelector("#lb-close");
+      if (closeBtn) closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeLightbox(); });
+
+      const selA = bar.querySelector("#lb-sel-a");
+      const selB = bar.querySelector("#lb-sel-b");
+      if (selA) {
+        selA.value = String(idxA);
+        selA.addEventListener("change", (e) => { e.stopPropagation(); idxA = +selA.value; renderStageOnly(); });
+      }
+      if (selB) {
+        selB.value = String(idxB);
+        selB.addEventListener("change", (e) => { e.stopPropagation(); idxB = +selB.value; renderStageOnly(); });
+      }
+      const swapBtn = bar.querySelector("#lb-swap");
+      if (swapBtn) {
+        swapBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const tmp = idxA; idxA = idxB; idxB = tmp;
+          renderView();
+        });
+      }
+      renderStageOnly();
+    };
+
+    const renderStageOnly = () => {
+      if (mode === "grid") {
+        stage.style.display = "none";
+        stage.innerHTML = "";
+        gal.style.display = "grid";
+        gal.dataset.count = Math.min(items.length, 6);
+        gal.innerHTML = items.map((it) =>
+          `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
+          `<img src="${it.src}" alt="" /></figure>`
+        ).join("");
+        return;
+      }
+
+      gal.style.display = "none";
+      stage.style.display = "flex";
+      const itemA = items[idxA] || items[0];
+      const itemB = items[idxB] || items[1] || items[0];
+
+      if (mode === "wipe") {
+        stage.innerHTML = `
+          <div class="lb-wipe-wrap" id="lb-wipe-wrap" style="--lb-wipe:${wipePos}%">
+            <img class="lb-img-a" src="${itemA.src}" alt="" draggable="false" />
+            <img class="lb-img-b" src="${itemB.src}" alt="" draggable="false" />
+            <div class="lb-wipe-line"><span>A ◂ ▸ B</span></div>
+            <span class="lb-tag lb-tag-a">A · ${escapeHtml(itemA.label || "")}</span>
+            <span class="lb-tag lb-tag-b">B · ${escapeHtml(itemB.label || "")}</span>
+          </div>
+          <div class="lb-slider-row">
+            <span>A</span>
+            <input type="range" id="lb-wipe-range" min="0" max="100" step="0.5" value="${wipePos}" />
+            <span>B</span>
+          </div>`;
+        const wrap = stage.querySelector("#lb-wipe-wrap");
+        const range = stage.querySelector("#lb-wipe-range");
+        const applyWipe = (val) => {
+          wipePos = Math.max(0, Math.min(100, Number(val) || 0));
+          if (wrap) wrap.style.setProperty("--lb-wipe", wipePos + "%");
+          if (range) range.value = String(wipePos);
+        };
+        if (range) {
+          range.addEventListener("input", (e) => { e.stopPropagation(); applyWipe(range.value); });
+        }
+        if (wrap) {
+          let dragging = false;
+          const fromEvent = (ev) => {
+            const r = wrap.getBoundingClientRect();
+            const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left;
+            if (r.width > 0) applyWipe(((x / r.width) * 100).toFixed(1));
+          };
+          wrap.addEventListener("mousedown", (ev) => { dragging = true; fromEvent(ev); ev.preventDefault(); ev.stopPropagation(); });
+          window.addEventListener("mousemove", (ev) => { if (dragging) fromEvent(ev); });
+          window.addEventListener("mouseup", () => { dragging = false; });
+          wrap.addEventListener("touchstart", (ev) => { fromEvent(ev); }, { passive: true });
+          wrap.addEventListener("touchmove", (ev) => { fromEvent(ev); }, { passive: true });
+        }
+      } else if (mode === "flip") {
+        const cur = flipSide === 0 ? itemA : itemB;
+        const curTag = flipSide === 0 ? "A" : "B";
+        stage.innerHTML = `
+          <div class="lb-flip-wrap" id="lb-flip-wrap" title="Klicken oder gedrückt halten zum Umschalten A ↔ B">
+            <img src="${cur.src}" alt="" draggable="false" />
+            <span class="lb-tag lb-tag-a">${curTag} · ${escapeHtml(cur.label || "")}</span>
+          </div>
+          <div class="lb-slider-row">
+            <button type="button" class="btn btn-sm ${flipSide === 0 ? "btn-primary" : "btn-ghost"}" data-lb-flip="0">A zeigen</button>
+            <button type="button" class="btn btn-sm ${flipSide === 1 ? "btn-primary" : "btn-ghost"}" data-lb-flip="1">B zeigen</button>
+            <span class="muted" style="font-size:12px">Klick ins Bild schaltet sofort zwischen A und B um</span>
+          </div>`;
+        const fwrap = stage.querySelector("#lb-flip-wrap");
+        if (fwrap) {
+          fwrap.addEventListener("click", (e) => {
+            e.stopPropagation();
+            flipSide = flipSide === 0 ? 1 : 0;
+            renderStageOnly();
+          });
+        }
+        stage.querySelectorAll("[data-lb-flip]").forEach((b) =>
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            flipSide = +b.dataset.lbFlip;
+            renderStageOnly();
+          }));
+      }
+    };
+
+    renderView();
     box.style.display = "flex";
     requestAnimationFrame(() => box.classList.add("open"));
   }
@@ -5071,9 +5333,21 @@
 
   // SSIMULACRA2-Einordnung (0–100): ≥ 85 kaum unterscheidbar, ≥ 70 sehr gut,
   // ≥ 50 sichtbare Verluste, darunter schwach.
-  function ssimulacra2Mark(v) {
+  // Bricht das schwächste Standbild (minVal) deutlich weg, warnt die Pille ehrlich.
+  function ssimulacra2Mark(v, minVal) {
     const x = Number(v);
     if (!Number.isFinite(x)) return { cls: "", text: "—", word: "" };
+    const m = minVal != null && Number.isFinite(Number(minVal)) ? Number(minVal) : x;
+    if (m < 50) {
+      return {
+        cls: m < 35 ? "bad" : "warn",
+        text: x.toFixed(1),
+        word: x >= 70 ? "Einbruch im Standbild" : "schwach",
+      };
+    }
+    if (x >= 70 && m < 62) {
+      return { cls: "warn", text: x.toFixed(1), word: "gut (mit Ausreißer)" };
+    }
     const cls = x >= 85 ? "good" : (x >= 70 ? "" : (x >= 50 ? "warn" : "bad"));
     const word = x >= 85
       ? "kaum unterscheidbar"
@@ -5081,15 +5355,30 @@
     return { cls, text: x.toFixed(1), word };
   }
 
+  function ssimulacra2BreakdownLines(r) {
+    const lines = [];
+    (r.scene_scores || []).forEach((sc) => {
+      if (sc.ssimulacra2 == null) return;
+      const vals = Array.isArray(sc.ssimulacra2_scores) && sc.ssimulacra2_scores.length
+        ? sc.ssimulacra2_scores.map((v, i) => `B${i + 1}: ${Number(v).toFixed(1)}`).join(", ")
+        : (sc.ssimulacra2_min != null ? `min ${Number(sc.ssimulacra2_min).toFixed(1)}` : "");
+      lines.push(`Szene ${sc.scene + 1}: Ø ${Number(sc.ssimulacra2).toFixed(1)}${vals ? ` (${vals})` : ""}`);
+    });
+    return lines;
+  }
+
   function ssimulacra2Pill(r) {
     if (r.ssimulacra2 == null) return "";
-    const m = ssimulacra2Mark(r.ssimulacra2);
+    const m = ssimulacra2Mark(r.ssimulacra2, r.ssimulacra2_min);
     const mn = r.ssimulacra2_min != null ? ` (min ${Number(r.ssimulacra2_min).toFixed(1)})` : "";
+    const breakdown = ssimulacra2BreakdownLines(r);
     const tip = [
       `SSIMULACRA2 ${m.text}${mn} – ${m.word}.`,
+      ...(breakdown.length ? ["", ...breakdown, ""] : []),
       "Standbild-Vergleich (Skala bis 100, höher = näher an der Quelle):",
       "≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbare Verluste · < 50 deutlich schlechter.",
-    ].join(" ");
+      "Fällt ein einzelnes Standbild unter 50, wird trotz gutem Mittelwert vor dem Einbruch gewarnt.",
+    ].join("\n");
     return `<span class="metric-pill ${m.cls}" title="${escapeHtml(tip)}">SSIMULACRA2 ${m.text}${mn} · ${m.word}</span>`;
   }
 
@@ -5124,12 +5413,14 @@
             bits.push(`CAMBI ${Number(sc.cambi).toFixed(2)}${mn}`);
           }
           if (sc.ssimulacra2 != null) {
-            const m = ssimulacra2Mark(sc.ssimulacra2);
+            const m = ssimulacra2Mark(sc.ssimulacra2, sc.ssimulacra2_min);
             const mn = sc.ssimulacra2_min != null
               ? ` (min ${Number(sc.ssimulacra2_min).toFixed(1)})` : "";
-            const n = sc.ssimulacra2_n ? `, ${sc.ssimulacra2_n} Bilder` : "";
+            const vals = Array.isArray(sc.ssimulacra2_scores) && sc.ssimulacra2_scores.length
+              ? ` [${sc.ssimulacra2_scores.map((v) => Number(v).toFixed(1)).join(" / ")}]`
+              : (sc.ssimulacra2_n ? `, ${sc.ssimulacra2_n} Bilder` : "");
             const word = m.word ? ` (${m.word})` : "";
-            bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${word}${mn}${n}`);
+            bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${word}${mn}${vals}`);
           }
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
@@ -5140,9 +5431,19 @@
       const visible = (r.scene_scores || []).map((sc) => {
         const p = sc.p1 != null ? ` / 1% ${Number(sc.p1).toFixed(1)}` : "";
         const idle = sc.idle ? ` · ${tt("zählt nicht")}` : "";
+        const s2Tip = sc.ssimulacra2 != null
+          ? ` · SSIMULACRA2 Ø ${Number(sc.ssimulacra2).toFixed(1)}`
+            + (Array.isArray(sc.ssimulacra2_scores) && sc.ssimulacra2_scores.length
+              ? ` (${sc.ssimulacra2_scores.map((v, i) => `B${i + 1}: ${Number(v).toFixed(1)}`).join(", ")})`
+              : (sc.ssimulacra2_min != null ? ` (min ${Number(sc.ssimulacra2_min).toFixed(1)})` : ""))
+          : "";
         const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}${idle}`;
-        if (sc.idle || !vmafSceneP1Miss(sc, floor)) return escapeHtml(text);
-        const tip = `1%-Low ${Number(sc.p1).toFixed(1)} unter ${Math.round(floor)}`;
+        if (sc.idle || !vmafSceneP1Miss(sc, floor)) {
+          return s2Tip
+            ? `<span title="${escapeHtml(`Szene ${sc.scene + 1}: VMAF ${Number(sc.vmaf).toFixed(1)}${p}${s2Tip}`)}">${escapeHtml(text)}</span>`
+            : escapeHtml(text);
+        }
+        const tip = `1%-Low ${Number(sc.p1).toFixed(1)} unter ${Math.round(floor)}${s2Tip}`;
         return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
       s += `<br><span class="muted vmaf-scenes" title="${escapeHtml(perScene.join("\n"))}">`
@@ -6232,6 +6533,8 @@
       if (empty) empty.hidden = false;
       const bar = $("nerd-scenes");
       if (bar) bar.innerHTML = "";
+      const nsc = $("nerd-screenshots");
+      if (nsc) nsc.innerHTML = "";
       destroyNamedChart("vmafNerdChart");
       return;
     }
@@ -6243,6 +6546,12 @@
     fillVmafTable(vmaf);
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
     const scene = state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);
+    const nsc = $("nerd-screenshots");
+    if (nsc) {
+      const ui = nsc._shotUi || (nsc._shotUi = { scene: null, group: null });
+      ui.scene = scene;
+      renderScreenshots(vmaf, nsc);
+    }
     const session = state.vmafSession;
     const title = $("vmaf-nerd-title");
     const body = $("vmaf-nerd-body");
@@ -6693,11 +7002,12 @@
         state.chartScene = raw === "" ? null : +raw;
         showVmafChart(vmaf);
         if (state.chartScene != null) {
-          const grid = $("vmaf-screenshots");
-          if (grid && grid._shotUi) {
-            grid._shotUi.scene = state.chartScene;
-            renderScreenshots(vmaf, grid);
-          }
+          [$("vmaf-screenshots"), $("nerd-screenshots")].forEach((grid) => {
+            if (grid && grid._shotUi) {
+              grid._shotUi.scene = state.chartScene;
+              renderScreenshots(vmaf, grid);
+            }
+          });
         }
       });
     });
@@ -7525,6 +7835,15 @@
   function openAbCompare(rootA, pathA, rootB, pathB, opts) {
     closeModal();
     navTo("abcompare");
+    const sameBox = $("ab-same-source");
+    if (sameBox) sameBox.checked = !!(pathA && pathA === pathB);
+    const fmA = $("ab-a-filter-mode");
+    const fmB = $("ab-b-filter-mode");
+    if (pathA && pathB && pathA !== pathB) {
+      if (fmA) fmA.value = "off";
+      if (fmB) fmB.value = "off";
+    }
+    abSyncSourceUi();
     const set = (id, val) => { const el = $(id); if (el && val != null) el.value = val; };
     set("ab-root-a", rootA); set("ab-path-a", pathA);
     set("ab-root-b", rootB); set("ab-path-b", pathB);
@@ -9386,7 +9705,10 @@
       syncVmafRate(false);
     }
 
-    $("st-platform").addEventListener("change", stUpdateCodec);
+    $("st-platform").addEventListener("change", () => {
+      stUpdateCodec();
+      syncTonemapEngine("st");
+    });
     $("st-codec").addEventListener("change", stUpdateCodec);
     stUpdateCodec();
 
@@ -11643,6 +11965,9 @@
   function syncAbChrome() {
     const card = $("ab-card");
     if (card) card.classList.toggle("is-nerd", state.currentPage === "vmafnerd");
+    abSyncSourceUi();
+    abSyncSideLookUi("a");
+    abSyncSideLookUi("b");
   }
 
   function screenshotAbPicks() {
@@ -11956,7 +12281,191 @@
     return {
       key, video: $("ab-video-" + key), path: "", root: "media", clipUrl: "",
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
+      info: null, lookSummary: "", lookTimer: 0, starting: false, lookAgain: false,
+      lastTime: 0,
     };
+  }
+
+  function abIsStandalone() {
+    const card = $("ab-card");
+    return !(card && card.classList.contains("is-nerd"));
+  }
+
+  function abSyncSourceUi() {
+    const same = !!($("ab-same-source") && $("ab-same-source").checked);
+    const pickers = $("ab-pickers");
+    const pickB = $("ab-picker-b");
+    const labA = $("ab-label-a");
+    if (pickers) pickers.classList.toggle("ab-single-source", same);
+    if (pickB) pickB.hidden = same;
+    if (labA) labA.textContent = same ? tt("Quelldatei (für A und B)") : tt("Video A");
+  }
+
+  function abSyncSideLookUi(key) {
+    const side = ab.sides[key];
+    const grid = $("ab-look-grid");
+    const hasAny = !!(ab.sides.a && ab.sides.a.info) || !!(ab.sides.b && ab.sides.b.info);
+    if (grid) grid.hidden = !abIsStandalone() || !hasAny;
+    if (!side) return;
+    const modeEl = $(`ab-${key}-filter-mode`);
+    const filterOn = !modeEl || modeEl.value === "on";
+    const body = $(`ab-${key}-look-body`);
+    const platWrap = $(`ab-${key}-plat-wrap`);
+    if (body) body.hidden = !filterOn;
+    if (platWrap) platWrap.hidden = !filterOn;
+
+    const hdr = !!(side.info && side.info.is_hdr);
+    const toneBox = $(`ab-${key}-tonemap-opts`);
+    if (toneBox) toneBox.hidden = !(filterOn && hdr);
+
+    const opts = window.fpPlayerOptions || null;
+    const rawPlat = ($(`ab-${key}-platform`) || {}).value || "auto";
+    const plat = rawPlat === "auto"
+      ? ((opts && opts.transcode_platform) || "cpu")
+      : rawPlat;
+    const jfList = opts && Array.isArray(opts.jellyfin_filters) ? opts.jellyfin_filters : null;
+    const hasJf = (f) => !jfList || jfList.includes(f);
+    const intelVaapi = !(opts && opts.intel_uses_vaapi === false);
+
+    const engine = $(`ab-${key}-tonemap-engine`);
+    if (engine) {
+      [...engine.options].forEach((opt) => {
+        let ok = true;
+        if (opt.value === "libplacebo") ok = plat === "cpu" || plat === "nvidia";
+        else if (opt.value === "cuda") ok = plat === "nvidia" && hasJf("tonemap_cuda");
+        else if (opt.value === "opencl") ok = hasJf("tonemap_opencl");
+        else if (opt.value === "vaapi") {
+          ok = (plat === "amd" || (plat === "intel" && intelVaapi)) && hasJf("tonemap_vaapi");
+        } else if (opt.value === "tonemapx") ok = hasJf("tonemapx");
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (engine.selectedOptions[0] && engine.selectedOptions[0].disabled) {
+        engine.value = "cpu";
+      }
+    }
+
+    const engVal = engine ? engine.value : "cpu";
+    const algo = $(`ab-${key}-tonemap-algo`);
+    if (algo) {
+      algo.disabled = engVal === "vaapi";
+      [...algo.options].forEach((opt) => {
+        const ok = !(engVal === "cpu" && opt.value === "bt2390");
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (algo.selectedOptions[0] && algo.selectedOptions[0].disabled) {
+        algo.value = "hable";
+      }
+    }
+
+    const showPeak = filterOn && hdr && engVal !== "libplacebo";
+    if (toneBox) {
+      toneBox.querySelectorAll(".tonemap-cpu-only").forEach((el) => {
+        el.hidden = !showPeak;
+      });
+    }
+    const desatEl = $(`ab-${key}-tonemap-desat`);
+    const desatLab = $(`ab-${key}-tonemap-desat-val`);
+    if (desatEl && desatLab) {
+      const n = parseFloat(desatEl.value);
+      desatLab.textContent = (Number.isFinite(n) ? n : 0).toFixed(1).replace(".", ",");
+    }
+    abUpdateSideBadge(key);
+  }
+
+  function abUpdateSideBadge(key) {
+    const side = ab.sides[key];
+    const sumEl = $(`ab-look-summary-${key}`);
+    const tagEl = $(`ab-tag-${key}`);
+    const up = key.toUpperCase();
+    if (!side || !side.path) {
+      if (sumEl) sumEl.textContent = "—";
+      if (tagEl) tagEl.textContent = up;
+      return;
+    }
+    const modeEl = $(`ab-${key}-filter-mode`);
+    const filterOn = abIsStandalone() && (!modeEl || modeEl.value === "on");
+    let label = side.mode === "direct" ? "Direct" : "HLS";
+    if (filterOn && side.lookSummary) {
+      label = side.lookSummary;
+    } else if (!filterOn) {
+      label = `${tt("Original")} (${side.mode === "direct" ? "Direct" : "HLS"})`;
+    }
+    if (sumEl) sumEl.textContent = label;
+    if (tagEl) tagEl.textContent = abIsStandalone() && label ? `${up} · ${label}` : up;
+  }
+
+  function abGatherSideLook(side) {
+    if (!abIsStandalone() || side.clipUrl) return null;
+    const key = side.key;
+    const modeEl = $(`ab-${key}-filter-mode`);
+    if (!modeEl || modeEl.value !== "on") return null;
+    const hdr = !!(side.info && side.info.is_hdr);
+    let desat = parseFloat(($(`ab-${key}-tonemap-desat`) || {}).value);
+    if (!Number.isFinite(desat)) desat = 0;
+    const peakEl = $(`ab-${key}-tonemap-peak`);
+    let peak = 0;
+    if (peakEl && String(peakEl.value).trim() !== "") {
+      peak = parseFloat(peakEl.value);
+      if (!Number.isFinite(peak) || peak < 0) peak = 0;
+    }
+    const level = (id) => {
+      const el = $(id);
+      return el ? el.value : "off";
+    };
+    return {
+      apply: true,
+      tonemap: hdr,
+      platform: ($(`ab-${key}-platform`) || {}).value || "auto",
+      tonemap_engine: ($(`ab-${key}-tonemap-engine`) || {}).value || "cpu",
+      tonemap_algo: ($(`ab-${key}-tonemap-algo`) || {}).value || "hable",
+      tonemap_desat: Math.round(desat * 100) / 100,
+      tonemap_peak: peak,
+      deband: level(`ab-${key}-deband`),
+      denoise: level(`ab-${key}-denoise`),
+      sharpen: level(`ab-${key}-sharpen`),
+      grain: level(`ab-${key}-grain`),
+    };
+  }
+
+  function abUpdateStatusLine() {
+    const sa = ab.sides.a, sb = ab.sides.b;
+    const parts = [sa, sb].filter((s) => s && s.path).map((s) => {
+      const up = s.key.toUpperCase();
+      const base = s.mode === "direct" ? "Direct" : "HLS";
+      return s.lookSummary ? `${up}: ${base} (${s.lookSummary})` : `${up}: ${base}`;
+    });
+    if (parts.length) abSetStatus(parts.join(" · "));
+  }
+
+  function abQueueSideReload(key) {
+    const side = ab.sides[key];
+    abSyncSideLookUi(key);
+    if (!side || !side.path || side.clipUrl) return;
+    if (side.lookTimer) clearTimeout(side.lookTimer);
+    side.lookTimer = setTimeout(async () => {
+      side.lookTimer = 0;
+      if (side.starting) {
+        side.lookAgain = true;
+        return;
+      }
+      const sa = ab.sides.a, sb = ab.sides.b;
+      const wasPaused = sa && sa.video ? sa.video.paused : true;
+      const masterT = sa ? Math.max(0, abTime(sa)) : 0;
+      const targetT = key === "b" ? Math.max(0, masterT + abOffsetB()) : masterT;
+      abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau …")}`);
+      await abStartSide(side, targetT);
+      abSetTime(side, targetT);
+      if (wasPaused) {
+        if (sa && sa.video) sa.video.pause();
+        if (sb && sb.video) sb.video.pause();
+      } else {
+        if (sa && sa.video) sa.video.play().catch(() => {});
+        if (abSynced() && sb && sb.video) sb.video.play().catch(() => {});
+      }
+      abUpdateStatusLine();
+    }, 450);
   }
 
   function abDestroy(side) {
@@ -11970,8 +12479,18 @@
   }
 
   // Filmzeit ↔ Elementzeit (HLS-Sessions beginnen bei `offset`).
-  const abTime = (side) => side.video.currentTime + (side.offset || 0);
-  const abSetTime = (side, t) => { side.video.currentTime = Math.max(0, t - (side.offset || 0)); };
+  const abTime = (side) => {
+    const cur = side.video ? (side.video.currentTime || 0) : 0;
+    const t = cur + (side.offset || 0);
+    if (t <= 0 && side.lastTime > 0 && (!side.video || !side.video.src)) {
+      return side.lastTime;
+    }
+    return t;
+  };
+  const abSetTime = (side, t) => {
+    side.lastTime = Math.max(0, t);
+    side.video.currentTime = Math.max(0, t - (side.offset || 0));
+  };
   const abBufferedEnd = (side) => {
     const b = side.video.buffered;
     return b.length ? b.end(b.length - 1) + (side.offset || 0) : (side.offset || 0);
@@ -11986,85 +12505,118 @@
   };
 
   async function abStartSide(side, startSec) {
-    abDestroy(side);
-    if (side.clipUrl) {
-      side.mode = "direct";
-      side.path = side.clipUrl;
-      side.sid = "";
-      side.video.src = side.clipUrl;
-      side.video.load();
-      side.ready = true;
-      side.video.addEventListener("loadedmetadata", () => {
-        const dur = Number(side.video.duration);
-        if (Number.isFinite(dur) && dur > 0) side.duration = (side.offset || 0) + dur;
-      }, { once: true });
-      return true;
-    }
-    if (!side.path) return false;
-    const forceHls = $("ab-playback") && $("ab-playback").value === "hls";
-    const codecs = (typeof window.fpDetectClientCodecs === "function") ? window.fpDetectClientCodecs() : ["h264"];
-    let d;
+    const targetStart = Math.max(0, startSec || 0);
+    side.lastTime = targetStart;
+    side.starting = true;
     try {
-      d = await (await fetch("/api/player/session", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: side.path, audio: 0, subtitle: -1, start: Math.max(0, startSec || 0),
-          profile: "auto", client_direct_ok: !forceHls, client_codecs: codecs,
-          lookahead_sec: 30, audio_copy: false,
-        }),
-      })).json();
-    } catch (e) {
-      abSetStatus(`${side.key.toUpperCase()}: ${e}`, true);
-      return false;
-    }
-    if (d.error) { abSetStatus(`${side.key.toUpperCase()}: ${d.error}`, true); return false; }
-    const sess = d.session || {};
-    side.sid = sess.id || "";
-    side.mode = sess.mode || "hls";
-    side.duration = sess.duration || (d.info && d.info.duration) || side.duration || 0;
-    if (side.mode === "direct") {
-      side.offset = 0;
-      side.sid = "";  // Direct-Play hält keinen Encoder offen
-      side.video.src = sess.media_url || sess.playlist_url
-        || `/api/media?root=${encodeURIComponent(side.root)}&path=${encodeURIComponent(side.path)}`;
-      side.video.load();
-      if (startSec > 0) {
-        side.video.addEventListener("loadedmetadata", () => { try { side.video.currentTime = startSec; } catch (e) { /* ignore */ } }, { once: true });
+      abDestroy(side);
+      if (side.clipUrl) {
+        side.mode = "direct";
+        side.path = side.clipUrl;
+        side.sid = "";
+        side.lookSummary = "";
+        side.video.src = side.clipUrl;
+        side.video.load();
+        side.ready = true;
+        side.video.addEventListener("loadedmetadata", () => {
+          const dur = Number(side.video.duration);
+          if (Number.isFinite(dur) && dur > 0) side.duration = (side.offset || 0) + dur;
+        }, { once: true });
+        abUpdateSideBadge(side.key);
+        return true;
+      }
+      if (!side.path) return false;
+      if (!side.info) {
+        try {
+          const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(side.path)}`)).json();
+          if (pr && !pr.error) side.info = pr;
+        } catch (e) { /* ignore */ }
+      }
+      abSyncSideLookUi(side.key);
+      const look = abGatherSideLook(side);
+      const plat = look && look.platform ? look.platform : "auto";
+      const forceHls = ($("ab-playback") && $("ab-playback").value === "hls") || !!look;
+      const codecs = (typeof window.fpDetectClientCodecs === "function") ? window.fpDetectClientCodecs() : ["h264"];
+      const reqBody = {
+        path: side.path, audio: 0, subtitle: -1, start: targetStart,
+        profile: look ? "original" : "auto",
+        platform: plat,
+        client_direct_ok: !forceHls, client_codecs: codecs,
+        lookahead_sec: 30, audio_copy: false,
+      };
+      if (look) reqBody.look = look;
+      let d;
+      try {
+        d = await (await fetch("/api/player/session", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(reqBody),
+        })).json();
+      } catch (e) {
+        abSetStatus(`${side.key.toUpperCase()}: ${e}`, true);
+        return false;
+      }
+      if (d.error) { abSetStatus(`${side.key.toUpperCase()}: ${d.error}`, true); return false; }
+      if (d.options) window.fpPlayerOptions = d.options;
+      if (d.info) side.info = d.info;
+      const sess = d.session || {};
+      side.sid = sess.id || "";
+      side.mode = sess.mode || "hls";
+      side.lookSummary = sess.look_summary || "";
+      side.duration = sess.duration || (d.info && d.info.duration) || side.duration || 0;
+      abSyncSideLookUi(side.key);
+      if (side.mode === "direct") {
+        side.offset = 0;
+        side.sid = "";  // Direct-Play hält keinen Encoder offen
+        side.video.src = sess.media_url || sess.playlist_url
+          || `/api/media?root=${encodeURIComponent(side.root)}&path=${encodeURIComponent(side.path)}`;
+        side.video.load();
+        if (targetStart > 0) {
+          side.video.addEventListener("loadedmetadata", () => { try { side.video.currentTime = targetStart; } catch (e) { /* ignore */ } }, { once: true });
+        }
+        side.ready = true;
+        abUpdateSideBadge(side.key);
+        return true;
+      }
+      // HLS: auf „ready“ warten, dann hls.js anhängen.
+      side.offset = sess.start != null ? sess.start : targetStart;
+      side.lastTime = side.offset;
+      const url = sess.playlist_url || `/api/player/session/${side.sid}/index.m3u8`;
+      for (let i = 0; i < 60; i++) {
+        const st = await (await fetch(`/api/player/session/${side.sid}`)).json();
+        if (st.session && st.session.ready) break;
+        if (st.session && st.session.error) { abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true); return false; }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (window.Hls && window.Hls.isSupported()) {
+        side.hls = new window.Hls({
+          enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, maxMaxBufferLength: 90,
+          backBufferLength: Infinity, startPosition: 0, liveDurationInfinity: false,
+        });
+        side.hls.loadSource(url);
+        side.hls.attachMedia(side.video);
+        side.hls.on(window.Hls.Events.ERROR, (_, data) => {
+          if (data && data.fatal && side.hls) {
+            const det = String(data.details || "");
+            if (det.indexOf("Load") >= 0) { try { side.hls.startLoad(); } catch (e) { /* ignore */ } }
+            else abSetStatus(`${side.key.toUpperCase()}: ${det}`, true);
+          }
+        });
+      } else if (side.video.canPlayType("application/vnd.apple.mpegurl")) {
+        side.video.src = url;
+      } else {
+        abSetStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
+        return false;
       }
       side.ready = true;
+      abUpdateSideBadge(side.key);
       return true;
+    } finally {
+      side.starting = false;
+      if (side.lookAgain) {
+        side.lookAgain = false;
+        abQueueSideReload(side.key);
+      }
     }
-    // HLS: auf „ready“ warten, dann hls.js anhängen.
-    side.offset = sess.start || 0;
-    const url = sess.playlist_url || `/api/player/session/${side.sid}/index.m3u8`;
-    for (let i = 0; i < 60; i++) {
-      const st = await (await fetch(`/api/player/session/${side.sid}`)).json();
-      if (st.session && st.session.ready) break;
-      if (st.session && st.session.error) { abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true); return false; }
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    if (window.Hls && window.Hls.isSupported()) {
-      side.hls = new window.Hls({
-        enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, maxMaxBufferLength: 90,
-        backBufferLength: Infinity, startPosition: 0, liveDurationInfinity: false,
-      });
-      side.hls.loadSource(url);
-      side.hls.attachMedia(side.video);
-      side.hls.on(window.Hls.Events.ERROR, (_, data) => {
-        if (data && data.fatal && side.hls) {
-          const det = String(data.details || "");
-          if (det.indexOf("Load") >= 0) { try { side.hls.startLoad(); } catch (e) { /* ignore */ } }
-          else abSetStatus(`${side.key.toUpperCase()}: ${det}`, true);
-        }
-      });
-    } else if (side.video.canPlayType("application/vnd.apple.mpegurl")) {
-      side.video.src = url;
-    } else {
-      abSetStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
-      return false;
-    }
-    side.ready = true;
-    return true;
   }
 
   // Beide Seiten auf Filmzeit t setzen. HLS außerhalb des Puffers → Session neu ab t.
@@ -12193,16 +12745,41 @@
       sa.clipUrl = "";
       sb.clipUrl = "";
       ab.window = null;
-      sa.path = $("ab-path-a").value.trim(); sa.root = $("ab-root-a").value || "media";
-      sb.path = $("ab-path-b").value.trim(); sb.root = $("ab-root-b").value || "media";
+      const same = !!($("ab-same-source") && $("ab-same-source").checked);
+      const pathA = $("ab-path-a").value.trim();
+      const rootA = $("ab-root-a").value || "media";
+      let pathB = $("ab-path-b").value.trim();
+      let rootB = $("ab-root-b").value || "media";
+      if (same || (!pathB && pathA)) {
+        pathB = pathA;
+        rootB = rootA;
+      }
+      if (sa.path !== pathA) sa.info = null;
+      if (sb.path !== pathB) sb.info = null;
+      sa.path = pathA; sa.root = rootA;
+      sb.path = pathB; sb.root = rootB;
+      if (!sa.path && !sb.path) {
+        abSetStatus(tt("Bitte eine Datei wählen."), true);
+        return;
+      }
+      if (sa.path && sa.path === sb.path && !sa.info) {
+        try {
+          const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(sa.path)}`)).json();
+          if (pr && !pr.error) {
+            sa.info = pr;
+            sb.info = pr;
+          }
+        } catch (e) { /* ignore */ }
+      }
+      abSyncSideLookUi("a");
+      abSyncSideLookUi("b");
       const badge = $("ab-badge");
       if (badge) badge.textContent = tt("Lädt …");
       abSetStatus(tt("Starte Wiedergabe …"));
       abApplyMode();
       const ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
       if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
-      const modes = [sa, sb].filter((s) => s.path).map((s) => `${s.key.toUpperCase()}: ${s.mode === "direct" ? "Direct" : "HLS"}`);
-      if (ok.every(Boolean)) abSetStatus(modes.join(" · "));
+      if (ok.every(Boolean)) abUpdateStatusLine();
       abLoadWeakSpots();
     });
 
@@ -12314,14 +12891,64 @@
       if (ab.sides.a.path || ab.sides.b.path) load.click();
     });
 
+    const sameBox = $("ab-same-source");
+    if (sameBox) {
+      sameBox.addEventListener("change", () => {
+        abSyncSourceUi();
+        if (sameBox.checked) {
+          const fmA = $("ab-a-filter-mode");
+          const fmB = $("ab-b-filter-mode");
+          if (fmA) fmA.value = "off";
+          if (fmB) fmB.value = "on";
+          abSyncSideLookUi("a");
+          abSyncSideLookUi("b");
+        }
+        if ($("ab-path-a") && $("ab-path-a").value.trim()) load.click();
+      });
+    }
+    ["a", "b"].forEach((key) => {
+      [
+        `ab-${key}-filter-mode`, `ab-${key}-platform`,
+        `ab-${key}-tonemap-engine`, `ab-${key}-tonemap-algo`,
+        `ab-${key}-tonemap-desat`, `ab-${key}-tonemap-peak`,
+        `ab-${key}-deband`, `ab-${key}-denoise`, `ab-${key}-sharpen`, `ab-${key}-grain`,
+      ].forEach((id) => {
+        const el = $(id);
+        if (!el) return;
+        el.addEventListener("change", () => abQueueSideReload(key));
+        if (id.endsWith("-tonemap-desat")) {
+          el.addEventListener("input", () => abSyncSideLookUi(key));
+        }
+        if (id.endsWith("-tonemap-peak")) {
+          el.addEventListener("input", () => abQueueSideReload(key));
+        }
+      });
+    });
+    abSyncSourceUi();
+    abSyncSideLookUi("a");
+    abSyncSideLookUi("b");
+
     const browse = (which) => {
       openFilePickerModal({
         title: `Video ${which.toUpperCase()} wählen`,
-        onPick: (f) => {
+        onPick: async (f) => {
           $("ab-path-" + which).value = f.rel;
           const rootEl = $("ab-root-" + which);
           if (rootEl) rootEl.value = "media";
           state.abJob = "";  // manuelle Wahl → keine Job-Schwachstellen mehr
+          try {
+            const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
+            if (pr && !pr.error) {
+              if (ab.sides[which]) ab.sides[which].info = pr;
+              const same = !!($("ab-same-source") && $("ab-same-source").checked);
+              const otherB = !$("ab-path-b").value.trim();
+              if (which === "a" && (same || otherB) && ab.sides.b) {
+                ab.sides.b.info = pr;
+              }
+            }
+          } catch (e) { /* ignore */ }
+          abSyncSideLookUi("a");
+          abSyncSideLookUi("b");
         },
       });
     };

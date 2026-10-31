@@ -15,9 +15,12 @@ from typing import Callable, Optional
 from . import ffmpeg_utils as ff
 from .ffmpeg_utils import VideoInfo
 
-# Kurven für den CPU-Filter ``tonemap`` und die Jellyfin-Filter. Hable bleibt
-# die Vorgabe. Die Jellyfin-Filter bekommen denselben Namen (``bt2390``).
+# Kurven je Engine:
+# - CPU-Filter ``tonemap`` (vf_tonemap) kennt kein ``bt2390``.
+# - ``tonemap_vaapi`` nutzt die Kurve des VAAPI-Treibers (keine ``tonemap``-Option).
+# - ``libplacebo``, ``tonemap_cuda``, ``tonemap_opencl`` und ``tonemapx`` kennen alle 7.
 _TONEMAP_ALGOS = ("hable", "bt2390", "reinhard", "mobius", "gamma", "clip", "linear")
+_CPU_TONEMAP_ALGOS = ("hable", "reinhard", "mobius", "gamma", "clip", "linear")
 TONEMAP_ALGO_LABELS = {
     "hable": "Hable",
     "bt2390": "BT.2390",
@@ -32,6 +35,14 @@ TONEMAP_ALGO_LABELS = {
 def normalize_tonemap_algo(value: str) -> str:
     v = str(value or "hable").strip().lower()
     return v if v in _TONEMAP_ALGOS else "hable"
+
+
+def tonemap_algo_for_engine(algo: str, engine: str) -> str:
+    """Aufzulösende Kurve passend zur Engine (CPU-Filter kennt kein bt2390)."""
+    a = normalize_tonemap_algo(algo)
+    if engine == "cpu" and a not in _CPU_TONEMAP_ALGOS:
+        return "hable"
+    return a
 
 
 def normalize_tonemap_desat(value) -> float:
@@ -58,7 +69,7 @@ def normalize_tonemap_peak(value) -> float:
 
 def tonemap_chain(algo: str = "hable", desat: float = 0.0, peak: float = 0.0) -> str:
     """HDR (PQ/HLG) -> SDR (BT.709) auf der CPU. NVIDIA encodiert danach."""
-    algo = normalize_tonemap_algo(algo)
+    algo = tonemap_algo_for_engine(algo, "cpu")
     desat = normalize_tonemap_desat(desat)
     peak = normalize_tonemap_peak(peak)
     tone = f"tonemap=tonemap={algo}:desat={desat:g}"
@@ -203,6 +214,7 @@ def _jelly_tone_filter(kind: str, algo: str, desat: float, peak: float,
     """Ein Jellyfin-Tonemap-Filter. Peak 0 lässt die Metadaten gelten.
 
     ``desat`` wird immer gesetzt. Die Vorgabe der Jellyfin-Filter wäre 0,5.
+    ``tonemap_vaapi`` hat keine ``tonemap``-Kurvenoption (Treiber-Shader).
     """
     algo = normalize_tonemap_algo(algo)
     desat = normalize_tonemap_desat(desat)
@@ -217,6 +229,19 @@ def _jelly_tone_filter(kind: str, algo: str, desat: float, peak: float,
             "transfer=bt709",
             f"format={fmt}",
         ]
+        if peak > 0:
+            parts.insert(2, f"peak={peak:g}")
+    elif kind == "tonemap_vaapi":
+        parts = [
+            f"desat={desat:g}",
+            "p=bt709",
+            "t=bt709",
+            "m=bt709",
+            "range=tv",
+            f"format={fmt}",
+        ]
+        if peak > 0:
+            parts.insert(1, f"peak={peak:g}")
     else:
         parts = [
             f"tonemap={algo}",
@@ -227,8 +252,8 @@ def _jelly_tone_filter(kind: str, algo: str, desat: float, peak: float,
             "range=tv",
             f"format={fmt}",
         ]
-    if peak > 0:
-        parts.insert(2, f"peak={peak:g}")
+        if peak > 0:
+            parts.insert(2, f"peak={peak:g}")
     return kind + "=" + ":".join(parts)
 
 
@@ -413,8 +438,9 @@ def preview_look_summary(look: dict, *, is_hdr: bool) -> str:
         eng = effective_tonemap_engine(
             str(look.get("engine") or "cpu"), str(look.get("platform") or "cpu"))
         bits.append(TONEMAP_ENGINE_LABELS.get(eng, eng))
-        algo = normalize_tonemap_algo(str(look.get("algo") or "hable"))
-        bits.append(TONEMAP_ALGO_LABELS.get(algo, algo))
+        if eng != "vaapi":
+            algo = tonemap_algo_for_engine(str(look.get("algo") or "hable"), eng)
+            bits.append(TONEMAP_ALGO_LABELS.get(algo, algo))
     for label, key in (
         ("Deband", "deband"), ("Denoise", "denoise"),
         ("Schärfen", "sharpen"), ("Korn", "grain"),

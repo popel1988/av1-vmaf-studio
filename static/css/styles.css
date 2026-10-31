@@ -880,12 +880,36 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .ab-from-nerd { display: none; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
 #ab-card.is-nerd .ab-from-nerd { display: flex; }
 #ab-card.is-nerd .ab-pickers,
+#ab-card.is-nerd .ab-top-bar,
+#ab-card.is-nerd .ab-look-grid,
 #ab-card.is-nerd #ab-intro,
-#ab-card.is-nerd #btn-ab-load { display: none; }
+#ab-card.is-nerd #btn-ab-load { display: none !important; }
 .ab-from-nerd label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .ab-from-nerd select { min-width: 180px; }
 .ab-from-nerd .hint { flex-basis: 100%; margin: 0; }
+.ab-top-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 10px; }
 .ab-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+.ab-pickers.ab-single-source { grid-template-columns: 1fr; }
+.ab-look-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 8px 0 12px; }
+.ab-look-grid[hidden], .ab-look-body[hidden] { display: none; }
+.ab-look-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ab-look-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.ab-look-body { display: flex; flex-direction: column; gap: 8px; }
+.ab-bottom-bar { margin-top: 10px; }
 .ab-videos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
 .ab-pane { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
 .ab-pane video {
@@ -898,7 +922,7 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   padding: 2px 9px; border-radius: 6px; font-size: 12px;
 }
 .ab-controls { display: flex; align-items: center; gap: 12px; }
-@media (max-width: 900px) { .ab-videos, .ab-pickers { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .ab-videos, .ab-pickers, .ab-look-grid { grid-template-columns: 1fr; } }
 
 /* Wipe: beide Videos übereinander, B wird von links her abgeschnitten.
    Die Kante folgt der Maus (Ziehen) oder dem Handle. */
@@ -1614,11 +1638,59 @@ input[type="range"]::-moz-range-thumb {
 
 /* Lightbox für Vergleichsbilder */
 .lightbox {
-  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
-  justify-content: center; background: rgba(0, 0, 0, .88); cursor: zoom-out;
-  padding: 24px; opacity: 0; transition: opacity .15s;
+  position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  background: rgba(0, 0, 0, .9); cursor: zoom-out;
+  padding: 20px 24px 36px; opacity: 0; transition: opacity .15s;
 }
 .lightbox.open { opacity: 1; }
+.lightbox-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 10px 16px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 14px; max-width: 96vw; cursor: default; z-index: 5;
+}
+.lightbox-toolbar .lb-modes,
+.lightbox-toolbar .lb-selectors { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lightbox-toolbar label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.lightbox-toolbar select { max-width: 280px; padding: 4px 8px; font-size: 12px; }
+.lightbox-stage {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; max-width: 96vw; max-height: 80vh; cursor: default;
+}
+.lb-wipe-wrap, .lb-flip-wrap {
+  position: relative; display: inline-block; max-width: 94vw; max-height: 72vh;
+  border-radius: 8px; overflow: hidden; background: #000;
+  box-shadow: 0 8px 40px rgba(0,0,0,.65); user-select: none;
+}
+.lb-wipe-wrap { cursor: col-resize; }
+.lb-flip-wrap { cursor: pointer; }
+.lb-wipe-wrap img, .lb-flip-wrap img {
+  display: block; max-width: 94vw; max-height: 72vh; width: auto; height: auto; object-fit: contain;
+}
+.lb-wipe-wrap .lb-img-b {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  clip-path: inset(0 0 0 var(--lb-wipe, 50%));
+}
+.lb-wipe-line {
+  position: absolute; top: 0; bottom: 0; left: var(--lb-wipe, 50%); width: 2px;
+  background: rgba(255,255,255,.9); box-shadow: 0 0 6px rgba(0,0,0,.8); pointer-events: none; z-index: 3;
+}
+.lb-wipe-line span {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(0,0,0,.72); color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 10px; white-space: nowrap;
+}
+.lb-tag {
+  position: absolute; top: 10px; z-index: 4; background: rgba(0,0,0,.7); color: #fff;
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 6px;
+  max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
+.lb-tag-a { left: 10px; }
+.lb-tag-b { right: 10px; }
+.lb-slider-row {
+  display: flex; align-items: center; gap: 10px; width: min(560px, 90vw);
+  color: #fff; font-size: 12px; font-weight: 600;
+}
+.lb-slider-row input[type="range"] { flex: 1; }
 .lightbox-pair { display: flex; gap: 10px; align-items: flex-start; max-width: 98vw; }
 .lightbox-pair figure { margin: 0; display: flex; flex-direction: column; gap: 6px; flex: 1 1 0; min-width: 0; }
 .lightbox-pair figcaption { text-align: center; color: rgba(255,255,255,.75); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }

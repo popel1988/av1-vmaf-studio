@@ -24,7 +24,7 @@ from .encoder import (
     EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, TONEMAP_ENGINE_LABELS,
     build_encode_cmd, deinterlace_filter, normalize_deband, normalize_svt_look,
     normalize_tonemap_algo, normalize_tonemap_desat, normalize_tonemap_engine,
-    normalize_tonemap_peak, tonemap_engine_for,
+    normalize_tonemap_peak, tonemap_algo_for_engine, tonemap_engine_for,
 )
 from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
 
@@ -2727,17 +2727,18 @@ def _describe_dynamic(s: JobSettings) -> str:
     if getattr(s, "preserve_hdr", False):
         return "HDR10/HLG erhalten"
     if getattr(s, "tonemap", False):
-        name = TONEMAP_ALGO_LABELS.get(getattr(s, "tonemap_algo", "hable"), "Hable")
+        eng = tonemap_engine_for(
+            getattr(s, "tonemap_engine", "cpu"), getattr(s, "platform", "cpu"))
+        algo = tonemap_algo_for_engine(getattr(s, "tonemap_algo", "hable"), eng)
+        name = "VAAPI" if eng == "vaapi" else TONEMAP_ALGO_LABELS.get(algo, "Hable")
         extra = []
         desat = float(getattr(s, "tonemap_desat", 0) or 0)
         peak = float(getattr(s, "tonemap_peak", 0) or 0)
-        if desat:
+        if desat and eng != "libplacebo":
             extra.append(f"Entsättigung {desat:g}")
-        if peak:
+        if peak and eng != "libplacebo":
             extra.append(f"Peak {peak:g} nits")
-        eng = tonemap_engine_for(
-            getattr(s, "tonemap_engine", "cpu"), getattr(s, "platform", "cpu"))
-        if eng != "cpu":
+        if eng not in ("cpu", "vaapi"):
             extra.append(TONEMAP_ENGINE_LABELS.get(eng, eng))
         tail = f", {', '.join(extra)}" if extra else ""
         return f"HDR→SDR ({name}{tail})"

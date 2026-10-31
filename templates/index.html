@@ -1018,6 +1018,7 @@
                 <tbody></tbody>
               </table>
             </div>
+            <div id="nerd-screenshots" class="shot-wrap"></div>
           </div>
         </section>
 
@@ -2762,7 +2763,7 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild.</p>
+            <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild. <a href="#faq-player-auto" class="faq-jump">FAQ: Wie entscheidet der Player (H.264, 1080p, Tonemap)?</a></p>
             <div class="field-row field-row-inline fp-file-row" style="margin-bottom:10px">
               <div class="field fp-grow">
                 <label>Datei</label>
@@ -2931,6 +2932,7 @@
                     <summary>Details</summary>
                     <ul id="fp-plan-reasons"></ul>
                   </details>
+                  <p class="hint" style="margin:8px 0 0"><a href="#faq-player-auto" class="faq-jump">Warum genau dieser Pfad? (FAQ)</a></p>
                 </div>
                 <div class="fp-chapters" id="fp-chapters-wrap" style="display:none">
                   <div class="fp-chapters-title">Kapitel</div>
@@ -2956,30 +2958,150 @@
               <p class="hint">A und B sind Clips aus diesem Vergleich. Die Szene ist die oben gewählte.</p>
             </div>
             <p class="hint" id="ab-intro">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
-              (geteiltes Bild mit verschiebbarer Kante). Was der Browser nicht direkt abspielen
-              kann, läuft über den HLS-Player des Studios (Server-Transcode). Aus den
-              Job-Details kommt zusätzlich die Liste der schwächsten VMAF-Stellen, die sich
-              direkt anspringen lassen.</p>
-            <div class="ab-pickers">
+              (geteiltes Bild mit verschiebbarer Kante). Du kannst zwei verschiedene Dateien laden oder
+              <strong>dieselbe Quelle auf A und B</strong> legen und für beide Seiten unterschiedliche
+              Tonemap- und Bildfilter-Einstellungen live vergleichen. <a href="#faq-player-auto" class="faq-jump">FAQ: Player &amp; Live-Vorschau</a></p>
+            <div class="ab-top-bar" id="ab-top-bar">
+              <label class="check" style="margin:0">
+                <input type="checkbox" id="ab-same-source" />
+                <span>Gleiche Quelle für A und B (Einstellungen direkt vergleichen)</span>
+              </label>
+              <button class="btn btn-primary btn-sm" id="btn-ab-load" type="button">Laden</button>
+              <span id="ab-status" class="muted" style="font-size:12px"></span>
+            </div>
+            <div class="ab-pickers" id="ab-pickers">
               <div class="field">
-                <label>Video A</label>
+                <label id="ab-label-a">Video A</label>
                 <div class="field-row field-row-inline fp-file-pick">
                   <input type="hidden" id="ab-root-a" value="media" />
                   <input type="text" id="ab-path-a" placeholder="Medienpfad, z. B. Filme/film.mkv" />
                   <button class="btn btn-ghost btn-sm" id="btn-ab-browse-a" type="button">Durchsuchen …</button>
                 </div>
               </div>
-              <div class="field">
+              <div class="field" id="ab-picker-b">
                 <label>Video B</label>
                 <div class="field-row field-row-inline fp-file-pick">
                   <input type="hidden" id="ab-root-b" value="media" />
-                  <input type="text" id="ab-path-b" placeholder="Medienpfad, z. B. output/Filme/film_av1.mkv" />
+                  <input type="text" id="ab-path-b" placeholder="Medienpfad, z. B. output/Filme/film_av1.mkv (leer = wie Video A)" />
                   <button class="btn btn-ghost btn-sm" id="btn-ab-browse-b" type="button">Durchsuchen …</button>
                 </div>
               </div>
             </div>
-            <div class="lib-actions">
-              <button class="btn btn-primary btn-sm" id="btn-ab-load">Laden</button>
+            <div class="ab-look-grid" id="ab-look-grid" hidden>
+              {% for side, side_label in [("a", "A"), ("b", "B")] %}
+              <div class="ab-look-card" id="ab-look-{{ side }}">
+                <div class="ab-look-head">
+                  <strong>Seite {{ side_label }}</strong>
+                  <span class="muted" id="ab-look-summary-{{ side }}">—</span>
+                </div>
+                <div class="field-row field-row-inline">
+                  <div class="field">
+                    <label data-tip="Original lässt die Datei ohne Zusatzfilter laufen (Direct-Play/Standard). Live-Filter aktiviert Tonemap-Auswahl und Bildfilter für diese Seite.">Modus {{ side_label }}</label>
+                    <select id="ab-{{ side }}-filter-mode">
+                      <option value="off">Original (ohne Live-Filter)</option>
+                      <option value="on"{% if side == "b" %} selected{% endif %}>Live-Filter / Tonemap (Transcode)</option>
+                    </select>
+                  </div>
+                  <div class="field" id="ab-{{ side }}-plat-wrap">
+                    <label>Hardware {{ side_label }}</label>
+                    <select id="ab-{{ side }}-platform">
+                      <option value="auto">Automatisch</option>
+                      <option value="nvidia">NVIDIA NVENC</option>
+                      <option value="intel">Intel QSV/VAAPI</option>
+                      <option value="amd">AMD VAAPI</option>
+                      <option value="cpu">CPU</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="ab-look-body" id="ab-{{ side }}-look-body">
+                  <div class="field-row field-row-inline" id="ab-{{ side }}-tonemap-opts" hidden>
+                    <div class="field">
+                      <label>Tonemap-Engine</label>
+                      <select id="ab-{{ side }}-tonemap-engine">
+                        <option value="cpu">CPU (zscale + tonemap)</option>
+                        <option value="libplacebo">libplacebo (Vulkan)</option>
+                        <option value="cuda">CUDA (NVIDIA)</option>
+                        <option value="opencl">OpenCL</option>
+                        <option value="vaapi">VAAPI (Intel/AMD)</option>
+                        <option value="tonemapx">tonemapx (CPU)</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Tonemap-Kurve</label>
+                      <select id="ab-{{ side }}-tonemap-algo">
+                        <option value="hable">Hable (Mitten heller)</option>
+                        <option value="bt2390">BT.2390 (Broadcast)</option>
+                        <option value="reinhard">Reinhard</option>
+                        <option value="mobius">Mobius</option>
+                        <option value="gamma">Gamma</option>
+                        <option value="clip">Clip</option>
+                        <option value="linear">Linear</option>
+                      </select>
+                    </div>
+                    <div class="field tonemap-cpu-only">
+                      <label>Entsättigung: <strong id="ab-{{ side }}-tonemap-desat-val">0,0</strong></label>
+                      <input type="range" id="ab-{{ side }}-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+                    </div>
+                    <div class="field tonemap-cpu-only">
+                      <label>Quell-Peak (nits)</label>
+                      <input type="number" id="ab-{{ side }}-tonemap-peak" min="0" max="10000" step="50" placeholder="Metadaten" />
+                    </div>
+                  </div>
+                  <div class="field-row field-row-inline">
+                    <div class="field">
+                      <label>Denoise</label>
+                      <select id="ab-{{ side }}-denoise">
+                        <option value="off">Aus</option>
+                        <option value="light">Leicht</option>
+                        <option value="medium">Mittel</option>
+                        <option value="strong">Stark</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Deband</label>
+                      <select id="ab-{{ side }}-deband">
+                        <option value="off">Aus</option>
+                        <option value="light">Leicht</option>
+                        <option value="medium">Mittel</option>
+                        <option value="strong">Stark</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Schärfen</label>
+                      <select id="ab-{{ side }}-sharpen">
+                        <option value="off">Aus</option>
+                        <option value="light">Leicht</option>
+                        <option value="medium">Mittel</option>
+                        <option value="strong">Stark</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Korn</label>
+                      <select id="ab-{{ side }}-grain">
+                        <option value="off">Aus</option>
+                        <option value="light">Leicht</option>
+                        <option value="medium">Mittel</option>
+                        <option value="strong">Stark</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="ab-videos" id="ab-videos">
+              <div class="ab-pane"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="metadata" playsinline></video></div>
+              <div class="ab-pane"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="metadata" playsinline></video></div>
+              <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
+            </div>
+            <div class="ab-controls">
+              <button class="btn btn-primary btn-sm" id="ab-play">▶ / ⏸ (beide)</button>
+              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-back" title="Ein Bild zurück (beide)">⏮</button>
+              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-fwd" title="Ein Bild vor (beide)">⏭</button>
+              <input type="range" id="ab-seek" min="0" max="1000" value="0" style="flex:1" />
+              <span id="ab-time" class="muted">0:00</span>
+            </div>
+            <div class="lib-actions ab-bottom-bar">
               <label class="check" style="margin:0"><input type="checkbox" id="ab-sync" checked /><span>Synchron</span></label>
               <div class="field" style="margin:0">
                 <label style="font-size:11px">Versatz B (s)</label>
@@ -3002,25 +3124,12 @@
                 </select>
               </div>
               <div class="field" style="margin:0">
-                <label style="font-size:11px" data-tip="Direct = Datei unverändert an den Browser. Transcode = HLS-Session mit Server-Encode (H.264), auch für HEVC/10-bit. Auto wählt Direct, wenn der Browser den Codec kann.">Wiedergabe</label>
+                <label style="font-size:11px" data-tip="Direct = Datei unverändert an den Browser. Transcode = HLS-Session mit Server-Encode (H.264), auch für HEVC/10-bit. Auto wählt Direct, wenn der Browser den Codec kann (sofern keine Live-Filter auf der Seite aktiv sind).">Wiedergabe</label>
                 <select id="ab-playback" style="width:auto">
                   <option value="auto">Auto</option>
                   <option value="hls">Immer Transcode (HLS)</option>
                 </select>
               </div>
-              <span id="ab-status" class="muted" style="font-size:12px"></span>
-            </div>
-            <div class="ab-videos" id="ab-videos">
-              <div class="ab-pane"><span class="ab-tag">A</span><video id="ab-video-a" controls preload="metadata" playsinline></video></div>
-              <div class="ab-pane"><span class="ab-tag">B</span><video id="ab-video-b" controls preload="metadata" playsinline></video></div>
-              <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
-            </div>
-            <div class="ab-controls">
-              <button class="btn btn-primary btn-sm" id="ab-play">▶ / ⏸ (beide)</button>
-              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-back" title="Ein Bild zurück (beide)">⏮</button>
-              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-fwd" title="Ein Bild vor (beide)">⏭</button>
-              <input type="range" id="ab-seek" min="0" max="1000" value="0" style="flex:1" />
-              <span id="ab-time" class="muted">0:00</span>
             </div>
             <div id="ab-weak" class="ab-weak" style="display:none"></div>
           </div>
@@ -3443,7 +3552,7 @@
             <details class="faq-item" id="faq-ssimulacra2">
               <summary>Was ist SSIMULACRA2 neben VMAF?</summary>
               <div class="faq-body">
-                <p>SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Es ändert die Empfehlung nicht.</p>
+                <p>SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt samt Minimum, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Bricht ein einzelnes Standbild unter 50 ein, warnt die Pille trotz gutem Mittelwert („Einbruch im Standbild“). Per Hover auf die Pille oder die Szenenzeile siehst du alle Einzelwerte je Szene und Bild. Sind Screenshots aktiv, werden diese Vergleichsbilder mit gespeichert und lassen sich in der Galerie über die Reiter „S2-Bild 1…N“ mit dem Wipe-Schieber direkt übereinanderlegen. Es ändert die Empfehlung nicht.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-history-suggest">
@@ -3459,10 +3568,20 @@
                 <p>Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit der CUDA-Engine und ohne weitere Software-Filter kann die Archivfassung auf der GPU bleiben. Sobald die Mobile-Fassung mitläuft, oder Crop, Deinterlace, Deband, Denoise, Schärfen oder Korn an sind, gehen die Bilder durch den Hauptspeicher.</p>
               </div>
             </details>
-            <details class="faq-item" id="faq-compare">
-              <summary>Wie prüfe ich das Ergebnis mit dem Auge?</summary>
+            <details class="faq-item" id="faq-player-auto">
+              <summary>Wie entscheidet der Player bei „Automatisch“ (warum H.264, 1080p, Transcode oder Jellyfin)?</summary>
               <div class="faq-body">
-                <p>In den Details eines fertigen Jobs öffnet „Vorher/Nachher im Vergleichsplayer“ Quelle und Ausgabe synchron – nebeneinander oder als Wipe (geteiltes Bild, die Kante folgt der Maus). Was der Browser nicht direkt abspielen kann (HEVC, 10-bit, MKV), läuft über den HLS-Player des Studios mit Server-Transcode; „Immer Transcode“ erzwingt das für beide Seiten, damit identisch gewandelt wird. Unter dem Bild stehen die schwächsten VMAF-Stellen aus der Analyse des Jobs als Zeiten: Klick springt hin und hält an, ⏮/⏭ gehen bildweise. Die Zeiten stammen aus den Frame-Logs der Testszenen; ältere Sessions ohne gespeicherte Szenenstarts werden aus Dauer und Stichprobenzahl nachgerechnet.</p>
+                <p><strong>1. Wann Direct-Play, wann Remux, wann Transcode?</strong> Direct-Play reicht die Datei unverändert an den Browser durch (geht nur bei MP4/WebM mit browserfähigem Video und Ton und ohne aktive Filter). Remux (Video-Copy) verpackt das Video ohne Neucodierung in fMP4-HLS um und wandelt bei Bedarf nur den Ton (z. B. TrueHD/DTS → Stereo-AAC). Sobald aber Bildfilter (Denoise, Deband, Schärfen, Korn) oder bei einer HDR-Quelle die Live-Tonemap-Vorschau aktiv sind, muss jedes Einzelbild berechnet werden – „Automatisch“ schaltet dann auf Transcode. Willst du die Datei garantiert ohne Filter als Stream-Copy sehen, wählst du oben „Remux HLS“ oder „Direct-Play“.</p>
+                <p><strong>2. Warum im Transcode standardmäßig H.264 und bei 4K-Quellen 1080p?</strong> Der Zielcodec im Player ist nur das Transportformat zum Browser, nicht dein späterer Archiv-Encode. H.264 (`h264_nvenc` / `libx264`) hat die geringste Start-Latenz beim Spulen und beim Live-Umschalten der Regler und läuft in jedem Browser stabil. 4K-Quellen (ab 1440p) skaliert „Automatisch“ für die Live-Vorschau auf 1080p (6000 kbit/s) herunter, damit auch CPU-Tonemapping und Filter verzögerungsfrei in Echtzeit laufen. Für volle 4K-Auflösung stellst du den Modus auf „Original-Auflösung (Transcode + Bitrate)“.</p>
+                <p><strong>3. Wann läuft Standard-FFmpeg (BtbN) und wann Jellyfin-FFmpeg?</strong> Steht die Tonemap-Engine auf CPU (`zscale + tonemap`) oder `libplacebo` (Vulkan), nutzt der Player BtbN-FFmpeg. Sobald du auf CUDA, OpenCL, VAAPI oder `tonemapx` umschaltest, startet die Session an derselben Filmsekunde mit `/usr/local/bin/ffmpeg-jellyfin` neu.</p>
+                <p><strong>4. Welche Kurve geht mit welcher Engine?</strong> Der klassische CPU-Filter kennt kein BT.2390 (dort wird es ausgeblendet). `libplacebo`, CUDA, OpenCL und `tonemapx` unterstützen alle 7 Kurven inkl. BT.2390; bei `libplacebo` entfallen Quell-Peak und Entsättigung. VAAPI nutzt die feste Kurve des Grafiktreibers.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-compare">
+              <summary>Wie prüfe ich das Ergebnis mit dem Auge (A/B-Player &amp; Bild-Wipe)?</summary>
+              <div class="faq-body">
+                <p>Im <strong>A/B-Vergleichsplayer</strong> kannst du entweder zwei verschiedene Dateien laden (z. B. Quelle gegen fertigen Encode) oder den Haken „Gleiche Quelle für A und B“ setzen und auf Seite A und Seite B unterschiedliche Live-Filter und Tonemap-Engines/Kurven gegeneinander laufen lassen – nebeneinander oder als Wipe-Schieber mit Zoom bis 4×.</p>
+                <p>In den <strong>VMAF-Screenshots</strong> sind neben der Szenenmitte auch alle berechneten SSIMULACRA2-Vergleichsbilder („S2-Bild 1…N“) gespeichert. Klickst du auf ein Encode-Bild oder wählst mehrere Bilder zur „Auswahl vergleichen“, öffnet sich der Bildvergleich direkt mit einem <strong>Wipe-Schieber</strong> (links/rechts übereinanderlegen) sowie einem <strong>Hin-&amp;-Her-Umschalter (A/B)</strong> zum flüssigen Durchschalten an exakt derselben Bildstelle.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-disc">

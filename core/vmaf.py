@@ -374,6 +374,24 @@ class VmafResult:
                     item["ssimulacra2_min"] = round(float(s["ssimulacra2_min"]), 2)
                 if s.get("ssimulacra2_n"):
                     item["ssimulacra2_n"] = int(s["ssimulacra2_n"])
+                s2_vals = s.get("ssimulacra2_scores") or []
+                if s2_vals:
+                    item["ssimulacra2_scores"] = [round(float(x), 2) for x in s2_vals]
+                s2_pairs = s.get("ssimulacra2_pairs") or []
+                if s2_pairs:
+                    item["ssimulacra2_pairs"] = [
+                        {
+                            "idx": int(p.get("idx", j)),
+                            "at": round(float(p.get("at") or 0.0), 2),
+                            "score": round(float(p.get("score") or 0.0), 2),
+                            "ref": (p["ref"] if str(p.get("ref") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['ref']}" if p.get("ref") else "")),
+                            "enc": (p["enc"] if str(p.get("enc") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['enc']}" if p.get("enc") else "")),
+                        }
+                        for j, p in enumerate(s2_pairs)
+                        if isinstance(p, dict)
+                    ]
                 frames = s.get("frames") or []
                 if frames:
                     item["frames"] = frames
@@ -889,14 +907,28 @@ def _ssimulacra2_pair(ref_png: Path, dist_png: Path) -> Optional[float]:
     return float(parts[-1])
 
 
+def _jpg_from_png(src_png: Path, out_rel: str) -> str:
+    """PNG-Standbild platzsparend als JPG im Preview-Ordner ablegen."""
+    dest = config.PREVIEW_DIR / out_rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size > 0:
+        return out_rel
+    cmd = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", str(src_png), "-q:v", "2", str(dest)]
+    res = _run_logged(cmd, "SSIMULACRA2-Preview")
+    return out_rel if res.returncode == 0 and dest.is_file() else ""
+
+
 def _ssimulacra2_clip(
     reference: Path, distorted: Path, work: Path, key: str,
     clip_len: float, fps: float, frames: int = 3,
+    *, sess: str = "", scene_idx: int = 0, save_previews: bool = False,
 ) -> Optional[dict]:
     """Mehrere Standbilder je Stichprobe. Höher ist besser, bis 100."""
     if _s2_frame_count(frames) <= 0 or not _ssimulacra2_ok():
         return None
     scores: list[float] = []
+    pairs: list[dict] = []
     times = _s2_times(clip_len, frames)
     try:
         for i, at in enumerate(times):
@@ -910,6 +942,18 @@ def _ssimulacra2_clip(
                 score = _ssimulacra2_pair(ref_png, dist_png)
                 if score is not None:
                     scores.append(score)
+                    ref_rel = ""
+                    enc_rel = ""
+                    if save_previews and sess:
+                        ref_rel = _jpg_from_png(ref_png, f"{sess}/s2_s{scene_idx}_f{i}_ref.jpg")
+                        enc_rel = _jpg_from_png(dist_png, f"{sess}/s2_s{scene_idx}_f{i}_{key}.jpg")
+                    pairs.append({
+                        "idx": i,
+                        "at": round(float(at), 2),
+                        "score": round(float(score), 2),
+                        "ref": ref_rel,
+                        "enc": enc_rel,
+                    })
             finally:
                 for path in (ref_png, dist_png):
                     try:
@@ -925,6 +969,8 @@ def _ssimulacra2_clip(
         "mean": sum(scores) / len(scores),
         "min": min(scores),
         "n": len(scores),
+        "scores": [round(float(x), 2) for x in scores],
+        "pairs": pairs,
     }
 
 
@@ -1296,11 +1342,15 @@ def analyze(
                         status(f"SSIMULACRA2 {shown} @ {rate_lbl}{smp} …")
                     s2 = _ssimulacra2_clip(
                         reference, test_file, work, skey, clip_len,
-                        float(info.fps or 0), opts.ssimulacra2_frames)
+                        float(info.fps or 0), opts.ssimulacra2_frames,
+                        sess=sess, scene_idx=si,
+                        save_previews=bool(opts.generate_screenshots))
                     if s2 is not None:
                         metrics["ssimulacra2"] = s2["mean"]
                         metrics["ssimulacra2_min"] = s2["min"]
                         metrics["ssimulacra2_n"] = s2["n"]
+                        metrics["ssimulacra2_scores"] = s2.get("scores") or []
+                        metrics["ssimulacra2_pairs"] = s2.get("pairs") or []
                         s2s.append(s2["mean"])
             scene = {
                 "scene": si,
@@ -1325,6 +1375,10 @@ def analyze(
                 scene["ssimulacra2_min"] = metrics["ssimulacra2_min"]
             if metrics and metrics.get("ssimulacra2_n"):
                 scene["ssimulacra2_n"] = int(metrics["ssimulacra2_n"])
+            if metrics and metrics.get("ssimulacra2_scores"):
+                scene["ssimulacra2_scores"] = list(metrics["ssimulacra2_scores"])
+            if metrics and metrics.get("ssimulacra2_pairs"):
+                scene["ssimulacra2_pairs"] = list(metrics["ssimulacra2_pairs"])
             scene_scores.append(scene)
             clip_bytes = test_file.stat().st_size
             total_size += clip_bytes

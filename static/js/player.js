@@ -260,13 +260,19 @@
 
   function absoluteTime() {
     const v = $("fp-video");
-    return fp.startOffset + (v ? (v.currentTime || 0) : 0);
+    const cur = v ? (v.currentTime || 0) : 0;
+    const t = fp.startOffset + cur;
+    if (t <= 0 && fp.lastPosition > 0 && (!v || !v.src)) {
+      return fp.lastPosition;
+    }
+    return t;
   }
 
   function updateTimeUi() {
     const seek = $("fp-seek");
     const time = $("fp-time");
     const t = absoluteTime();
+    if (t > 0) fp.lastPosition = t;
     const dur = fp.duration || 0;
     if (time) time.textContent = `${fmtClock(t)} / ${fmtClock(dur)}`;
     if (seek && dur > 0 && !fp.seeking) {
@@ -345,7 +351,22 @@
       }
     }
 
-    const showPeak = showTone && (!engine || engine.value !== "libplacebo");
+    const engVal = engine ? engine.value : "cpu";
+    const algo = $("fp-tonemap-algo");
+    if (algo) {
+      const vaapiEngine = engVal === "vaapi";
+      algo.disabled = vaapiEngine;
+      [...algo.options].forEach((opt) => {
+        const ok = !(engVal === "cpu" && opt.value === "bt2390");
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (algo.selectedOptions[0] && algo.selectedOptions[0].disabled) {
+        algo.value = "hable";
+      }
+    }
+
+    const showPeak = showTone && engVal !== "libplacebo";
     document.querySelectorAll("#fp-tonemap-opts .tonemap-cpu-only").forEach((el) => {
       el.hidden = !showPeak;
     });
@@ -725,6 +746,7 @@
     fp.chapters = [];
     fp.duration = 0;
     fp.startOffset = 0;
+    fp.lastPosition = 0;
     fp.windowEnd = 0;
     fp.encodePaused = false;
     fp.mode = "hls";
@@ -889,12 +911,15 @@
     setBadge(tt("Lädt …"));
     setStatus(tt("Starte Session …"));
 
+    const targetStart = Math.max(0, startSec || 0);
+    fp.lastPosition = targetStart;
+    fp.startOffset = targetStart;
     const directOk = clientDirectOk(fp.info);
     const body = {
       path,
       audio: isNaN(audio) ? 0 : audio,
       subtitle: isNaN(sub) ? -1 : sub,
-      start: Math.max(0, startSec || 0),
+      start: targetStart,
       profile,
       burn_subs: burn,
       client_direct_ok: directOk,
@@ -921,10 +946,14 @@
         setBadge(tt("Fehler"));
         return;
       }
-      if (d.options) fillEncodeOptions(d.options);
+      if (d.options) {
+      fillEncodeOptions(d.options);
+      window.fpPlayerOptions = d.options;
+    }
       const sess = d.session || {};
       fp.sid = sess.id;
-      fp.startOffset = sess.mode === "direct" ? 0 : (sess.start || 0);
+      fp.startOffset = sess.mode === "direct" ? 0 : (sess.start != null ? sess.start : targetStart);
+      fp.lastPosition = sess.start != null ? sess.start : targetStart;
       fp.duration = sess.duration || fp.duration || 0;
       fp.mode = sess.mode || "hls";
       fp.windowEnd = 0;
@@ -1033,6 +1062,7 @@
       fp.info = info;
       syncLookUi();
       fp.duration = info.duration || 0;
+      fp.lastPosition = 0;
       fp.path = path;
       fillTracks(info);
       updateTimeUi();
@@ -1046,6 +1076,7 @@
   async function loadOptions() {
     try {
       const d = await (await fetch("/api/player/options")).json();
+      window.fpPlayerOptions = d;
       fillEncodeOptions(d);
     } catch (e) {
       fillEncodeOptions(null);
@@ -1181,6 +1212,10 @@
           updateAudioModeHint(null);
         }
         if (!fp.path) return;
+        if ((id === "fp-platform" || id === "fp-codec") && fp.sid) {
+          queueLookApply();
+          return;
+        }
         setDirty(true);
         setStatus(tt("Änderungen noch nicht übernommen – „Übernehmen“ klicken."));
         refreshPlan();
