@@ -135,8 +135,8 @@ def _models_section() -> dict:
     models = [
         ("HD (1080p)", config.VMAF_MODEL_1080P),
         ("4K/UHD", config.VMAF_MODEL_4K),
-        ("HD NEG (Anime)", config.VMAF_MODEL_1080P_NEG),
-        ("4K NEG (Anime)", config.VMAF_MODEL_4K_NEG),
+        ("HD NEG (Messung)", config.VMAF_MODEL_1080P_NEG),
+        ("4K NEG (Messung)", config.VMAF_MODEL_4K_NEG),
     ]
     for label, name in models:
         path = config.VMAF_MODEL_DIR / name

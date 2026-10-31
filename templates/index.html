@@ -23,6 +23,7 @@
                       <option value="5"{% if selected == "5" %} selected{% endif %}>5 Szenen</option>
   {% endmacro %}
   {% macro s2_frame_options(selected="3") %}
+                      <option value="0"{% if selected == "0" %} selected{% endif %}>0 – Aus</option>
                       <option value="1"{% if selected == "1" %} selected{% endif %}>1 – nur Mitte</option>
                       <option value="3"{% if selected == "3" %} selected{% endif %}>3 – über die Szene</option>
                       <option value="5"{% if selected == "5" %} selected{% endif %}>5</option>
@@ -222,7 +223,7 @@
                   <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
                   <button type="button" class="btn btn-ghost btn-sm" data-preset="Film" data-tip="AV1 · CQ 28, Ton kopieren – Ausgangspunkt für Spielfilme.">Film</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-preset="Serie" data-tip="Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.">Serie</button>
-                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime" data-tip="AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).">Anime</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-preset="Anime" data-tip="AV1 · CQ 26, Anime-Modus (10-bit gegen Banding).">Anime</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-preset="Remux-only" data-tip="Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.">Remux-only</button>
                 </div>
               </div>
@@ -457,7 +458,7 @@
                     </select>
                   </div>
                   <div class="field">
-                    <label>SSIMULACRA2-Bilder je Szene</label>
+                    <label data-tip="SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · &lt; 50 deutlich schlechter. 0 schaltet die Messung aus.">SSIMULACRA2-Bilder je Szene</label>
                     <select id="opt-s2-frames">
                       {{ s2_frame_options("3") }}
                     </select>
@@ -511,7 +512,7 @@
                 </label>
                 <label class="check">
                   <input type="checkbox" id="opt-anime" />
-                  <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
+                  <span data-tip="10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.">Anime-Modus (10-bit gegen Banding)</span>
                 </label>
                 <label class="check">
                   <input type="checkbox" id="opt-mobile-copy" />
@@ -728,11 +729,11 @@
                   <p class="hint">Mehr Stichproben = genauere Größenprognose, aber längere Analyse.</p>
                 </div>
                 <div class="field">
-                  <label>SSIMULACRA2-Bilder je Szene</label>
+                  <label data-tip="SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · &lt; 50 deutlich schlechter. 0 schaltet die Messung aus.">SSIMULACRA2-Bilder je Szene</label>
                   <select id="vt-s2-frames">
                     {{ s2_frame_options("3") }}
                   </select>
-                  <p class="hint">Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.</p>
+                  <p class="hint">Skala bis 100 (höher = besser): ab 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · unter 50 schwach. 0 = aus.</p>
                 </div>
                 <div class="field">
                   <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
@@ -794,13 +795,14 @@
                 </label>
                 <label class="check">
                   <input type="checkbox" id="vt-anime" />
-                  <span>Anime-Modus (VMAF-NEG + 10-bit)</span>
+                  <span data-tip="10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.">Anime-Modus (10-bit gegen Banding)</span>
                 </label>
                 <label class="check">
                   <input type="checkbox" id="vt-two-pass" />
                   <span>Zwei-Pass für die Testclips</span>
                 </label>
               </div>
+              <p class="hint">Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala. Der Anime-Haken schaltet nur den 10-bit-Encode gegen Banding.</p>
               <p class="hint" id="vt-visual-hint" hidden>Encodiert die Testclips und lässt die Messung weg. In der Szenengalerie zwei Bilder wählen und im A/B-Player vergleichen.</p>
               <p class="hint">Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, damit das Bitrate-Ziel auf dem kurzen Clip getroffen wird. NVIDIA nutzt Multipass in einem Lauf. Der Vergleich dauert länger.</p>
             </div>
@@ -1431,7 +1433,7 @@
                   </select>
                 </div>
                 <div class="field">
-                  <label>SSIMULACRA2-Bilder je Szene</label>
+                  <label data-tip="SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · &lt; 50 deutlich schlechter. 0 schaltet die Messung aus.">SSIMULACRA2-Bilder je Szene</label>
                   <select id="st-s2-frames">
                     {{ s2_frame_options("3") }}
                   </select>
@@ -1465,8 +1467,9 @@
 
             <label class="check">
               <input type="checkbox" id="st-anime" />
-              <span>Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)</span>
+              <span data-tip="10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.">Anime-Modus (10-bit gegen Banding)</span>
             </label>
+            <p class="hint">Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala. Der Anime-Haken schaltet nur den 10-bit-Encode gegen Banding.</p>
 
             <div class="field">
               <label data-tip="Automatisch: pro Datei DV übernehmen (HEVC auch GPU; AV1 nur CPU/SVT, nicht NVIDIA) oder bei Profil 5 nach SDR. Feste Optionen gelten für den ganzen Stapel.">Dynamik (HDR / Dolby Vision)</label>
@@ -2808,9 +2811,9 @@
               </div>
             </div>
             <p class="muted" id="fp-hw-info"></p>
-            <div class="fp-look" id="fp-look">
-              <p class="hint">Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.</p>
-              <div class="field-row field-row-inline" id="fp-tonemap-opts">
+            <div class="fp-look" id="fp-look" hidden>
+              <p class="hint" id="fp-look-hint">Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.</p>
+              <div class="field-row field-row-inline" id="fp-tonemap-opts" hidden>
                 <div class="field">
                   <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg.">Tonemap-Engine</label>
                   <select id="fp-tonemap-engine">
@@ -3143,7 +3146,7 @@
                 </select>
               </div>
               <div class="field" id="eb-s2-field">
-                <label>SSIMULACRA2-Bilder je Szene</label>
+                <label data-tip="SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · &lt; 50 deutlich schlechter. 0 schaltet die Messung aus.">SSIMULACRA2-Bilder je Szene</label>
                 <select id="eb-s2-frames">
                   {{ s2_frame_options("3") }}
                 </select>
@@ -3153,7 +3156,7 @@
                 <input type="number" id="eb-seconds" min="5" max="60" value="12" />
               </div>
             </div>
-            <label class="check" id="eb-anime-wrap"><input type="checkbox" id="eb-anime" /><span>Anime-Modus (VMAF-NEG, 10-bit)</span></label>
+            <label class="check" id="eb-anime-wrap"><input type="checkbox" id="eb-anime" /><span data-tip="10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.">Anime-Modus (10-bit gegen Banding)</span></label>
             <p class="hint" id="eb-estimate"></p>
 
             <div class="lib-actions">
@@ -3408,7 +3411,7 @@
             <details class="faq-item" id="faq-vmaf">
               <summary>Was ist VMAF überhaupt?</summary>
               <div class="faq-body">
-                <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.</p>
+                <p>VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala, der Bereich 93–95 stammt aus diesen Läufen. Der Anime-Modus schaltet nur den 10-bit-Encode gegen Banding.</p>
                 <p>Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low der schwächsten Szene nicht durchrutschen – ruhige Szenen können den Schnitt nicht retten. Den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low dieser Szene ≥ 88). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 = nur Mittelwert. Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.</p>
                 <p>Mindest-Ersparnis (Vorgabe 0 %): eine Stufe gilt nur als Empfehlung, wenn die prognostizierte Datei (Video plus kopierter Ton) mindestens so viel kleiner ist als die Quelle. −1 schaltet den Filter aus. Hält das Ziel-VMAF, aber jede passende Stufe wäre zu groß, bleibt die Quelle – Ziel-VMAF und Super-Tool encodieren dann nicht (kein Fehler). Hält keine Stufe den 1%-Low-Abstand, aber mindestens eine spart, gilt Ersparnis als Pflicht – unter den Sparern bleibt ein Fenster von etwa 2 Punkten unter dem besten 1%-Low der schwächsten Szene (⅓ des Floor-Abstands), dort die kleinste Datei (Kompromiss, Warnung in der Warteschlange). Wird trotzdem encodiert und die echte Datei ist zu groß, wird die Ausgabe verworfen. Manuell kannst du trotzdem eine Stufe wählen. Nach dem groben Raster (typisch vier Werte) wird je Encoder einmal die Mitte zwischen letztem Treffer und erstem Fehlschlag nachgetestet, wenn der Abstand groß genug ist – keine volle Binärsuche.</p>
               </div>
@@ -3422,7 +3425,7 @@
             <details class="faq-item" id="faq-anime">
               <summary>Was tun Anime-Modus, Auto-Crop und Film-Grain?</summary>
               <div class="faq-body">
-                <p>Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.</p>
+                <p>Anime-Modus: 10-bit-Encode, damit Flächen weniger banden. Die VMAF-Messung ist davon unabhängig und nutzt immer NEG. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-xpsnr">
@@ -3440,7 +3443,7 @@
             <details class="faq-item" id="faq-ssimulacra2">
               <summary>Was ist SSIMULACRA2 neben VMAF?</summary>
               <div class="faq-body">
-                <p>SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.</p>
+                <p>SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Es ändert die Empfehlung nicht.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-history-suggest">

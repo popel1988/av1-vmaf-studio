@@ -146,7 +146,7 @@ class JobSettings:
     # Zweite Ausgabe aus demselben Decode: H.264 MP4 fürs Handy (0 = aus).
     mobile_copy: bool = False
     mobile_height: int = 720
-    anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
+    anime: bool = False              # 10-bit-Ausgabe gegen Banding; VMAF-Messung ist immer NEG
     # Audio-Optimierung: video_mode="copy" => nur Remux (Video 1:1), Tonspuren
     # werden je nach scope (bloated|all) transcodiert. Kein VMAF/Encode.
     video_mode: str = "encode"       # encode | copy
@@ -1111,7 +1111,7 @@ class QueueManager:
                 test_values=list(s.test_values),
                 clip_seconds=s.clip_seconds,
                 samples=s.samples,
-                ssimulacra2_frames=getattr(s, "ssimulacra2_frames", 3) or 3,
+                ssimulacra2_frames=int(getattr(s, "ssimulacra2_frames", 3) if getattr(s, "ssimulacra2_frames", None) is not None else 3),
                 generate_screenshots=s.generate_screenshots or s.visual_only,
                 visual_only=s.visual_only,
                 item_id=item.id,
@@ -2508,7 +2508,7 @@ def build_job_settings(d: dict) -> JobSettings:
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
-        ssimulacra2_frames=max(1, min(7, int(d.get("ssimulacra2_frames", 3) or 3))),
+        ssimulacra2_frames=max(0, min(7, int(d.get("ssimulacra2_frames") if d.get("ssimulacra2_frames") is not None else 3))),
         sample_mode="bitrate" if d.get("sample_mode") == "bitrate" else "even",
         scene_min_pct=max(5, min(60, int(d.get("scene_min_pct", 10) or 10))),
         credits_at=max(0.0, min(48 * 3600.0, float(d.get("credits_at", 0) or 0))),

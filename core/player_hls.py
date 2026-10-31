@@ -394,6 +394,7 @@ def plan_playback(
     height: int = 0,
     v_bitrate: int = 0,
     audio_copy: bool = False,
+    look: Optional[dict] = None,
 ) -> dict:
     """Datei × Browser × Server → bester Wiedergabepfad.
 
@@ -512,6 +513,7 @@ def plan_playback(
         )
 
     # --- Automatik -------------------------------------------------------
+    preview = _normalize_look(look)
     if want_burn:
         enc = resolve_encode(platform, "h264", client_codecs=client)
         h, br = _quality_params("720p", 0, v_bitrate)
@@ -521,6 +523,23 @@ def plan_playback(
             will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
             summary="Burn-in → Transcode 720p",
             extra_reasons=["Bild-Untertitel → Video muss encodiert werden"],
+        )
+
+    if _look_needs(preview, is_hdr):
+        targets = _server_encode_targets(client)
+        enc = resolve_encode(platform, codec or targets[0], client_codecs=client)
+        prof = "1080p" if src_h >= 1440 else "original"
+        h, br = _quality_params(prof, height, v_bitrate)
+        return _result(
+            strategy="transcode", profile=prof, mode="hls",
+            need_encode=True, encode=enc, height=h, v_bitrate=br,
+            will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
+            summary=f"Transcode {prof}, Encode-Vorschau",
+            extra_reasons=[
+                "Encode-Vorschau: Tonemap und Bildfilter brauchen einen Transcode",
+                f"Server: {enc['platform']}/{enc['codec']}/{enc['encoder']}"
+                + (" · HDR→SDR" if is_hdr else ""),
+            ],
         )
 
     # Direct-Play: Container+Codec Server-seitig + Browser-Flag + Ton/Video ok
@@ -579,7 +598,7 @@ def plan_playback(
 
     # Video nicht browserfähig → Transcode; Server wählt Encode-HW
     targets = _server_encode_targets(client)
-    enc = resolve_encode(platform, targets[0], client_codecs=client)
+    enc = resolve_encode(platform, codec or targets[0], client_codecs=client)
     # 4K-Live-Vorschau: 1080p reicht meist
     prof = "1080p" if src_h >= 1440 else "original"
     h, br = _quality_params(prof, height, v_bitrate)
@@ -611,6 +630,7 @@ def plan_for_path(
     v_bitrate: int = 0,
     audio_copy: bool = False,
     start_sec: float = 0.0,
+    look: Optional[dict] = None,
 ) -> dict:
     """Probe + plan_playback für die UI (ohne Session zu starten)."""
     target = config.resolve_input(rel)
@@ -641,6 +661,7 @@ def plan_for_path(
         height=height,
         v_bitrate=v_bitrate,
         audio_copy=audio_copy,
+        look=look,
     )
     return {
         "plan": plan,
@@ -727,6 +748,7 @@ def resolve_encode(
 
 def player_options() -> dict:
     from . import capabilities as caps
+    from .encoder import jellyfin_filters
     results = caps.results_map()
     decode = caps.decode_results_map()
     auto_p = pick_auto_platform("h264")
@@ -751,6 +773,8 @@ def player_options() -> dict:
         "transcode_encoder": (
             ff.encoder_name(auto_p, "h264") if auto_p != "cpu" else "libx264"
         ),
+        "jellyfin_filters": sorted(jellyfin_filters()),
+        "intel_uses_vaapi": bool(ff.intel_uses_vaapi()),
         "capabilities_ready": bool(results) and bool(decode),
         "lookahead_choices": [
             {"id": 15, "label": "15 s Puffer"},
@@ -1317,6 +1341,7 @@ def start_session(
         height=height,
         v_bitrate=v_bitrate,
         audio_copy=want_audio_copy,
+        look=preview,
     )
 
     resolved = plan["profile"]
@@ -1385,39 +1410,6 @@ def start_session(
         getattr(info, "codec", "") if info else ""
     )
     is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
-    if (
-        preview and _look_needs(preview, is_hdr) and requested == "auto"
-        and (sess.mode == "direct" or use_video_copy)
-    ):
-        src_h = int(getattr(info, "height", 0) or 0) if info else 0
-        prof = "1080p" if src_h >= 1440 else "original"
-        h, br = _quality_params(prof, 0, 0)
-        enc_info = resolve_encode(
-            platform, "h264", client_codecs=client_codecs or ["h264"])
-        use_video_copy = False
-        need_encode = True
-        sess.mode = "hls"
-        sess.profile = prof
-        sess.platform = enc_info["platform"]
-        sess.codec = enc_info["codec"]
-        sess.encoder = enc_info["encoder"]
-        sess.height = h
-        sess.v_bitrate = br
-        note = "Encode-Vorschau: Tonemap und Bildfilter brauchen einen Transcode"
-        sess.decision_reasons = list(sess.decision_reasons) + [note]
-        sess.decision_summary = f"Transcode {prof}, Encode-Vorschau"
-        sess.decision_strategy = "transcode"
-        plan["mode"] = "hls"
-        plan["use_video_copy"] = False
-        plan["need_encode"] = True
-        plan["strategy"] = "transcode"
-        plan["profile"] = prof
-        plan["summary"] = sess.decision_summary
-        plan["encode"] = enc_info
-        plan["height"] = h
-        plan["v_bitrate"] = br
-        plan["reasons"] = list(plan.get("reasons") or []) + [note]
-        sess.warning = sess.decision_summary
 
     if preview and str(preview.get("platform") or "") in ("auto", ""):
         preview = dict(preview)

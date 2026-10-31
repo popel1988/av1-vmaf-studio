@@ -290,7 +290,7 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   removed before encoding. VMAF analysis and the guardrail automatically use the
   same cropped area so scores stay correct.
 - **Film-grain synthesis** (AV1/SVT) and **denoise** (light/medium/strong).
-- **Anime mode**: VMAF-NEG model + 10-bit encode against banding.
+- **Anime mode**: 10-bit encode against banding. VMAF scoring always uses the NEG model, with or without this switch.
 - **Scaling**: downscale to a target height; the test encode is scaled back up to
   the original resolution for the VMAF comparison.
 - **Per-track audio**: copy / re-encode (AAC/Opus/AC3/E-AC3/FLAC) / remove,
@@ -568,7 +568,14 @@ HDR10-compatible base is kept and the job does not fail.
 | **Quality guardrail** | Measures VMAF **after** encode (optional re-encode). Not a pre-comparison. |
 
 VMAF estimates perceptual similarity (roughly 0–100). **93–95** is the
-sweet-spot used here. Anime mode uses **VMAF-NEG** + 10-bit against banding.
+sweet-spot used here. Scoring always uses **VMAF-NEG**: the standard model
+rewards sharpening and contrast even when the compression is no better, and
+NEG drops that bonus so encoder comparisons stay honest. Older runs with the
+standard model sit on a different scale, and the 93–95 band comes from those
+runs. On `:latest-legacy` this is `vmaf_v0.6.1neg` (4K:
+`vmaf_4k_v0.6.1neg`). On `:latest` the NEG setting names the same VMAF v1
+file as the default model. Anime mode only switches the 10-bit encode
+against banding.
 Recommendations also require 1% low within the gap from **Settings → VMAF
 recommendation** (default 6 points below the target mean). A **minimum
 savings** filter (default 0% = file must not grow) skips auto-encode when
@@ -583,7 +590,8 @@ guarantee — screenshots and A/B compare still help.
 **MKV** is recommended (all codecs and subtitle types). **MP4** converts text
 subs to `mov_text` and drops image subs (PGS/VobSub).
 
-**Anime mode** = VMAF-NEG + 10-bit. **Auto-crop** = `cropdetect` letterbox
+**Anime mode** = 10-bit against banding. The VMAF score always uses NEG.
+**Auto-crop** = `cropdetect` letterbox
 (same crop for VMAF/guardrail). **Film grain** = AV1/CPU/SVT synthesis only
 (metadata, saves bits; 0 = off). Separate from that, optional **picture
 filters** run before the encoder: deinterlace (`bwdif`, default automatic —
@@ -704,9 +712,10 @@ One media mount is enough — sources and encodes live in the same tree:
   interactive line chart, screenshots (original vs. encode), “sweet spot”
   recommendation (VMAF 93–95). The **latest** image scores with VMAF v1:
   `vmaf_v1.0.16_3d0h.json` for 1080p and `vmaf_v1.0.16_1d5h_2160.json` for 4K
-  (both scale 0–100; NEG is inside the v1 model, including anime mode).
-  **latest-legacy** scores with `vmaf_v0.6.1.json` (4K: `vmaf_4k_v0.6.1.json`,
-  NEG variants in anime mode). A 93 on v1 is not a 93 on v0.6.1.
+  (both scale 0–100). Scoring always asks for the NEG model. On this channel
+  the NEG file name is the same v1 model. **latest-legacy** scores with
+  `vmaf_v0.6.1neg.json` (4K: `vmaf_4k_v0.6.1neg.json`). A 93 on v1 is not a
+  93 on v0.6.1, and a NEG score is not a standard-model score.
 - **Per scene**: each clip stores mean VMAF, **1%-low**, harmonic mean, PSNR,
   SSIM, and a downsampled frame curve. The chart can switch to one scene
   (mean + that scene’s 1%-low), a gap chart (scene mean minus overall mean),
@@ -722,8 +731,10 @@ One media mount is enough — sources and encodes live in the same tree:
 - **CAMBI**: banding score in the same libvmaf pass. Higher means more visible
   steps in gradients. It does not change the recommendation.
 - **SSIMULACRA2**: the libjxl **0.11.1** binary compares stills of the source
-  and the encode, spread across each sample (1, 3, 5, or 7 frames; default 3).
-  Higher is closer to the source. It does not change the recommendation.
+  and the encode, spread across each sample (0 = off, or 1, 3, 5, 7 frames;
+  default 3). Scale up to 100 (higher is closer to the source): **≥ 85** nearly
+  indistinguishable (90+ nearly lossless, 100 identical), **70–85** very good,
+  **50–70** visible loss, **< 50** weak. It does not change the recommendation.
 - **Extra metrics**: besides mean VMAF, **1%-low** (mean of the worst 1% of frames),
   **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
   (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a

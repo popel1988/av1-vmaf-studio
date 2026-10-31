@@ -579,7 +579,7 @@ class EnqueueRequest(BaseModel):
     two_pass: bool = False
     mobile_copy: bool = False        # zweite Ausgabe: H.264 MP4 fürs Handy, gleicher Decode
     mobile_height: int = 720         # 720 | 1080
-    anime: bool = False              # Anime-Modus: VMAF-NEG-Modell + 10-bit-Ausgabe
+    anime: bool = False              # 10-bit-Ausgabe gegen Banding; VMAF-Messung ist immer NEG
     verify_vmaf: bool = False        # Guardrail: echten VMAF nach Encode messen
     verify_min: float = 93.0         # Ziel-VMAF für die Guardrail
     verify_retry: bool = False       # bei Unterschreiten automatisch neu encoden
@@ -2411,6 +2411,7 @@ class PlayerPlanRequest(BaseModel):
     v_bitrate: int = 0
     client_codecs: list[str] = []
     audio_copy: bool = False
+    look: Optional[dict] = None
 
 
 @app.post("/api/player/plan")
@@ -2432,6 +2433,7 @@ async def player_plan(req: PlayerPlanRequest):
         v_bitrate=req.v_bitrate,
         audio_copy=bool(req.audio_copy),
         start_sec=req.start,
+        look=req.look,
     )
 
 

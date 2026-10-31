@@ -51,7 +51,7 @@ class VmafOptions:
     # >0: Ziel-VMAF (Super-Tool) – dann wird der effizienteste Wert mit
     # VMAF >= Ziel empfohlen statt des Standard-Sweetspots.
     target_vmaf: float = 0.0
-    # Anime-Modus: NEG-Modell für die Bewertung + 10-bit-Test-Encodes.
+    # 10-bit-Test-Encodes gegen Banding. Die Messung selbst ist immer VMAF-NEG.
     anime: bool = False
     # False: nur die eingetragenen Testwerte (VMAF-Tool, Encoder-Bench).
     # True: ein Zwischenwert zwischen Treffer und Fehlschlag (Ziel-Encode).
@@ -859,12 +859,16 @@ def _s2_frame_count(n: int) -> int:
         v = int(n)
     except (TypeError, ValueError):
         v = 3
+    if v <= 0:
+        return 0
     return max(1, min(7, v))
 
 
 def _s2_times(clip_len: float, n: int) -> list[float]:
     """Gleichmäßig im Clip, nicht auf den Schnittkanten. 1 bleibt die Mitte."""
     count = _s2_frame_count(n)
+    if count <= 0:
+        return []
     length = max(0.0, float(clip_len or 0))
     return [length * (i / (count + 1)) for i in range(1, count + 1)]
 
@@ -890,7 +894,7 @@ def _ssimulacra2_clip(
     clip_len: float, fps: float, frames: int = 3,
 ) -> Optional[dict]:
     """Mehrere Standbilder je Stichprobe. Höher ist besser, bis 100."""
-    if not _ssimulacra2_ok():
+    if _s2_frame_count(frames) <= 0 or not _ssimulacra2_ok():
         return None
     scores: list[float] = []
     times = _s2_times(clip_len, frames)
@@ -970,6 +974,9 @@ def measure_output_vmaf(
 ) -> Optional[float]:
     """Misst den echten VMAF der fertigen Ausgabedatei gegen die Quelle.
 
+    Die Messung ist immer VMAF-NEG. ``anime`` bleibt im Aufruf, steuert hier
+    aber kein Modell mehr.
+
     Für die Qualitäts-Guardrail: es werden dieselben Stichproben-Positionen wie
     bei der Analyse genutzt. Aus Quelle (ggf. getonemappt) und Ausgabe werden
     verlustfreie Clips gezogen und verglichen; der Mittelwert wird gemittelt.
@@ -1002,7 +1009,7 @@ def measure_output_vmaf(
             if not dist.exists():
                 continue
             score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}",
-                                  neg=anime, dims=dims)
+                                  neg=True, dims=dims)
             if score is not None:
                 scores.append(score)
         return round(sum(scores) / len(scores), 2) if scores else None
@@ -1048,7 +1055,7 @@ def analyze(
     work = config.WORK_DIR / f"vmaf_{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True, exist_ok=True)
 
-    model_name, _ = _model_for(info, opts.anime)
+    model_name, _ = _model_for(info, True)
     analysis = VmafAnalysis(
         model="" if opts.visual_only else model_name,
         rate_mode=opts.rate_mode,
@@ -1265,7 +1272,7 @@ def analyze(
                     status(f"VMAF-Vergleich {shown} @ {rate_lbl}{smp} …")
                 emit("vmaf")
                 metrics = _vmaf_metrics(test_file, reference, info, work, skey,
-                                        neg=opts.anime, dims=dims, clip_len=clip_len)
+                                        neg=True, dims=dims, clip_len=clip_len)
                 prog["done"] += 1
                 emit("vmaf")
                 if metrics is None:
@@ -1284,7 +1291,7 @@ def analyze(
                     xpsnrs.append(metrics["xpsnr"])
                 if metrics.get("cambi") is not None:
                     cambis.append(float(metrics["cambi"]))
-                if reference is not None:
+                if reference is not None and _s2_frame_count(opts.ssimulacra2_frames) > 0:
                     if status:
                         status(f"SSIMULACRA2 {shown} @ {rate_lbl}{smp} …")
                     s2 = _ssimulacra2_clip(

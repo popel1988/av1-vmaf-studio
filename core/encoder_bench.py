@@ -764,7 +764,8 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
         values = [24, 28, 32] if rate_mode == "cq" else [8000, 6000, 4000]
     clip_seconds = max(5, min(60, int(cfg.get("clip_seconds") or 12)))
     samples = max(1, min(5, int(cfg.get("samples") or 3)))
-    s2_frames = max(1, min(7, int(cfg.get("ssimulacra2_frames") or 3)))
+    raw_s2 = cfg.get("ssimulacra2_frames")
+    s2_frames = max(0, min(7, int(raw_s2 if raw_s2 is not None else 3)))
     anime = bool(cfg.get("anime"))
     b_frames = ff.normalize_b_frames(cfg.get("b_frames", "auto"))
     nvenc_tune = ff.normalize_nvenc_tune(cfg.get("nvenc_tune", "auto"))

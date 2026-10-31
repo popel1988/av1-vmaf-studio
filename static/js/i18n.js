@@ -272,15 +272,18 @@
       "CAMBI looks for banding, stepped areas in gradients. It runs in the same libvmaf pass as VMAF, PSNR and SSIM. Higher means more banding. The number is the average across the samples and does not change the recommendation.",
     "Was ist SSIMULACRA2 neben VMAF?":
       "What is SSIMULACRA2 next to VMAF?",
-    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
-      "SSIMULACRA2 compares several stills per sample, spaced across the clip, source against encode. The default is 3 images, adjustable from 1 to 7. Shown is the average, higher is closer to the source: roughly 50 medium, 70 high, 90 nearly lossless, 100 identical. It does not change the recommendation.",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compares several stills per sample, spaced across the clip, source against encode. The default is 3 images, adjustable from 0 (off) to 7. Shown is the average, higher is closer to the source: 85+ nearly indistinguishable (90+ nearly lossless, 100 identical), 70–85 very good, 50–70 visible loss, below 50 clearly worse. It does not change the recommendation.",
     "SSIMULACRA2-Bilder je Szene": "SSIMULACRA2 stills per scene",
+    "0 – Aus": "0 – off",
     "1 – nur Mitte": "1 – middle only",
     "3 – über die Szene": "3 – across the scene",
-    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
-      "Spaced across each sample clip. Higher is closer to the source.",
-    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
-      "PSNR and SSIM are classic signal measures. CAMBI measures banding, higher means more steps. SSIMULACRA2 is the average of several stills per scene, min is the weakest of them. Higher is closer to the source. The recommendation stays with VMAF.",
+    "Skala bis 100 (höher = besser): ab 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · unter 50 schwach. 0 = aus.":
+      "Scale up to 100 (higher = better): 85+ nearly indistinguishable · 70–85 very good · 50–70 visible · below 50 weak. 0 = off.",
+    "SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · < 50 deutlich schlechter. 0 schaltet die Messung aus.":
+      "SSIMULACRA2 (0–100, higher = closer to the source): ≥ 85 nearly indistinguishable · 70–85 very good · 50–70 visible · < 50 clearly worse. 0 turns the measurement off.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.":
+      "PSNR and SSIM are classic signal measures. CAMBI measures banding, higher means more steps. SSIMULACRA2 (0–100, higher = closer to the source): 85+ nearly indistinguishable, 70–85 very good, 50–70 visible, below 50 weak. The recommendation stays with VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "Where do the suggestion and runtime “from history” come from?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -431,6 +434,16 @@
     "Datei zum Zusammenführen auswählen": "Select file to merge",
     "A/B-Vergleich": "A/B Compare",
     "Encode-Vorschau": "Encode preview",
+    "Direct-Play und Remux zeigen die Datei unverändert. Stellst du unten einen Filter um, wechselt der Modus auf Automatisch und startet den Transcode an der aktuellen Stelle.":
+      "Direct play and remux show the file unchanged. If you change a filter below, the mode switches to Auto and starts transcoding at the current position.",
+    "HDR-Quelle erkannt: Tonemap-Engine, Kurve, Peak, Entsättigung und Bildfilter starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN.":
+      "HDR source detected: tone-map engine, curve, peak, desaturation and picture filters restart the preview at the current position right after a change. CUDA, OpenCL, VAAPI and tonemapx run on Jellyfin-FFmpeg, CPU and libplacebo on BtbN.",
+    "SDR-Quelle: Tonemap entfällt. Deband, Denoise, Schärfen und Korn starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu.":
+      "SDR source: tone mapping does not apply. Deband, denoise, sharpen and grain restart the preview at the current position right after a change.",
+    "10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.":
+      "10-bit encode against banding in flat areas. The VMAF score always uses NEG, regardless of this switch.",
+    "Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala. Der Anime-Haken schaltet nur den 10-bit-Encode gegen Banding.":
+      "Scoring always uses VMAF-NEG. The standard model rewards sharpening and contrast even when the compression is no better. NEG drops that bonus so encoder comparisons stay honest. Older runs with the standard model sit on a different scale. The anime switch only turns on the 10-bit encode against banding.",
     "Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.":
       "Each change restarts the preview at the current position. CUDA, OpenCL, VAAPI and tonemapx run on Jellyfin-FFmpeg, CPU and libplacebo on BtbN. On HDR the curve applies, otherwise deband, denoise, sharpen and grain. Direct play and remux show the file unchanged; a change switches to Auto for that.",
     "Warteschlange": "Queue",
@@ -664,9 +677,9 @@
       "ABR and CBR only. The CPU encodes each test clip twice so the bitrate target is hit on the short clip. NVIDIA uses multipass in one run. The comparison takes longer.",
     "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
       "ABR and CBR only. The CPU encodes each test clip twice, NVIDIA uses multipass. The comparison takes longer.",
-    "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)":
-      "Anime mode (VMAF-NEG scoring + 10-bit against banding)",
-    "Anime-Modus (VMAF-NEG + 10-bit)": "Anime mode (VMAF-NEG + 10-bit)",
+    "Anime-Modus (10-bit gegen Banding)":
+      "Anime mode (10-bit against banding)",
+    "Anime-Modus (10-bit gegen Banding)": "Anime mode (10-bit against banding)",
     "Optionen": "Options",
     "Vergleich": "Comparison",
     "Encoder & Optionen": "Encoders & options",
@@ -1434,8 +1447,8 @@
       "AV1 · CQ 28, copy audio – starting point for movies.",
     "Wie Film, etwas kleiner (CQ 30) und Sprach-Whitelist de/en für Ton und Untertitel.":
       "Like Movie, a bit smaller (CQ 30) and de/en language whitelist for audio and subs.",
-    "AV1 · CQ 26, Anime-Modus (VMAF-NEG + 10-bit gegen Banding).":
-      "AV1 · CQ 26, anime mode (VMAF-NEG + 10-bit against banding).",
+    "AV1 · CQ 26, Anime-Modus (10-bit gegen Banding).":
+      "AV1 · CQ 26, anime mode (10-bit against banding).",
     "Kein Video-Encode: nur Container/Spuren (Remux). Schnell, Datei bleibt bildgleich.":
       "No video encode: container/tracks only (remux). Fast, picture stays identical.",
     "Wohin FFmpeg encodiert: NVIDIA/Intel/AMD (GPU) oder CPU. AV1+Dolby Vision nur mit CPU/SVT – NVIDIA kann die RPU nicht einbetten (dann HDR10-Fallback).":
@@ -1600,8 +1613,8 @@
     "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
       "The quality guardrail measures sample VMAF after encode. That is a check, not a pre-comparison. Optionally it re-encodes automatically if the score is too low.",
     "Was ist VMAF überhaupt?": "What is VMAF, actually?",
-    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
-      "VMAF estimates how similar output and source look (typically 0–100). 93–95 is the sweet spot here: below that it often looks worse, above that the file grows a lot for little gain. Anime mode uses VMAF-NEG and 10-bit against banding.",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala, der Bereich 93–95 stammt aus diesen Läufen. Der Anime-Modus schaltet nur den 10-bit-Encode gegen Banding.":
+      "VMAF estimates how similar output and source look (typically 0–100). 93–95 is the sweet spot here: below that it often looks worse, above that the file grows a lot for little gain. Scoring always uses VMAF-NEG. The standard model rewards sharpening and contrast even when the compression is no better. NEG drops that bonus so encoder comparisons stay honest. Older runs with the standard model sit on a different scale, and the 93–95 band comes from those runs. Anime mode only switches the 10-bit encode against banding.",
     "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low der schwächsten Szene nicht durchrutschen – ruhige Szenen können den Schnitt nicht retten. Den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low dieser Szene ≥ 88). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 = nur Mittelwert.  Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
       "There is also 1% low (worst frames), harmonic mean, PSNR and SSIM. Target VMAF on the slider stays the mean (94 means mean ≥ 94). Recommendations (VMAF Tool, target VMAF, Super Tool, encoder test) do not let the weakest scene's 1% low slip – calm scenes cannot rescue the average. You set the gap under Settings → VMAF recommendation (default 6, so at 94 that scene's low ≥ 88). The shown 1% low stays the average across scenes. 0 = mean only.A bigger gap (mean 95, 1% low 79) does not count as hitting the target – then the pick is not the smallest file, but the one with the better low. The shown score (55% mean + 35% 1% low + 10% harmonic mean) is only a comparison number, not a new slider. Samples: 1–5 scenes. VMAF is not a guarantee – screenshots and A/B compare still help.",
     "MKV oder MP4?": "MKV or MP4?",
@@ -1609,8 +1622,8 @@
       "MKV is recommended: AV1/HEVC/H.264 and all subtitle types (incl. PGS). MP4 converts text subs to mov_text; image subs (PGS/VobSub) are dropped. Automatic: AV1 and HEVC → MKV, H.264 → MP4.",
     "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
       "What do anime mode, auto-crop and film grain do?",
-    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
-      "Anime mode: VMAF-NEG model plus 10-bit encode so flat areas band less. Auto-crop detects black bars (letterbox) and cuts them before encode – saves bits. VMAF and the guardrail use the same area. Film grain (AV1/CPU/SVT only) synthesizes grain so the encoder spends fewer bits on real noise. 0 = off.",
+    "Anime-Modus: 10-bit-Encode, damit Flächen weniger banden. Die VMAF-Messung ist davon unabhängig und nutzt immer NEG. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Anime mode: 10-bit encode so flat areas band less. The VMAF score is independent of this and always uses NEG. Auto-crop detects black bars (letterbox) and cuts them before encode – saves bits. VMAF and the guardrail use the same area. Film grain (AV1/CPU/SVT only) synthesizes grain so the encoder spends fewer bits on real noise. 0 = off.",
     "Erklärung in der FAQ": "Explained in the FAQ",
     "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
       "CQ, ABR, CBR and HDR/Dolby Vision profiles:",
@@ -1761,7 +1774,7 @@
     "CBR (kbit/s)": "CBR (kbit/s)",
     "Werte (kommagetrennt, max. 4)": "Values (comma-separated, max. 4)",
     "Clip-Länge (Sekunden)": "Clip length (seconds)",
-    "Anime-Modus (VMAF-NEG, 10-bit)": "Anime mode (VMAF-NEG, 10-bit)",
+    "Anime-Modus (10-bit gegen Banding)": "Anime mode (10-bit against banding)",
     "Test starten": "Start test",
     "Empfehlung übernehmen und speichern": "Apply recommendation and save",
     "Ergebnisse leeren": "Clear results",
@@ -2040,15 +2053,18 @@
       "CAMBI busca banding, zonas escalonadas en degradados. Corre en la misma pasada de libvmaf que VMAF, PSNR y SSIM. Más alto significa más bandas. El número es la media de las muestras y no cambia la recomendación.",
     "Was ist SSIMULACRA2 neben VMAF?":
       "¿Qué es SSIMULACRA2 junto a VMAF?",
-    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
-      "SSIMULACRA2 compara varias imágenes por muestra, repartidas por el clip, fuente contra codificado. El valor por defecto son 3 imágenes, ajustable de 1 a 7. Se muestra la media, más alto está más cerca de la fuente: unos 50 medio, 70 alto, 90 casi sin pérdida, 100 idéntico. No cambia la recomendación.",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compara varias imágenes por muestra, repartidas por el clip, fuente contra codificado. El valor por defecto son 3 imágenes, ajustable de 0 (apagado) a 7. Se muestra la media, más alto está más cerca de la fuente: desde 85 casi indistinguible (90+ casi sin pérdida, 100 idéntico), 70–85 muy bien, 50–70 pérdidas visibles, menos de 50 claramente peor. No cambia la recomendación.",
     "SSIMULACRA2-Bilder je Szene": "Imágenes SSIMULACRA2 por escena",
+    "0 – Aus": "0 – apagado",
     "1 – nur Mitte": "1 – solo el centro",
     "3 – über die Szene": "3 – a lo largo de la escena",
-    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
-      "Repartidas por cada clip de muestra. Más alto está más cerca de la fuente.",
-    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
-      "PSNR y SSIM son medidas de señal clásicas. CAMBI mide el banding, más alto significa más bandas. SSIMULACRA2 es la media de varias imágenes por escena, min es la más débil. Más alto está más cerca de la fuente. La recomendación sigue siendo VMAF.",
+    "Skala bis 100 (höher = besser): ab 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · unter 50 schwach. 0 = aus.":
+      "Escala hasta 100 (más alto = mejor): desde 85 casi indistinguible · 70–85 muy bien · 50–70 visible · menos de 50 débil. 0 = apagado.",
+    "SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · < 50 deutlich schlechter. 0 schaltet die Messung aus.":
+      "SSIMULACRA2 (0–100, más alto = más cerca de la fuente): ≥ 85 casi indistinguible · 70–85 muy bien · 50–70 visible · < 50 claramente peor. 0 desactiva la medición.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.":
+      "PSNR y SSIM son medidas de señal clásicas. CAMBI mide el banding, más alto significa más bandas. SSIMULACRA2 (0–100, más alto = más cerca de la fuente): desde 85 casi indistinguible, 70–85 muy bien, 50–70 visible, menos de 50 débil. La recomendación sigue siendo VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "¿De dónde salen la sugerencia y la duración «del historial»?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -2196,6 +2212,16 @@
     "Datei zum Zusammenführen auswählen": "Seleccionar archivo para unir",
     "A/B-Vergleich": "Comparación A/B",
     "Encode-Vorschau": "Vista previa del encode",
+    "Direct-Play und Remux zeigen die Datei unverändert. Stellst du unten einen Filter um, wechselt der Modus auf Automatisch und startet den Transcode an der aktuellen Stelle.":
+      "La reproducción directa y el remux muestran el archivo sin cambios. Si cambias un filtro abajo, el modo pasa a Automático e inicia la transcodificación en la posición actual.",
+    "HDR-Quelle erkannt: Tonemap-Engine, Kurve, Peak, Entsättigung und Bildfilter starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN.":
+      "Fuente HDR detectada: el motor de mapeo de tonos, la curva, el pico, la desaturación y los filtros de imagen reinician la vista previa en la posición actual tras un cambio. CUDA, OpenCL, VAAPI y tonemapx corren con Jellyfin-FFmpeg, CPU y libplacebo con BtbN.",
+    "SDR-Quelle: Tonemap entfällt. Deband, Denoise, Schärfen und Korn starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu.":
+      "Fuente SDR: no se aplica mapeo de tonos. Deband, denoise, nitidez y grano reinician la vista previa en la posición actual tras un cambio.",
+    "10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.":
+      "Encode de 10 bits contra el banding en áreas planas. La medición VMAF usa siempre NEG, con independencia de este interruptor.",
+    "Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala. Der Anime-Haken schaltet nur den 10-bit-Encode gegen Banding.":
+      "La medición usa siempre VMAF-NEG. El modelo estándar premia el enfoque y el contraste aunque la compresión no sea mejor. NEG quita ese bonus para que la comparación de codificadores sea honesta. Las pasadas antiguas con el modelo estándar están en otra escala. El interruptor de anime solo activa el encode de 10 bits contra el banding.",
     "Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.":
       "Cada cambio reinicia la vista previa en la posición actual. CUDA, OpenCL, VAAPI y tonemapx corren con Jellyfin-FFmpeg, CPU y libplacebo con BtbN. En HDR se aplica la curva; si no, deband, denoise, nitidez y grano. La reproducción directa y el remux muestran el archivo sin cambios; un cambio pasa a Automático.",
     "Warteschlange": "Cola",
@@ -2362,8 +2388,8 @@
       "Solo ABR y CBR. La CPU codifica cada clip de prueba dos veces para alcanzar el bitrate en el clip corto. NVIDIA usa multipass en una pasada. La comparación tarda más.",
     "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
       "Solo ABR y CBR. La CPU codifica cada clip de prueba dos veces, NVIDIA usa multipass. La comparación tarda más.",
-    "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Modo anime (puntuación VMAF-NEG + 10 bits contra el banding)",
-    "Anime-Modus (VMAF-NEG + 10-bit)": "Modo anime (VMAF-NEG + 10 bits)",
+    "Anime-Modus (10-bit gegen Banding)": "Modo anime (10 bits contra el banding)",
+    "Anime-Modus (10-bit gegen Banding)": "Modo anime (10 bits contra el banding)",
     "Optionen": "Opciones",
     "Vergleich": "Comparación",
     "Encoder & Optionen": "Codificadores y opciones",
@@ -3103,8 +3129,8 @@
     "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
       "El guardrail de calidad mide VMAF por muestras después del encode. Es un control, no una comparación previa. Opcionalmente recodifica si se queda corto.",
     "Was ist VMAF überhaupt?": "¿Qué es VMAF?",
-    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
-      "VMAF estima cuánto se parecen salida y fuente a la vista (típicamente 0–100). 93–95 es el punto dulce aquí: por debajo suele verse peor, por encima el archivo crece mucho a cambio de poco. El modo anime usa VMAF-NEG y 10 bit contra el banding.",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala, der Bereich 93–95 stammt aus diesen Läufen. Der Anime-Modus schaltet nur den 10-bit-Encode gegen Banding.":
+      "VMAF estima cuánto se parecen salida y fuente a la vista (típicamente 0–100). 93–95 es el punto dulce aquí: por debajo suele verse peor, por encima el archivo crece mucho a cambio de poco. La medición usa siempre VMAF-NEG. El modelo estándar premia el enfoque y el contraste aunque la compresión no sea mejor. NEG quita ese bonus para que la comparación de codificadores sea honesta. Las pasadas antiguas con el modelo estándar están en otra escala, y el rango 93–95 viene de esas pasadas. El modo anime solo activa el encode de 10 bits contra el banding.",
     "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low der schwächsten Szene nicht durchrutschen – ruhige Szenen können den Schnitt nicht retten. Den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low dieser Szene ≥ 88). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 = nur Mittelwert.  Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
       "Además hay 1 % low (peores fotogramas), media armónica, PSNR y SSIM. El VMAF objetivo del control sigue siendo la media (94 significa media ≥ 94). La recomendación (herramienta VMAF, VMAF objetivo, Super Tool, prueba de encoder) no deja escapar el 1 % low de la escena más débil: las escenas tranquilas no salvan la media. El margen se fija en Ajustes → Recomendación VMAF (valor 6, con 94 el low de esa escena ≥ 88). El 1 % low mostrado sigue siendo la media de las escenas. 0 = solo media.Si la brecha es mayor (media 95, 1 % low 79), no cuenta como objetivo cumplido: entonces no se elige el archivo más pequeño, sino el de mejor low. La puntuación mostrada (55 % media + 35 % 1 % low + 10 % media armónica) es solo un número de comparación, no un control nuevo. Muestras: 1–5 escenas. VMAF no es una garantía: capturas y comparación A/B siguen siendo útiles.",
     "MKV oder MP4?": "¿MKV o MP4?",
@@ -3112,8 +3138,8 @@
       "Se recomienda MKV: AV1/HEVC/H.264 y todos los subtítulos (incl. PGS). MP4 convierte subtítulos de texto a mov_text; los de imagen (PGS/VobSub) se descartan. Automático: AV1 y HEVC → MKV, H.264 → MP4.",
     "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
       "¿Qué hacen el modo anime, el auto-crop y el film grain?",
-    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
-      "Modo anime: modelo VMAF-NEG más encode de 10 bit para que las áreas planas banden menos. Auto-crop detecta barras negras (letterbox) y las recorta antes del encode: ahorra bits. VMAF y el guardrail usan la misma área. Film grain (solo AV1/CPU/SVT) sintetiza grano para que el encoder gaste menos en ruido real. 0 = off.",
+    "Anime-Modus: 10-bit-Encode, damit Flächen weniger banden. Die VMAF-Messung ist davon unabhängig und nutzt immer NEG. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Modo anime: encode de 10 bits para que las áreas planas banden menos. La medición VMAF es independiente y usa siempre NEG. Auto-crop detecta barras negras (letterbox) y las recorta antes del encode: ahorra bits. VMAF y el guardrail usan la misma área. Film grain (solo AV1/CPU/SVT) sintetiza grano para que el encoder gaste menos en ruido real. 0 = off.",
     "Erklärung in der FAQ": "Explicado en la FAQ",
     "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
       "CQ, ABR, CBR y perfiles HDR/Dolby Vision:",
@@ -3261,7 +3287,7 @@
     "CBR (kbit/s)": "CBR (kbit/s)",
     "Werte (kommagetrennt, max. 4)": "Valores (separados por comas, máx. 4)",
     "Clip-Länge (Sekunden)": "Duración del clip (segundos)",
-    "Anime-Modus (VMAF-NEG, 10-bit)": "Modo anime (VMAF-NEG, 10 bit)",
+    "Anime-Modus (10-bit gegen Banding)": "Modo anime (10 bits contra el banding)",
     "Test starten": "Iniciar prueba",
     "Empfehlung übernehmen und speichern": "Aplicar recomendación y guardar",
     "Ergebnisse leeren": "Vaciar resultados",
@@ -3532,15 +3558,18 @@
       "CAMBI cherche le banding, des aplats en escalier dans les dégradés. Il tourne dans la même passe libvmaf que VMAF, PSNR et SSIM. Plus haut veut dire plus de bandes. Le nombre est la moyenne des échantillons et ne change pas la recommandation.",
     "Was ist SSIMULACRA2 neben VMAF?":
       "Qu'est-ce que SSIMULACRA2 à côté du VMAF ?",
-    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 1 bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: grob 50 mittel, 70 hoch, 90 fast verlustfrei, 100 deckungsgleich. Es ändert die Empfehlung nicht.":
-      "SSIMULACRA2 compare plusieurs images par échantillon, réparties sur le clip, source contre encode. La valeur par défaut est 3 images, réglable de 1 à 7. Affiché : la moyenne, plus haut est plus proche de la source : environ 50 moyen, 70 élevé, 90 presque sans perte, 100 identique. Cela ne change pas la recommandation.",
+    "SSIMULACRA2 vergleicht mehrere Standbilder je Stichprobe, gleichmäßig über den Clip verteilt, Quelle gegen Encode. Die Vorgabe sind 3 Bilder, einstellbar von 0 (aus) bis 7. Angezeigt wird der Schnitt, höher ist näher an der Quelle: ab 85 kaum unterscheidbar (90+ fast verlustfrei, 100 deckungsgleich), 70–85 sehr gut, 50–70 sichtbare Verluste, unter 50 deutlich schlechter. Es ändert die Empfehlung nicht.":
+      "SSIMULACRA2 compare plusieurs images par échantillon, réparties sur le clip, source contre encode. La valeur par défaut est 3 images, réglable de 0 (désactivé) à 7. Affiché : la moyenne, plus haut est plus proche de la source : dès 85 presque indiscernable (90+ presque sans perte, 100 identique), 70–85 très bon, 50–70 pertes visibles, sous 50 nettement moins bon. Cela ne change pas la recommandation.",
     "SSIMULACRA2-Bilder je Szene": "Images SSIMULACRA2 par scène",
+    "0 – Aus": "0 – désactivé",
     "1 – nur Mitte": "1 – seulement le milieu",
     "3 – über die Szene": "3 – sur la scène",
-    "Gleichmäßig über jeden Stichproben-Clip. Höher ist näher an der Quelle.":
-      "Réparties sur chaque clip d'échantillon. Plus haut est plus proche de la source.",
-    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.":
-      "PSNR et SSIM sont des mesures de signal classiques. CAMBI mesure le banding, plus haut veut dire plus de bandes. SSIMULACRA2 est la moyenne de plusieurs images par scène, min est la plus faible. Plus haut est plus proche de la source. La recommandation reste le VMAF.",
+    "Skala bis 100 (höher = besser): ab 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · unter 50 schwach. 0 = aus.":
+      "Échelle jusqu'à 100 (plus haut = mieux) : dès 85 presque indiscernable · 70–85 très bon · 50–70 visible · sous 50 faible. 0 = désactivé.",
+    "SSIMULACRA2 (0–100, höher = näher an der Quelle): ≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · < 50 deutlich schlechter. 0 schaltet die Messung aus.":
+      "SSIMULACRA2 (0–100, plus haut = plus proche de la source) : ≥ 85 presque indiscernable · 70–85 très bon · 50–70 visible · < 50 nettement moins bon. 0 désactive la mesure.",
+    "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.":
+      "PSNR et SSIM sont des mesures de signal classiques. CAMBI mesure le banding, plus haut veut dire plus de bandes. SSIMULACRA2 (0–100, plus haut = plus proche de la source) : dès 85 presque indiscernable, 70–85 très bon, 50–70 visible, sous 50 faible. La recommandation reste le VMAF.",
     "Woher kommen Vorschlag und Laufzeit „aus der Historie“?":
       "D'où viennent la suggestion et la durée « d'après l'historique » ?",
     "Sobald eine Datei gewählt ist, durchsucht das Studio fertige Encodes mit VMAF-Wert auf demselben Encoder (Plattform und Codec), deren Quelle ähnlich ist: gleiche Auflösungsklasse, gleicher Codec, gleiche HDR-Lage, Bitrate pro Pixel höchstens um den Faktor zwei verschieden, gleiche Zielhöhe. Aus den Paaren (CQ, VMAF) wird der höchste CQ vorgeschlagen, der das Ziel-VMAF noch gehalten hat; liegt zwischen zwei getesteten Werten eine Lücke, wird dazwischen interpoliert. Hat kein Wert das Ziel erreicht, steht der beste bekannte mit Hinweis da. „Übernehmen“ setzt den Slider – ein Test-Encode entfällt, der Guardrail (VMAF nach dem Encode messen) bleibt empfehlenswert.":
@@ -3688,6 +3717,16 @@
     "Datei zum Zusammenführen auswählen": "Sélectionner un fichier à fusionner",
     "A/B-Vergleich": "Comparaison A/B",
     "Encode-Vorschau": "Aperçu de l'encodage",
+    "Direct-Play und Remux zeigen die Datei unverändert. Stellst du unten einen Filter um, wechselt der Modus auf Automatisch und startet den Transcode an der aktuellen Stelle.":
+      "La lecture directe et le remux montrent le fichier inchangé. Si vous modifiez un filtre ci-dessous, le mode passe sur Automatique et lance le transcodage à la position actuelle.",
+    "HDR-Quelle erkannt: Tonemap-Engine, Kurve, Peak, Entsättigung und Bildfilter starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN.":
+      "Source HDR détectée : le moteur de tone-mapping, la courbe, le pic, la désaturation et les filtres d'image relancent l'aperçu à la position actuelle après une modification. CUDA, OpenCL, VAAPI et tonemapx passent par Jellyfin-FFmpeg, CPU et libplacebo par BtbN.",
+    "SDR-Quelle: Tonemap entfällt. Deband, Denoise, Schärfen und Korn starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu.":
+      "Source SDR : pas de tone-mapping. Le deband, le denoise, la netteté et le grain relancent l'aperçu à la position actuelle après une modification.",
+    "10-bit-Encode gegen Banding in Flächen. Die VMAF-Messung läuft immer mit NEG, unabhängig von diesem Haken.":
+      "Encode 10 bits contre le banding dans les aplats. La mesure VMAF utilise toujours NEG, indépendamment de cet interrupteur.",
+    "Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala. Der Anime-Haken schaltet nur den 10-bit-Encode gegen Banding.":
+      "La mesure utilise toujours VMAF-NEG. Le modèle standard récompense la netteté et le contraste même si la compression n'est pas meilleure. NEG retire ce bonus pour que la comparaison d'encodeurs reste honnête. Les anciens passages avec le modèle standard sont sur une autre échelle. L'interrupteur anime ne fait que l'encode 10 bits contre le banding.",
     "Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.":
       "Chaque changement relance l'aperçu à la position actuelle. CUDA, OpenCL, VAAPI et tonemapx passent par Jellyfin-FFmpeg, CPU et libplacebo par BtbN. En HDR la courbe s'applique, sinon le deband, le denoise, la netteté et le grain. La lecture directe et le remux montrent le fichier inchangé ; un changement bascule sur Automatique.",
     "Warteschlange": "File d'attente",
@@ -3854,8 +3893,8 @@
       "ABR et CBR seulement. Le CPU encode chaque clip de test deux fois pour atteindre le débit sur le clip court. NVIDIA utilise le multipass en un passage. La comparaison dure plus longtemps.",
     "Nur ABR und CBR. Die CPU encodiert jeden Testclip zweimal, NVIDIA nutzt Multipass. Der Vergleich dauert länger.":
       "ABR et CBR seulement. Le CPU encode chaque clip de test deux fois, NVIDIA utilise le multipass. La comparaison dure plus longtemps.",
-    "Anime-Modus (VMAF-NEG-Bewertung + 10-bit gegen Banding)": "Mode anime (notation VMAF-NEG + 10 bits contre le banding)",
-    "Anime-Modus (VMAF-NEG + 10-bit)": "Mode anime (VMAF-NEG + 10 bits)",
+    "Anime-Modus (10-bit gegen Banding)": "Mode anime (10 bits contre le banding)",
+    "Anime-Modus (10-bit gegen Banding)": "Mode anime (10 bits contre le banding)",
     "Optionen": "Options",
     "Vergleich": "Comparaison",
     "Encoder & Optionen": "Encodeurs et options",
@@ -4598,8 +4637,8 @@
     "Der Qualitäts-Guardrail misst nach dem Encode Stichproben-VMAF. Das ist eine Kontrolle, kein Vorab-Vergleich. Optional wird bei Unterschreiten automatisch neu encodiert.":
       "Le garde-fou qualité mesure un VMAF d'échantillons après l'encode. C'est un contrôle, pas une comparaison préalable. Optionnellement, il réencode si le score est trop bas.",
     "Was ist VMAF überhaupt?": "Qu'est-ce que le VMAF, au juste ?",
-    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Anime-Modus nutzt VMAF-NEG und 10-bit gegen Banding.":
-      "Le VMAF estime à quel point sortie et source se ressemblent à l'œil (typiquement 0–100). 93–95 est le sweet spot ici : en dessous ça se voit souvent, au-dessus le fichier grossit beaucoup pour peu de gain. Le mode anime utilise VMAF-NEG et 10 bit contre le banding.",
+    "VMAF schätzt, wie ähnlich Ausgabe und Quelle fürs Auge sind (typisch 0–100). 93–95 gilt hier als Sweet-Spot: darunter wird es oft sichtbar schlechter, darüber wächst die Datei stark bei wenig Gewinn. Gemessen wird immer mit VMAF-NEG. Das Standardmodell belohnt Schärfen und Kontrast, auch wenn die Kompression nicht besser ist. NEG lässt diesen Bonus weg, damit Encoder-Vergleiche ehrlich bleiben. Ältere Läufe mit dem Standardmodell liegen auf einer anderen Skala, der Bereich 93–95 stammt aus diesen Läufen. Der Anime-Modus schaltet nur den 10-bit-Encode gegen Banding.":
+      "Le VMAF estime à quel point sortie et source se ressemblent à l'œil (typiquement 0–100). 93–95 est le sweet spot ici : en dessous ça se voit souvent, au-dessus le fichier grossit beaucoup pour peu de gain. La mesure utilise toujours VMAF-NEG. Le modèle standard récompense la netteté et le contraste même si la compression n'est pas meilleure. NEG retire ce bonus pour que la comparaison d'encodeurs reste honnête. Les anciens passages avec le modèle standard sont sur une autre échelle, et la plage 93–95 vient de ces passages. Le mode anime ne fait plus que l'encode 10 bits contre le banding.",
     "Zusätzlich gibt es 1%-Low (schlechteste Frames), harmonisches Mittel, PSNR und SSIM. Ziel-VMAF am Slider bleibt der Mittelwert (94 heißt Mittel ≥ 94). Die Empfehlung (VMAF-Tool, Ziel-VMAF, Super-Tool, Encoder-Test) lässt das 1%-Low der schwächsten Szene nicht durchrutschen – ruhige Szenen können den Schnitt nicht retten. Den Abstand stellst du unter Einstellungen → VMAF-Empfehlung ein (Vorgabe 6, bei Ziel 94 also Low dieser Szene ≥ 88). Der angezeigte 1%-Low bleibt der Schnitt über die Szenen. 0 = nur Mittelwert.  Klafft es stärker (Mittel 95, 1%-Low 79), gilt das Ziel als nicht erreicht – dann wird nicht die kleinste Datei genommen, sondern die mit dem besseren Low. Der angezeigte Score (55 % Mittel + 35 % 1%-Low + 10 % H-Ø) ist nur die Vergleichszahl, kein neuer Slider. Stichproben: 1–5 Szenen. VMAF ist keine Garantie – Screenshots und A/B-Vergleich bleiben sinnvoll.":
       "Il y a aussi le 1 % low (pires images), la moyenne harmonique, PSNR et SSIM. Le VMAF cible du curseur reste la moyenne (94 veut dire moyenne ≥ 94). La recommandation (outil VMAF, VMAF cible, Super Tool, test d'encodeur) ne laisse pas passer le 1 % low de la scène la plus faible – les scènes calmes ne sauvent pas la moyenne. L'écart se règle dans Paramètres → Recommandation VMAF (défaut 6, à 94 le low de cette scène ≥ 88). Le 1 % low affiché reste la moyenne des scènes. 0 = moyenne seulement.Un écart plus grand (moyenne 95, 1 % low 79) ne compte pas comme cible atteinte – on ne prend alors pas le plus petit fichier, mais celui au meilleur low. Le score affiché (55 % moyenne + 35 % 1 % low + 10 % moyenne harmonique) n'est qu'un chiffre de comparaison, pas un nouveau curseur. Échantillons : 1–5 scènes. Le VMAF n'est pas une garantie – captures et comparaison A/B restent utiles.",
     "MKV oder MP4?": "MKV ou MP4 ?",
@@ -4607,8 +4646,8 @@
       "MKV est recommandé : AV1/HEVC/H.264 et tous les sous-titres (y compris PGS). MP4 convertit les sous-titres texte en mov_text ; les sous-titres image (PGS/VobSub) sont abandonnés. Automatique : AV1 et HEVC → MKV, H.264 → MP4.",
     "Was tun Anime-Modus, Auto-Crop und Film-Grain?":
       "Que font le mode anime, l'auto-crop et le film grain ?",
-    "Anime-Modus: VMAF-NEG-Modell plus 10-bit-Encode, damit Flächen weniger banden. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
-      "Mode anime : modèle VMAF-NEG plus encode 10 bit pour que les aplats bandent moins. L'auto-crop détecte les barres noires (letterbox) et les coupe avant l'encode – ça économise des bits. VMAF et garde-fou utilisent la même surface. Le film grain (AV1/CPU/SVT seulement) synthétise du grain pour que l'encodeur dépense moins sur le vrai bruit. 0 = off.",
+    "Anime-Modus: 10-bit-Encode, damit Flächen weniger banden. Die VMAF-Messung ist davon unabhängig und nutzt immer NEG. Auto-Crop erkennt schwarze Balken (Letterbox) und schneidet sie vor dem Encode – spart Bits. VMAF und Guardrail nutzen dieselbe Fläche. Film-Grain (nur AV1/CPU/SVT) erzeugt künstliches Korn, damit der Encoder echtes Rauschen nicht teuer speichern muss. 0 = aus.":
+      "Mode anime : encode 10 bits pour que les aplats bandent moins. La mesure VMAF en est indépendante et utilise toujours NEG. L'auto-crop détecte les barres noires (letterbox) et les coupe avant l'encode – ça économise des bits. VMAF et garde-fou utilisent la même surface. Le film grain (AV1/CPU/SVT seulement) synthétise du grain pour que l'encodeur dépense moins sur le vrai bruit. 0 = off.",
     "Erklärung in der FAQ": "Expliqué dans la FAQ",
     "CQ, ABR, CBR und HDR/Dolby-Vision-Profile:":
       "CQ, ABR, CBR et profils HDR/Dolby Vision :",
@@ -4756,7 +4795,7 @@
     "CBR (kbit/s)": "CBR (kbit/s)",
     "Werte (kommagetrennt, max. 4)": "Valeurs (séparées par des virgules, max. 4)",
     "Clip-Länge (Sekunden)": "Durée du clip (secondes)",
-    "Anime-Modus (VMAF-NEG, 10-bit)": "Mode anime (VMAF-NEG, 10 bit)",
+    "Anime-Modus (10-bit gegen Banding)": "Mode anime (10 bits contre le banding)",
     "Test starten": "Lancer le test",
     "Empfehlung übernehmen und speichern": "Appliquer la recommandation et enregistrer",
     "Ergebnisse leeren": "Vider les résultats",

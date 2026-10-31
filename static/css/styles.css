@@ -365,6 +365,9 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   }
 }
 .fp-look { margin: 4px 0 12px; }
+.fp-look[hidden],
+.field-row-inline[hidden],
+.field-row-inline .tonemap-cpu-only[hidden] { display: none; }
 .fp-look .hint { margin-top: 0; }
 .fp-main { min-width: 0; }
 .fp-side {

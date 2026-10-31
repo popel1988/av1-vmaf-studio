@@ -2926,7 +2926,7 @@
           keyint_sec: ($("eb-keyint") && parseInt($("eb-keyint").value, 10)) || 0,
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
-          ssimulacra2_frames: parseInt(($("eb-s2-frames") && $("eb-s2-frames").value) || "3", 10) || 3,
+          ssimulacra2_frames: $("eb-s2-frames") ? parseInt($("eb-s2-frames").value, 10) : 3,
           anime: ebMode() === "speed" ? false : !!($("eb-anime") && $("eb-anime").checked),
           mode: ebMode(),
         });
@@ -2999,7 +2999,7 @@
       out.target_vmaf = $("opt-vmaf-target") ? parseInt($("opt-vmaf-target").value, 10) : 94;
       out.clip_seconds = $("opt-vmaf-clip") ? parseInt($("opt-vmaf-clip").value, 10) || 20 : 20;
       out.samples = $("opt-vmaf-samples") ? parseInt($("opt-vmaf-samples").value, 10) || 1 : 1;
-      out.ssimulacra2_frames = $("opt-s2-frames") ? parseInt($("opt-s2-frames").value, 10) || 3 : 3;
+      out.ssimulacra2_frames = $("opt-s2-frames") ? parseInt($("opt-s2-frames").value, 10) : 3;
       out.test_values = encTestValues();
       out.generate_screenshots = $("opt-vmaf-shots") ? $("opt-vmaf-shots").checked : false;
       if (rateMode !== "cq" && out.test_values[0]) out.quality = out.test_values[0];
@@ -3346,7 +3346,7 @@
       test_values: vtGatherTestValues(),
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
-      ssimulacra2_frames: parseInt(($("vt-s2-frames") && $("vt-s2-frames").value) || "3", 10) || 3,
+      ssimulacra2_frames: $("vt-s2-frames") ? parseInt($("vt-s2-frames").value, 10) : 3,
       sample_mode: sampleModeValue(),
       scene_min_pct: sceneMinPct(),
       credits_at: creditsAtSeconds(),
@@ -3440,7 +3440,7 @@
     } else {
       setSel("opt-bitrate", r.value);
     }
-    // Anime-Modus aus dem VMAF-Tool übernehmen (VMAF-NEG + 10-bit).
+    // Anime-Modus aus dem VMAF-Tool übernehmen (nur 10-bit; Messung ist immer NEG).
     const vtAnime = $("vt-anime"), optAnime = $("opt-anime");
     if (vtAnime && optAnime) {
       optAnime.checked = vtAnime.checked;
@@ -4000,7 +4000,7 @@
       set("st-vmaf-rate", s.rate_mode || "cq", "change");
       if (s.clip_seconds) set("st-clip", s.clip_seconds);
       if (s.samples) set("st-samples", String(s.samples));
-      if (s.ssimulacra2_frames) set("st-s2-frames", String(s.ssimulacra2_frames));
+      if (s.ssimulacra2_frames !== undefined && s.ssimulacra2_frames !== null) set("st-s2-frames", String(s.ssimulacra2_frames));
       set("st-sample-mode", s.sample_mode === "bitrate", "change");
       set("st-two-pass", !!s.two_pass);
       const grid = [...document.querySelectorAll("#st-test-grid .st-test-val")];
@@ -4587,7 +4587,7 @@
       if (shown) shown.textContent = clip.value;
     }
     setVal("vt-samples", base.samples);
-    setVal("vt-s2-frames", base.ssimulacra2_frames || 3);
+    setVal("vt-s2-frames", base.ssimulacra2_frames != null ? base.ssimulacra2_frames : 3);
     if ($("vt-two-pass")) $("vt-two-pass").checked = !!base.two_pass;
     if ($("vt-anime")) $("vt-anime").checked = !!base.anime;
     if ($("vt-screenshots")) $("vt-screenshots").checked = !!base.screenshots;
@@ -4774,10 +4774,12 @@
           if (sceneScore && sceneScore.cambi != null)
             bits.push(`CAMBI ${Number(sceneScore.cambi).toFixed(2)}`);
           if (sceneScore && sceneScore.ssimulacra2 != null) {
+            const m = ssimulacra2Mark(sceneScore.ssimulacra2);
             const mn = sceneScore.ssimulacra2_min != null
               ? ` min ${Number(sceneScore.ssimulacra2_min).toFixed(1)}` : "";
             const n = sceneScore.ssimulacra2_n ? ` · ${sceneScore.ssimulacra2_n} Bilder` : "";
-            bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${mn}${n}`);
+            const word = m.word ? ` (${m.word})` : "";
+            bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${word}${mn}${n}`);
           }
         }
         const ist = bitrateReport(
@@ -5067,6 +5069,30 @@
     return s;
   }
 
+  // SSIMULACRA2-Einordnung (0–100): ≥ 85 kaum unterscheidbar, ≥ 70 sehr gut,
+  // ≥ 50 sichtbare Verluste, darunter schwach.
+  function ssimulacra2Mark(v) {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return { cls: "", text: "—", word: "" };
+    const cls = x >= 85 ? "good" : (x >= 70 ? "" : (x >= 50 ? "warn" : "bad"));
+    const word = x >= 85
+      ? "kaum unterscheidbar"
+      : (x >= 70 ? "sehr gut" : (x >= 50 ? "sichtbar" : "schwach"));
+    return { cls, text: x.toFixed(1), word };
+  }
+
+  function ssimulacra2Pill(r) {
+    if (r.ssimulacra2 == null) return "";
+    const m = ssimulacra2Mark(r.ssimulacra2);
+    const mn = r.ssimulacra2_min != null ? ` (min ${Number(r.ssimulacra2_min).toFixed(1)})` : "";
+    const tip = [
+      `SSIMULACRA2 ${m.text}${mn} – ${m.word}.`,
+      "Standbild-Vergleich (Skala bis 100, höher = näher an der Quelle):",
+      "≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbare Verluste · < 50 deutlich schlechter.",
+    ].join(" ");
+    return `<span class="metric-pill ${m.cls}" title="${escapeHtml(tip)}">SSIMULACRA2 ${m.text}${mn} · ${m.word}</span>`;
+  }
+
   function vmafCell(r) {
     const spread = vmafSpread(r);
     let s = `${r.vmaf.toFixed(2)}`;
@@ -5098,10 +5124,12 @@
             bits.push(`CAMBI ${Number(sc.cambi).toFixed(2)}${mn}`);
           }
           if (sc.ssimulacra2 != null) {
+            const m = ssimulacra2Mark(sc.ssimulacra2);
             const mn = sc.ssimulacra2_min != null
               ? ` (min ${Number(sc.ssimulacra2_min).toFixed(1)})` : "";
             const n = sc.ssimulacra2_n ? `, ${sc.ssimulacra2_n} Bilder` : "";
-            bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${mn}${n}`);
+            const word = m.word ? ` (${m.word})` : "";
+            bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${word}${mn}${n}`);
           }
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
@@ -5141,20 +5169,16 @@
         + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
         + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
     }
-    // Zweite Meinung: XPSNR als eingefärbte Pille (wie die VMAF-Δ-Marke),
-    // PSNR/SSIM bleiben Beiwerk.
-    const pill = xpsnrPill(r);
+    // Zweite Meinung: XPSNR und SSIMULACRA2 als eingefärbte Pillen,
+    // PSNR/SSIM/CAMBI daneben.
+    const pill = [xpsnrPill(r), ssimulacra2Pill(r)].filter(Boolean).join(" ");
     const qual = [];
     if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
     if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
     if (r.cambi != null) qual.push(`CAMBI ${Number(r.cambi).toFixed(2)}`);
-    if (r.ssimulacra2 != null) {
-      const mn = r.ssimulacra2_min != null ? ` (min ${Number(r.ssimulacra2_min).toFixed(1)})` : "";
-      qual.push(`SSIMULACRA2 ${Number(r.ssimulacra2).toFixed(1)}${mn}`);
-    }
     if (pill || qual.length) {
       s += `<br>${pill}${qual.length
-        ? `<span class="muted" title="${escapeHtml("PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 ist der Schnitt mehrerer Standbilder je Szene, min das schwächste davon. Höher ist näher an der Quelle. Die Empfehlung bleibt beim VMAF.")}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
+        ? `<span class="muted" title="${escapeHtml("PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.")}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
         : ""}`;
     }
     const lo = vmafTargetLo(state.vmafShown);
@@ -7746,7 +7770,7 @@
         $("opt-vmaf-clip-val").textContent = $("opt-vmaf-clip").value;
       }
       if (s.samples) set("opt-vmaf-samples", String(s.samples));
-      if (s.ssimulacra2_frames) set("opt-s2-frames", String(s.ssimulacra2_frames));
+      if (s.ssimulacra2_frames !== undefined && s.ssimulacra2_frames !== null) set("opt-s2-frames", String(s.ssimulacra2_frames));
       if (s.generate_screenshots !== undefined) set("opt-vmaf-shots", s.generate_screenshots);
       const grid = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")];
       const vals = Array.isArray(s.test_values) ? s.test_values : [];
@@ -10031,7 +10055,7 @@
       s.rate_mode = $("st-vmaf-rate") ? $("st-vmaf-rate").value : "cq";
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
-      s.ssimulacra2_frames = parseInt(($("st-s2-frames") && $("st-s2-frames").value) || "3", 10) || 3;
+      s.ssimulacra2_frames = $("st-s2-frames") ? parseInt($("st-s2-frames").value, 10) : 3;
       s.sample_mode = sampleModeValue("st-sample-mode");
       s.scene_min_pct = sceneMinPct();
       s.credits_at = creditsAtSeconds();

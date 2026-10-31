@@ -169,6 +169,9 @@
         ? `${sess.height}p${sess.v_bitrate ? ` · ${sess.v_bitrate} kbit/s` : ""}`
         : (plan && plan.height ? `${plan.height}p` : tt("Original"));
       if (res) rows.push([tt("Zielauflösung"), res]);
+      if (sess && sess.look_summary) {
+        rows.push([tt("Encode-Vorschau"), sess.look_summary]);
+      }
     }
 
     const la = (sess && sess.lookahead_sec != null) ? sess.lookahead_sec : fp.lookahead;
@@ -240,6 +243,7 @@
           v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
           client_codecs: detectClientCodecs(),
           audio_copy: audioCopy,
+          look: playerLook(),
         }),
       })).json();
       if (d.error) {
@@ -304,11 +308,44 @@
   }
 
   function syncLookUi() {
+    const hasFile = !!fp.info;
+    const lookWrap = $("fp-look");
+    if (lookWrap) lookWrap.hidden = !hasFile;
     const hdr = !!(fp.info && fp.info.is_hdr);
+    const prof = (($("fp-profile") || {}).value) || "auto";
+    const fixedCopy = prof === "direct" || prof === "copy";
+    const showTone = hdr && !fixedCopy;
     const box = $("fp-tonemap-opts");
-    if (box) box.hidden = !hdr;
+    if (box) box.hidden = !showTone;
+
+    const rawPlat = (($("fp-platform") || {}).value) || "auto";
+    const plat = rawPlat === "auto"
+      ? ((fp.options && fp.options.transcode_platform) || "cpu")
+      : rawPlat;
+    const jfList = fp.options && Array.isArray(fp.options.jellyfin_filters)
+      ? fp.options.jellyfin_filters
+      : null;
+    const hasJf = (f) => !jfList || jfList.includes(f);
+    const intelVaapi = !(fp.options && fp.options.intel_uses_vaapi === false);
     const engine = $("fp-tonemap-engine");
-    const showPeak = hdr && (!engine || engine.value !== "libplacebo");
+    if (engine) {
+      [...engine.options].forEach((opt) => {
+        let ok = true;
+        if (opt.value === "libplacebo") ok = plat === "cpu" || plat === "nvidia";
+        else if (opt.value === "cuda") ok = plat === "nvidia" && hasJf("tonemap_cuda");
+        else if (opt.value === "opencl") ok = hasJf("tonemap_opencl");
+        else if (opt.value === "vaapi") {
+          ok = (plat === "amd" || (plat === "intel" && intelVaapi)) && hasJf("tonemap_vaapi");
+        } else if (opt.value === "tonemapx") ok = hasJf("tonemapx");
+        opt.disabled = !ok;
+        opt.hidden = !ok;
+      });
+      if (engine.selectedOptions[0] && engine.selectedOptions[0].disabled) {
+        engine.value = "cpu";
+      }
+    }
+
+    const showPeak = showTone && (!engine || engine.value !== "libplacebo");
     document.querySelectorAll("#fp-tonemap-opts .tonemap-cpu-only").forEach((el) => {
       el.hidden = !showPeak;
     });
@@ -317,6 +354,16 @@
     if (el && lab) {
       const n = parseFloat(el.value);
       lab.textContent = (Number.isFinite(n) ? n : 0).toFixed(1).replace(".", ",");
+    }
+    const hint = $("fp-look-hint");
+    if (hint && hasFile) {
+      if (fixedCopy) {
+        hint.textContent = tt("Direct-Play und Remux zeigen die Datei unverändert. Stellst du unten einen Filter um, wechselt der Modus auf Automatisch und startet den Transcode an der aktuellen Stelle.");
+      } else if (hdr) {
+        hint.textContent = tt("HDR-Quelle erkannt: Tonemap-Engine, Kurve, Peak, Entsättigung und Bildfilter starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN.");
+      } else {
+        hint.textContent = tt("SDR-Quelle: Tonemap entfällt. Deband, Denoise, Schärfen und Korn starten die Vorschau nach einer Änderung sofort an der aktuellen Stelle neu.");
+      }
     }
   }
 
@@ -386,9 +433,10 @@
   function syncEncodeUi(opts) {
     const prof = (($("fp-profile") || {}).value) || "auto";
     const encode = ENCODE_PROFILES.includes(prof);
+    const canTranscode = prof !== "direct" && prof !== "copy";
     ["fp-platform", "fp-codec"].forEach((id) => {
       const el = $(id);
-      if (el) el.disabled = !encode;
+      if (el) el.disabled = !canTranscode;
     });
     const hw = $("fp-height-wrap");
     const bw = $("fp-vbr-wrap");
@@ -398,6 +446,7 @@
     if (opts && opts.presetBr && PRESET_BR[prof] && $("fp-vbr")) {
       $("fp-vbr").value = String(PRESET_BR[prof]);
     }
+    syncLookUi();
   }
 
   function updateAudioModeHint(sess) {
@@ -1124,7 +1173,10 @@
       const onChange = () => {
         if (id === "fp-sub") syncBurnHint();
         if (id === "fp-profile") syncEncodeUi({ presetBr: true });
-        if (id === "fp-platform") syncCodecOptionsForPlatform();
+        if (id === "fp-platform") {
+          syncCodecOptionsForPlatform();
+          syncLookUi();
+        }
         if (id === "fp-audio" || id === "fp-profile" || id === "fp-audio-copy") {
           updateAudioModeHint(null);
         }
@@ -1144,6 +1196,9 @@
       el.addEventListener("change", queueLookApply);
       if (id === "fp-tonemap-desat") {
         el.addEventListener("input", syncLookUi);
+      }
+      if (id === "fp-tonemap-peak") {
+        el.addEventListener("input", queueLookApply);
       }
     });
     syncLookUi();
