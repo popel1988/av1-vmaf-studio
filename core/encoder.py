@@ -15,8 +15,8 @@ from typing import Callable, Optional
 from . import ffmpeg_utils as ff
 from .ffmpeg_utils import VideoInfo
 
-# Kurven des Software-Filters ``tonemap`` in diesem FFmpeg. Hable bleibt die
-# Vorgabe. BT.2390 kennt ``tonemap_opencl`` nicht, der CPU-Filter schon.
+# Kurven für den CPU-Filter ``tonemap`` und die Jellyfin-Filter. Hable bleibt
+# die Vorgabe. Die Jellyfin-Filter bekommen denselben Namen (``bt2390``).
 _TONEMAP_ALGOS = ("hable", "bt2390", "reinhard", "mobius", "gamma", "clip", "linear")
 TONEMAP_ALGO_LABELS = {
     "hable": "Hable",
@@ -72,9 +72,26 @@ def tonemap_chain(algo: str = "hable", desat: float = 0.0, peak: float = 0.0) ->
 
 
 # Bisherige Kette: Hable, keine Entsättigung, Peak aus den Metadaten.
+# Der Player bleibt auf diesem String und auf BtbN.
 _TONEMAP_CHAIN = tonemap_chain()
 
-_TONEMAP_ENGINES = ("cpu", "libplacebo")
+_TONEMAP_ENGINES = ("cpu", "libplacebo", "cuda", "opencl", "vaapi", "tonemapx")
+_JELLYFIN_ENGINES = ("cuda", "opencl", "vaapi", "tonemapx")
+_JELLYFIN_FILTER = {
+    "cuda": "tonemap_cuda",
+    "opencl": "tonemap_opencl",
+    "vaapi": "tonemap_vaapi",
+    "tonemapx": "tonemapx",
+}
+TONEMAP_ENGINE_LABELS = {
+    "cpu": "CPU",
+    "libplacebo": "libplacebo",
+    "cuda": "CUDA",
+    "opencl": "OpenCL",
+    "vaapi": "VAAPI",
+    "tonemapx": "tonemapx",
+}
+_jelly_filter_cache: Optional[set[str]] = None
 _PLACEBO_CURVE = {
     "hable": "hable",
     "bt2390": "bt.2390",
@@ -98,12 +115,67 @@ def normalize_tonemap_engine(value: str) -> str:
     return v if v in _TONEMAP_ENGINES else "cpu"
 
 
+def jellyfin_filters() -> set[str]:
+    """Filter des zweiten Binary. Leer, wenn ffmpeg-jellyfin fehlt."""
+    global _jelly_filter_cache
+    if _jelly_filter_cache is not None:
+        return _jelly_filter_cache
+    from . import config
+    found: set[str] = set()
+    path = Path(config.FFMPEG_JELLYFIN)
+    if path.is_file():
+        try:
+            out = subprocess.run(
+                [str(path), "-hide_banner", "-filters"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=20, check=False,
+            )
+            for line in (out.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] in _JELLYFIN_FILTER.values():
+                    found.add(parts[1])
+        except (OSError, subprocess.SubprocessError):
+            found = set()
+    _jelly_filter_cache = found
+    return found
+
+
 def tonemap_engine_for(engine: str, platform: str) -> str:
-    """libplacebo nur auf CPU und NVIDIA. Intel/AMD behalten die CPU-Kurve."""
+    """Engine, die auf dieser Plattform und mit dem vorhandenen Binary läuft.
+
+    CUDA nur mit NVIDIA. VAAPI nur, wenn der Encoder selbst VAAPI-Frames
+    erwartet (AMD, Intel im VAAPI-Modus). OpenCL und tonemapx auf allen
+    Plattformen. Fehlt Jellyfin-FFmpeg oder der Filter, gilt die CPU-Kurve.
+    """
     engine = normalize_tonemap_engine(engine)
-    if engine == "libplacebo" and (platform or "cpu") not in ("cpu", "nvidia"):
+    platform = platform or "cpu"
+    if engine == "libplacebo" and platform not in ("cpu", "nvidia"):
+        return "cpu"
+    if engine == "cuda" and platform != "nvidia":
+        return "cpu"
+    if engine == "vaapi" and not (
+            platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi())):
+        return "cpu"
+    needed = _JELLYFIN_FILTER.get(engine)
+    if needed and needed not in jellyfin_filters():
         return "cpu"
     return engine
+
+
+def effective_tonemap_engine(engine: str, platform: str, *,
+                             preserve_dv: bool = False) -> str:
+    """Dolby Vision bleibt auf BtbN. Jellyfin-Engines fallen dann auf die CPU."""
+    resolved = tonemap_engine_for(engine, platform)
+    if preserve_dv and resolved in _JELLYFIN_ENGINES:
+        return "cpu"
+    return resolved
+
+
+def ffmpeg_binary_for(engine: str) -> str:
+    from . import config
+    if engine in _JELLYFIN_ENGINES:
+        return config.FFMPEG_JELLYFIN
+    return config.FFMPEG
 
 
 def normalize_deband(value: str) -> str:
@@ -124,6 +196,105 @@ def tonemap_placebo(algo: str) -> str:
         ":color_primaries=bt709:color_trc=bt709:range=limited"
         ":format=yuv420p:peak_detect=1"
     )
+
+
+def _jelly_tone_filter(kind: str, algo: str, desat: float, peak: float,
+                       fmt: str) -> str:
+    """Ein Jellyfin-Tonemap-Filter. Peak 0 lässt die Metadaten gelten.
+
+    ``desat`` wird immer gesetzt. Die Vorgabe der Jellyfin-Filter wäre 0,5.
+    """
+    algo = normalize_tonemap_algo(algo)
+    desat = normalize_tonemap_desat(desat)
+    peak = normalize_tonemap_peak(peak)
+    if kind == "tonemapx":
+        parts = [
+            f"tonemap={algo}",
+            f"desat={desat:g}",
+            "matrix=bt709",
+            "primaries=bt709",
+            "range=tv",
+            "transfer=bt709",
+            f"format={fmt}",
+        ]
+    else:
+        parts = [
+            f"tonemap={algo}",
+            f"desat={desat:g}",
+            "p=bt709",
+            "t=bt709",
+            "m=bt709",
+            "range=tv",
+            f"format={fmt}",
+        ]
+    if peak > 0:
+        parts.insert(2, f"peak={peak:g}")
+    return kind + "=" + ":".join(parts)
+
+
+def _scale_cuda(target_height: Optional[int], downscale: bool, ten_bit: bool) -> str:
+    """scale_cuda immer mit Zielformat, sonst werden CUDA-Frames bei NVENC grün."""
+    sc = f"scale_cuda=-2:{target_height}" if downscale else "scale_cuda"
+    fmt = "p010le" if ten_bit else "nv12"
+    if sc == "scale_cuda":
+        return f"{sc}=format={fmt}"
+    return f"{sc}:format={fmt}"
+
+
+def reference_tonemap_setup(
+    engine: str, platform: str, algo: str, desat: float, peak: float, *,
+    active: bool,
+) -> tuple[str, list[str], str]:
+    """Binary, Argumente vor ``-i`` und das Tonemap-Stück für Referenz und Standbild.
+
+    Die Ausgabe ist immer ein Software-Frame. libvmaf selbst bleibt bei BtbN.
+    """
+    from . import config
+    if not active:
+        return config.FFMPEG, [], ""
+    engine = tonemap_engine_for(engine, platform)
+    pre: list[str] = []
+    if engine == "libplacebo":
+        pre = ["-init_hw_device", "vulkan"]
+        piece = tonemap_placebo(algo)
+    elif engine == "cuda":
+        pre = ["-hwaccel", "cuda"]
+        piece = ",".join([
+            "format=p010le", "hwupload_cuda",
+            _jelly_tone_filter("tonemap_cuda", algo, desat, peak, "nv12"),
+            "hwdownload", "format=nv12", "format=yuv420p",
+        ])
+    elif engine == "opencl":
+        if platform == "intel" and not ff.intel_uses_vaapi():
+            pre = ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                   "-init_hw_device", "qsv=qs@va",
+                   "-filter_hw_device", "qs"]
+            upload = "format=p010le,hwupload,hwmap=derive_device=opencl"
+        elif platform in ("amd", "intel"):
+            pre = ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                   "-filter_hw_device", "va"]
+            upload = "format=p010le,hwupload,hwmap=derive_device=opencl"
+        else:
+            pre = ["-init_hw_device", "opencl=ocl", "-filter_hw_device", "ocl"]
+            upload = "format=p010le,hwupload"
+        piece = ",".join([
+            upload,
+            _jelly_tone_filter("tonemap_opencl", algo, desat, peak, "nv12"),
+            "hwdownload", "format=nv12", "format=yuv420p",
+        ])
+    elif engine == "vaapi":
+        pre = ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+               "-filter_hw_device", "va"]
+        piece = ",".join([
+            "format=p010le", "hwupload",
+            _jelly_tone_filter("tonemap_vaapi", algo, desat, peak, "nv12"),
+            "hwdownload", "format=nv12", "format=yuv420p",
+        ])
+    elif engine == "tonemapx":
+        piece = _jelly_tone_filter("tonemapx", algo, desat, peak, "yuv420p")
+    else:
+        piece = tonemap_chain(algo, desat, peak)
+    return ffmpeg_binary_for(engine), pre, piece
 
 
 def svt_param_string(film_grain: int = 0, look: str = "standard",
@@ -167,6 +338,92 @@ _GRAIN = {
     "medium": "noise=alls=8:allf=t",
     "strong": "noise=alls=16:allf=t",
 }
+_PICTURE_LEVELS = ("off", "light", "medium", "strong")
+
+
+def normalize_picture_level(value: str) -> str:
+    v = str(value or "off").strip().lower()
+    return v if v in _PICTURE_LEVELS else "off"
+
+
+def picture_filters(deband: str, denoise: str, sharpen: str, grain: str) -> list[str]:
+    """Deband, Denoise, Schärfen, Korn. Dieselbe Reihenfolge wie der Encode."""
+    out: list[str] = []
+    band = _DEBAND.get(normalize_deband(deband), "")
+    if band:
+        out.append(band)
+    level = normalize_picture_level(denoise)
+    if level in _DENOISE:
+        out.append(_DENOISE[level])
+    level = normalize_picture_level(sharpen)
+    if level in _SHARPEN:
+        out.append(_SHARPEN[level])
+    level = normalize_picture_level(grain)
+    if level in _GRAIN:
+        out.append(_GRAIN[level])
+    return out
+
+
+def player_preview_setup(
+    *,
+    tone: bool,
+    engine: str,
+    platform: str,
+    algo: str,
+    desat: float,
+    peak: float,
+    deband: str = "off",
+    denoise: str = "off",
+    sharpen: str = "off",
+    grain: str = "off",
+    encoder: str = "",
+) -> tuple[str, list[str], list[str]]:
+    """Binary (leer = BtbN behalten), Argumente vor ``-i``, Filterstücke.
+
+    Nach einem Seek immer der Speicher-Pfad, wie bei den VMAF-Clips.
+    Bildfilter folgen dem Tonemap. Nutzt der HLS-Encoder schon VAAPI oder
+    QSV auf demselben Chip, bleibt dessen Device stehen.
+    """
+    from . import config
+    pre: list[str] = []
+    parts: list[str] = []
+    binary = ""
+    if tone:
+        eng = effective_tonemap_engine(engine, platform)
+        bin_path, tone_pre, piece = reference_tonemap_setup(
+            eng, platform, algo, desat, peak, active=True)
+        owns = ("vaapi" in (encoder or "")) or ("qsv" in (encoder or ""))
+        if owns and eng in ("opencl", "vaapi") and (platform or "") in ("intel", "amd"):
+            tone_pre = []
+        if bin_path and bin_path != config.FFMPEG:
+            binary = bin_path
+        pre = list(tone_pre)
+        if piece:
+            parts.append(piece)
+    parts.extend(picture_filters(deband, denoise, sharpen, grain))
+    return binary, pre, parts
+
+
+def preview_look_summary(look: dict, *, is_hdr: bool) -> str:
+    """Kurzer Text für die Player-Statuszeile."""
+    if not look:
+        return ""
+    bits: list[str] = []
+    if is_hdr and look.get("tonemap"):
+        eng = effective_tonemap_engine(
+            str(look.get("engine") or "cpu"), str(look.get("platform") or "cpu"))
+        bits.append(TONEMAP_ENGINE_LABELS.get(eng, eng))
+        algo = normalize_tonemap_algo(str(look.get("algo") or "hable"))
+        bits.append(TONEMAP_ALGO_LABELS.get(algo, algo))
+    for label, key in (
+        ("Deband", "deband"), ("Denoise", "denoise"),
+        ("Schärfen", "sharpen"), ("Korn", "grain"),
+    ):
+        raw = str(look.get(key) or "off")
+        val = normalize_deband(raw) if key == "deband" else normalize_picture_level(raw)
+        if val != "off":
+            bits.append(f"{label} {val}")
+    return " · ".join(bits)
 
 
 def deinterlace_filter(mode: str, interlaced: bool) -> str:
@@ -202,6 +459,7 @@ def build_video_filters(
     tonemap_peak: float = 0.0,
     tonemap_engine: str = "cpu",
     deband: str = "off",
+    cuda_surface: bool = False,
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
@@ -218,13 +476,11 @@ def build_video_filters(
 
     # --- Reine NVIDIA-GPU-Pipeline (kein Tonemap) --------------------------
     if platform == "nvidia" and nvidia_cuda_frames:
-        sc = f"scale_cuda=-2:{target_height}" if downscale else "scale_cuda"
         # Immer mit definiertem Zielformat durch scale_cuda leiten. Geht die
         # rohe CUDA-Surface ohne Formatnormalisierung direkt an NVENC, entstehen
         # bei manchen Quellen/Treibern komplett grüne Ausgaben. p010le = 10-bit
         # (Anime), sonst nv12 (8-bit).
-        fmt = "p010le" if force_10bit else "nv12"
-        return f"{sc}=format={fmt}" if sc == "scale_cuda" else f"{sc}:format={fmt}"
+        return _scale_cuda(target_height, downscale, force_10bit)
 
     filters: list[str] = []
 
@@ -239,38 +495,72 @@ def build_video_filters(
         filters.append(f"crop={crop}")
 
     engine = tonemap_engine_for(tonemap_engine, platform)
+    cuda_out = bool(cuda_surface and engine == "cuda")
     if tonemap and info.is_hdr:
         if engine == "libplacebo":
             filters.append(tonemap_placebo(tonemap_algo))
+        elif engine == "cuda":
+            if not cuda_surface:
+                filters += ["format=p010le", "hwupload_cuda"]
+            filters.append(_jelly_tone_filter(
+                "tonemap_cuda", tonemap_algo, tonemap_desat, tonemap_peak,
+                "p010" if force_10bit and cuda_out else "nv12"))
+            if cuda_out:
+                filters.append(_scale_cuda(target_height, downscale, force_10bit))
+            else:
+                filters += ["hwdownload", "format=nv12", "format=yuv420p"]
+        elif engine == "opencl":
+            filters.append("format=p010le")
+            filters.append("hwupload")
+            if platform in ("amd", "intel"):
+                # hwupload trifft das VAAPI-/QSV-Device. tonemap_opencl braucht
+                # OpenCL-Frames, hwmap leitet sie daraus ab.
+                filters.append("hwmap=derive_device=opencl")
+            filters += [
+                _jelly_tone_filter(
+                    "tonemap_opencl", tonemap_algo, tonemap_desat, tonemap_peak, "nv12"),
+                "hwdownload", "format=nv12", "format=yuv420p",
+            ]
+        elif engine == "vaapi":
+            filters += [
+                "format=p010le", "hwupload",
+                _jelly_tone_filter(
+                    "tonemap_vaapi", tonemap_algo, tonemap_desat, tonemap_peak, "nv12"),
+                "hwdownload", "format=nv12", "format=yuv420p",
+            ]
+        elif engine == "tonemapx":
+            filters.append(_jelly_tone_filter(
+                "tonemapx", tonemap_algo, tonemap_desat, tonemap_peak, "yuv420p"))
         else:
             filters.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
 
-    deband_f = _DEBAND.get(normalize_deband(deband), "")
-    if deband_f:
-        filters.append(deband_f)
+    if not cuda_out:
+        deband_f = _DEBAND.get(normalize_deband(deband), "")
+        if deband_f:
+            filters.append(deband_f)
 
-    if denoise in _DENOISE:
-        filters.append(_DENOISE[denoise])
-    if sharpen in _SHARPEN:
-        filters.append(_SHARPEN[sharpen])
-    if grain in _GRAIN:
-        filters.append(_GRAIN[grain])
+        if denoise in _DENOISE:
+            filters.append(_DENOISE[denoise])
+        if sharpen in _SHARPEN:
+            filters.append(_SHARPEN[sharpen])
+        if grain in _GRAIN:
+            filters.append(_GRAIN[grain])
 
-    if downscale:
-        # -2 hält das Seitenverhältnis (gerade Pixelzahl für die Encoder).
-        filters.append(f"scale=-2:{target_height}:flags=lanczos")
+        if downscale:
+            # -2 hält das Seitenverhältnis (gerade Pixelzahl für die Encoder).
+            filters.append(f"scale=-2:{target_height}:flags=lanczos")
 
-    # Plattformspezifischer Upload/Pixelformat-Schritt.
-    # AMD/Intel benötigen Frames auf einer HW-Surface.
-    # Für 10-bit (HDR-Erhalt ODER Anime-Modus) p010le, sonst nv12 (8-bit).
-    hw_fmt = "p010le" if want_10bit else "nv12"
-    if platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
-        filters.append(f"format={hw_fmt},hwupload")
-    elif platform == "intel":
-        filters.append(f"format={hw_fmt},hwupload=extra_hw_frames=64")
-    elif force_10bit and not keep_hdr:
-        # CPU- bzw. NVENC-Software-Pfad: Pixelformat direkt auf 10-bit setzen.
-        filters.append("format=yuv420p10le")
+        # Plattformspezifischer Upload/Pixelformat-Schritt.
+        # AMD/Intel benötigen Frames auf einer HW-Surface.
+        # Für 10-bit (HDR-Erhalt ODER Anime-Modus) p010le, sonst nv12 (8-bit).
+        hw_fmt = "p010le" if want_10bit else "nv12"
+        if platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
+            filters.append(f"format={hw_fmt},hwupload")
+        elif platform == "intel":
+            filters.append(f"format={hw_fmt},hwupload=extra_hw_frames=64")
+        elif force_10bit and not keep_hdr:
+            # CPU- bzw. NVENC-Software-Pfad: Pixelformat direkt auf 10-bit setzen.
+            filters.append("format=yuv420p10le")
 
     if not filters:
         return None
@@ -309,10 +599,22 @@ def _setparams(prim: str, trc: str, space: str, rng: str) -> str:
 
 
 def _with_setparams(vf: Optional[str], sp: str) -> str:
-    """Kennung vor dem HW-Upload, sonst am Ende der Kette."""
+    """Kennung auf den SDR-Frames, direkt vor dem Encoder-Upload.
+
+    Ein GPU-Tonemap lädt vorher HDR-Frames hoch. Die Kennung darf nicht vor
+    diesem ersten Upload stehen, sonst markiert sie die Quelle schon als BT.709.
+    """
     if not vf:
         return sp
     parts = vf.split(",")
+    download = next((i for i, part in enumerate(parts) if part.startswith("hwdownload")), None)
+    if download is not None:
+        later = [i for i, part in enumerate(parts) if i > download and part.startswith("hwupload")]
+        if later:
+            parts.insert(later[-1], sp)
+        else:
+            parts.append(sp)
+        return ",".join(parts)
     for i, part in enumerate(parts):
         if part.startswith("hwupload"):
             parts.insert(i, sp)
@@ -444,7 +746,12 @@ def build_encode_cmd(
     hängen am selben Input; FFmpeg dekodiert einmal und bedient beide Encoder.
     """
     from . import config
-    cmd: list[str] = [config.FFMPEG, "-y", "-hide_banner"]
+    engine = effective_tonemap_engine(
+        tonemap_engine, platform, preserve_dv=bool(preserve_dv))
+    do_tone = bool(tonemap and info.is_hdr)
+    mobile_tone = bool(mobile) and info.is_hdr
+    binary = ffmpeg_binary_for(engine) if (do_tone or mobile_tone) else config.FFMPEG
+    cmd: list[str] = [binary, "-y", "-hide_banner"]
 
     keep_hdr = bool(preserve_hdr and info.is_hdr)
     downscale = bool(target_height and info.height and target_height < info.height)
@@ -459,6 +766,16 @@ def build_encode_cmd(
     deband_on = normalize_deband(deband) in _DEBAND
     software_filters = (denoise_on or sharpen_on or grain_on or deint_on
                         or bool(crop) or bool(mobile) or deband_on)
+    pre_sw = bool(crop) or deint_on
+    post_sw = denoise_on or sharpen_on or grain_on or deband_on or bool(mobile)
+    enc = ff.encoder_name(platform, codec)
+    # CUDA-Frames nur, wenn tonemap_cuda der erste Filter ist und danach nichts
+    # mehr in den RAM muss. Seek und Software-Filter bleiben beim Download.
+    cuda_surface = (
+        engine == "cuda" and platform == "nvidia" and do_tone
+        and not pre_sw and not post_sw and start_at is None
+        and "nvenc" in (enc or "")
+    )
     nvidia_cuda_frames = False
 
     # --- Hardware-Decode-/Device-Initialisierung (VOR dem Input) -----------
@@ -469,11 +786,12 @@ def build_encode_cmd(
         # CUDA-Surface-Pipeline (`-hwaccel_output_format cuda`) je nach
         # Treiber/Quelle erzeugt. Software-Filter (Tonemapping/Denoise) und
         # Positions-Sprünge (VMAF-/Verify-Clips) brauchen ohnehin den RAM-Pfad.
-        full_gpu = (config.NVENC_FULL_GPU and not (tonemap and info.is_hdr)
+        # Ausnahme: tonemap_cuda ohne Software-Filter bleibt auf der Surface.
+        full_gpu = (config.NVENC_FULL_GPU and not do_tone
                     and not software_filters and start_at is None)
-        if full_gpu:
+        if full_gpu or cuda_surface:
             cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-            nvidia_cuda_frames = True
+            nvidia_cuda_frames = full_gpu
         else:
             cmd += ["-hwaccel", "cuda"]
     elif platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
@@ -488,10 +806,12 @@ def build_encode_cmd(
                 "-init_hw_device", "qsv=qs@va",
                 "-filter_hw_device", "qs"]
 
-    mobile_tonemap = bool(mobile) and info.is_hdr
-    if (tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
-            and info.is_hdr and (tonemap or mobile_tonemap)):
+    if engine == "libplacebo" and info.is_hdr and (do_tone or mobile_tone):
         cmd += ["-init_hw_device", "vulkan"]
+    elif engine == "opencl" and (do_tone or mobile_tone) and platform in ("nvidia", "cpu"):
+        # Intel/AMD lassen das VAAPI-/QSV-Device stehen. tonemap_opencl leitet
+        # OpenCL daraus ab, der Encoder-Upload danach trifft wieder dasselbe Device.
+        cmd += ["-init_hw_device", "opencl=ocl", "-filter_hw_device", "ocl"]
 
     if start_at is not None:
         cmd += ["-ss", str(start_at)]
@@ -507,10 +827,9 @@ def build_encode_cmd(
                              sharpen=sharpen, grain=grain, deinterlace=deinterlace,
                              force_10bit=ten_bit, crop=crop,
                              tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
-                             tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
-                             deband=deband)
+                             tonemap_peak=tonemap_peak, tonemap_engine=engine,
+                             deband=deband, cuda_surface=cuda_surface)
     tonemapped = bool(tonemap and info.is_hdr and not keep_hdr)
-    enc = ff.encoder_name(platform, codec)
     av1_dv = bool(
         enc == "libsvtav1" and preserve_dv and info.dolby_vision
         and not tonemap and not downscale and not software_filters
@@ -522,7 +841,7 @@ def build_encode_cmd(
     # übernimmt es beim Öffnen des Encoders nur globale Frame-Side-Data;
     # AV_FRAME_DATA_DOVI_METADATA fällt dabei weg und libsvtav1 schaltet
     # Dolby Vision stumm ab. Ohne Filtergraph bleibt die RPU erhalten.
-    if not nvidia_cuda_frames and not av1_dv:
+    if not nvidia_cuda_frames and not cuda_surface and not av1_dv:
         prim, trc, space, rng = _color_tuple(
             info, tonemapped=tonemapped, keep_hdr=keep_hdr)
         sp = _setparams(prim, trc, space, rng)
@@ -643,7 +962,7 @@ def build_encode_cmd(
                                   tonemap_algo=tonemap_algo,
                                   tonemap_desat=tonemap_desat,
                                   tonemap_peak=tonemap_peak,
-                                  tonemap_engine=tonemap_engine,
+                                  tonemap_engine=engine,
                                   deband=deband)
     return cmd
 

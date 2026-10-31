@@ -139,10 +139,13 @@ matching FFmpeg encoder:
 | Component | Version / notes |
 |-----------|-----------------|
 | Base image | CUDA **12.6.3** runtime (Ubuntu 24.04) |
-| FFmpeg | **latest:** BtbN **n9.0** (NVENC API 13.1). **latest-legacy:** BtbN **n8.1**. |
+| FFmpeg | **latest:** BtbN **n9.0** (NVENC API 13.1). **latest-legacy:** BtbN **n8.1**. Probe, remux, player, DVD, VMAF scoring, Dolby Vision, and the default CPU tone-map use this binary. |
+| Jellyfin-FFmpeg | **8.1.3-1** (upstream FFmpeg 8.1), portable GPL, as `/usr/local/bin/ffmpeg-jellyfin`. Same pin in both image channels. Used only when the chosen tone-map engine needs `tonemap_cuda`, `tonemap_opencl`, `tonemap_vaapi`, or `tonemapx`. |
 | `hdr10plus_tool` | **1.7.2** (HEVC HDR10+ extract + inject) |
-| `dovi_tool` | **2.3.3** |
-| libva | **2.22** (Intel VAAPI) |
+| `dovi_tool` | **2.3.3** (HEVC Dolby Vision RPU; no AV1 inject) |
+| `ssimulacra2` | libjxl **0.11.1** static binary (still-image score beside VMAF) |
+| libva | **2.22** (built from source; Intel/AMD VAAPI) |
+| OpenCL | `ocl-icd-libopencl1`, `intel-opencl-icd`, `mesa-opencl-icd`. The NVIDIA OpenCL ICD is the host driver at runtime. |
 
 ## Image channels
 
@@ -159,8 +162,9 @@ GitHub Actions publishes two tags from the same source. `docker compose up --bui
 | Anime | same v1 file (NEG is inside the model) | separate NEG model files |
 | AV1 hierarchical B-frames | with B-frames set to Auto (CQ) or Deep, when a probe accepts `-bf 7 -b_ref_mode hierarchical` | not in this FFmpeg build. Auto/Deep fall back to `-bf 4 -b_ref_mode middle` when a probe accepts it |
 | H.264 / HEVC hierarchical B-frames | no (SDK 13.1 adds the mode for AV1 only) | no |
+| Jellyfin-FFmpeg | **8.1.3-1** (`ffmpeg-jellyfin`) | the same binary |
 
-Both images still include SVT-AV1, x265, x264, VP9, VAAPI, QSV, and CPU `libvmaf`. Neither includes `libvmaf_cuda`. `dovi_tool` 2.3.3 still does not inject AV1. CPU encode, remux and the player work on either tag. A score of 93 on **latest** is not a 93 on **latest-legacy**.
+Both images include SVT-AV1, x265, x264, VP9, VAAPI, QSV, CPU `libvmaf`, and Jellyfin-FFmpeg 8.1.3-1 for HDR tone-map. Neither includes `libvmaf_cuda`. `dovi_tool` 2.3.3 still does not inject AV1. CPU encode, remux and the player work on either tag. A score of 93 on **latest** is not a 93 on **latest-legacy**.
 
 FFmpeg 9 refuses to open NVENC when the driver is older than 610 (`The minimum required Nvidia driver for nvenc is 610.00 or newer`). Pull `:latest-legacy` in that case. `NVIDIA_DISABLE_REQUIRE` in `docker-compose.yml` only skips the CUDA runtime check at container start. It does not raise the NVENC API the driver exposes.
 
@@ -189,7 +193,51 @@ HDR handling depends on the source and is chosen per job.
 | Mode | Effect |
 |------|--------|
 | **Keep HDR (10-bit)** | preserves HDR10/HLG metadata unchanged (no DV layer). |
-| **HDR → SDR (tone mapping)** | converts to SDR; the VMAF reference is tonemapped identically to avoid skewed scores. |
+| **HDR → SDR (tone mapping)** | converts to SDR; the VMAF reference and source stills use the same engine and curve. |
+
+### Tone mapping
+
+The engine and the curve are set in Encoding, the VMAF Tool, and the Super Tool.
+Encode, mobile copy, VMAF reference, and source stills share that choice. The
+full player has the same controls and restarts the preview at the current
+position when one of them changes. Jellyfin-FFmpeg is used for that preview
+only when the selected engine is CUDA, OpenCL, VAAPI, or tonemapx. CPU and
+libplacebo stay on BtbN. Direct play and remux show the file unchanged. The
+editor and the A/B player stay on the CPU Hable chain.
+If the Jellyfin binary or the needed filter is missing, the job uses the CPU
+chain. A Dolby Vision preserve stays on BtbN as well.
+
+| Engine | Where it runs | Binary |
+|--------|----------------|--------|
+| **CPU** (`zscale` + `tonemap`) | Default. Hable, desaturation 0, peak from metadata. | BtbN |
+| **libplacebo** | Vulkan, on CPU and NVIDIA. Peak and desaturation do not apply. | BtbN |
+| **CUDA** | NVIDIA only. Stays on the GPU when the encode has no crop, deinterlace, deband, denoise, sharpen, grain, or mobile copy, and it is not a seeked clip. Otherwise the frames go through memory, then `hwupload_cuda`. | Jellyfin-FFmpeg |
+| **OpenCL** | Every platform. Intel and AMD map OpenCL from the VAAPI or QSV device. | Jellyfin-FFmpeg |
+| **VAAPI** | AMD, and Intel in VAAPI mode. Intel in QSV mode falls back to the CPU chain. | Jellyfin-FFmpeg |
+| **tonemapx** | CPU, SIMD. | Jellyfin-FFmpeg |
+
+Curves: **Hable** (default here), BT.2390, Reinhard, Mobius, Gamma, Clip, Linear.
+Desaturation runs from 0 to 2 and defaults to 0. Peak 0 keeps the file
+metadata. Any other number is passed straight through as the filter's `peak`
+option, the same way the CPU chain already does. That option is not nits:
+Jellyfin's own field uses **100 for a 1000-nit peak**.
+
+This is the Linux set of Jellyfin's tone-map engines and curves, plus the CPU
+chain and libplacebo. It is not the whole Jellyfin playback page:
+
+| Jellyfin dashboard | This studio |
+|--------------------|-------------|
+| Algorithm `none`, `clip`, `linear`, `gamma`, `reinhard`, `hable`, `mobius`, `bt2390` | The same list, without `none`. Default here is Hable. Jellyfin recommends BT.2390. |
+| Mode auto / max / rgb / luminance | Not a choice. The GPU filters keep their own default. |
+| Range auto / TV / PC | Always TV (limited). |
+| Desaturation, peak | Yes. See the scale note above. |
+| Algorithm parameter | Not a choice. |
+| Intel VPP tone-map (brightness and contrast gain) | Not a choice. The VAAPI engine is `tonemap_vaapi`, not that vendor VPP path. |
+| 3D LUT | Not a choice. |
+| VideoToolbox, Metal | Not in this Linux image. |
+
+Jellyfin's filters can read Dolby Vision metadata while tone-mapping. This
+studio does not composite a profile-7 enhancement layer.
 
 **HDR10+** (dynamic per-scene metadata on HEVC): when HDR is kept and the
 target is **HEVC**, `hdr10plus_tool` extracts the JSON and writes it back into
@@ -492,7 +540,8 @@ scored VMAF frames. The table number is the file average. The two may differ.
 | **Dolby Vision** | Dynamic RPU (per scene/frame). Profile describes how it is stored. |
 
 **HDR without DV:** *Keep HDR* = 10-bit + metadata. *Tone-map* = SDR for any
-display (VMAF tests are tonemapped the same way so scores stay fair).
+display (VMAF tests use the same engine and curve). Engines and curves are
+listed under [HDR & Dolby Vision](#hdr--dolby-vision).
 
 **Dolby Vision profiles (as used here):**
 
@@ -670,6 +719,11 @@ One media mount is enough — sources and encodes live in the same tree:
   `(4·Y + U + V) / 6` appears next to VMAF in the results, in chart tooltips and
   in the CSV. Roughly: ≥ 36 dB good, ≥ 40 dB very good. Frames that are
   identical to the source (infinite PSNR) are excluded from the mean.
+- **CAMBI**: banding score in the same libvmaf pass. Higher means more visible
+  steps in gradients. It does not change the recommendation.
+- **SSIMULACRA2**: the libjxl **0.11.1** binary compares stills of the source
+  and the encode, spread across each sample (1, 3, 5, or 7 frames; default 3).
+  Higher is closer to the source. It does not change the recommendation.
 - **Extra metrics**: besides mean VMAF, **1%-low** (mean of the worst 1% of frames),
   **harmonic mean**, plus **PSNR** and **SSIM** are reported. Recommendations
   (VMAF Tool, target VMAF, Super Tool, encoder test) keep 1% low within a
@@ -858,7 +912,7 @@ On push to `main`, GitHub Actions builds both images and publishes them under
 
 ### Hardware notes
 
-- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`). `:latest` needs driver **610** or newer for NVENC. Older drivers use `:latest-legacy`. The image is based on **CUDA 12.6**; a driver older than that runtime may need `NVIDIA_DISABLE_REQUIRE=true` (see compose comments). That switch does not change the NVENC API.
+- **Nvidia**: the [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) must be installed (`runtime: nvidia`). `:latest` needs driver **610** or newer for NVENC. Older drivers use `:latest-legacy`. The image is based on **CUDA 12.6**; a driver older than that runtime may need `NVIDIA_DISABLE_REQUIRE=true` (see compose comments). That switch does not change the NVENC API. OpenCL tone-map on NVIDIA uses the driver ICD (`compute` is already in `NVIDIA_DRIVER_CAPABILITIES`). Intel and AMD use the OpenCL ICDs installed in the image.
 - **Intel/AMD**: `/dev/dri` is passed through. On pure Intel/AMD hosts without
   Nvidia, remove the `runtime: nvidia` and `deploy:` blocks. Set
   `LIBVA_DRIVER_NAME=iHD` (Intel) and `VAAPI_DEVICE` as needed.
@@ -876,7 +930,9 @@ On push to `main`, GitHub Actions builds both images and publishes them under
 
 ```bash
 pip install -r requirements.txt
-# FFmpeg/ffprobe with libvmaf, dovi_tool, and VMAF models must be available
+# FFmpeg/ffprobe with libvmaf, optional ffmpeg-jellyfin, dovi_tool, hdr10plus_tool,
+# ssimulacra2, and VMAF models must be available. Without ffmpeg-jellyfin the
+# CUDA, OpenCL, VAAPI, and tonemapx engines fall back to the CPU curve.
 export MEDIA_DIR=/path/videos VMAF_MODEL_DIR=/path/model
 python app.py
 ```
@@ -896,7 +952,7 @@ core/
   hardware.py           CPU/RAM/GPU monitoring (Nvidia/Intel/AMD)
   capabilities.py       Functional encoder capability tests (mini encodes)
   ffmpeg_utils.py       ffprobe, encoder mapping, sampled integrity check, auto-crop
-  encoder.py            FFmpeg command builder, filter chains, progress parser
+  encoder.py            FFmpeg command builder, filter chains, tone-map engines, progress parser
   vmaf.py               VMAF pipeline (VMAF/PSNR/SSIM/percentiles, sessions)
   dolby_vision.py       Dolby Vision RPU preservation via dovi_tool (HEVC 8.1)
   hdr10plus.py          HDR10+ JSON extract/inject via hdr10plus_tool (HEVC only)
@@ -926,7 +982,7 @@ static/js/app.js        Dashboard logic (WebSocket, charts, browser)
 static/js/editor.js     Timeline video editor UI
 static/js/player.js     Full Player UI (HLS)
 static/js/i18n.js       DE / EN / ES / FR translations
-Dockerfile              All-in-one image (CUDA 12.6 + FFmpeg n9.0 by default, n8.1 for latest-legacy)
+Dockerfile              All-in-one image (CUDA 12.6, BtbN FFmpeg, Jellyfin-FFmpeg 8.1.3-1, dovi_tool, hdr10plus_tool, ssimulacra2)
 docker-compose.yml      Portainer stack
 ```
 
@@ -968,7 +1024,7 @@ docker-compose.yml      Portainer stack
 | `LIBVA_DRIVER_NAME` | – | e.g. `iHD` for Intel iGPU (set in compose) |
 | `NVENC_FULL_GPU` | `false` | Force full GPU pipeline (faster, riskier) |
 | `CQ_SWEETSPOT` | – | CQ fine-tuning, e.g. `cpu:hevc=22,nvidia:av1=33` |
-| `FFMPEG_BIN` / `FFPROBE_BIN` / `DOVI_TOOL_BIN` | – | Override tool paths |
+| `FFMPEG_BIN` / `FFPROBE_BIN` / `FFMPEG_JELLYFIN_BIN` / `DOVI_TOOL_BIN` / `HDR10PLUS_TOOL_BIN` / `SSIMULACRA2_BIN` | – | Override tool paths |
 | `ARR_PATH_MAP` | – | *arr path remap: `from:to,from2:to2` |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `LOG_FFMPEG_CMD` | `true` | Log the full FFmpeg command line |

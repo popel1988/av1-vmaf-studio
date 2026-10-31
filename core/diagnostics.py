@@ -52,6 +52,32 @@ def _tools_section() -> dict:
         "FFmpeg", "ok" if ver != "unbekannt" else "fail",
         f"{ver} · Linie {config.IMAGE_CHANNEL} · {config.FFMPEG}"))
 
+    jf = Path(config.FFMPEG_JELLYFIN)
+    if not jf.is_file():
+        checks.append(_check(
+            "Jellyfin-FFmpeg", "warn",
+            "nicht gefunden – CUDA, OpenCL, VAAPI und tonemapx fallen auf die CPU-Kurve zurück"))
+    else:
+        try:
+            r = subprocess.run(
+                [str(jf), "-hide_banner", "-version"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=15, check=False)
+            line = ((r.stdout or "").strip().splitlines() or [str(jf)])[0]
+        except (OSError, subprocess.SubprocessError):
+            line = str(jf)
+        from .encoder import jellyfin_filters
+        need = ("tonemap_cuda", "tonemap_opencl", "tonemap_vaapi", "tonemapx")
+        missing = [name for name in need if name not in jellyfin_filters()]
+        if missing:
+            checks.append(_check(
+                "Jellyfin-FFmpeg", "warn",
+                f"{line} · fehlt: {', '.join(missing)}"))
+        else:
+            checks.append(_check(
+                "Jellyfin-FFmpeg", "ok",
+                f"{line} · tonemap_cuda, tonemap_opencl, tonemap_vaapi, tonemapx"))
+
     probe_ok = bool(Path(config.FFPROBE).exists() or config.FFPROBE)
     checks.append(_check("ffprobe", "ok" if probe_ok else "fail", config.FFPROBE))
 

@@ -14,8 +14,7 @@ from typing import Callable, Optional
 from . import config
 from . import ffmpeg_utils as ff
 from .encoder import (
-    EncodeRunner, build_encode_cmd, tonemap_chain, tonemap_engine_for,
-    tonemap_placebo,
+    EncodeRunner, build_encode_cmd, reference_tonemap_setup,
 )
 from .ffmpeg_utils import VideoInfo
 
@@ -546,24 +545,20 @@ def _extract_reference(
     platform: str = "cpu",
 ) -> Path:
     ref = work / f"reference_{idx}.mkv"
-    use_placebo = (
-        tonemap and info.is_hdr
-        and tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
+    binary, pre, piece = reference_tonemap_setup(
+        tonemap_engine, platform, tonemap_algo, tonemap_desat, tonemap_peak,
+        active=bool(tonemap and info.is_hdr),
     )
-    cmd = [config.FFMPEG, "-y", "-hide_banner"]
-    if use_placebo:
-        cmd += ["-init_hw_device", "vulkan"]
+    cmd = [binary, "-y", "-hide_banner"]
+    cmd += pre
     cmd += ["-ss", str(start), "-t", str(clip_len), "-i", str(info.path)]
     # Crop und Tonemap identisch zur Encode-Kette anwenden, damit der Vergleich
     # dieselbe (beschnittene/getonemappte) Bildfläche wie die Ausgabe nutzt.
     vf = []
     if crop:
         vf.append(f"crop={crop}")
-    if tonemap and info.is_hdr:
-        if use_placebo:
-            vf.append(tonemap_placebo(tonemap_algo))
-        else:
-            vf.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
+    if piece:
+        vf.append(piece)
     if vf:
         cmd += ["-vf", ",".join(vf)]
     cmd += ["-an", "-sn", "-c:v", "ffv1", "-level", "3", str(ref)]
@@ -937,22 +932,18 @@ def _extract_source_still(
     """Ein Standbild der Quelle an einer Filmzeit, mit derselben Tonemap wie der Encode."""
     dest = config.PREVIEW_DIR / out_rel
     dest.parent.mkdir(parents=True, exist_ok=True)
-    use_placebo = (
-        tonemap and info.is_hdr
-        and tonemap_engine_for(tonemap_engine, platform) == "libplacebo"
+    binary, pre, piece = reference_tonemap_setup(
+        tonemap_engine, platform, tonemap_algo, tonemap_desat, tonemap_peak,
+        active=bool(tonemap and info.is_hdr),
     )
-    cmd = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
-    if use_placebo:
-        cmd += ["-init_hw_device", "vulkan"]
+    cmd = [binary, "-y", "-hide_banner", "-loglevel", "error"]
+    cmd += pre
     cmd += ["-ss", f"{max(0.0, float(at_sec)):.3f}", "-i", str(info.path)]
     vf: list[str] = []
     if crop:
         vf.append(f"crop={crop}")
-    if tonemap and info.is_hdr:
-        if use_placebo:
-            vf.append(tonemap_placebo(tonemap_algo))
-        else:
-            vf.append(tonemap_chain(tonemap_algo, tonemap_desat, tonemap_peak))
+    if piece:
+        vf.append(piece)
     if vf:
         cmd += ["-vf", ",".join(vf)]
     cmd += ["-frames:v", "1", "-q:v", "2", str(dest)]
@@ -1798,8 +1789,13 @@ def _body_kbps(values: list[float]) -> list[float]:
     return out
 
 
-def _curve_from_packets(packets: list[dict], duration: float = 0, fps: float = 0) -> dict:
-    """Frame-Bitrate aus Paketen, deren Zeit bei 0 am Clipanfang liegt."""
+def _curve_from_packets(packets: list[dict], duration: float = 0, fps: float = 0,
+                        full: bool = False) -> dict:
+    """Frame-Bitrate aus Paketen, deren Zeit bei 0 am Clipanfang liegt.
+
+    ``full`` behält die ganze Szene. Sonst nur das bewertete Fenster, und t = 0
+    ist dann das erste bewertete Bild.
+    """
     if not packets:
         return {"bins": [], "scored_sec": 0, "frame": True}
     if fps <= 0:
@@ -1812,7 +1808,11 @@ def _curve_from_packets(packets: list[dict], duration: float = 0, fps: float = 0
     frame_dt = 1.0 / max(fps, 1.0)
     if duration <= 0:
         duration = packets[-1]["t"] + frame_dt
-    start, end = _scored_window(duration)
+    margin, win_end = _scored_window(duration)
+    if full:
+        start, end = 0.0, float(duration)
+    else:
+        start, end = margin, win_end
     kept = [pkt for pkt in packets if start <= float(pkt["t"]) < end]
     shares = _shown_share(kept)
     raw = [share * 8 / frame_dt / 1000 for share in shares]
@@ -1825,12 +1825,17 @@ def _curve_from_packets(packets: list[dict], duration: float = 0, fps: float = 0
             "t": round(max(0.0, rel), 4),
             "kbps": round(body[n], 1),
         })
-    return {
+    out = {
         "bins": bins,
         "scored_sec": round(max(0.0, end - start), 3),
         "frame": True,
         "align": "body",
     }
+    if full:
+        out["span"] = "scene"
+        out["margin"] = round(margin, 3)
+        out["scene_sec"] = round(float(duration), 3)
+    return out
 
 
 def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
@@ -1844,26 +1849,36 @@ def scored_bitrate(path: Path, duration: float = 0, fps: float = 0) -> dict:
     return _curve_from_packets(bitrate_profile.clip_packets(path), duration, fps)
 
 
-def source_scene_bitrate(session: str, scene: int) -> Optional[dict]:
-    """Frame-Bitrate der Quelle im Szenenfenster, auf die VMAF-Zeitachse gelegt.
+def _read_source_cache(cache: Path) -> Optional[dict]:
+    if not cache.is_file():
+        return None
+    try:
+        blob = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(blob, dict) and blob.get("bins"):
+        return blob
+    return None
 
-    Kein VMAF. Das Ergebnis liegt neben der Session, damit dieselbe Szene
-    nicht noch einmal gelesen wird. Fehlt die Quelle, bleibt das Ergebnis leer.
+
+def source_scene_bitrate(session: str, scene: int) -> Optional[dict]:
+    """Frame-Bitrate der Quelle über die ganze Szene.
+
+    Kein VMAF. t = 0 ist der Szenenanfang, auch der Rand, den die Bewertung
+    auslässt. Das Ergebnis liegt neben der Session. Eine ältere Datei, die nur
+    das bewertete Fenster enthält, wird neu gemessen, solange die Quelle noch
+    da ist. Fehlt die Quelle, bleibt diese ältere Kurve der Ersatz.
     """
     data = load_session(session)
     if data is None:
         return None
+    cache = _session_meta_path(session).parent / f"source_bitrate_s{int(scene)}.json"
+    blob = _read_source_cache(cache)
+    if isinstance(blob, dict) and blob.get("span") == "scene":
+        return blob
     src = Path(str(data.get("source_path") or ""))
     if not src.is_file():
-        return None
-    cache = _session_meta_path(session).parent / f"source_bitrate_s{int(scene)}.json"
-    if cache.is_file():
-        try:
-            blob = json.loads(cache.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            blob = None
-        if isinstance(blob, dict) and blob.get("bins"):
-            return blob
+        return blob
     start = length = None
     analysis = data.get("analysis") or {}
     for raw in analysis.get("results") or []:
@@ -1880,7 +1895,7 @@ def source_scene_bitrate(session: str, scene: int) -> Optional[dict]:
         if start is not None:
             break
     if start is None or length <= 0:
-        return None
+        return blob
     info = ff.ffprobe(src)
     fps = float(info.fps or 0) if info else 0.0
     from . import bitrate_profile
@@ -1897,12 +1912,13 @@ def source_scene_bitrate(session: str, scene: int) -> Optional[dict]:
         if rel < -0.001 or rel > length + 0.5:
             continue
         shifted.append({"t": max(0.0, rel), "bytes": int(pkt["bytes"])})
-    curve = _curve_from_packets(shifted, length, fps)
-    if curve.get("bins"):
-        try:
-            cache.write_text(json.dumps(curve), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Quell-Bitrate konnte nicht gespeichert werden: %s", exc)
+    curve = _curve_from_packets(shifted, length, fps, full=True)
+    if not curve.get("bins"):
+        return blob
+    try:
+        cache.write_text(json.dumps(curve), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Quell-Bitrate konnte nicht gespeichert werden: %s", exc)
     return curve
 
 

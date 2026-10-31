@@ -37,6 +37,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libva2 libva-drm2 vainfo \
         intel-media-va-driver-non-free \
         mesa-va-drivers \
+        ocl-icd-libopencl1 \
+        intel-opencl-icd \
+        mesa-opencl-icd \
         libmfx1 libmfx-gen1.2 libvpl2 \
         # --- GPU-Monitoring-Werkzeuge ---
         intel-gpu-tools radeontop \
@@ -96,6 +99,27 @@ RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FF
     && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -iE "nvenc|libsvtav1" \
     && /usr/local/bin/ffmpeg -hide_banner -encoders | grep -q av1_nvenc \
        || (echo "FEHLER: av1_nvenc fehlt im FFmpeg-Build!" && exit 1)
+
+# ------------------------------------------------------- Jellyfin-FFmpeg 8.1
+# Zweites Binary. BtbN bleibt ffmpeg/ffprobe. Jellyfin bringt die HDR-Filter,
+# die im Upstream fehlen: tonemap_cuda, erweitertes tonemap_opencl,
+# tonemap_vaapi und tonemapx. 8.1 spricht dieselbe NVENC-API wie latest-legacy
+# (Treiber vor 610, inklusive 575).
+ARG JELLYFIN_FFMPEG_VERSION=8.1.3-1
+RUN wget -q "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg_${JELLYFIN_FFMPEG_VERSION}_portable_linux64-gpl.tar.xz" \
+        -O /tmp/jf.tar.xz \
+    && mkdir -p /tmp/jf \
+    && tar -xf /tmp/jf.tar.xz -C /tmp/jf \
+    && JF_BIN="$(find /tmp/jf -type f -name ffmpeg -print -quit)" \
+    && install -m 0755 "$JF_BIN" /usr/local/bin/ffmpeg-jellyfin \
+    && find "$(dirname "$JF_BIN")" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} /usr/local/lib/ \; \
+    && ldconfig \
+    && rm -rf /tmp/jf /tmp/jf.tar.xz \
+    && /usr/local/bin/ffmpeg-jellyfin -hide_banner -filters | grep -q tonemap_cuda \
+    && /usr/local/bin/ffmpeg-jellyfin -hide_banner -filters | grep -q tonemap_opencl \
+    && /usr/local/bin/ffmpeg-jellyfin -hide_banner -filters | grep -q tonemap_vaapi \
+    && /usr/local/bin/ffmpeg-jellyfin -hide_banner -filters | grep -q " tonemapx " \
+       || (echo "FEHLER: Jellyfin-FFmpeg ohne HDR-Tonemap-Filter!" && exit 1)
 
 # ------------------------------------------------------------- dovi_tool
 # Für die (experimentelle) Dolby-Vision-RPU-Erhaltung bei HEVC. Statisches

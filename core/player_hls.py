@@ -170,6 +170,7 @@ class PlayerSession:
     decision_summary: str = ""
     decision_reasons: list = field(default_factory=list)
     decision_strategy: str = ""
+    look_summary: str = ""
 
     @property
     def playlist(self) -> Path:
@@ -222,6 +223,7 @@ class PlayerSession:
             "decision_summary": self.decision_summary,
             "decision_reasons": list(self.decision_reasons or []),
             "decision_strategy": self.decision_strategy,
+            "look_summary": self.look_summary,
         }
 
     def playback_label(self) -> str:
@@ -879,7 +881,11 @@ _PLAYER_SDR_TAGS = (
 
 
 def _player_sdr_8bit_filters(*, is_hdr: bool, target_codec: str) -> list[str]:
-    """HDR/10-bit → 8-bit SDR für Browser-H.264 (NVENC kann kein 10-bit H.264)."""
+    """HDR/10-bit → 8-bit SDR für Browser-H.264 (NVENC kann kein 10-bit H.264).
+
+    Feste CPU-Kette. Die Encode-Vorschau hängt ihre eigene Kette an und
+    ruft das hier nicht auf.
+    """
     out: list[str] = []
     want_h264 = (target_codec or "h264").lower() == "h264"
     if not want_h264:
@@ -895,6 +901,58 @@ def _player_sdr_8bit_filters(*, is_hdr: bool, target_codec: str) -> list[str]:
     return out
 
 
+def _drop_cuda_hwaccel(cmd: list[str], pre: list[str]) -> list[str]:
+    """``-hwaccel cuda`` nur einmal. Der Decode setzt es, die CUDA-Tonemap auch."""
+    has_cuda = any(
+        cmd[i] == "-hwaccel" and i + 1 < len(cmd) and cmd[i + 1] == "cuda"
+        for i in range(len(cmd))
+    )
+    if not has_cuda:
+        return pre
+    out: list[str] = []
+    i = 0
+    while i < len(pre):
+        if pre[i] == "-hwaccel" and i + 1 < len(pre) and pre[i + 1] == "cuda":
+            i += 2
+            continue
+        out.append(pre[i])
+        i += 1
+    return out
+
+
+def _normalize_look(raw) -> Optional[dict]:
+    """Encode-Formular → Vorschau. Ohne ``apply`` bleibt die feste CPU-Kette."""
+    if not isinstance(raw, dict) or not raw.get("apply"):
+        return None
+    from .encoder import (
+        normalize_deband, normalize_picture_level, normalize_tonemap_algo,
+        normalize_tonemap_desat, normalize_tonemap_engine, normalize_tonemap_peak,
+    )
+    platform = str(raw.get("platform") or "cpu").strip().lower() or "cpu"
+    return {
+        "apply": True,
+        "tonemap": bool(raw.get("tonemap", True)),
+        "engine": normalize_tonemap_engine(raw.get("tonemap_engine") or "cpu"),
+        "algo": normalize_tonemap_algo(raw.get("tonemap_algo") or "hable"),
+        "desat": normalize_tonemap_desat(raw.get("tonemap_desat", 0)),
+        "peak": normalize_tonemap_peak(raw.get("tonemap_peak", 0)),
+        "platform": platform,
+        "deband": normalize_deband(raw.get("deband") or "off"),
+        "denoise": normalize_picture_level(raw.get("denoise") or "off"),
+        "sharpen": normalize_picture_level(raw.get("sharpen") or "off"),
+        "grain": normalize_picture_level(raw.get("grain") or "off"),
+    }
+
+
+def _look_needs(look: Optional[dict], is_hdr: bool) -> bool:
+    """Transcode, damit die Vorschau die Encode-Kurve und die Bildfilter zeigt."""
+    if not look:
+        return False
+    if any(look.get(k) not in (None, "", "off") for k in ("deband", "denoise", "sharpen", "grain")):
+        return True
+    return bool(is_hdr and look.get("tonemap"))
+
+
 def _build_video_filter(
     *,
     height: int,
@@ -903,25 +961,69 @@ def _build_video_filter(
     encoder: str,
     target_codec: str = "h264",
     is_hdr: bool = False,
-) -> tuple[list[str], list[str]]:
-    """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args).
+    look: Optional[dict] = None,
+) -> tuple[list[str], list[str], str]:
+    """Filter + ggf. Extra-Args vor -i. Rückgabe (pre_input, map/filter args, binary).
 
-    Zeitstempel kommen von ``-copyts -start_at_zero`` (wie Jellyfin-HLS),
-    nicht von ``setpts`` – sonst läuft Video unabhängig vom Ton auf 0.
-    Seek bleibt vor ``-i``. Bei H.264-Ziel: Tonemap/``yuv420p``.
+    ``binary`` leer = BtbN. Jellyfin nur, wenn die gewählte Tonemap-Engine
+    dessen Filter braucht. Zeitstempel kommen von ``-copyts -start_at_zero``.
     """
     pre: list[str] = []
+    binary = ""
     backend = ff.encoder_backend(platform) if platform != "cpu" else "cpu"
     need_hwupload = "vaapi" in encoder or "qsv" in encoder
     sdr = _player_sdr_8bit_filters(is_hdr=is_hdr, target_codec=target_codec)
-
+    want_h264 = (target_codec or "h264").lower() == "h264"
     scale = f"scale=-2:{int(height)}" if height and height > 0 else ""
 
+    def apply_look(base: list[str]) -> list[str]:
+        nonlocal pre, binary
+        picture = bool(look) and any(
+            look.get(k) not in (None, "", "off")
+            for k in ("deband", "denoise", "sharpen", "grain")
+        )
+        if not look or (not picture and not is_hdr):
+            return base + sdr
+        from .encoder import player_preview_setup
+        chosen = bool(look.get("tonemap")) and is_hdr
+        # H.264 für den Browser ist SDR. Behält der Encode HDR, bleibt die
+        # Anzeige auf der CPU-Kurve. Die Bildfilter kommen danach.
+        tone = chosen or (is_hdr and want_h264)
+        b, extra, pieces = player_preview_setup(
+            tone=tone,
+            engine=look.get("engine") if chosen else "cpu",
+            platform=look.get("platform") if chosen else "cpu",
+            algo=look.get("algo") if chosen else "hable",
+            desat=look.get("desat") if chosen else 0,
+            peak=look.get("peak") if chosen else 0,
+            deband=look.get("deband") or "off",
+            denoise=look.get("denoise") or "off",
+            sharpen=look.get("sharpen") or "off",
+            grain=look.get("grain") or "off",
+            encoder=encoder,
+        )
+        if b:
+            binary = b
+        if extra:
+            pre = list(extra) + pre
+        out = list(base)
+        out.extend(pieces)
+        joined = ",".join(out)
+        if want_h264 and "format=yuv420p" not in joined:
+            out.append("format=yuv420p")
+        if want_h264:
+            out.append(_PLAYER_SDR_TAGS)
+        return out
+
     if burn_sub_index >= 0:
-        pix = ",".join(sdr)
+        chain = apply_look([scale] if scale else [])
+        pix = ",".join(chain)
         if scale:
             fc = (f"[0:v:0]{scale}[vs];"
                   f"[vs][0:s:{int(burn_sub_index)}]overlay=format=auto")
+            # scale steht schon in der Overlay-Kette; die Look-Filter danach.
+            rest = [p for p in chain if p != scale]
+            pix = ",".join(rest)
         else:
             fc = "[0:v:0][0:s:{0}]overlay=format=auto".format(int(burn_sub_index))
         if pix:
@@ -932,21 +1034,16 @@ def _build_video_filter(
                 fc += "=extra_hw_frames=64"
             fc += "[vout]"
             if backend == "vaapi":
-                pre = ["-vaapi_device", _vaapi_device()]
+                pre += ["-vaapi_device", _vaapi_device()]
             elif backend == "qsv":
-                pre = ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
-                       "-filter_hw_device", "hw"]
+                pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
+                        "-filter_hw_device", "hw"]
         else:
             fc += "[vout]"
-        return pre, ["-filter_complex", fc, "-map", "[vout]"]
+        return pre, ["-filter_complex", fc, "-map", "[vout]"], binary
 
-    # Ohne Burn-in
-    parts: list[str] = []
-    if scale:
-        parts.append(scale)
-    parts.extend(sdr)
+    parts = apply_look([scale] if scale else [])
     if need_hwupload:
-        # Nach SDR-8-bit: nv12-Upload
         if "format=yuv420p" not in ",".join(parts):
             parts.append("format=yuv420p")
         parts.append("format=nv12")
@@ -956,16 +1053,15 @@ def _build_video_filter(
             parts.append("hwupload")
         vf = ",".join(parts)
         if backend == "vaapi":
-            pre = ["-vaapi_device", _vaapi_device()]
+            pre += ["-vaapi_device", _vaapi_device()]
         elif backend == "qsv":
-            pre = ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
-                   "-filter_hw_device", "hw"]
-        return pre, ["-vf", vf, "-map", "0:v:0?"]
+            pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
+                    "-filter_hw_device", "hw"]
+        return pre, ["-vf", vf, "-map", "0:v:0?"], binary
 
-    # NVENC / CPU – ohne Scale/SDR kein Filter (copyts übernimmt die Timeline)
     if parts:
-        return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"]
-    return pre, ["-map", "0:v:0?"]
+        return pre, ["-vf", ",".join(parts), "-map", "0:v:0?"], binary
+    return pre, ["-map", "0:v:0?"], binary
 
 
 def _encoder_rate_args(encoder: str, codec: str, v_bitrate: int) -> list[str]:
@@ -1021,6 +1117,7 @@ def _build_hls_cmd(
     audio_copy: bool = False,
     source_codec: str = "",
     is_hdr: bool = False,
+    look: Optional[dict] = None,
 ) -> list[str]:
     """HLS als fMP4, Zeitstempel wie Jellyfin Dynamic HLS.
 
@@ -1057,15 +1154,20 @@ def _build_hls_cmd(
 
     pre: list[str] = []
     vmap: list[str] = []
+    binary = ""
     if not video_copy:
         cmd += _hwaccel_decode_args(platform, source_codec)
-        pre, vmap = _build_video_filter(
+        pre, vmap, binary = _build_video_filter(
             height=height, burn_sub_index=burn_sub_index,
             platform=platform, encoder=encoder,
             target_codec=codec or "h264",
             is_hdr=bool(is_hdr),
+            look=look,
         )
+        pre = _drop_cuda_hwaccel(cmd, pre)
         cmd += pre
+        if binary:
+            cmd[0] = binary
 
     if start_sec and start_sec > 0:
         ss = float(start_sec)
@@ -1173,6 +1275,7 @@ def start_session(
     client_codecs: Optional[list[str]] = None,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
+    look: Optional[dict] = None,
 ) -> dict:
     """Session starten (Direct-Play oder HLS)."""
     target = config.resolve_input(rel)
@@ -1196,6 +1299,7 @@ def start_session(
     want_audio_copy = bool(audio_copy)
     want_burn = bool(burn_subs) and subtitle_index >= 0 and _is_image_sub(sub_codec)
     requested = (profile or "auto").lower()
+    preview = _normalize_look(look)
 
     plan = plan_playback(
         info,
@@ -1281,6 +1385,47 @@ def start_session(
         getattr(info, "codec", "") if info else ""
     )
     is_hdr = bool(getattr(info, "is_hdr", False)) if info else False
+    if (
+        preview and _look_needs(preview, is_hdr) and requested == "auto"
+        and (sess.mode == "direct" or use_video_copy)
+    ):
+        src_h = int(getattr(info, "height", 0) or 0) if info else 0
+        prof = "1080p" if src_h >= 1440 else "original"
+        h, br = _quality_params(prof, 0, 0)
+        enc_info = resolve_encode(
+            platform, "h264", client_codecs=client_codecs or ["h264"])
+        use_video_copy = False
+        need_encode = True
+        sess.mode = "hls"
+        sess.profile = prof
+        sess.platform = enc_info["platform"]
+        sess.codec = enc_info["codec"]
+        sess.encoder = enc_info["encoder"]
+        sess.height = h
+        sess.v_bitrate = br
+        note = "Encode-Vorschau: Tonemap und Bildfilter brauchen einen Transcode"
+        sess.decision_reasons = list(sess.decision_reasons) + [note]
+        sess.decision_summary = f"Transcode {prof}, Encode-Vorschau"
+        sess.decision_strategy = "transcode"
+        plan["mode"] = "hls"
+        plan["use_video_copy"] = False
+        plan["need_encode"] = True
+        plan["strategy"] = "transcode"
+        plan["profile"] = prof
+        plan["summary"] = sess.decision_summary
+        plan["encode"] = enc_info
+        plan["height"] = h
+        plan["v_bitrate"] = br
+        plan["reasons"] = list(plan.get("reasons") or []) + [note]
+        sess.warning = sess.decision_summary
+
+    if preview and str(preview.get("platform") or "") in ("auto", ""):
+        preview = dict(preview)
+        preview["platform"] = sess.platform or "cpu"
+
+    if preview and sess.mode == "hls" and not use_video_copy:
+        from .encoder import preview_look_summary
+        sess.look_summary = preview_look_summary(preview, is_hdr=is_hdr)
 
     _plog(
         sid,
@@ -1333,6 +1478,7 @@ def start_session(
             audio_copy=want_audio_copy and not drop_audio,
             source_codec=source_vcodec,
             is_hdr=is_hdr,
+            look=preview,
         )
 
     sess.debug_cmd = _cmd_preview(cmd, 800)
@@ -1397,6 +1543,7 @@ def start_session(
                     audio_copy=want_audio_copy and not drop_audio,
                     source_codec=source_vcodec,
                     is_hdr=is_hdr,
+                    look=preview,
                 )
                 sess.debug_cmd = _cmd_preview(cmd, 800)
                 try:

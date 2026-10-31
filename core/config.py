@@ -33,6 +33,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
 FFMPEG = _resolve_binary("ffmpeg")
 FFPROBE = _resolve_binary("ffprobe")
 
+# Jellyfin-FFmpeg 8.1: tonemap_cuda, tonemap_opencl, tonemap_vaapi, tonemapx.
+# Probe, Remux, DVD und die libvmaf-Messung bleiben bei BtbN.
+# Der Vollplayer wechselt nur für eine Jellyfin-Tonemap in der Encode-Vorschau.
+# Die VMAF-Referenz nutzt dasselbe Binary wie der gewählte Tonemap.
+def _resolve_named(env_key: str, filename: str) -> str:
+    env_override = os.getenv(env_key)
+    if env_override:
+        return env_override
+    local = Path("/usr/local/bin") / filename
+    if local.exists():
+        return str(local)
+    return shutil.which(filename) or filename
+
+
+FFMPEG_JELLYFIN = _resolve_named("FFMPEG_JELLYFIN_BIN", "ffmpeg-jellyfin")
+
 # dovi_tool: für die (experimentelle) Dolby-Vision-RPU-Erhaltung bei HEVC.
 DOVI_TOOL = _resolve_binary("dovi_tool")
 

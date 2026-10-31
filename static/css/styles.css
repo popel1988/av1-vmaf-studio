@@ -364,6 +364,8 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
     grid-template-columns: var(--fp-video-w) minmax(230px, 280px);
   }
 }
+.fp-look { margin: 4px 0 12px; }
+.fp-look .hint { margin-top: 0; }
 .fp-main { min-width: 0; }
 .fp-side {
   display: flex;

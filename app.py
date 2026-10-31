@@ -558,7 +558,7 @@ class EnqueueRequest(BaseModel):
     tonemap_algo: str = "hable"      # hable | bt2390 | reinhard | mobius | gamma | clip | linear
     tonemap_desat: float = 0.0       # 0 = Farben in den Spitzen behalten
     tonemap_peak: float = 0.0        # 0 = Peak aus den Metadaten, sonst Nits
-    tonemap_engine: str = "cpu"      # cpu | libplacebo
+    tonemap_engine: str = "cpu"      # cpu | libplacebo | cuda | opencl | vaapi | tonemapx
     deband: str = "off"              # off | light | medium | strong
     svt_look: str = "standard"       # standard | detail, nur CPU-AV1
     preserve_dv: bool = False        # Legacy: Dolby-Vision-RPU beibehalten
@@ -2387,6 +2387,7 @@ class PlayerSessionRequest(BaseModel):
     client_codecs: list[str] = []   # was der Browser abspielen kann
     lookahead_sec: float = 30       # Zielpuffer; 0 = Encode nicht drosseln
     audio_copy: bool = False        # Ton nicht umcodieren (Stream-Copy)
+    look: Optional[dict] = None     # Encode-Vorschau: Tonemap und Bildfilter
 
 
 @app.get("/api/player/options")
@@ -2447,6 +2448,7 @@ async def player_session_start(req: PlayerSessionRequest):
         client_codecs=req.client_codecs or None,
         lookahead_sec=req.lookahead_sec,
         audio_copy=bool(req.audio_copy),
+        look=req.look,
     )
 
 

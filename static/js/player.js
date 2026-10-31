@@ -303,6 +303,76 @@
     return out;
   }
 
+  function syncLookUi() {
+    const hdr = !!(fp.info && fp.info.is_hdr);
+    const box = $("fp-tonemap-opts");
+    if (box) box.hidden = !hdr;
+    const engine = $("fp-tonemap-engine");
+    const showPeak = hdr && (!engine || engine.value !== "libplacebo");
+    document.querySelectorAll("#fp-tonemap-opts .tonemap-cpu-only").forEach((el) => {
+      el.hidden = !showPeak;
+    });
+    const el = $("fp-tonemap-desat");
+    const lab = $("fp-tonemap-desat-val");
+    if (el && lab) {
+      const n = parseFloat(el.value);
+      lab.textContent = (Number.isFinite(n) ? n : 0).toFixed(1).replace(".", ",");
+    }
+  }
+
+  function playerLook() {
+    const hdr = !!(fp.info && fp.info.is_hdr);
+    let desat = parseFloat(($("fp-tonemap-desat") || {}).value);
+    if (!Number.isFinite(desat)) desat = 0;
+    const peakEl = $("fp-tonemap-peak");
+    let peak = 0;
+    if (peakEl && String(peakEl.value).trim() !== "") {
+      peak = parseFloat(peakEl.value);
+      if (!Number.isFinite(peak) || peak < 0) peak = 0;
+    }
+    const level = (id) => {
+      const el = $(id);
+      return el ? el.value : "off";
+    };
+    return {
+      apply: true,
+      tonemap: hdr,
+      platform: (($("fp-platform") || {}).value) || "auto",
+      tonemap_engine: (($("fp-tonemap-engine") || {}).value) || "cpu",
+      tonemap_algo: (($("fp-tonemap-algo") || {}).value) || "hable",
+      tonemap_desat: Math.round(desat * 100) / 100,
+      tonemap_peak: peak,
+      deband: level("fp-deband"),
+      denoise: level("fp-denoise"),
+      sharpen: level("fp-sharpen"),
+      grain: level("fp-grain"),
+    };
+  }
+
+  function ensurePreviewMode() {
+    const sel = $("fp-profile");
+    if (!sel) return;
+    if (sel.value === "direct" || sel.value === "copy") {
+      sel.value = "auto";
+      syncEncodeUi();
+    }
+  }
+
+  function queueLookApply() {
+    if (!fp.path) return;
+    syncLookUi();
+    if (fp.lookTimer) clearTimeout(fp.lookTimer);
+    fp.lookTimer = setTimeout(() => {
+      fp.lookTimer = 0;
+      if (fp.starting) {
+        fp.lookAgain = true;
+        return;
+      }
+      ensurePreviewMode();
+      startSession(absoluteTime(), true);
+    }, 450);
+  }
+
   function setDirty(on) {
     fp.dirty = !!on;
     const btn = $("fp-apply");
@@ -602,6 +672,7 @@
     await stopSession();
     fp.path = "";
     fp.info = null;
+    syncLookUi();
     fp.chapters = [];
     fp.duration = 0;
     fp.startOffset = 0;
@@ -770,28 +841,30 @@
     setStatus(tt("Starte Session …"));
 
     const directOk = clientDirectOk(fp.info);
+    const body = {
+      path,
+      audio: isNaN(audio) ? 0 : audio,
+      subtitle: isNaN(sub) ? -1 : sub,
+      start: Math.max(0, startSec || 0),
+      profile,
+      burn_subs: burn,
+      client_direct_ok: directOk,
+      platform,
+      codec,
+      height: profile === "custom" ? height : 0,
+      // Bitrate bei allen Transcode-Profilen mitschicken (überschreibt Preset-Default)
+      v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
+      client_codecs: detectClientCodecs(),
+      lookahead_sec: fp.lookahead,
+      audio_copy: audioCopy,
+      look: playerLook(),
+    };
     try {
       await stopSession();
       const r = await fetch("/api/player/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path,
-          audio: isNaN(audio) ? 0 : audio,
-          subtitle: isNaN(sub) ? -1 : sub,
-          start: Math.max(0, startSec || 0),
-          profile,
-          burn_subs: burn,
-          client_direct_ok: directOk,
-          platform,
-          codec,
-          height: profile === "custom" ? height : 0,
-          // Bitrate bei allen Transcode-Profilen mitschicken (überschreibt Preset-Default)
-          v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
-          client_codecs: detectClientCodecs(),
-          lookahead_sec: fp.lookahead,
-          audio_copy: audioCopy,
-        }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (d.error) {
@@ -812,6 +885,7 @@
       }
       if (d.info) {
         fp.info = d.info;
+        syncLookUi();
         fillTracks(d.info);
         if ($("fp-audio") && sess.audio != null) $("fp-audio").value = String(sess.audio);
         if ($("fp-sub") && sess.subtitle != null) $("fp-sub").value = String(sess.subtitle);
@@ -856,6 +930,7 @@
         const badgeLab = (PLAN_KIND[kind] && PLAN_KIND[kind].label) || sess.profile || tt("HLS");
         setBadge(tt(badgeLab));
         const extra = [];
+        if (sess.look_summary) extra.push(tt("Encode-Vorschau") + ": " + sess.look_summary);
         if (sess.burn_subs) extra.push(tt("Bild-UT eingebrannt"));
         if (sess.warning && !(d.plan && d.plan.summary && sess.warning.indexOf(d.plan.summary) >= 0)) {
           extra.push(sess.warning);
@@ -885,6 +960,11 @@
       setBadge(tt("Fehler"));
     } finally {
       fp.starting = false;
+      if (fp.lookAgain) {
+        fp.lookAgain = false;
+        ensurePreviewMode();
+        startSession(absoluteTime(), true);
+      }
     }
   }
 
@@ -902,6 +982,7 @@
         return;
       }
       fp.info = info;
+      syncLookUi();
       fp.duration = info.duration || 0;
       fp.path = path;
       fillTracks(info);
@@ -1056,6 +1137,17 @@
       if (id === "fp-height" || id === "fp-vbr") el.addEventListener("input", onChange);
     });
 
+    ["fp-tonemap-engine", "fp-tonemap-algo", "fp-tonemap-desat", "fp-tonemap-peak",
+      "fp-deband", "fp-denoise", "fp-sharpen", "fp-grain"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", queueLookApply);
+      if (id === "fp-tonemap-desat") {
+        el.addEventListener("input", syncLookUi);
+      }
+    });
+    syncLookUi();
+
     try {
       const savedLa = localStorage.getItem("fpLookahead");
       if (savedLa && $("fp-lookahead")) $("fp-lookahead").value = savedLa;
@@ -1101,6 +1193,7 @@
               `/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
             if (!info.error) {
               fp.info = info;
+              syncLookUi();
               fp.duration = info.duration || 0;
               fillTracks(info);
               updateTimeUi();

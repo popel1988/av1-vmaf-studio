@@ -21,10 +21,10 @@ from . import config
 from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
 from .encoder import (
-    EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, build_encode_cmd,
-    deinterlace_filter, normalize_deband, normalize_svt_look,
+    EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, TONEMAP_ENGINE_LABELS,
+    build_encode_cmd, deinterlace_filter, normalize_deband, normalize_svt_look,
     normalize_tonemap_algo, normalize_tonemap_desat, normalize_tonemap_engine,
-    normalize_tonemap_peak,
+    normalize_tonemap_peak, tonemap_engine_for,
 )
 from .ffmpeg_utils import VideoInfo, ffprobe, probe_with_error
 
@@ -122,7 +122,7 @@ class JobSettings:
     tonemap_algo: str = "hable"     # hable | bt2390 | reinhard | mobius | gamma | clip | linear
     tonemap_desat: float = 0.0      # 0 = Farben in den Spitzen behalten
     tonemap_peak: float = 0.0       # 0 = Peak aus den Metadaten, sonst Nits
-    tonemap_engine: str = "cpu"     # cpu | libplacebo
+    tonemap_engine: str = "cpu"     # cpu | libplacebo | cuda | opencl | vaapi | tonemapx
     deband: str = "off"             # off | light | medium | strong
     svt_look: str = "standard"      # standard | detail (nur CPU-AV1)
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
@@ -2735,8 +2735,10 @@ def _describe_dynamic(s: JobSettings) -> str:
             extra.append(f"Entsättigung {desat:g}")
         if peak:
             extra.append(f"Peak {peak:g} nits")
-        if getattr(s, "tonemap_engine", "cpu") == "libplacebo":
-            extra.append("libplacebo")
+        eng = tonemap_engine_for(
+            getattr(s, "tonemap_engine", "cpu"), getattr(s, "platform", "cpu"))
+        if eng != "cpu":
+            extra.append(TONEMAP_ENGINE_LABELS.get(eng, eng))
         tail = f", {', '.join(extra)}" if extra else ""
         return f"HDR→SDR ({name}{tail})"
     return "unverändert (SDR / keine HDR-Behandlung)"

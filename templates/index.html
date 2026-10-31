@@ -285,10 +285,14 @@
                 </div>
                 <div class="tonemap-opts" id="tonemap-opts" hidden>
                   <div class="field">
-                    <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                    <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg. Fehlt das Binary, gilt wieder die CPU-Kurve.">Tonemap-Engine</label>
                     <select id="opt-tonemap-engine">
                       <option value="cpu">CPU (zscale + tonemap)</option>
                       <option value="libplacebo">libplacebo (Vulkan)</option>
+                      <option value="cuda">CUDA (NVIDIA)</option>
+                      <option value="opencl">OpenCL</option>
+                      <option value="vaapi">VAAPI (Intel/AMD)</option>
+                      <option value="tonemapx">tonemapx (CPU)</option>
                     </select>
                   </div>
                   <div class="field">
@@ -311,7 +315,7 @@
                     <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
                     <input type="number" id="opt-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
                   </div>
-                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.</p>
+                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA, OpenCL, VAAPI und tonemapx nutzen Jellyfin-FFmpeg und übernehmen Peak und Entsättigung. Der Vollplayer hat dieselben Regler. Eine Änderung startet die Vorschau an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx nutzen dort Jellyfin-FFmpeg. Direct-Play und Remux zeigen die Datei unverändert.</p>
                 </div>
                 <div class="field">
                   <label data-tip="CQ/CRF: eine Qualitätszahl (niedriger = besser/größer). CBR: feste Bitrate. ABR: Zielbitrate, darf schwanken.">Steuerungsmodus</label>
@@ -746,10 +750,14 @@
                 </div>
                 <div class="tonemap-opts" id="vt-tonemap-opts" hidden>
                   <div class="field">
-                    <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                    <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg. Fehlt das Binary, gilt wieder die CPU-Kurve.">Tonemap-Engine</label>
                     <select id="vt-tonemap-engine">
                       <option value="cpu">CPU (zscale + tonemap)</option>
                       <option value="libplacebo">libplacebo (Vulkan)</option>
+                      <option value="cuda">CUDA (NVIDIA)</option>
+                      <option value="opencl">OpenCL</option>
+                      <option value="vaapi">VAAPI (Intel/AMD)</option>
+                      <option value="tonemapx">tonemapx (CPU)</option>
                     </select>
                   </div>
                   <div class="field">
@@ -772,7 +780,7 @@
                     <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
                     <input type="number" id="vt-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
                   </div>
-                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht.</p>
+                  <p class="hint tonemap-hint">Dieselbe Kurve für den Encode, die Mobile-Fassung und die VMAF-Referenz. Die CPU rechnet zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA, OpenCL, VAAPI und tonemapx nutzen Jellyfin-FFmpeg und übernehmen Peak und Entsättigung. Der Vollplayer hat dieselben Regler. Eine Änderung startet die Vorschau an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx nutzen dort Jellyfin-FFmpeg. Direct-Play und Remux zeigen die Datei unverändert.</p>
                 </div>
               </div>
               <div class="fmt-checks" style="margin-top:10px">
@@ -1475,10 +1483,14 @@
             </div>
             <div class="tonemap-opts" id="st-tonemap-opts">
               <div class="field">
-                <label data-tip="CPU-Filter zscale und tonemap. libplacebo rechnet auf Vulkan und liest den Peak Bild für Bild. Intel und AMD bleiben bei der CPU-Kurve.">Tonemap-Engine</label>
+                <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg. Fehlt das Binary, gilt wieder die CPU-Kurve.">Tonemap-Engine</label>
                 <select id="st-tonemap-engine">
                   <option value="cpu">CPU (zscale + tonemap)</option>
                   <option value="libplacebo">libplacebo (Vulkan)</option>
+                  <option value="cuda">CUDA (NVIDIA)</option>
+                  <option value="opencl">OpenCL</option>
+                  <option value="vaapi">VAAPI (Intel/AMD)</option>
+                  <option value="tonemapx">tonemapx (CPU)</option>
                 </select>
               </div>
               <div class="field">
@@ -1501,7 +1513,7 @@
                 <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
                 <input type="number" id="st-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
               </div>
-              <p class="hint tonemap-hint">Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg.</p>
+              <p class="hint tonemap-hint">Gilt für jede Datei, die nach SDR gerechnet wird, auch in der Automatik bei Dolby-Vision-Profil 5. Dieselbe Kurve in den VMAF-Tests. libplacebo lässt Peak und Entsättigung weg. CUDA, OpenCL, VAAPI und tonemapx nutzen Jellyfin-FFmpeg. Der Vollplayer hat dieselben Regler. Eine Änderung startet die Vorschau an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx nutzen dort Jellyfin-FFmpeg. Direct-Play und Remux zeigen die Datei unverändert.</p>
             </div>
             <div class="field-row">
               <div class="field">
@@ -2796,6 +2808,80 @@
               </div>
             </div>
             <p class="muted" id="fp-hw-info"></p>
+            <div class="fp-look" id="fp-look">
+              <p class="hint">Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.</p>
+              <div class="field-row field-row-inline" id="fp-tonemap-opts">
+                <div class="field">
+                  <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg.">Tonemap-Engine</label>
+                  <select id="fp-tonemap-engine">
+                    <option value="cpu">CPU (zscale + tonemap)</option>
+                    <option value="libplacebo">libplacebo (Vulkan)</option>
+                    <option value="cuda">CUDA (NVIDIA)</option>
+                    <option value="opencl">OpenCL</option>
+                    <option value="vaapi">VAAPI (Intel/AMD)</option>
+                    <option value="tonemapx">tonemapx (CPU)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Kurve von HDR nach SDR. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit.">Tonemap-Kurve</label>
+                  <select id="fp-tonemap-algo">
+                    <option value="hable">Hable (bisher, Mitten heller)</option>
+                    <option value="bt2390">BT.2390 (Broadcast)</option>
+                    <option value="reinhard">Reinhard</option>
+                    <option value="mobius">Mobius</option>
+                    <option value="gamma">Gamma</option>
+                    <option value="clip">Clip (hart abschneiden)</option>
+                    <option value="linear">Linear</option>
+                  </select>
+                </div>
+                <div class="field tonemap-cpu-only">
+                  <label data-tip="Zieht Farbe aus den hellsten Stellen Richtung Weiß. 0 lässt die Farben stehen.">Entsättigung der Spitzen: <strong id="fp-tonemap-desat-val">0,0</strong></label>
+                  <input type="range" id="fp-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+                </div>
+                <div class="field tonemap-cpu-only">
+                  <label data-tip="Helligkeitsspitze der Quelle in Nits. Leer heißt: aus den Metadaten der Datei.">Quell-Peak (nits)</label>
+                  <input type="number" id="fp-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
+                </div>
+              </div>
+              <div class="field-row field-row-inline">
+                <div class="field">
+                  <label>Rauschminderung (Denoise)</label>
+                  <select id="fp-denoise">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Glättet Streifen in Himmel und Verläufen.">Deband</label>
+                  <select id="fp-deband">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Unsharp nach dem Denoise. Stark kann Kanten überzeichnen.">Schärfen</label>
+                  <select id="fp-sharpen">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Sichtbares Korn im Bild.">Korn</label>
+                  <select id="fp-grain">
+                    <option value="off">Aus</option>
+                    <option value="light">Leicht</option>
+                    <option value="medium">Mittel</option>
+                    <option value="strong">Stark</option>
+                  </select>
+                </div>
+              </div>
+            </div>
             <div class="fp-layout">
               <div class="fp-main">
                 <div class="fp-playback">
@@ -3224,7 +3310,7 @@
               <div class="faq-body">
                 <p>SDR ist normales Fernseh-/Monitor-Bild (begrenzter Kontrast). HDR10 hat statische Metadaten für die ganze Datei (MaxCLL/MaxFALL) und 10-bit PQ. HLG ist broadcast-HDR, oft ohne Extra-Metadaten, auf vielen SDR-TVs noch ansehbar. HDR10+ ergänzt HDR10 um Helligkeitsdaten pro Szene. Beim Beibehalten und einem HEVC-Ziel schreibt das Studio diese Daten nach dem Encode zurück. AV1 und H.264 behalten nur das statische HDR10.</p>
                 <p>Bei HDR-Quellen ohne Dolby Vision: „HDR beibehalten“ hält 10-bit und die Metadaten. „Tone-Mapping“ rechnet nach SDR – jedes Display kann es, der Kontrast geht verloren. VMAF-Tests werden dann ebenfalls getonemappt, damit die Werte nicht schief sind.</p>
-                <p>Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan. Intel und AMD bleiben bei der CPU-Kurve. Dieses FFmpeg hat keinen CUDA-Tonemap. Referenz und Testclips nutzen dieselbe Kurve.</p>
+                <p>Die Kurve beim Tone-Mapping stellst du im Encoding, im VMAF-Vergleich und im Super-Tool ein. Hable ist die bisherige Vorgabe und hebt die Mitten an. BT.2390 bleibt näher an der HDR-Helligkeit. Reinhard, Mobius, Gamma, Clip und Linear sind die übrigen Kurven. Die CPU-Engine rechnet zscale und tonemap, NVIDIA encodiert danach. libplacebo rechnet dieselbe Kurve auf Vulkan, dort gelten Peak und Entsättigung nicht. CUDA (nur NVIDIA), OpenCL, VAAPI (Intel im VAAPI-Modus und AMD) und tonemapx kommen aus Jellyfin-FFmpeg und übernehmen Kurve, Peak und Entsättigung. Fehlt das Binary oder der Filter, gilt wieder die CPU-Kurve. Referenz und Testclips nutzen dieselbe Kurve. Der Vollplayer hat dieselben Regler. Eine Änderung startet die Vorschau an der aktuellen Stelle neu. CUDA, OpenCL, VAAPI und tonemapx nutzen dort Jellyfin-FFmpeg. Direct-Play und Remux zeigen die Datei unverändert.</p>
                 <p>Deband glättet Streifen in Verläufen und steht neben dem Denoise. Der SVT-Look „Detail“ gilt nur für AV1 auf der CPU und bleibt standardmäßig aus. Das ist das mitgelieferte SVT mit ein paar Parametern aus der Hauptlinie, nicht der SVT-AV1-HDR-Fork.</p>
               </div>
             </details>
@@ -3367,7 +3453,7 @@
             <details class="faq-item" id="faq-mobile">
               <summary>Was macht „Zusätzlich Mobile-Fassung“?</summary>
               <div class="faq-body">
-                <p>Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit NVIDIA laufen die Bilder dann durch den Hauptspeicher statt komplett auf der GPU, weil Tonemap und Skalierung Software-Filter sind.</p>
+                <p>Eine zweite Datei im selben FFmpeg-Lauf: Die Quelle wird einmal dekodiert, der Archiv-Encode und eine H.264-Fassung (8-bit SDR, 720p oder 1080p, CQ/CRF 23, AAC-Stereo 160 kbit/s, MP4 mit faststart) hängen am selben Eingang. HDR wird für diese Fassung getonemappt. Die Datei heißt ‹Ausgabename›_mobile.mp4 und liegt neben der Hauptausgabe (bei „Original ersetzen“ neben der Quelle). Nicht bei Chunked oder Remux; bei Zwei-Pass entsteht sie im zweiten Pass. Mit der CUDA-Engine und ohne weitere Software-Filter kann die Archivfassung auf der GPU bleiben. Sobald die Mobile-Fassung mitläuft, oder Crop, Deinterlace, Deband, Denoise, Schärfen oder Korn an sind, gehen die Bilder durch den Hauptspeicher.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-compare">

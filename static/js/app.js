@@ -5893,6 +5893,31 @@
     return pack.bins || [];
   }
 
+  function sourceScoredSpan(pack) {
+    const sceneSec = Number(pack && pack.scene_sec) || 0;
+    const margin = Number(pack && pack.margin) || 0;
+    if (margin > 0 && sceneSec > margin * 2 + 1) return sceneSec - margin * 2;
+    return sceneSec;
+  }
+
+  function sourceWindowBins(scene) {
+    const bins = sourceBinsFor(scene);
+    const pack = state.sourceBr;
+    const whole = pack && pack.session === state.vmafSession
+      && pack.scene === scene && pack.span === "scene";
+    if (!whole) return bins;
+    const margin = Number(pack.margin) || 0;
+    const span = sourceScoredSpan(pack);
+    if (!(span > 0)) return bins;
+    const kept = [];
+    bins.forEach((b) => {
+      const rel = (Number(b.t) || 0) - margin;
+      if (rel < -0.0001 || rel >= span) return;
+      kept.push({ n: kept.length, t: Math.max(0, rel), kbps: Number(b.kbps) });
+    });
+    return kept;
+  }
+
   function loadSourceBitrate(vmaf) {
     const session = state.vmafSession;
     const scenes = vmaf ? vmafSceneList(vmaf) : [];
@@ -5907,6 +5932,9 @@
         state.sourceBr = {
           key, session, scene,
           bins: (data && data.bins) || [],
+          span: (data && data.span) || "",
+          margin: Number(data && data.margin) || 0,
+          scene_sec: Number(data && data.scene_sec) || 0,
         };
       })
       .catch(() => {
@@ -6085,7 +6113,7 @@
     if (timed && srcBins.length) {
       datasets.push(originalBitrateDataset(
         srcBins, col,
-        srcBins.map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
+        sourceWindowBins(scene).map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
       ));
     }
     const opts = lineChartOptions(col, "VMAF");
@@ -6377,9 +6405,10 @@
       const buckets = Math.min(maxPoints, n);
       const fullCount = Number(s.count) || n;
       maxX = Math.max(maxX, fullCount);
+      const frameX = (f, k) => (f && f.n != null ? Number(f.n) : k);
       const vmafPoints = nerdFinite(n <= maxPoints
         ? frames.map((f, k) => ({
-          x: f.n != null ? Number(f.n) : k,
+          x: frameX(f, k),
           y: f.vmaf == null ? null : Number(f.vmaf),
         }))
         : nerdPick((k) => {
@@ -6410,7 +6439,7 @@
       sc.bitrate.forEach((b) => { byN[b.n] = Number(b.kbps); });
       const brPoints = nerdFinite(n <= maxPoints
         ? frames.map((f, k) => ({
-          x: f.n != null ? Number(f.n) : k,
+          x: frameX(f, k),
           y: !f || byN[f.n] == null ? null : byN[f.n],
         }))
         : nerdPick((k) => {
@@ -6435,14 +6464,26 @@
         spanGaps: false,
       });
     });
-    const frameSec = Number(series[0] && series[0].frame_sec) || 0;
-    const srcBins = nerdScene != null ? sourceBinsFor(nerdScene) : [];
-    const nSrc = Math.max(0, ...series.map((s) => (s.frames || []).length));
-    if (!vmafRowOff("original") && srcBins.length && frameSec > 0 && nSrc > 0) {
-      const srcPoints = nerdFinite(srcBins.map((b) => ({
-        x: Number(b.t) / frameSec,
-        y: Number(b.kbps),
-      })));
+    const srcBins = nerdScene != null ? sourceWindowBins(nerdScene) : [];
+    let refFrames = [];
+    series.forEach((s) => {
+      const frames = s.frames || [];
+      if (frames.length > refFrames.length) refFrames = frames;
+    });
+    if (!vmafRowOff("original") && srcBins.length && refFrames.length) {
+      const bySrc = {};
+      srcBins.forEach((b) => { if (b && b.n != null) bySrc[b.n] = Number(b.kbps); });
+      const n = refFrames.length;
+      const buckets = Math.min(maxPoints, n);
+      const srcPoints = nerdFinite(n <= maxPoints
+        ? refFrames.map((f, k) => ({
+          x: f.n != null ? Number(f.n) : k,
+          y: bySrc[f.n] == null ? null : bySrc[f.n],
+        }))
+        : nerdPick((k) => {
+          const f = refFrames[k];
+          return !f || bySrc[f.n] == null ? null : bySrc[f.n];
+        }, n, buckets, "max"));
       if (srcPoints.length >= 2) {
         datasets.push(Object.assign(originalBitrateDataset(srcBins, col, []), {
           nerdKey: "original",
@@ -6453,7 +6494,6 @@
           data: srcPoints,
         }));
       }
-      maxX = Math.max(maxX, nSrc);
     }
     const floor = nerdFloorValue();
     datasets.push({
@@ -6523,7 +6563,7 @@
     const floor = nerdFloorValue();
     const nerdScene = data && data.scene;
     const frameSec = Number(series[0] && series[0].frame_sec) || 0;
-    const nerdHasOriginal = nerdScene != null && frameSec > 0 && sourceBinsFor(nerdScene).length > 0;
+    const nerdHasOriginal = nerdScene != null && sourceBinsFor(nerdScene).length > 0;
     const coarse = series.some((s) => (Number(s.count) || 0) > (s.frames || []).length);
     if (!body) {
       try { paintNerdChart(data); } catch (e) { /* Canvas bleibt leer */ }
