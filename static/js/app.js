@@ -12281,9 +12281,106 @@
     return {
       key, video: $("ab-video-" + key), path: "", root: "media", clipUrl: "",
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
-      info: null, lookSummary: "", lookTimer: 0, starting: false, lookAgain: false,
-      lastTime: 0,
+      info: null, sess: null, plan: null, lookSummary: "", lookTimer: 0,
+      starting: false, lookAgain: false, lastTime: 0, encodePaused: false,
     };
+  }
+
+  function abLookaheadSec() {
+    const v = parseInt(($("ab-lookahead") || {}).value, 10);
+    return Number.isFinite(v) ? v : 30;
+  }
+
+  function abBufferedAhead(side) {
+    const v = side && side.video;
+    if (!v) return 0;
+    const t = v.currentTime || 0;
+    let end = t;
+    try {
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= t + 0.75) {
+          end = Math.max(end, v.buffered.end(i));
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return Math.max(0, end - t);
+  }
+
+  async function abSetEncodePaused(side, paused) {
+    if (!side || !side.sid || side.mode !== "hls") return;
+    if (side.encodePaused === !!paused) return;
+    side.encodePaused = !!paused;
+    const action = paused ? "pause" : "resume";
+    try {
+      const d = await (await fetch(`/api/player/session/${side.sid}/${action}`, {
+        method: "POST",
+      })).json();
+      if (d && d.encode_paused != null) side.encodePaused = !!d.encode_paused;
+    } catch (e) { /* ignore */ }
+  }
+
+  function abThrottleSide(side) {
+    if (!side || side.mode !== "hls" || !side.sid) return;
+    const la = abLookaheadSec();
+    if (!(la > 0)) {
+      if (side.encodePaused) abSetEncodePaused(side, false);
+      return;
+    }
+    const v = side.video;
+    if (!v || ab.seeking) return;
+    const ahead = abBufferedAhead(side);
+    const target = v.paused ? Math.min(la, 12) : la;
+    if (ahead >= target - 0.5 && !side.encodePaused) {
+      abSetEncodePaused(side, true);
+    } else if ((!v.paused && ahead < target * 0.4 && side.encodePaused)
+               || (v.paused && ahead < 6 && side.encodePaused)) {
+      abSetEncodePaused(side, false);
+    }
+  }
+
+  function abDescribeSideStream(side) {
+    if (!side || !side.path) return "";
+    if (side.clipUrl) return tt("Testclip (Direct)");
+    const info = side.info || {};
+    const sess = side.sess || {};
+    const plan = side.plan || {};
+    const srcCodec = (info.codec || "").toUpperCase();
+    const isDv = !!info.dolby_vision;
+    const dvProf = info.dv_profile ? ` P${info.dv_profile}` : "";
+    const isHdr = !!info.is_hdr;
+    const modeEl = $(`ab-${side.key}-filter-mode`);
+    const filterOn = abIsStandalone() && (!modeEl || modeEl.value === "on");
+
+    if (side.mode === "direct") {
+      const dyn = isDv ? `DV${dvProf}` : (isHdr ? (info.hdr_type || "HDR10") : "SDR");
+      return `${tt("Quelle")} (Direct-Play) – ${[srcCodec, dyn].filter(Boolean).join(" · ")} ${tt("unverändert")}`;
+    }
+
+    const isCopy = (plan && plan.use_video_copy) || sess.encoder === "copy" || sess.profile === "copy";
+    if (isCopy) {
+      let dynNote = isHdr ? (info.hdr_type || "HDR10") : "SDR";
+      if (isDv) {
+        dynNote = Number(info.dv_profile) === 5
+          ? `DV${dvProf} Stream-Copy`
+          : `nur HDR10-Basis (DV${dvProf} im Browser-HLS nicht aktiv)`;
+      }
+      return `${tt("Quelle")} (HLS-Remux) – ${[srcCodec, "Video-Copy", dynNote].filter(Boolean).join(" · ")}`;
+    }
+
+    // Transcode-Pfad
+    const outCodec = (sess.codec || (plan.encode && plan.encode.codec) || "h264").toUpperCase();
+    const outEnc = sess.encoder || (plan.encode && plan.encode.encoder) || "";
+    const res = sess.height ? `${sess.height}p` : (info.height ? `${info.height}p` : "");
+    if (filterOn && side.lookSummary) {
+      const srcDyn = isDv
+        ? (Number(info.dv_profile) === 5 ? `DV${dvProf} → SDR` : `HDR10-Basis aus DV${dvProf} → SDR`)
+        : (isHdr ? "HDR → SDR" : "SDR");
+      return `HLS-Transcode (${[outCodec, res].filter(Boolean).join(" ")}) – ${srcDyn} · ${side.lookSummary}`;
+    }
+    const stdDyn = isDv
+      ? `HDR10-Basis aus DV${dvProf} → SDR (CPU · Hable)`
+      : (isHdr ? "HDR → SDR (CPU · Hable)" : "SDR");
+    return `${tt("Quelle")} (HLS-Transcode ${[outCodec, outEnc, res].filter(Boolean).join("/")}) – ${stdDyn}`;
   }
 
   function abIsStandalone() {
@@ -12384,16 +12481,9 @@
       if (tagEl) tagEl.textContent = up;
       return;
     }
-    const modeEl = $(`ab-${key}-filter-mode`);
-    const filterOn = abIsStandalone() && (!modeEl || modeEl.value === "on");
-    let label = side.mode === "direct" ? "Direct" : "HLS";
-    if (filterOn && side.lookSummary) {
-      label = side.lookSummary;
-    } else if (!filterOn) {
-      label = `${tt("Original")} (${side.mode === "direct" ? "Direct" : "HLS"})`;
-    }
-    if (sumEl) sumEl.textContent = label;
-    if (tagEl) tagEl.textContent = abIsStandalone() && label ? `${up} · ${label}` : up;
+    const desc = abDescribeSideStream(side);
+    if (sumEl) sumEl.textContent = desc || "—";
+    if (tagEl) tagEl.textContent = abIsStandalone() && desc ? `${up} · ${desc}` : up;
   }
 
   function abGatherSideLook(side) {
@@ -12433,16 +12523,57 @@
     const sa = ab.sides.a, sb = ab.sides.b;
     const parts = [sa, sb].filter((s) => s && s.path).map((s) => {
       const up = s.key.toUpperCase();
-      const base = s.mode === "direct" ? "Direct" : "HLS";
-      return s.lookSummary ? `${up}: ${base} (${s.lookSummary})` : `${up}: ${base}`;
+      return `${up}: ${abDescribeSideStream(s)}`;
     });
-    if (parts.length) abSetStatus(parts.join(" · "));
+    if (parts.length) abSetStatus(parts.join("   |   "));
+  }
+
+  function abWaitMediaReady(video, timeoutMs) {
+    return new Promise((resolve) => {
+      if (!video || video.readyState >= 3) { resolve(); return; }
+      let done = false;
+      const fin = () => {
+        if (done) return;
+        done = true;
+        video.removeEventListener("canplay", fin);
+        video.removeEventListener("loadeddata", fin);
+        resolve();
+      };
+      video.addEventListener("canplay", fin, { once: true });
+      video.addEventListener("loadeddata", fin, { once: true });
+      setTimeout(fin, timeoutMs || 2500);
+    });
+  }
+
+  async function abAlignAndSettleBoth(masterT, keepPaused) {
+    const sa = ab.sides.a, sb = ab.sides.b;
+    if (!sa || !sb) return;
+    if (sa.video) sa.video.pause();
+    if (sb.video) sb.video.pause();
+    const targetA = Math.max(0, masterT);
+    const targetB = Math.max(0, masterT + abOffsetB());
+    if (sa.path) abSetTime(sa, targetA);
+    if (sb.path) abSetTime(sb, targetB);
+    await Promise.all([
+      sa.path ? abWaitMediaReady(sa.video, 2500) : Promise.resolve(),
+      sb.path ? abWaitMediaReady(sb.video, 2500) : Promise.resolve(),
+    ]);
+    if (sa.path) abSetTime(sa, targetA);
+    if (sb.path) abSetTime(sb, targetB);
+    if (!keepPaused) {
+      if (sa.video) sa.video.play().catch(() => {});
+      if (abSynced() && sb.video) sb.video.play().catch(() => {});
+    }
   }
 
   function abQueueSideReload(key) {
     const side = ab.sides[key];
     abSyncSideLookUi(key);
     if (!side || !side.path || side.clipUrl) return;
+    // Beide Seiten sofort pausieren, damit nichts versetzt weiterläuft
+    const sa = ab.sides.a, sb = ab.sides.b;
+    if (sa && sa.video) sa.video.pause();
+    if (sb && sb.video) sb.video.pause();
     if (side.lookTimer) clearTimeout(side.lookTimer);
     side.lookTimer = setTimeout(async () => {
       side.lookTimer = 0;
@@ -12450,20 +12581,11 @@
         side.lookAgain = true;
         return;
       }
-      const sa = ab.sides.a, sb = ab.sides.b;
-      const wasPaused = sa && sa.video ? sa.video.paused : true;
       const masterT = sa ? Math.max(0, abTime(sa)) : 0;
       const targetT = key === "b" ? Math.max(0, masterT + abOffsetB()) : masterT;
-      abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau …")}`);
+      abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau (beide Seiten pausiert) …")}`);
       await abStartSide(side, targetT);
-      abSetTime(side, targetT);
-      if (wasPaused) {
-        if (sa && sa.video) sa.video.pause();
-        if (sb && sb.video) sb.video.pause();
-      } else {
-        if (sa && sa.video) sa.video.play().catch(() => {});
-        if (abSynced() && sb && sb.video) sb.video.play().catch(() => {});
-      }
+      await abAlignAndSettleBoth(masterT, true);
       abUpdateStatusLine();
     }, 450);
   }
@@ -12537,12 +12659,13 @@
       const plat = look && look.platform ? look.platform : "auto";
       const forceHls = ($("ab-playback") && $("ab-playback").value === "hls") || !!look;
       const codecs = (typeof window.fpDetectClientCodecs === "function") ? window.fpDetectClientCodecs() : ["h264"];
+      const laSec = abLookaheadSec();
       const reqBody = {
         path: side.path, audio: 0, subtitle: -1, start: targetStart,
         profile: look ? "original" : "auto",
         platform: plat,
         client_direct_ok: !forceHls, client_codecs: codecs,
-        lookahead_sec: 30, audio_copy: false,
+        lookahead_sec: laSec, audio_copy: false,
       };
       if (look) reqBody.look = look;
       let d;
@@ -12559,8 +12682,11 @@
       if (d.options) window.fpPlayerOptions = d.options;
       if (d.info) side.info = d.info;
       const sess = d.session || {};
+      side.sess = sess;
+      side.plan = d.plan || null;
       side.sid = sess.id || "";
       side.mode = sess.mode || "hls";
+      side.encodePaused = false;
       side.lookSummary = sess.look_summary || "";
       side.duration = sess.duration || (d.info && d.info.duration) || side.duration || 0;
       abSyncSideLookUi(side.key);
@@ -12587,16 +12713,22 @@
         if (st.session && st.session.error) { abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true); return false; }
         await new Promise((r) => setTimeout(r, 150));
       }
+      const maxBuf = laSec > 0 ? Math.max(12, Math.min(120, laSec + 8)) : 60;
       if (window.Hls && window.Hls.isSupported()) {
         side.hls = new window.Hls({
-          enableWorker: true, lowLatencyMode: false, maxBufferLength: 60, maxMaxBufferLength: 90,
+          enableWorker: true, lowLatencyMode: false,
+          maxBufferLength: maxBuf, maxMaxBufferLength: maxBuf + 20,
           backBufferLength: Infinity, startPosition: 0, liveDurationInfinity: false,
         });
         side.hls.loadSource(url);
         side.hls.attachMedia(side.video);
         side.hls.on(window.Hls.Events.ERROR, (_, data) => {
-          if (data && data.fatal && side.hls) {
-            const det = String(data.details || "");
+          if (!data) return;
+          const det = String(data.details || "");
+          if (det === "bufferStalledError" || det === "bufferNudgeOnStall" || det.indexOf("Load") >= 0) {
+            if (side.encodePaused) abSetEncodePaused(side, false);
+          }
+          if (data.fatal && side.hls) {
             if (det.indexOf("Load") >= 0) { try { side.hls.startLoad(); } catch (e) { /* ignore */ } }
             else abSetStatus(`${side.key.toUpperCase()}: ${det}`, true);
           }
@@ -12607,6 +12739,7 @@
         abSetStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
         return false;
       }
+      await abWaitMediaReady(side.video, 3000);
       side.ready = true;
       abUpdateSideBadge(side.key);
       return true;
@@ -12723,6 +12856,48 @@
     }));
   }
 
+  function abUnload(clearPaths) {
+    ["a", "b"].forEach((key) => {
+      const side = ab.sides[key];
+      if (!side) return;
+      if (side.lookTimer) {
+        clearTimeout(side.lookTimer);
+        side.lookTimer = 0;
+      }
+      side.lookAgain = false;
+      abDestroy(side);
+      side.path = "";
+      side.clipUrl = "";
+      side.info = null;
+      side.sess = null;
+      side.plan = null;
+      side.lookSummary = "";
+      side.duration = 0;
+      side.offset = 0;
+      side.lastTime = 0;
+      side.encodePaused = false;
+      abUpdateSideBadge(key);
+    });
+    if (clearPaths) {
+      if ($("ab-path-a")) $("ab-path-a").value = "";
+      if ($("ab-path-b")) $("ab-path-b").value = "";
+    }
+    ab.window = null;
+    ab.weak = null;
+    state.abJob = "";
+    const weakBox = $("ab-weak");
+    if (weakBox) { weakBox.style.display = "none"; weakBox.innerHTML = ""; }
+    const seek = $("ab-seek");
+    if (seek) seek.value = "0";
+    const time = $("ab-time");
+    if (time) time.textContent = "0:00";
+    const badge = $("ab-badge");
+    if (badge) badge.textContent = "—";
+    abSyncSideLookUi("a");
+    abSyncSideLookUi("b");
+    abSetStatus(tt("Video entladen."));
+  }
+
   function initAbCompare() {
     const load = $("btn-ab-load");
     if (!load) return;
@@ -12732,6 +12907,10 @@
 
     const nerdPlay = $("btn-ab-nerd");
     if (nerdPlay) nerdPlay.addEventListener("click", playNerdAb);
+    const nerdUnload = $("btn-ab-nerd-unload");
+    if (nerdUnload) nerdUnload.addEventListener("click", () => abUnload(false));
+    const unload = $("btn-ab-unload");
+    if (unload) unload.addEventListener("click", () => abUnload(true));
     ["ab-nerd-a", "ab-nerd-b"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("change", () => {
@@ -12778,6 +12957,7 @@
       abSetStatus(tt("Starte Wiedergabe …"));
       abApplyMode();
       const ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+      await abAlignAndSettleBoth(0, true);
       if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
       if (ok.every(Boolean)) abUpdateStatusLine();
       abLoadWeakSpots();
@@ -12786,25 +12966,61 @@
     // B exakt auf A (+ Versatz) ziehen. Wird beim Suchen und laufend genutzt.
     const alignB = (force) => {
       if (!abSynced() || ab.seeking) return;
-      const sb = ab.sides.b;
+      const sa = ab.sides.a, sb = ab.sides.b;
       if (!sb.path || !sb.ready) return;
-      const t = Math.max(0, abTime(ab.sides.a) + abOffsetB());
-      if (force || Math.abs(abTime(sb) - t) > 0.05) {
+      const t = Math.max(0, abTime(sa) + abOffsetB());
+      const diff = abTime(sb) - t;
+      if (force || Math.abs(diff) > 0.04) {
         // Außerhalb des HLS-Fensters → Session neu statt ins Leere springen.
         if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 20)) {
-          abSeekBoth(abTime(ab.sides.a));
+          abSeekBoth(abTime(sa));
         } else {
           abSetTime(sb, t);
+          if (sb.video) sb.video.playbackRate = sa.video.playbackRate || 1;
+        }
+      } else if (!sa.video.paused && !sb.video.paused) {
+        // Sanfter Rate-Nudge bei Mini-Versatz (1–2 Frames = 15–40 ms) ohne harten Seek-Ruckler
+        const baseRate = sa.video.playbackRate || 1;
+        if (Math.abs(diff) > 0.012) {
+          sb.video.playbackRate = diff > 0 ? baseRate * 0.97 : baseRate * 1.03;
+        } else if (sb.video.playbackRate !== baseRate) {
+          sb.video.playbackRate = baseRate;
         }
       }
     };
 
-    // A ist Master; B folgt (mit Versatz).
-    va.addEventListener("play", () => { if (abSynced()) vb.play().catch(() => {}); });
-    va.addEventListener("pause", () => { if (abSynced()) vb.pause(); });
+    // A ist Master; B folgt (mit Versatz). Vor dem Start beide auf dieselbe Sekunde ziehen.
+    va.addEventListener("play", async () => {
+      abSetEncodePaused(ab.sides.a, false);
+      abSetEncodePaused(ab.sides.b, false);
+      if (!abSynced() || !ab.sides.b.path) return;
+      alignB(true);
+      await Promise.all([
+        abWaitMediaReady(va, 1500),
+        abWaitMediaReady(vb, 1500),
+      ]);
+      alignB(true);
+      if (!va.paused) vb.play().catch(() => {});
+    });
+    va.addEventListener("pause", () => {
+      if (abSynced()) {
+        vb.pause();
+        vb.playbackRate = va.playbackRate || 1;
+        alignB(true);
+      }
+      if (!ab.seeking) {
+        if (abBufferedAhead(ab.sides.a) >= 6) abSetEncodePaused(ab.sides.a, true);
+        if (abBufferedAhead(ab.sides.b) >= 6) abSetEncodePaused(ab.sides.b, true);
+      }
+    });
     va.addEventListener("ratechange", () => { vb.playbackRate = va.playbackRate; });
     va.addEventListener("seeking", () => alignB(true));
     va.addEventListener("seeked", () => alignB(true));
+    [ab.sides.a, ab.sides.b].forEach((side) => {
+      if (!side || !side.video) return;
+      side.video.addEventListener("progress", () => abThrottleSide(side));
+      side.video.addEventListener("timeupdate", () => abThrottleSide(side));
+    });
     va.addEventListener("timeupdate", () => {
       const seek = $("ab-seek"), time = $("ab-time");
       const sa = ab.sides.a;
@@ -12821,12 +13037,9 @@
         va.pause();
         vb.pause();
       }
-      // Drift in Filmzeit, nicht gegen die Fensterzeit. Sonst liegt der
-      // Testclip beim Original um den Szenenstart daneben und wird bei
-      // jedem timeupdate neu gespult (Flackern).
+      // Laufende Frame-Synchronisation (inkl. Rate-Nudge ab 12 ms / Seek ab 40 ms).
       const sb = ab.sides.b;
-      const targetB = abTime(sa) + abOffsetB();
-      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > 0.25) {
+      if (abSynced() && sb.ready && !sb.video.seeking) {
         alignB(false);
       }
     });
@@ -12890,6 +13103,18 @@
       if (ab.sides.a.clipUrl || ab.sides.b.clipUrl) return;
       if (ab.sides.a.path || ab.sides.b.path) load.click();
     });
+    const laEl = $("ab-lookahead");
+    if (laEl) {
+      try {
+        const saved = localStorage.getItem("abLookahead");
+        if (saved) laEl.value = saved;
+      } catch (e) { /* ignore */ }
+      laEl.addEventListener("change", () => {
+        try { localStorage.setItem("abLookahead", String(abLookaheadSec())); } catch (e) { /* ignore */ }
+        abThrottleSide(ab.sides.a);
+        abThrottleSide(ab.sides.b);
+      });
+    }
 
     const sameBox = $("ab-same-source");
     if (sameBox) {
@@ -12963,6 +13188,7 @@
   function pauseAbVideos() {
     Object.values(ab.sides).forEach((s) => {
       if (s && s.video) { try { s.video.pause(); } catch (e) { /* ignore */ } }
+      abThrottleSide(s);
     });
   }
 

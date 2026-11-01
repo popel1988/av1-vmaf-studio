@@ -2955,6 +2955,7 @@
               <label>Video A <select id="ab-nerd-a"></select></label>
               <label>Video B <select id="ab-nerd-b"></select></label>
               <button class="btn btn-primary btn-sm" id="btn-ab-nerd" type="button" disabled>Diese Szene abspielen</button>
+              <button class="btn btn-ghost btn-sm" id="btn-ab-nerd-unload" type="button" title="Videos und Sessions entladen">Entladen</button>
               <p class="hint">A und B sind Clips aus diesem Vergleich. Die Szene ist die oben gewählte.</p>
             </div>
             <p class="hint" id="ab-intro">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
@@ -2967,6 +2968,7 @@
                 <span>Gleiche Quelle für A und B (Einstellungen direkt vergleichen)</span>
               </label>
               <button class="btn btn-primary btn-sm" id="btn-ab-load" type="button">Laden</button>
+              <button class="btn btn-ghost btn-sm" id="btn-ab-unload" type="button" title="Videos und Sessions entladen">Entladen</button>
               <span id="ab-status" class="muted" style="font-size:12px"></span>
             </div>
             <div class="ab-pickers" id="ab-pickers">
@@ -2996,9 +2998,9 @@
                 </div>
                 <div class="field-row field-row-inline">
                   <div class="field">
-                    <label data-tip="Original lässt die Datei ohne Zusatzfilter laufen (Direct-Play/Standard). Live-Filter aktiviert Tonemap-Auswahl und Bildfilter für diese Seite.">Modus {{ side_label }}</label>
+                    <label data-tip="Quelle (Standard) spielt ohne eigene Live-Filter ab (Direct-Play, fMP4-Remux oder CPU-Standard-Tonemap). Live-Filter aktiviert Tonemap-Auswahl und Bildfilter für diese Seite.">Modus {{ side_label }}</label>
                     <select id="ab-{{ side }}-filter-mode">
-                      <option value="off">Original (ohne Live-Filter)</option>
+                      <option value="off">Quelle (ohne Live-Filter)</option>
                       <option value="on"{% if side == "b" %} selected{% endif %}>Live-Filter / Tonemap (Transcode)</option>
                     </select>
                   </div>
@@ -3128,6 +3130,16 @@
                 <select id="ab-playback" style="width:auto">
                   <option value="auto">Auto</option>
                   <option value="hls">Immer Transcode (HLS)</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label style="font-size:11px" data-tip="Wie weit FFmpeg je Seite vorausrechnen darf. Ist der Puffer voll oder das Video pausiert, wird der FFmpeg-Prozess angehalten, damit nicht der ganze Film durchgerechnet wird.">Encode-Vorlauf</label>
+                <select id="ab-lookahead" style="width:auto">
+                  <option value="15">15 s</option>
+                  <option value="30" selected>30 s</option>
+                  <option value="60">60 s</option>
+                  <option value="120">120 s</option>
+                  <option value="0">Unbegrenzt</option>
                 </select>
               </div>
             </div>
