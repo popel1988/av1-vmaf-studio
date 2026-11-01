@@ -31,6 +31,10 @@ from .encoder import _TONEMAP_CHAIN
 logger = logging.getLogger("vcompress.player_hls")
 
 _SESSIONS: dict[str, "PlayerSession"] = {}
+# client_token → sid, sobald die Session registriert ist (auch während des Starts).
+_TOKENS: dict[str, str] = {}
+# Tokens, deren Start noch nicht registriert ist und schon abgebrochen wurde.
+_PENDING_CANCEL: set[str] = set()
 _LOCK = threading.RLock()
 _ROOT = config.DATA_DIR / "player_sessions"
 _MAX_IDLE_SEC = 3600
@@ -80,6 +84,8 @@ def _spawn_ffmpeg(cmd: list[str], sid: str, work_dir: Path) -> subprocess.Popen:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
+            # Eigene Prozessgruppe: Tonemap-/OpenCL-Helfer sterben mit SIGKILL mit.
+            start_new_session=True,
         )
     except Exception:
         log_f.close()
@@ -171,6 +177,8 @@ class PlayerSession:
     decision_reasons: list = field(default_factory=list)
     decision_strategy: str = ""
     look_summary: str = ""
+    client_token: str = ""
+    cancel: bool = False
 
     @property
     def playlist(self) -> Path:
@@ -1300,6 +1308,7 @@ def start_session(
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
     look: Optional[dict] = None,
+    client_token: str = "",
 ) -> dict:
     """Session starten (Direct-Play oder HLS)."""
     target = config.resolve_input(rel)
@@ -1404,7 +1413,12 @@ def start_session(
         decision_summary=str(plan.get("summary") or ""),
         decision_reasons=list(plan.get("reasons") or []),
         decision_strategy=str(plan.get("strategy") or ""),
+        client_token=_clean_token(client_token),
     )
+
+    if _attach_session(sess):
+        stop_session(sid)
+        return {"error": "abgebrochen", "cancelled": True}
 
     source_vcodec = ff.normalize_video_codec(
         getattr(info, "codec", "") if info else ""
@@ -1427,8 +1441,9 @@ def start_session(
     )
 
     if sess.mode == "direct":
-        with _LOCK:
-            _SESSIONS[sid] = sess
+        if sess.cancel or not _session_live(sess):
+            stop_session(sid)
+            return {"error": "abgebrochen", "cancelled": True}
         return {
             "session": sess.to_dict(),
             "info": info.to_dict() if info else None,
@@ -1485,34 +1500,49 @@ def start_session(
         sess.platform, sess.encoder, la, sess.debug_cmd,
     )
 
-    try:
-        sess.proc = _spawn_ffmpeg(cmd, sid, work)
-    except OSError as e:
-        _plog(sid, "FFmpeg-Start fehlgeschlagen: %s", e, level=logging.ERROR)
-        shutil.rmtree(work, ignore_errors=True)
-        return {"error": f"FFmpeg-Start fehlgeschlagen: {e}"}
+    if sess.cancel or not _session_live(sess):
+        _finish_cancelled(sess)
+        return {"error": "abgebrochen", "cancelled": True}
 
-    with _LOCK:
-        _SESSIONS[sid] = sess
+    err = _assign_proc(sess, cmd)
+    if err == "abgebrochen" or sess.cancel or not _session_live(sess):
+        _finish_cancelled(sess)
+        return {"error": "abgebrochen", "cancelled": True}
+    if err:
+        _plog(sid, "FFmpeg-Start fehlgeschlagen: %s", err, level=logging.ERROR)
+        _finish_cancelled(sess)
+        return {"error": f"FFmpeg-Start fehlgeschlagen: {err}"}
 
     deadline = time.time() + (10.0 if need_encode else 6.0)
     while time.time() < deadline:
+        if sess.cancel or not _session_live(sess):
+            break
         if sess.playlist.is_file() and sess.playlist.stat().st_size > 0:
             _plog(sid, "Playlist bereit (%s bytes)", sess.playlist.stat().st_size)
             break
-        if sess.proc.poll() is not None:
+        proc = sess.proc
+        if proc is not None and proc.poll() is not None:
             tail = _tail_ffmpeg_log(work)
             sess.error = (tail or "FFmpeg beendet")[-800:]
             _plog(
                 sid,
                 "FFmpeg exit=%s vor Playlist. Log:\n%s",
-                sess.proc.returncode, tail or "(leer)",
+                proc.returncode, tail or "(leer)",
                 level=logging.ERROR,
             )
-            # Einmaliger Fallback CPU/H.264 bei HW-Fehler
-            if need_encode and sess.platform != "cpu" and not sess.playlist.exists():
+            # Einmaliger Fallback CPU/H.264 bei echtem HW-Fehler.
+            # Nicht, wenn Entladen den Prozess gerade beendet hat: sonst
+            # bleibt ein unregistrierter CPU-Encode liegen.
+            if (
+                need_encode
+                and sess.platform != "cpu"
+                and not sess.playlist.exists()
+                and _session_live(sess)
+            ):
                 _plog(sid, "HW-Fallback → CPU/libx264", level=logging.WARNING)
                 _kill(sess)
+                if sess.cancel or not _session_live(sess):
+                    break
                 for old in work.glob("*"):
                     try:
                         if old.name != "ffmpeg.log":
@@ -1538,15 +1568,21 @@ def start_session(
                     look=preview,
                 )
                 sess.debug_cmd = _cmd_preview(cmd, 800)
-                try:
-                    sess.proc = _spawn_ffmpeg(cmd, sid, work)
-                    deadline = time.time() + 10.0
-                    continue
-                except OSError as e2:
-                    sess.error = str(e2)
-                    _plog(sid, "Fallback-Start fehlgeschlagen: %s", e2, level=logging.ERROR)
+                err = _assign_proc(sess, cmd)
+                if err == "abgebrochen" or sess.cancel or not _session_live(sess):
+                    break
+                if err:
+                    sess.error = err
+                    _plog(sid, "Fallback-Start fehlgeschlagen: %s", err, level=logging.ERROR)
+                    break
+                deadline = time.time() + 10.0
+                continue
             break
         time.sleep(0.1)
+
+    if sess.cancel or not _session_live(sess):
+        _finish_cancelled(sess)
+        return {"error": "abgebrochen", "cancelled": True}
 
     if not sess.playlist.is_file() and not sess.error:
         sess.error = "Timeout: keine HLS-Playlist erzeugt"
@@ -1596,6 +1632,108 @@ def log_client_error(sid: str, payload: dict) -> dict:
     return {"ok": False, "error": "Session nicht gefunden"}
 
 
+def _clean_token(token: str) -> str:
+    raw = (token or "").strip()
+    if not raw or len(raw) > 64:
+        return ""
+    if not all(c.isalnum() or c in "-_" for c in raw):
+        return ""
+    return raw
+
+
+def _signal_tree(pid: int, sig: int) -> None:
+    """Signal an FFmpeg und seine Helfer (eigene Prozessgruppe)."""
+    if not pid or sig is None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(pid, sig)
+            return
+        except OSError:
+            pass
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _proc_state(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    tail = raw.rsplit(")", 1)
+    if len(tail) < 2:
+        return ""
+    parts = tail[1].split()
+    return parts[0] if parts else ""
+
+
+def _drop_session(sess: PlayerSession) -> None:
+    with _LOCK:
+        if _SESSIONS.get(sess.id) is sess:
+            _SESSIONS.pop(sess.id, None)
+        token = sess.client_token
+        if token and _TOKENS.get(token) == sess.id:
+            _TOKENS.pop(token, None)
+
+
+def _session_live(sess: PlayerSession) -> bool:
+    if sess.cancel:
+        return False
+    with _LOCK:
+        return _SESSIONS.get(sess.id) is sess
+
+
+def _attach_session(sess: PlayerSession) -> bool:
+    """Registriert die Session. True = der Client hat den Start schon abgebrochen."""
+    token = sess.client_token
+    with _LOCK:
+        if token and token in _PENDING_CANCEL:
+            _PENDING_CANCEL.discard(token)
+            sess.cancel = True
+        _SESSIONS[sess.id] = sess
+        if token:
+            _TOKENS[token] = sess.id
+    return bool(sess.cancel)
+
+
+def _assign_proc(sess: PlayerSession, cmd: list[str]) -> Optional[str]:
+    """Startet FFmpeg. ``abgebrochen``, eine Fehlermeldung, oder None."""
+    if sess.cancel or not _session_live(sess):
+        return "abgebrochen"
+    try:
+        proc = _spawn_ffmpeg(cmd, sess.id, sess.work_dir)
+    except OSError as e:
+        return str(e)
+    sess.proc = proc
+    if sess.cancel or not _session_live(sess):
+        _kill(sess)
+        return "abgebrochen"
+    return None
+
+
+def _finish_cancelled(sess: PlayerSession) -> None:
+    sess.cancel = True
+    _drop_session(sess)
+    _kill(sess)
+    shutil.rmtree(sess.work_dir, ignore_errors=True)
+
+
 def get_session(sid: str) -> Optional[PlayerSession]:
     with _LOCK:
         sess = _SESSIONS.get(sid)
@@ -1604,13 +1742,34 @@ def get_session(sid: str) -> Optional[PlayerSession]:
     return sess
 
 
+def cancel_client_token(token: str) -> bool:
+    """Start abbrechen, auch solange ``start_session`` noch keine Antwort geliefert hat."""
+    token = _clean_token(token)
+    if not token:
+        return False
+    with _LOCK:
+        sid = _TOKENS.get(token)
+        if not sid:
+            if len(_PENDING_CANCEL) > 200:
+                _PENDING_CANCEL.clear()
+            _PENDING_CANCEL.add(token)
+            return True
+        sess = _SESSIONS.get(sid)
+        if sess:
+            sess.cancel = True
+    return stop_session(sid)
+
+
 def stop_session(sid: str) -> bool:
     with _LOCK:
-        sess = _SESSIONS.pop(sid, None)
+        sess = _SESSIONS.get(sid)
     if not sess:
         return False
+    sess.cancel = True
+    _drop_session(sess)
     _kill(sess)
     shutil.rmtree(sess.work_dir, ignore_errors=True)
+    _plog(sid, "Session gestoppt")
     return True
 
 
@@ -1626,7 +1785,7 @@ def pause_encode(sid: str) -> dict:
     if sess.encode_paused:
         return {"ok": True, "encode_paused": True}
     try:
-        os.kill(sess.proc.pid, signal.SIGSTOP)
+        _signal_tree(int(sess.proc.pid), signal.SIGSTOP)
         sess.encode_paused = True
         return {"ok": True, "encode_paused": True}
     except OSError as e:
@@ -1645,7 +1804,7 @@ def resume_encode(sid: str) -> dict:
     if not sess.encode_paused:
         return {"ok": True, "encode_paused": False}
     try:
-        os.kill(sess.proc.pid, signal.SIGCONT)
+        _signal_tree(int(sess.proc.pid), signal.SIGCONT)
         sess.encode_paused = False
         return {"ok": True, "encode_paused": False}
     except OSError as e:
@@ -1653,19 +1812,41 @@ def resume_encode(sid: str) -> dict:
 
 
 def _kill(sess: PlayerSession) -> None:
-    if sess.proc and sess.proc.poll() is None:
+    """Beendet FFmpeg inklusive Helfer. Hängt nicht an Popen.poll() nach SIGSTOP."""
+    proc = sess.proc
+    sess.encode_paused = False
+    if proc is None:
+        return
+    pid = int(proc.pid or 0)
+    if pid and _pid_alive(pid):
+        if hasattr(signal, "SIGCONT"):
+            _signal_tree(pid, signal.SIGCONT)
+        if hasattr(signal, "SIGKILL"):
+            _signal_tree(pid, signal.SIGKILL)
         try:
-            # Falls per SIGSTOP eingefroren: erst fortsetzen, dann beenden
-            if sess.encode_paused:
-                try:
-                    os.kill(sess.proc.pid, signal.SIGCONT)
-                except OSError:
-                    pass
-                sess.encode_paused = False
-            sess.proc.kill()
-            sess.proc.wait(timeout=5)
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        if proc.returncode is None:
+            proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _plog(sess.id, "ffmpeg pid %s reagiert nicht auf SIGKILL", pid, level=logging.ERROR)
+        if pid and hasattr(signal, "SIGKILL"):
+            _signal_tree(pid, signal.SIGKILL)
+        try:
+            proc.wait(timeout=2)
         except Exception:
             pass
+    except Exception as e:
+        _plog(sess.id, "ffmpeg wait pid %s: %s", pid, e, level=logging.WARNING)
+    state = _proc_state(pid) if pid else ""
+    if pid and _pid_alive(pid) and state not in ("Z", ""):
+        _plog(
+            sess.id,
+            "ffmpeg pid %s läuft nach Stop weiter (state=%s)",
+            pid, state, level=logging.ERROR,
+        )
 
 
 def cleanup_idle(max_idle: float = _MAX_IDLE_SEC) -> int:

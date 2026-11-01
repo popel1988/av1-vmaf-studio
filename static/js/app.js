@@ -5202,7 +5202,9 @@
         stage.innerHTML = `
           <div class="lb-wipe-wrap" id="lb-wipe-wrap" style="--lb-wipe:${wipePos}%">
             <img class="lb-img-a" src="${itemA.src}" alt="" draggable="false" />
-            <img class="lb-img-b" src="${itemB.src}" alt="" draggable="false" />
+            <div class="lb-img-b-clip">
+              <img class="lb-img-b" src="${itemB.src}" alt="" draggable="false" />
+            </div>
             <div class="lb-wipe-line"><span>A ◂ ▸ B</span></div>
             <span class="lb-tag lb-tag-a">A · ${escapeHtml(itemA.label || "")}</span>
             <span class="lb-tag lb-tag-b">B · ${escapeHtml(itemB.label || "")}</span>
@@ -12338,6 +12340,7 @@
 
   async function openClipAb(picks, opts) {
     if (!ab.sides.a || !ab.sides.b) return;
+    ab.closing = false;
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
     const sa = ab.sides.a;
@@ -12372,6 +12375,7 @@
       if (pathB) pathB.value = "";
       abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
       ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
+      if (ab.closing) return;
     } else {
       const len = encs[0].len || encs[1].len || 0;
       ab.window = len > 0 ? { start: 0, end: len } : null;
@@ -12383,7 +12387,9 @@
       if (pathB) pathB.value = "";
       abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
       ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+      if (ab.closing) return;
     }
+    if (ab.closing) return;
     if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
     syncNerdAbToPicks(picks);
     const box = $("ab-weak");
@@ -12400,6 +12406,7 @@
     mode: "side",       // side | wipe
     wipe: 50,           // Kante in %
     seeking: false,
+    closing: false,     // Entladen: kein neuer Encode, kein Nachziehen
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
   };
@@ -12410,6 +12417,7 @@
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
       info: null, sess: null, plan: null, lookSummary: "", lookTimer: 0,
       starting: false, lookAgain: false, lastTime: 0, encodePaused: false,
+      epoch: 0, token: "",
     };
   }
 
@@ -12673,6 +12681,7 @@
   }
 
   async function abAlignAndSettleBoth(masterT, keepPaused) {
+    if (ab.closing) return;
     const sa = ab.sides.a, sb = ab.sides.b;
     if (!sa || !sb) return;
     if (sa.video) sa.video.pause();
@@ -12704,6 +12713,7 @@
     if (side.lookTimer) clearTimeout(side.lookTimer);
     side.lookTimer = setTimeout(async () => {
       side.lookTimer = 0;
+      if (ab.closing) return;
       if (side.starting) {
         side.lookAgain = true;
         return;
@@ -12712,19 +12722,72 @@
       const targetT = key === "b" ? Math.max(0, masterT + abOffsetB()) : masterT;
       abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau (beide Seiten pausiert) …")}`);
       await abStartSide(side, targetT);
+      if (ab.closing) return;
       await abAlignAndSettleBoth(masterT, true);
+      if (ab.closing) return;
       abUpdateStatusLine();
     }, 450);
   }
 
-  function abDestroy(side) {
-    if (side.hls) { try { side.hls.destroy(); } catch (e) { /* ignore */ } side.hls = null; }
-    if (side.sid) {
-      fetch(`/api/player/session/${side.sid}`, { method: "DELETE" }).catch(() => {});
-      side.sid = "";
+  function abNewToken() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID().replace(/-/g, "");
     }
-    try { side.video.pause(); side.video.removeAttribute("src"); side.video.load(); } catch (e) { /* ignore */ }
+    return (Date.now().toString(16) + Math.random().toString(16).slice(2)).slice(0, 32);
+  }
+
+  function abStopSession(sid) {
+    if (!sid) return Promise.resolve();
+    return fetch(`/api/player/session/${sid}`, { method: "DELETE", keepalive: true }).catch(() => {});
+  }
+
+  function abCancelToken(token) {
+    if (!token) return Promise.resolve();
+    return fetch("/api/player/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  function abDetach(side) {
+    if (!side) return;
+    if (side.hls) {
+      try { side.hls.destroy(); } catch (e) { /* ignore */ }
+      side.hls = null;
+    }
+    try {
+      side.video.pause();
+      side.video.removeAttribute("src");
+      side.video.load();
+    } catch (e) { /* ignore */ }
     side.ready = false;
+  }
+
+  function abStale(side, epoch) {
+    return ab.closing || !side || side.epoch !== epoch;
+  }
+
+  // Laufenden Start verwerfen: Token (noch ohne sid) und Session.
+  function abAbortStart(side, token, sid) {
+    abCancelToken(token);
+    if (side && side.token === token) side.token = "";
+    const stopId = sid || (side && side.sid) || "";
+    if (side && stopId && side.sid === stopId) side.sid = "";
+    if (stopId) abStopSession(stopId);
+    if (side) abDetach(side);
+  }
+
+  function abDestroy(side) {
+    if (!side) return;
+    const sid = side.sid;
+    const token = side.token;
+    side.sid = "";
+    side.token = "";
+    abDetach(side);
+    abStopSession(sid);
+    abCancelToken(token);
   }
 
   // Filmzeit ↔ Elementzeit (HLS-Sessions beginnen bei `offset`).
@@ -12754,11 +12817,18 @@
   };
 
   async function abStartSide(side, startSec) {
+    if (ab.closing || !side) return false;
+    const epoch = (side.epoch || 0) + 1;
+    side.epoch = epoch;
+    const token = abNewToken();
+    const stale = () => abStale(side, epoch);
     const targetStart = Math.max(0, startSec || 0);
     side.lastTime = targetStart;
     side.starting = true;
     try {
       abDestroy(side);
+      if (stale()) return false;
+      side.token = token;
       if (side.clipUrl) {
         side.mode = "direct";
         side.path = side.clipUrl;
@@ -12772,6 +12842,7 @@
           if (Number.isFinite(dur) && dur > 0) side.duration = (side.offset || 0) + dur;
         }, { once: true });
         abUpdateSideBadge(side.key);
+        if (stale()) { abDetach(side); return false; }
         return true;
       }
       if (!side.path) return false;
@@ -12781,6 +12852,7 @@
           if (pr && !pr.error) side.info = pr;
         } catch (e) { /* ignore */ }
       }
+      if (stale()) { abAbortStart(side, token); return false; }
       abSyncSideLookUi(side.key);
       const look = abGatherSideLook(side);
       const plat = look && look.platform ? look.platform : "auto";
@@ -12793,8 +12865,10 @@
         platform: plat,
         client_direct_ok: !forceHls, client_codecs: codecs,
         lookahead_sec: laSec, audio_copy: false,
+        client_token: token,
       };
       if (look) reqBody.look = look;
+      if (stale()) { abAbortStart(side, token); return false; }
       let d;
       try {
         d = await (await fetch("/api/player/session", {
@@ -12802,10 +12876,21 @@
           body: JSON.stringify(reqBody),
         })).json();
       } catch (e) {
-        abSetStatus(`${side.key.toUpperCase()}: ${e}`, true);
+        if (!stale()) abSetStatus(`${side.key.toUpperCase()}: ${e}`, true);
+        abAbortStart(side, token);
         return false;
       }
-      if (d.error) { abSetStatus(`${side.key.toUpperCase()}: ${d.error}`, true); return false; }
+      const born = d && d.session && d.session.id;
+      if (stale() || (d && d.cancelled)) {
+        abAbortStart(side, token, born);
+        return false;
+      }
+      if (!d || d.error) {
+        if (!d) abSetStatus(`${side.key.toUpperCase()}: ${tt("Fehler")}`, true);
+        else abSetStatus(`${side.key.toUpperCase()}: ${d.error}`, true);
+        abAbortStart(side, token, born);
+        return false;
+      }
       if (d.options) window.fpPlayerOptions = d.options;
       if (d.info) side.info = d.info;
       const sess = d.session || {};
@@ -12817,9 +12902,14 @@
       side.lookSummary = sess.look_summary || "";
       side.duration = sess.duration || (d.info && d.info.duration) || side.duration || 0;
       abSyncSideLookUi(side.key);
+      if (stale()) { abAbortStart(side, token, side.sid); return false; }
       if (side.mode === "direct") {
         side.offset = 0;
+        const directSid = side.sid;
         side.sid = "";  // Direct-Play hält keinen Encoder offen
+        side.token = "";
+        abStopSession(directSid);
+        abCancelToken(token);
         side.video.src = sess.media_url || sess.playlist_url
           || `/api/media?root=${encodeURIComponent(side.root)}&path=${encodeURIComponent(side.path)}`;
         side.video.load();
@@ -12828,6 +12918,7 @@
         }
         side.ready = true;
         abUpdateSideBadge(side.key);
+        if (stale()) { abDetach(side); return false; }
         return true;
       }
       // HLS: auf „ready“ warten, dann hls.js anhängen.
@@ -12835,11 +12926,18 @@
       side.lastTime = side.offset;
       const url = sess.playlist_url || `/api/player/session/${side.sid}/index.m3u8`;
       for (let i = 0; i < 60; i++) {
+        if (stale()) { abAbortStart(side, token, side.sid); return false; }
         const st = await (await fetch(`/api/player/session/${side.sid}`)).json();
+        if (stale()) { abAbortStart(side, token, side.sid); return false; }
         if (st.session && st.session.ready) break;
-        if (st.session && st.session.error) { abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true); return false; }
+        if (st.session && st.session.error) {
+          abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true);
+          abAbortStart(side, token, side.sid);
+          return false;
+        }
         await new Promise((r) => setTimeout(r, 150));
       }
+      if (stale()) { abAbortStart(side, token, side.sid); return false; }
       const maxBuf = laSec > 0 ? Math.max(12, Math.min(120, laSec + 8)) : 60;
       if (window.Hls && window.Hls.isSupported()) {
         side.hls = new window.Hls({
@@ -12864,23 +12962,28 @@
         side.video.src = url;
       } else {
         abSetStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
+        abAbortStart(side, token, side.sid);
         return false;
       }
       await abWaitMediaReady(side.video, 3000);
+      if (stale()) { abAbortStart(side, token, side.sid); return false; }
       side.ready = true;
       abUpdateSideBadge(side.key);
       return true;
     } finally {
-      side.starting = false;
-      if (side.lookAgain) {
-        side.lookAgain = false;
-        abQueueSideReload(side.key);
+      if (side.epoch === epoch) {
+        side.starting = false;
+        if (side.lookAgain && !ab.closing) {
+          side.lookAgain = false;
+          abQueueSideReload(side.key);
+        }
       }
     }
   }
 
   // Beide Seiten auf Filmzeit t setzen. HLS außerhalb des Puffers → Session neu ab t.
   async function abSeekBoth(t, pauseAfter) {
+    if (ab.closing) return;
     const sa = ab.sides.a, sb = ab.sides.b;
     if (!sa || !sb) return;
     const win = ab.window;
@@ -12902,6 +13005,7 @@
     if (jobs.length) {
       abSetStatus(tt("Spule …"));
       await Promise.all(jobs);
+      if (ab.closing) { ab.seeking = false; return; }
       abSetStatus("");
     }
     ab.seeking = false;
@@ -12983,7 +13087,9 @@
     }));
   }
 
-  function abUnload(clearPaths) {
+  async function abUnload(clearPaths) {
+    ab.closing = true;
+    const jobs = [];
     ["a", "b"].forEach((key) => {
       const side = ab.sides[key];
       if (!side) return;
@@ -12991,8 +13097,16 @@
         clearTimeout(side.lookTimer);
         side.lookTimer = 0;
       }
+      side.epoch = (side.epoch || 0) + 1;
       side.lookAgain = false;
-      abDestroy(side);
+      side.starting = false;
+      const sid = side.sid;
+      const token = side.token;
+      side.sid = "";
+      side.token = "";
+      abDetach(side);
+      if (sid) jobs.push(abStopSession(sid));
+      if (token) jobs.push(abCancelToken(token));
       side.path = "";
       side.clipUrl = "";
       side.info = null;
@@ -13022,7 +13136,8 @@
     if (badge) badge.textContent = "—";
     abSyncSideLookUi("a");
     abSyncSideLookUi("b");
-    abSetStatus(tt("Video entladen."));
+    await Promise.all(jobs);
+    if (ab.closing) abSetStatus(tt("Video entladen."));
   }
 
   function initAbCompare() {
@@ -13047,6 +13162,7 @@
     });
 
     load.addEventListener("click", async () => {
+      ab.closing = false;
       const sa = ab.sides.a, sb = ab.sides.b;
       sa.clipUrl = "";
       sb.clipUrl = "";
@@ -13084,7 +13200,9 @@
       abSetStatus(tt("Starte Wiedergabe …"));
       abApplyMode();
       const ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+      if (ab.closing) return;
       await abAlignAndSettleBoth(0, true);
+      if (ab.closing) return;
       if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
       if (ok.every(Boolean)) abUpdateStatusLine();
       abLoadWeakSpots();
@@ -13092,7 +13210,7 @@
 
     // B auf A (+ Versatz) ziehen. Hart beim Start/Pause/Seek; laufend nur bei grobem Drift.
     const alignB = (force) => {
-      if (!abSynced() || ab.seeking) return;
+      if (ab.closing || !abSynced() || ab.seeking) return;
       const sa = ab.sides.a, sb = ab.sides.b;
       if (!sb.path || !sb.ready) return;
       const t = Math.max(0, abTime(sa) + abOffsetB());
@@ -13109,6 +13227,7 @@
 
     // A ist Master; B folgt (mit Versatz). Vor dem Start beide auf dieselbe Sekunde ziehen.
     va.addEventListener("play", async () => {
+      if (ab.closing) return;
       abSetEncodePaused(ab.sides.a, false);
       abSetEncodePaused(ab.sides.b, false);
       if (!abSynced() || !ab.sides.b.path) return;
@@ -13121,6 +13240,7 @@
       if (!va.paused) vb.play().catch(() => {});
     });
     va.addEventListener("pause", () => {
+      if (ab.closing) return;
       if (abSynced()) {
         vb.pause();
         vb.playbackRate = va.playbackRate || 1;

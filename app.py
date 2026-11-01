@@ -2388,6 +2388,7 @@ class PlayerSessionRequest(BaseModel):
     lookahead_sec: float = 30       # Zielpuffer; 0 = Encode nicht drosseln
     audio_copy: bool = False        # Ton nicht umcodieren (Stream-Copy)
     look: Optional[dict] = None     # Encode-Vorschau: Tonemap und Bildfilter
+    client_token: str = ""          # A/B-Entladen kann den Start vor der Antwort abbrechen
 
 
 @app.get("/api/player/options")
@@ -2442,7 +2443,8 @@ async def player_session_start(req: PlayerSessionRequest):
     """Direct-Play oder HLS-Session (HW/SW-Transcode, Qualitätsstufen)."""
     from core import player_hls
     player_hls.cleanup_idle()
-    return player_hls.start_session(
+    return await asyncio.to_thread(
+        player_hls.start_session,
         req.path, audio_index=req.audio, subtitle_index=req.subtitle,
         start_sec=req.start, profile=req.profile, burn_subs=req.burn_subs,
         client_direct_ok=req.client_direct_ok, platform=req.platform,
@@ -2451,6 +2453,7 @@ async def player_session_start(req: PlayerSessionRequest):
         lookahead_sec=req.lookahead_sec,
         audio_copy=bool(req.audio_copy),
         look=req.look,
+        client_token=req.client_token or "",
     )
 
 
@@ -2477,10 +2480,21 @@ async def player_session_resume(sid: str):
     return player_hls.resume_encode(sid)
 
 
+class PlayerCancelRequest(BaseModel):
+    token: str = ""
+
+
+@app.post("/api/player/cancel")
+async def player_session_cancel(req: PlayerCancelRequest):
+    """A/B-Start abbrechen, bevor die Session-Antwort da ist."""
+    from core import player_hls
+    return {"ok": await asyncio.to_thread(player_hls.cancel_client_token, req.token)}
+
+
 @app.delete("/api/player/session/{sid}")
 async def player_session_stop(sid: str):
     from core import player_hls
-    return {"ok": player_hls.stop_session(sid)}
+    return {"ok": await asyncio.to_thread(player_hls.stop_session, sid)}
 
 
 class PlayerClientError(BaseModel):
