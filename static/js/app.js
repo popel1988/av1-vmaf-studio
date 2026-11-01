@@ -4941,6 +4941,11 @@
 
     const cmpBtn = grid.querySelector(".shot-compare");
     const abBtn = grid.querySelector(".shot-ab");
+    const allSceneItems = () => [...grid.querySelectorAll(".shot-tile")].map((t) => ({
+      src: t.dataset.src,
+      label: t.dataset.cap,
+      kind: t.dataset.kind || "",
+    }));
     const selected = () => [...grid.querySelectorAll(".shot-tile")]
       .filter((t) => t.querySelector(".shot-check input").checked)
       .map((t) => ({
@@ -4948,8 +4953,8 @@
         label: t.dataset.cap,
         kind: t.dataset.kind || "",
         clip: t.dataset.clip || "",
-        start: Number(t.dataset.start) || 0,
-        len: Number(t.dataset.len) || 0,
+        start: Number(t.start || t.dataset.start) || 0,
+        len: Number(t.len || t.dataset.len) || 0,
       }));
     const updateCmp = () => {
       const picks = selected();
@@ -4971,7 +4976,7 @@
     });
     cmpBtn.addEventListener("click", () => {
       const items = selected();
-      if (items.length) openGallery(items);
+      if (items.length) openGallery(items, allSceneItems());
     });
     if (abBtn) abBtn.addEventListener("click", () => {
       const picks = selected();
@@ -4981,17 +4986,18 @@
       img.addEventListener("click", () => {
         const tile = img.closest(".shot-tile");
         const clicked = { src: tile.dataset.src, label: tile.dataset.cap };
+        const pool = allSceneItems();
         if (tile.dataset.kind !== "ref") {
           const refTile = grid.querySelector('.shot-tile[data-kind="ref"]');
           if (refTile && refTile.dataset.src && refTile.dataset.src !== clicked.src) {
             openGallery([
               { src: refTile.dataset.src, label: refTile.dataset.cap || "Original" },
               clicked,
-            ]);
+            ], pool);
             return;
           }
         }
-        openGallery([clicked]);
+        openGallery([clicked], pool);
       }));
     grid.querySelectorAll(".shot-play").forEach((btn) =>
       btn.addEventListener("click", (e) => {
@@ -5009,8 +5015,8 @@
     updateCmp();
   }
 
-  // Öffnet beliebig viele Bilder (mit interaktivem Wipe-/Umschalt-Vergleich ab 2 Bildern).
-  function openGallery(items) {
+  // Öffnet beliebig viele Bilder (mit interaktivem Wipe-/Umschalt-Vergleich + 1:1/2×/4× Pixel-Zoom).
+  function openGallery(items, allPool) {
     let box = $("lightbox");
     if (!box) {
       box = document.createElement("div");
@@ -5034,12 +5040,54 @@
     const bar = box.querySelector("#lightbox-toolbar");
     const stage = box.querySelector("#lightbox-stage");
     const gal = box.querySelector(".lightbox-grid");
-    const canCompare = items.length >= 2;
-    let mode = canCompare ? "wipe" : "grid";
-    let idxA = 0;
-    let idxB = 1;
+    const pool = (Array.isArray(allPool) && allPool.length >= items.length) ? allPool : items;
+    const canCompare = pool.length >= 2;
+    let mode = items.length >= 2 ? "wipe" : (canCompare ? "wipe" : "grid");
+    const findIdx = (it, fb) => {
+      if (!it) return fb;
+      const hit = pool.findIndex((p) => p.src === it.src);
+      return hit >= 0 ? hit : fb;
+    };
+    let idxA = findIdx(items[0], 0);
+    let idxB = findIdx(items[1], idxA === 0 ? Math.min(1, pool.length - 1) : 0);
     let wipePos = 50;
     let flipSide = 0;
+    let zoomMode = "fit"; // fit | 1 | 2 | 4
+    let panX = 50;        // Fokus-Punkt in % (0..100)
+    let panY = 50;
+
+    const calcZoomFactor = (imgEl) => {
+      if (!imgEl || !zoomMode || zoomMode === "fit") return 1;
+      const mult = parseFloat(zoomMode) || 1;
+      const nw = imgEl.naturalWidth;
+      const nh = imgEl.naturalHeight;
+      const cw = imgEl.clientWidth;
+      const ch = imgEl.clientHeight;
+      if (!nw || !nh || !cw || !ch) return mult;
+      const dpr = window.devicePixelRatio || 1;
+      return Math.max(1, (nw / (cw * dpr)) * mult);
+    };
+
+    const applyZoomTransform = () => {
+      const wrap = stage.querySelector("#lb-wipe-wrap, #lb-flip-wrap");
+      if (!wrap) return;
+      const imgs = wrap.querySelectorAll("img");
+      if (!imgs.length) return;
+      const zoomed = zoomMode !== "fit";
+      wrap.classList.toggle("is-zoomed", zoomed);
+      if (!zoomed) {
+        imgs.forEach((im) => {
+          im.style.transformOrigin = "50% 50%";
+          im.style.transform = "";
+        });
+        return;
+      }
+      const scale = calcZoomFactor(imgs[0]);
+      imgs.forEach((im) => {
+        im.style.transformOrigin = `${panX.toFixed(1)}% ${panY.toFixed(1)}%`;
+        im.style.transform = `scale(${scale.toFixed(4)})`;
+      });
+    };
 
     const renderView = () => {
       if (!canCompare) {
@@ -5054,7 +5102,7 @@
         return;
       }
 
-      const optHtml = items.map((it, i) =>
+      const optHtml = pool.map((it, i) =>
         `<option value="${i}">${escapeHtml(it.label || ("Bild " + (i + 1)))}</option>`
       ).join("");
       bar.style.display = "flex";
@@ -5069,6 +5117,14 @@
           <label>A <select id="lb-sel-a">${optHtml}</select></label>
           <button type="button" class="btn btn-ghost btn-sm" id="lb-swap" title="A und B tauschen">⇄</button>
           <label>B <select id="lb-sel-b">${optHtml}</select></label>
+          <label>${escapeHtml(tt("Zoom"))}
+            <select id="lb-zoom">
+              <option value="fit">${escapeHtml(tt("Ganzes Bild"))}</option>
+              <option value="1">${escapeHtml(tt("1:1 Pixel"))}</option>
+              <option value="2">${escapeHtml(tt("2× Pixel"))}</option>
+              <option value="4">${escapeHtml(tt("4× Pixel"))}</option>
+            </select>
+          </label>
         </div>` : ""}
         <button type="button" class="btn btn-ghost btn-sm" id="lb-close">✕</button>
       `;
@@ -5092,6 +5148,18 @@
         selB.value = String(idxB);
         selB.addEventListener("change", (e) => { e.stopPropagation(); idxB = +selB.value; renderStageOnly(); });
       }
+      const zoomSel = bar.querySelector("#lb-zoom");
+      if (zoomSel) {
+        zoomSel.value = zoomMode;
+        zoomSel.addEventListener("change", (e) => {
+          e.stopPropagation();
+          zoomMode = zoomSel.value || "fit";
+          if (zoomMode === "fit") { panX = 50; panY = 50; }
+          applyZoomTransform();
+          const zNote = stage.querySelector("#lb-zoom-note");
+          if (zNote) zNote.hidden = zoomMode === "fit";
+        });
+      }
       const swapBtn = bar.querySelector("#lb-swap");
       if (swapBtn) {
         swapBtn.addEventListener("click", (e) => {
@@ -5103,13 +5171,22 @@
       renderStageOnly();
     };
 
+    const bindZoomPanAndLoad = (wrap) => {
+      if (!wrap) return;
+      wrap.querySelectorAll("img").forEach((im) => {
+        im.addEventListener("load", applyZoomTransform);
+      });
+      applyZoomTransform();
+    };
+
     const renderStageOnly = () => {
       if (mode === "grid") {
         stage.style.display = "none";
         stage.innerHTML = "";
         gal.style.display = "grid";
-        gal.dataset.count = Math.min(items.length, 6);
-        gal.innerHTML = items.map((it) =>
+        const gridItems = items.length >= 2 ? items : pool;
+        gal.dataset.count = Math.min(gridItems.length, 6);
+        gal.innerHTML = gridItems.map((it) =>
           `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
           `<img src="${it.src}" alt="" /></figure>`
         ).join("");
@@ -5118,8 +5195,8 @@
 
       gal.style.display = "none";
       stage.style.display = "flex";
-      const itemA = items[idxA] || items[0];
-      const itemB = items[idxB] || items[1] || items[0];
+      const itemA = pool[idxA] || pool[0];
+      const itemB = pool[idxB] || pool[1] || pool[0];
 
       if (mode === "wipe") {
         stage.innerHTML = `
@@ -5134,6 +5211,9 @@
             <span>A</span>
             <input type="range" id="lb-wipe-range" min="0" max="100" step="0.5" value="${wipePos}" />
             <span>B</span>
+          </div>
+          <div class="muted" id="lb-zoom-note" style="font-size:11.5px" ${zoomMode === "fit" ? "hidden" : ""}>
+            ${escapeHtml(tt("Im Zoom: Rechtsklick-Ziehen oder Shift+Ziehen verschiebt den Bildausschnitt · Linksziehen bewegt die Wipe-Kante"))}
           </div>`;
         const wrap = stage.querySelector("#lb-wipe-wrap");
         const range = stage.querySelector("#lb-wipe-range");
@@ -5146,35 +5226,81 @@
           range.addEventListener("input", (e) => { e.stopPropagation(); applyWipe(range.value); });
         }
         if (wrap) {
-          let dragging = false;
-          const fromEvent = (ev) => {
+          let draggingWipe = false;
+          let panning = false;
+          let startX = 0, startY = 0, startPanX = 50, startPanY = 50;
+          const fromWipeEvent = (ev) => {
             const r = wrap.getBoundingClientRect();
             const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left;
             if (r.width > 0) applyWipe(((x / r.width) * 100).toFixed(1));
           };
-          wrap.addEventListener("mousedown", (ev) => { dragging = true; fromEvent(ev); ev.preventDefault(); ev.stopPropagation(); });
-          window.addEventListener("mousemove", (ev) => { if (dragging) fromEvent(ev); });
-          window.addEventListener("mouseup", () => { dragging = false; });
-          wrap.addEventListener("touchstart", (ev) => { fromEvent(ev); }, { passive: true });
-          wrap.addEventListener("touchmove", (ev) => { fromEvent(ev); }, { passive: true });
+          wrap.addEventListener("contextmenu", (ev) => { if (zoomMode !== "fit") ev.preventDefault(); });
+          wrap.addEventListener("mousedown", (ev) => {
+            if (zoomMode !== "fit" && (ev.button === 2 || ev.shiftKey)) {
+              panning = true;
+              startX = ev.clientX; startY = ev.clientY;
+              startPanX = panX; startPanY = panY;
+              ev.preventDefault(); ev.stopPropagation();
+              return;
+            }
+            draggingWipe = true;
+            fromWipeEvent(ev);
+            ev.preventDefault(); ev.stopPropagation();
+          });
+          window.addEventListener("mousemove", (ev) => {
+            if (panning && wrap) {
+              const r = wrap.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                panX = Math.max(0, Math.min(100, startPanX - ((ev.clientX - startX) / r.width) * 100));
+                panY = Math.max(0, Math.min(100, startPanY - ((ev.clientY - startY) / r.height) * 100));
+                applyZoomTransform();
+              }
+            } else if (draggingWipe) {
+              fromWipeEvent(ev);
+            }
+          });
+          window.addEventListener("mouseup", () => { draggingWipe = false; panning = false; });
+          wrap.addEventListener("touchstart", (ev) => { fromWipeEvent(ev); }, { passive: true });
+          wrap.addEventListener("touchmove", (ev) => { fromWipeEvent(ev); }, { passive: true });
         }
+        bindZoomPanAndLoad(wrap);
       } else if (mode === "flip") {
         const cur = flipSide === 0 ? itemA : itemB;
         const curTag = flipSide === 0 ? "A" : "B";
         stage.innerHTML = `
-          <div class="lb-flip-wrap" id="lb-flip-wrap" title="Klicken oder gedrückt halten zum Umschalten A ↔ B">
+          <div class="lb-flip-wrap" id="lb-flip-wrap" title="Klicken zum Umschalten A ↔ B (im Zoom: Ziehen verschiebt den Ausschnitt)">
             <img src="${cur.src}" alt="" draggable="false" />
             <span class="lb-tag lb-tag-a">${curTag} · ${escapeHtml(cur.label || "")}</span>
           </div>
           <div class="lb-slider-row">
             <button type="button" class="btn btn-sm ${flipSide === 0 ? "btn-primary" : "btn-ghost"}" data-lb-flip="0">A zeigen</button>
             <button type="button" class="btn btn-sm ${flipSide === 1 ? "btn-primary" : "btn-ghost"}" data-lb-flip="1">B zeigen</button>
-            <span class="muted" style="font-size:12px">Klick ins Bild schaltet sofort zwischen A und B um</span>
+            <span class="muted" style="font-size:12px">Klick ins Bild schaltet zwischen A und B um${zoomMode !== "fit" ? " · Ziehen verschiebt den Ausschnitt" : ""}</span>
           </div>`;
         const fwrap = stage.querySelector("#lb-flip-wrap");
         if (fwrap) {
+          let panning = false, moved = false, startX = 0, startY = 0, startPanX = 50, startPanY = 50;
+          fwrap.addEventListener("mousedown", (ev) => {
+            if (zoomMode === "fit") return;
+            panning = true; moved = false;
+            startX = ev.clientX; startY = ev.clientY;
+            startPanX = panX; startPanY = panY;
+            ev.preventDefault(); ev.stopPropagation();
+          });
+          window.addEventListener("mousemove", (ev) => {
+            if (!panning || !fwrap) return;
+            if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) moved = true;
+            const r = fwrap.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              panX = Math.max(0, Math.min(100, startPanX - ((ev.clientX - startX) / r.width) * 100));
+              panY = Math.max(0, Math.min(100, startPanY - ((ev.clientY - startY) / r.height) * 100));
+              applyZoomTransform();
+            }
+          });
+          window.addEventListener("mouseup", () => { panning = false; });
           fwrap.addEventListener("click", (e) => {
             e.stopPropagation();
+            if (moved) { moved = false; return; }
             flipSide = flipSide === 0 ? 1 : 0;
             renderStageOnly();
           });
@@ -5185,6 +5311,7 @@
             flipSide = +b.dataset.lbFlip;
             renderStageOnly();
           }));
+        bindZoomPanAndLoad(fwrap);
       }
     };
 
@@ -12963,28 +13090,19 @@
       abLoadWeakSpots();
     });
 
-    // B exakt auf A (+ Versatz) ziehen. Wird beim Suchen und laufend genutzt.
+    // B auf A (+ Versatz) ziehen. Hart beim Start/Pause/Seek; laufend nur bei grobem Drift.
     const alignB = (force) => {
       if (!abSynced() || ab.seeking) return;
       const sa = ab.sides.a, sb = ab.sides.b;
       if (!sb.path || !sb.ready) return;
       const t = Math.max(0, abTime(sa) + abOffsetB());
-      const diff = abTime(sb) - t;
-      if (force || Math.abs(diff) > 0.04) {
+      if (force || Math.abs(abTime(sb) - t) > 0.05) {
         // Außerhalb des HLS-Fensters → Session neu statt ins Leere springen.
         if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 20)) {
           abSeekBoth(abTime(sa));
         } else {
           abSetTime(sb, t);
           if (sb.video) sb.video.playbackRate = sa.video.playbackRate || 1;
-        }
-      } else if (!sa.video.paused && !sb.video.paused) {
-        // Sanfter Rate-Nudge bei Mini-Versatz (1–2 Frames = 15–40 ms) ohne harten Seek-Ruckler
-        const baseRate = sa.video.playbackRate || 1;
-        if (Math.abs(diff) > 0.012) {
-          sb.video.playbackRate = diff > 0 ? baseRate * 0.97 : baseRate * 1.03;
-        } else if (sb.video.playbackRate !== baseRate) {
-          sb.video.playbackRate = baseRate;
         }
       }
     };
@@ -13037,9 +13155,10 @@
         va.pause();
         vb.pause();
       }
-      // Laufende Frame-Synchronisation (inkl. Rate-Nudge ab 12 ms / Seek ab 40 ms).
+      // Leichten Frame-Versatz laufen lassen; nur bei grobem Drift (~0,25 s) nachziehen.
       const sb = ab.sides.b;
-      if (abSynced() && sb.ready && !sb.video.seeking) {
+      const targetB = abTime(sa) + abOffsetB();
+      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > 0.25) {
         alignB(false);
       }
     });

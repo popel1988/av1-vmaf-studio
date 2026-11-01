@@ -1666,7 +1666,13 @@ input[type="range"]::-moz-range-thumb {
 .lb-flip-wrap { cursor: pointer; }
 .lb-wipe-wrap img, .lb-flip-wrap img {
   display: block; max-width: 94vw; max-height: 72vh; width: auto; height: auto; object-fit: contain;
+  image-rendering: auto;
 }
+.lb-wipe-wrap.is-zoomed img, .lb-flip-wrap.is-zoomed img {
+  image-rendering: pixelated;
+}
+.lb-flip-wrap.is-zoomed { cursor: grab; }
+.lb-flip-wrap.is-zoomed:active { cursor: grabbing; }
 .lb-wipe-wrap .lb-img-b {
   position: absolute; inset: 0; width: 100%; height: 100%;
   clip-path: inset(0 0 0 var(--lb-wipe, 50%));
