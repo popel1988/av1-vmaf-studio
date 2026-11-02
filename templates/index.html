@@ -3092,8 +3092,8 @@
               {% endfor %}
             </div>
             <div class="ab-videos" id="ab-videos">
-              <div class="ab-pane"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="metadata" playsinline></video></div>
-              <div class="ab-pane"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="metadata" playsinline></video></div>
+              <div class="ab-pane"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
+              <div class="ab-pane"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
               <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
             </div>
             <div class="ab-controls">
@@ -3108,6 +3108,14 @@
               <div class="field" style="margin:0">
                 <label style="font-size:11px">Versatz B (s)</label>
                 <input type="number" id="ab-offset" value="0" step="0.1" style="width:90px" />
+              </div>
+              <div class="field" style="margin:0">
+                <label for="ab-speed" style="font-size:11px" data-tip="Wiedergabetempo für beide Videos, auch im Wipe. Verlangsamt nur die Wiedergabe im Browser; es wird kein neuer Encode gestartet.">Tempo (beide)</label>
+                <select id="ab-speed" style="width:auto">
+                  <option value="1" selected>1× · Normal</option>
+                  <option value="0.5">½× · Halbe Geschwindigkeit</option>
+                  <option value="0.25">¼× · Viertelgeschwindigkeit</option>
+                </select>
               </div>
               <div class="field" style="margin:0">
                 <label style="font-size:11px">Ansicht</label>

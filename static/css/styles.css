@@ -1914,6 +1914,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .vmaf-table-wrap .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }
 .vmaf-table-wrap .vmaf-result-details summary { cursor: pointer; }
+.vmaf-low-context { margin-top: 4px; font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.vmaf-low-context > summary { cursor: pointer; }
+.vmaf-low-body { max-width: 48rem; white-space: normal; line-height: 1.45; }
+.vmaf-low-body p { margin: 5px 0; }
+.vmaf-low-body section { margin-top: 10px; }
+.vmaf-low-body strong { color: var(--text); }
 .vmaf-table-wrap input[type="checkbox"] { margin: 2px 0 0; }
 .vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
 .vmaf-chart-scenes:empty { display: none; }

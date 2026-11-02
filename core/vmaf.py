@@ -711,6 +711,10 @@ def _run_libvmaf(
         data = json.loads(log.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    # Tatsächlich bewertetes Fenster: beide Eingänge werden am Rand getrimmt.
+    spans = [end - start for start, end in (
+        _scored_window(dist_dur), _scored_window(ref_dur))]
+    data["scored_seconds"] = max(0.0, min(spans))
     if with_xpsnr and xlog.exists():
         parsed = _parse_xpsnr(xlog)
         if parsed:
@@ -749,6 +753,9 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "hmean": float(vm.get("harmonic_mean") or 0.0),
         "min": float(vm.get("min") or 0.0),
         "p1": float(p1),
+        "frame_count": len(vals),
+        "p1_count": max(1, int(len(vals) * 0.01)) if vals else 0,
+        "scored_seconds": float(data.get("scored_seconds") or 0),
         "psnr": float(psnr),
         "ssim": float(ssim),
         "xpsnr": float(xp.get("xpsnr") or 0.0),
@@ -1365,6 +1372,9 @@ def analyze(
                 "xpsnr_min": (metrics or {}).get("xpsnr_min") or 0.0,
                 "frames": (metrics or {}).get("frames") or [],
             }
+            if metrics:
+                for field in ("frame_count", "p1_count", "scored_seconds"):
+                    scene[field] = metrics.get(field) or 0
             if metrics and metrics.get("cambi") is not None:
                 scene["cambi"] = metrics["cambi"]
             if metrics and metrics.get("cambi_max") is not None:
@@ -2091,6 +2101,19 @@ def _downsample_min(frames: list[dict], buckets: int = 400) -> list[dict]:
     return out
 
 
+def _low_scored_seconds(scene: dict, analysis: dict, params: dict) -> float:
+    """Bewertetes Fenster, nicht die nominelle Cliplänge (Archiv-Fallback)."""
+    stored = _finite(scene.get("scored_seconds"), 6)
+    if stored is not None and stored > 0:
+        return stored
+    for value in (scene.get("length"), analysis.get("clip_seconds"), params.get("clip_seconds")):
+        duration = _finite(value, 6)
+        if duration is not None and duration > 0:
+            start, end = _scored_window(duration)
+            return max(0.0, end - start)
+    return 0.0
+
+
 def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[dict]:
     """Jeden bewerteten Frame einer Szene aus den libvmaf-Logs."""
     data = load_session(session)
@@ -2098,10 +2121,6 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
         return None
     analysis = data.get("analysis") or {}
     params = data.get("params") or {}
-    try:
-        clip_seconds = float(params.get("clip_seconds") or 0)
-    except (TypeError, ValueError):
-        clip_seconds = 0.0
     root = config.VMAF_SESSIONS_DIR / session
     series = []
     for raw in analysis.get("results") or []:
@@ -2124,6 +2143,9 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
                 "n": int(fr.get("frameNum") if fr.get("frameNum") is not None else len(frames)),
                 "vmaf": vmaf,
             }
+            if full:
+                # Grenzvergleiche im Kontext nicht mit auf 2 Stellen gerundeten Scores.
+                item["vmaf_raw"] = float(metrics["vmaf"])
             psnr = _finite(metrics.get("psnr_y", metrics.get("psnr")), 2)
             ssim = _finite(metrics.get("float_ssim", metrics.get("ssim")), 4)
             if psnr is not None:
@@ -2133,7 +2155,10 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
             frames.append(item)
         worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
         n_frames = len(frames)
-        frame_sec = (float(clip_seconds) / n_frames) if n_frames and clip_seconds > 0 else 0.0
+        scene_score = next((sc for sc in raw.get("scene_scores") or []
+                            if sc.get("scene") == scene), {})
+        scored_seconds = _low_scored_seconds(scene_score, analysis, params)
+        frame_sec = scored_seconds / n_frames if n_frames else 0.0
         dips = {
             str(level): _dip_line(frames, float(level), frame_sec)
             for level in range(80, 100)
@@ -2147,7 +2172,12 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
             "frames": frames if full else _downsample_min(frames),
             "dips": dips,
             "worst": worst,
-            "stats": _series_stats(frames, clip_seconds),
+            "stats": _series_stats(frames, scored_seconds),
+            "low_context": {
+                "count": n_frames,
+                "p1_count": max(1, int(n_frames * 0.01)) if n_frames else 0,
+                "scored_seconds": scored_seconds,
+            },
         })
     return {"scene": int(scene), "series": series}
 

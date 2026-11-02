@@ -5372,9 +5372,8 @@
     return (miss.mean || miss.p1 != null) ? miss : null;
   }
 
-  function vmafSceneFloor(r, lo, gap) {
+  function vmafSceneFloor(r, lo, gap, anchor = vmafP1Anchor()) {
     if (!(gap > 0)) return null;
-    const anchor = vmafP1Anchor();
     const limits = [];
     if (anchor === "both" || anchor === "target") limits.push(lo - gap);
     if (anchor === "both" || anchor === "mean") limits.push(Number(r.vmaf) - gap);
@@ -5391,7 +5390,7 @@
     if (miss.mean) bits.push(`Mittel ${Number(r.vmaf).toFixed(1)} unter Ziel ${Math.round(lo)}`);
     if (miss.p1 != null) {
       const where = miss.scene ? `Szene ${miss.scene}, ` : "";
-      bits.push(`${where}1%-Low ${Number(miss.p1).toFixed(1)} unter ${Math.round(miss.floor)}`);
+      bits.push(`${where}Low-Kriterium: 1%-Low ${Number(miss.p1).toFixed(2)} unter ${Number(miss.floor).toFixed(2)}`);
     }
     return bits.join(", ");
   }
@@ -5511,6 +5510,139 @@
     return `<span class="metric-pill ${m.cls}" title="${escapeHtml(tip)}">SSIMULACRA2 ${m.text}${mn} · ${m.word}</span>`;
   }
 
+  // Nur Erläuterung: keine neue Freigaberegel, keine Auswertung der Graph-Minima.
+  function vmafLowContextLines(sc, series, floor) {
+    const meta = (series && series.low_context) || {};
+    const count = Number(meta.count || (series && series.count) || sc.frame_count) || 0;
+    const k = count > 0 ? Math.max(1, Math.floor(count * 0.01)) : 0;
+    const seconds = Number(meta.scored_seconds || sc.scored_seconds) || 0;
+    const lines = [];
+    if (count > 0) {
+      lines.push(`1%-Low: Mittel der ${k} schlechtesten von ${count} bewerteten Frames`
+        + (seconds > 0 ? ` aus ca. ${seconds.toFixed(2)} s bewerteter Dauer.` : "."));
+      if (k === 1) {
+        lines.push("Hier bestimmt ein einziges Bild das Low. Das ist ein Extremwert, keine Aussage über einen anhaltenden Qualitätsverlust.");
+        if (count < 100) lines.push(`Bei dieser kurzen Framebasis entspricht das eine Bild ${(100 / count).toFixed(1)} % der Stichprobe: Es wird immer mindestens ein Frame verwendet.`);
+      } else if (k < 10) lines.push(`Hier bestimmen nur ${k} Extremframes das Low. Sie müssen nicht zusammenhängen; einzelne Ausreißer haben viel Gewicht.`);
+      else lines.push("Die schlechtesten Frames müssen nicht zusammenhängen. Auch ein Low aus vielen Bildern beschreibt keine zusammenhängende Dauer.");
+    } else {
+      lines.push("Die Anzahl bewerteter Frames fehlt. Aus den Tiefstwerten der verkürzten Graphkurve lässt sich die Framebasis nicht bestimmen.");
+    }
+    if (sc.idle) {
+      lines.push("Diese Szene zählt nicht zur Empfehlung; ihr Low löst keinen Ausschluss aus.");
+      return lines;
+    }
+    if (floor == null) {
+      lines.push("Low-Floor ausgeschaltet: Das Low ist informativ und kein Mindestkriterium der Empfehlung.");
+      return lines;
+    }
+    const p1 = sc.p1 == null ? NaN : Number(sc.p1);
+    if (Number.isFinite(p1)) {
+      lines.push(p1 + 1e-9 < floor
+        ? `Low-Kriterium nicht erfüllt: ${p1.toFixed(2)} unter Grenze ${floor.toFixed(2)}. Das ist ein Warnsignal, kein Nachweis sichtbar schlechter Qualität.`
+        : `Low-Kriterium erfüllt: ${p1.toFixed(2)} bei Grenze ${floor.toFixed(2)}. Das garantiert nicht, dass Verluste unsichtbar sind.`);
+    }
+    const frames = (series && series.frames) || [];
+    if (!(count > 0) || frames.length !== count
+        || frames.some((f) => f.vmaf == null || !Number.isFinite(Number(f.vmaf)))) {
+      lines.push("Häufigkeit und Dauer benötigen das vollständige Frame-Log; aus der verkürzten Kurve wird nichts hochgerechnet.");
+      return lines;
+    }
+    let under = 0, longest = 0, run = 0, previous = null;
+    frames.forEach((f, i) => {
+      const n = f.n == null ? i : Number(f.n);
+      const score = f.vmaf_raw == null ? Number(f.vmaf) : Number(f.vmaf_raw);
+      if (score < floor) {
+        under++;
+        run = previous != null && n === previous + 1 ? run + 1 : 1;
+        longest = Math.max(longest, run);
+      } else run = 0;
+      previous = n;
+    });
+    if (!under) {
+      lines.push("Kein bewerteter Frame liegt unter dieser Grenze.");
+    } else {
+      lines.push(`${under} von ${count} Frames (${(under / count * 100).toFixed(1)} %) unter dieser Grenze; längste Folge: ${longest} Frame${longest === 1 ? "" : "s"}`
+        + (seconds > 0 ? ` (ca. ${(longest * seconds / count).toFixed(2)} s).` : "."));
+      if (longest === 1) lines.push("Nur einzelne Unterschreitungen, keine direkt aufeinanderfolgenden. Auch Einzelbilder können etwa als Flackern auffallen.");
+      else if (longest === under) lines.push("Die Unterschreitungen liegen in einem zusammenhängenden Abschnitt. Diese Stelle gezielt im A/B-Vergleich prüfen.");
+      else lines.push("Es gibt zusammenhängende Unterschreitungen und weitere schwache Frames. Die längste Folge beschreibt nur einen Teil davon.");
+      if (Number.isFinite(p1) && p1 + 1e-9 >= floor) lines.push("Trotz erfülltem Low-Kriterium liegen Frames unter der Grenze: Das Low ist ein Mittelwert, kein Einzelbild-Minimum.");
+    }
+    return lines;
+  }
+
+  function vmafLowContextHtml(r, vmaf, packs = new Map()) {
+    const lo = vmafTargetLo(vmaf);
+    const gap = vmafP1GapValue();
+    const anchor = vmafP1Anchor();
+    const floor = vmafSceneFloor(r, lo, gap, anchor);
+    const lines = [];
+    if (floor != null) {
+      const rule = anchor === "mean" ? "Gesamtmittel − Abstand"
+        : (anchor === "target" ? "Ziel − Abstand" : "höhere Grenze aus Ziel − Abstand und Gesamtmittel − Abstand");
+      lines.push(`Verwendete Low-Grenze: ${floor.toFixed(2)} (${rule}; Abstand ${gap}).`);
+      if (anchor === "both" && Number(r.vmaf) > lo) lines.push("Hier hebt das Gesamtmittel die Grenze über Ziel − Abstand an. Sehr gute andere Szenen können die Konsistenzanforderung an die schwächste Szene verschärfen.");
+    }
+    const miss = vmafResultMiss(r, lo, gap);
+    if (r.recommended && miss) lines.push("Als Kompromiss empfohlen: Nicht alle Zielkriterien sind erfüllt. Die Kontextangaben ändern die Auswahlregel nicht.");
+    let html = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+    (r.scene_scores || []).forEach((sc) => {
+      const pack = packs.get(sc.scene);
+      const series = pack && (pack.series || []).find((s) => s.label === (r.label || ""));
+      const text = vmafLowContextLines(sc, series, floor);
+      if (packs.has(sc.scene) && !series) text.push("Das Frame-Log dieser Einstellung fehlt im Archiv oder konnte nicht geladen werden. Erneutes Öffnen versucht den Abruf nochmals.");
+      html += `<section><strong>Szene ${Number(sc.scene) + 1}</strong>`
+        + text.map((line) => `<p>${escapeHtml(line)}</p>`).join("") + `</section>`;
+    });
+    return html + `<p>Die Angaben beschreiben nur die getesteten Ausschnitte, nicht den gesamten Film. Hohe Originalbitrate allein beweist weder sichtbare Verluste noch deren Unbedenklichkeit. Sekunden sind Näherungen aus dem bewerteten Fenster, nicht aus der nominellen Cliplänge. Empfehlungslogik unverändert.</p>`;
+  }
+
+  // Pro sichtbarem Analyseobjekt und Szene teilen sich die Ergebniszeilen einen Abruf.
+  const vmafLowLogCache = new WeakMap();
+  async function loadVmafLowContext(details, r, vmaf) {
+    const body = details.querySelector(".vmaf-low-body");
+    if (!body || !details.open || details.dataset.loading) return;
+    const session = vmaf.session || state.vmafSession;
+    if (!session) {
+      body.innerHTML = vmafLowContextHtml(r, vmaf)
+        + `<p>Vollständige Frame-Logs sind erst für einen gespeicherten Vergleich verfügbar.</p>`;
+      return;
+    }
+    details.dataset.loading = "1";
+    body.innerHTML = vmafLowContextHtml(r, vmaf) + `<p>Vollständige Frame-Logs werden gelesen …</p>`;
+    let cache = vmafLowLogCache.get(vmaf);
+    if (!cache) { cache = new Map(); vmafLowLogCache.set(vmaf, cache); }
+    const packs = new Map();
+    await Promise.all((r.scene_scores || []).map(async (sc) => {
+      const key = `${session}:${sc.scene}`;
+      if (!cache.has(key)) {
+        const pending = fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc.scene}&full=1`)
+          .then((res) => res.ok ? res.json() : null)
+          .catch(() => null)
+          .then((pack) => {
+            if (!pack || !Array.isArray(pack.series) || !pack.series.length) {
+              cache.delete(key); // Späteres Öffnen darf nach Archiv-/Netzfehler erneut laden.
+              return null;
+            }
+            return pack;
+          });
+        cache.set(key, pending);
+      }
+      const pack = await cache.get(key);
+      if (pack && !pack.series.some((s) => s.label === (r.label || ""))) cache.delete(key);
+      packs.set(sc.scene, pack);
+    }));
+    delete details.dataset.loading;
+    // Abgelöste Tabellen oder ein zwischenzeitlich gewechseltes Archiv nicht verändern.
+    if (!details.isConnected || state.vmafShown !== vmaf) return;
+    body.innerHTML = vmafLowContextHtml(r, vmaf, packs);
+  }
+
+  function vmafMissLabel(miss) {
+    return miss.mean ? (miss.p1 != null ? "Zielkriterien verfehlt" : "Mittelwertziel verfehlt") : "Low-Kriterium verfehlt";
+  }
+
   function vmafCell(r) {
     const spread = vmafSpread(r);
     let s = `${r.vmaf.toFixed(2)}`;
@@ -5572,7 +5704,7 @@
             ? `<span title="${escapeHtml(`Szene ${sc.scene + 1}: VMAF ${Number(sc.vmaf).toFixed(1)}${p}${s2Tip}`)}">${escapeHtml(text)}</span>`
             : escapeHtml(text);
         }
-        const tip = `1%-Low ${Number(sc.p1).toFixed(1)} unter ${Math.round(floor)}${s2Tip}`;
+        const tip = `Low-Kriterium nicht erfüllt: 1%-Low ${Number(sc.p1).toFixed(2)} unter ${floor.toFixed(2)}. Sichtbarkeit und Dauer separat prüfen.${s2Tip}`;
         return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
       s += `<br><span class="muted vmaf-scenes" title="${escapeHtml(perScene.join("\n"))}">`
@@ -5591,9 +5723,10 @@
     if (r.vmaf_score != null && r.vmaf_1pct != null) extra.push(`<span>Score ${Number(r.vmaf_score).toFixed(1)}</span>`);
     if (extra.length) {
       const gap = vmafP1GapValue();
-      const rec = gap <= 0
+      const floor = vmafSceneFloor(r, vmafTargetLo(state.vmafShown), gap);
+      const rec = floor == null
         ? "Empfehlung: nur Mittel ≥ Ziel (1%-Low-Floor aus)."
-        : `Empfehlung: Mittel ≥ Ziel und das 1%-Low der schwächsten Szene nicht mehr als ${gap} darunter.`;
+        : `Empfehlung: Mittel ≥ Ziel und 1%-Low der schwächsten aktiven Szene ≥ ${floor.toFixed(2)}. Ein verfehltes Low-Kriterium ist kein unmittelbares Urteil über die Sichtbarkeit.`;
       s += `<br><span class="muted" title="Ø 1% = Schnitt der Szenen-1%-Lows; min 1% = schwächste Szene; `
         + `1%-Low je Szene = Mittel der schlechtesten 1 % Frames; `
         + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
@@ -5614,7 +5747,7 @@
     const lo = vmafTargetLo(state.vmafShown);
     const miss = vmafResultMiss(r, lo, vmafP1GapValue());
     if (miss) {
-      s += `<br><span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">Ziel verfehlt</span>`;
+      s += `<br><span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">${vmafMissLabel(miss)}</span>`;
     }
     return s;
   }
@@ -5650,14 +5783,15 @@
       return;
     }
     const lead = gap <= 0
-      ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, nur Mittel).`
+      ? `Zielkriterien nicht vollständig erfüllt (Ziel ${Math.round(lo)}, nur Mittel).`
       : (vmafP1Anchor() === "mean"
-        ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ Filmschnitt−${Math.round(gap)}).`
+        ? `Zielkriterien nicht vollständig erfüllt (Ziel ${Math.round(lo)}, schwächste Szene ≥ Filmschnitt−${Math.round(gap)}).`
         : (vmafP1Anchor() === "both"
-          ? `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)} und ≥ Filmschnitt−${Math.round(gap)}).`
-          : `Ziel nicht erreicht (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`));
+          ? `Zielkriterien nicht vollständig erfüllt (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)} und ≥ Filmschnitt−${Math.round(gap)}).`
+          : `Zielkriterien nicht vollständig erfüllt (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`));
     missBox.innerHTML = `<span>${escapeHtml(lead)}</span> `
-      + misses.map((line) => `<span>${escapeHtml(line)}</span>`).join(" ");
+      + misses.map((line) => `<span>${escapeHtml(line)}</span>`).join(" ")
+      + `<span>Ein verfehltes Low-Kriterium ist kein Nachweis sichtbar schlechter Qualität. „1%-Low einordnen“ an der Ergebniszeile erklärt Framebasis, Häufigkeit und Dauer.</span>`;
     missBox.style.display = "";
   }
 
@@ -5886,7 +6020,7 @@
     const lo = vmafTargetLo(state.vmafShown);
     const miss = vmafResultMiss(r, lo, vmafP1GapValue());
     if (miss) {
-      s += ` <span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">Ziel verfehlt</span>`;
+      s += ` <span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">${vmafMissLabel(miss)}</span>`;
     }
     return s;
   }
@@ -5904,7 +6038,9 @@
       <tr class="${r.recommended ? "row-recommended" : ""} ${missed ? "row-target-miss" : ""}">
         <td><input type="checkbox" data-vmaf-key="${escapeHtml(key)}" title="${escapeHtml(tip)}"${vmafRowOff(key) ? "" : " checked"}></td>
         <td><span class="nerd-swatch" style="background:${vmafRowColor(r, idx)}"></span>${escapeHtml(key)}
-          <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details></td>
+          <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details>
+          ${!vmaf.visual_only && (r.scene_scores || []).length
+            ? `<details class="vmaf-low-context" data-low-row="${idx}"><summary>1%-Low einordnen</summary><div class="vmaf-low-body">${vmafLowContextHtml(r, vmaf)}</div></details>` : ""}</td>
         <td>${vmafBrief(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
@@ -5927,6 +6063,12 @@
       body.innerHTML = html;
       body.querySelectorAll("[data-vmaf-key]").forEach((box) => {
         box.addEventListener("change", () => setVmafRowShown(box.getAttribute("data-vmaf-key"), box.checked));
+      });
+      body.querySelectorAll("[data-low-row]").forEach((details) => {
+        details.addEventListener("toggle", () => {
+          const row = vmaf.results[Number(details.dataset.lowRow)];
+          if (row && details.open) loadVmafLowContext(details, row, vmaf);
+        });
       });
       body.querySelectorAll("[data-take]").forEach((b) =>
         b.addEventListener("click", () =>
@@ -7031,7 +7173,7 @@
       try { paintNerdChart(data); } catch (e) { /* Canvas bleibt leer */ }
       return;
     }
-    const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Clip-Länge durch bewertete Frames.";
+    const legend = "σ ist die Streuung der Frame-VMAFs um den Schnitt dieser Szene. Klein heißt: die Qualität liegt eng beieinander, nicht dass die Filmszene ruhig ist. Liegt der Median über dem Schnitt, zieht ein schlechter Schwanz den Schnitt nach unten. Der längste Einbruch zählt aufeinanderfolgende Frames unter dem Regler. Die Sekunden sind Näherungen aus dem bewerteten Fenster (ohne abgeschnittene Clipränder) und der Zahl bewerteter Frames.";
     const num = (v) => Number(v).toFixed(2);
     const cell = (v) => (v == null || v === "" ? "" : escapeHtml(num(v)));
     const rows = series.map((s, i) => {
@@ -12340,7 +12482,8 @@
 
   async function openClipAb(picks, opts) {
     if (!ab.sides.a || !ab.sides.b) return;
-    ab.closing = false;
+    const loadSeq = abBeginLoad();
+    const seq = ab.controlSeq;
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
     const sa = ab.sides.a;
@@ -12361,9 +12504,11 @@
     const pathA = $("ab-path-a");
     const pathB = $("ab-path-b");
     let ok;
+    let masterT = 0;
     if (refs.length === 1) {
       const enc = encs[0];
       const start = enc.start || refs[0].start || 0;
+      masterT = start;
       const len = enc.len || refs[0].len || 0;
       ab.window = len > 0 ? { start, end: start + len } : null;
       sa.path = state.vmafSource.path;
@@ -12375,7 +12520,6 @@
       if (pathB) pathB.value = "";
       abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
       ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
-      if (ab.closing) return;
     } else {
       const len = encs[0].len || encs[1].len || 0;
       ab.window = len > 0 ? { start: 0, end: len } : null;
@@ -12387,10 +12531,12 @@
       if (pathB) pathB.value = "";
       abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
       ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
-      if (ab.closing) return;
     }
-    if (ab.closing) return;
-    if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
+    const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
+    if (!current()) return;
+    const settled = ok.every(Boolean) && await abAlignAndSettleBoth(masterT, true, current);
+    if (!current()) return;
+    if (badge) badge.textContent = settled ? tt("Geladen") : tt("Fehler");
     syncNerdAbToPicks(picks);
     const box = $("ab-weak");
     if (box) { box.style.display = "none"; box.innerHTML = ""; }
@@ -12407,6 +12553,13 @@
     wipe: 50,           // Kante in %
     seeking: false,
     closing: false,     // Entladen: kein neuer Encode, kein Nachziehen
+    loadSeq: 0,         // Ein älterer Clip-/Dateiwechsel darf den neuen nicht verändern.
+    controlSeq: 0,      // Play/Pause/Seek verwirft ältere asynchrone Startversuche.
+    wantPlay: false,
+    holding: false,     // Beide warten gemeinsam auf Daten/Seek-Ende.
+    playTask: null,
+    settling: 0,
+    settleSeq: 0,
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
   };
@@ -12417,8 +12570,25 @@
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
       info: null, sess: null, plan: null, lookSummary: "", lookTimer: 0,
       starting: false, lookAgain: false, lastTime: 0, encodePaused: false,
-      epoch: 0, token: "",
+      encodePauseWanted: false, encodePauseTask: null,
+      epoch: 0, token: "", syncPauses: 0, syncSeekTarget: null,
     };
+  }
+
+  function abApplyPlaybackRate() {
+    // Die gemeinsame Auswahl bleibt auch bei load()/HLS-Neustart maßgeblich.
+    const select = $("ab-speed");
+    const value = Number(select && select.value);
+    const rate = [1, 0.5, 0.25].includes(value) ? value : 1;
+    if (select && select.value !== String(rate)) select.value = String(rate);
+    Object.values(ab.sides).forEach((side) => {
+      const video = side && side.video;
+      if (!video) return;
+      // defaultPlaybackRate verhindert den Rückfall auf 1× beim Quellenwechsel.
+      // Nur bei Abweichung setzen: ratechange darf keine Event-Schleife auslösen.
+      if (video.defaultPlaybackRate !== rate) video.defaultPlaybackRate = rate;
+      if (video.playbackRate !== rate) video.playbackRate = rate;
+    });
   }
 
   function abLookaheadSec() {
@@ -12442,20 +12612,35 @@
   }
 
   async function abSetEncodePaused(side, paused) {
-    if (!side || !side.sid || side.mode !== "hls") return;
-    if (side.encodePaused === !!paused) return;
-    side.encodePaused = !!paused;
-    const action = paused ? "pause" : "resume";
-    try {
-      const d = await (await fetch(`/api/player/session/${side.sid}/${action}`, {
-        method: "POST",
-      })).json();
-      if (d && d.encode_paused != null) side.encodePaused = !!d.encode_paused;
-    } catch (e) { /* ignore */ }
+    if (ab.closing || !side || !side.sid || side.mode !== "hls") return;
+    side.encodePauseWanted = !!paused;
+    if (side.encodePauseTask) return side.encodePauseTask;
+    if (side.encodePaused === side.encodePauseWanted) return;
+    const sid = side.sid, epoch = side.epoch;
+    const current = () => !ab.closing && side.sid === sid && side.epoch === epoch;
+    // Pro Session nur einen Befehl gleichzeitig: Ein verspätetes Pause darf
+    // das Resume beim gemeinsamen Start/Puffern nicht wieder überschreiben.
+    const task = (async () => {
+      while (current() && side.encodePaused !== side.encodePauseWanted) {
+        const want = side.encodePauseWanted;
+        const action = want ? "pause" : "resume";
+        try {
+          const d = await (await fetch(`/api/player/session/${sid}/${action}`, {
+            method: "POST",
+          })).json();
+          if (!current() || !d || d.encode_paused == null) return;
+          side.encodePaused = !!d.encode_paused;
+          if (side.encodePaused !== want) return;
+        } catch (e) { return; }
+      }
+    })();
+    side.encodePauseTask = task;
+    try { await task; }
+    finally { if (side.encodePauseTask === task) side.encodePauseTask = null; }
   }
 
   function abThrottleSide(side) {
-    if (!side || side.mode !== "hls" || !side.sid) return;
+    if (ab.closing || !side || side.mode !== "hls" || !side.sid) return;
     const la = abLookaheadSec();
     if (!(la > 0)) {
       if (side.encodePaused) abSetEncodePaused(side, false);
@@ -12663,68 +12848,212 @@
     if (parts.length) abSetStatus(parts.join("   |   "));
   }
 
-  function abWaitMediaReady(video, timeoutMs) {
+  function abPauseMedia(side) {
+    const video = side && side.video;
+    if (!video || video.paused) return;
+    // pause-Events kommen asynchron. Eigene Puffer-/Seek-Pausen sind kein
+    // neuer Benutzerwunsch und dürfen den gemeinsamen Wiederanlauf nicht löschen.
+    side.syncPauses = (side.syncPauses || 0) + 1;
+    video.pause();
+  }
+
+  function abPauseBoth() {
+    ab.wantPlay = false;
+    ab.holding = false;
+    ab.seeking = false;
+    ab.controlSeq += 1;
+    ab.playTask = null;
+    Object.values(ab.sides).forEach(abPauseMedia);
+  }
+
+  function abBeginLoad() {
+    abPauseBoth();
+    ab.closing = false;
+    ab.seeking = false;
+    ab.loadSeq += 1;
+    Object.values(ab.sides).forEach((side) => {
+      if (side.lookTimer) clearTimeout(side.lookTimer);
+      side.lookTimer = 0;
+      side.lookAgain = false;
+      side.starting = false;
+      side.epoch += 1;
+      abDestroy(side);
+    });
+    return ab.loadSeq;
+  }
+
+  function abWaitMediaReady(video, timeoutMs, minState = 3, valid = () => true) {
     return new Promise((resolve) => {
-      if (!video || video.readyState >= 3) { resolve(); return; }
-      let done = false;
-      const fin = () => {
-        if (done) return;
-        done = true;
-        video.removeEventListener("canplay", fin);
-        video.removeEventListener("loadeddata", fin);
-        resolve();
+      const ready = () => !!video && video.readyState >= minState
+        && (minState < 2 || !video.seeking);
+      if (!video || !valid() || video.error) { resolve(false); return; }
+      if (ready()) { resolve(true); return; }
+      const events = ["loadedmetadata", "loadeddata", "canplay", "seeked", "progress"];
+      let timer;
+      const finish = (ok) => {
+        clearTimeout(timer);
+        events.forEach((name) => video.removeEventListener(name, check));
+        video.removeEventListener("error", fail);
+        resolve(ok);
       };
-      video.addEventListener("canplay", fin, { once: true });
-      video.addEventListener("loadeddata", fin, { once: true });
-      setTimeout(fin, timeoutMs || 2500);
+      const check = () => {
+        if (!valid() || video.error) finish(false);
+        else if (ready()) finish(true);
+      };
+      const fail = () => finish(false);
+      events.forEach((name) => video.addEventListener(name, check));
+      video.addEventListener("error", fail, { once: true });
+      // loadeddata allein und ein abgelaufener Timer bedeuten noch kein
+      // spielbereites Bild. Auch ein noch laufender Seek muss fertig werden.
+      timer = setTimeout(() => finish(valid() && ready()), timeoutMs || 8000);
     });
   }
 
-  async function abAlignAndSettleBoth(masterT, keepPaused) {
-    if (ab.closing) return;
+  function abWaitHlsTimeline(side, hls, valid = () => true) {
+    return new Promise((resolve) => {
+      const ptsEvent = window.Hls.Events.INIT_PTS_FOUND;
+      const destroyEvent = window.Hls.Events.DESTROYING;
+      let timer, done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        hls.off(ptsEvent, onPts);
+        hls.off(destroyEvent, onDestroy);
+        resolve(ok);
+      };
+      const onDestroy = () => finish(false);
+      const onPts = (_, data) => {
+        if (!valid()) { finish(false); return; }
+        if (!data || (data.id && data.id !== "main")) return;
+        const scale = Number(data.timescale), pts = Number(data.initPTS);
+        if (!(scale > 0) || !Number.isFinite(scale) || !Number.isFinite(pts)
+            || data.initPTS == null) return;
+        // FFmpeg erhält mit copyts/start_at_zero die Filmzeit im fMP4.
+        // hls.js zieht diesen DTS-Anker ab. sess.start ist dagegen nur
+        // der gewünschte Seek, nicht der tatsächlich getroffene Keyframe.
+        side.offset = pts / scale;
+        finish(true);
+      };
+      hls.on(ptsEvent, onPts);
+      hls.on(destroyEvent, onDestroy);
+      timer = setTimeout(() => finish(false), 8000);
+    });
+  }
+
+  async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true) {
+    if (ab.closing) return false;
     const sa = ab.sides.a, sb = ab.sides.b;
-    if (!sa || !sb) return;
-    if (sa.video) sa.video.pause();
-    if (sb.video) sb.video.pause();
-    const targetA = Math.max(0, masterT);
-    const targetB = Math.max(0, masterT + abOffsetB());
-    if (sa.path) abSetTime(sa, targetA);
-    if (sb.path) abSetTime(sb, targetB);
-    await Promise.all([
-      sa.path ? abWaitMediaReady(sa.video, 2500) : Promise.resolve(),
-      sb.path ? abWaitMediaReady(sb.video, 2500) : Promise.resolve(),
-    ]);
-    if (sa.path) abSetTime(sa, targetA);
-    if (sb.path) abSetTime(sb, targetB);
-    if (!keepPaused) {
-      if (sa.video) sa.video.play().catch(() => {});
-      if (abSynced() && sb.video) sb.video.play().catch(() => {});
+    if (!sa || !sb) return false;
+    const sides = [sa, sb].filter((side) => side.path);
+    const epochs = sides.map((side) => side.epoch);
+    const loadSeq = ab.loadSeq;
+    const current = () => !ab.closing && ab.loadSeq === loadSeq && valid()
+      && sides.every((side, i) => side.epoch === epochs[i]);
+    const settling = ++ab.settleSeq;
+    ab.settling = settling;
+    sides.forEach(abPauseMedia);
+    try {
+      const metadata = await Promise.all(sides.map((side) =>
+        abWaitMediaReady(side.video, 8000, 1, current)));
+      if (!current() || !metadata.every(Boolean)) return false;
+      sides.forEach((side) => abSetTime(side,
+        Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0))));
+      const ready = await Promise.all(sides.map((side) =>
+        abWaitMediaReady(side.video, 8000, 3, current)));
+      if (!current() || !ready.every(Boolean)) return false;
+    } finally {
+      if (ab.settling === settling) ab.settling = 0;
     }
+    if (!keepPaused) return abPlayTogether();
+    return true;
+  }
+
+  async function abPlayTogether() {
+    if (ab.closing || ab.seeking || !ab.sides.a.path) return false;
+    if (ab.playTask) return ab.playTask;
+    const sa = ab.sides.a, sb = ab.sides.b;
+    abApplyPlaybackRate();
+    ab.wantPlay = true;
+    if (!abSynced() || !sb.path) {
+      ab.holding = false;
+      abSetEncodePaused(sa, false);
+      try { await sa.video.play(); return true; } catch (e) { ab.wantPlay = false; return false; }
+    }
+    const seq = ++ab.controlSeq;
+    const loadSeq = ab.loadSeq;
+    const epochs = [sa.epoch, sb.epoch];
+    const current = () => !ab.closing && ab.wantPlay && seq === ab.controlSeq
+      && loadSeq === ab.loadSeq && sa.epoch === epochs[0] && sb.epoch === epochs[1];
+    const masterT = abTime(sa);
+    ab.holding = true;
+    const task = (async () => {
+      abSetEncodePaused(sa, false);
+      abSetEncodePaused(sb, false);
+      const ready = await abAlignAndSettleBoth(masterT, true, current);
+      if (!current() || !ready) return false;
+      abApplyPlaybackRate();
+      // Beide Uhren erst nach Daten UND Seek-Ende im selben Task starten.
+      ab.holding = false;
+      try {
+        await Promise.all([sa.video.play(), sb.video.play()]);
+        return current();
+      } catch (e) {
+        if (current()) abPauseBoth();
+        return false;
+      }
+    })();
+    ab.playTask = task;
+    try { return await task; }
+    finally { if (ab.playTask === task) ab.playTask = null; }
+  }
+
+  function abResumeIfReady() {
+    if (ab.closing || !ab.wantPlay || !ab.holding || ab.playTask || ab.seeking || ab.settling) return;
+    const sides = Object.values(ab.sides).filter((side) => side.path);
+    if (sides.every((side) => !side.starting && !side.video.seeking && side.video.readyState >= 3)) {
+      abPlayTogether();
+    }
+  }
+
+  function abHoldForBuffer(side) {
+    if (ab.closing || !abSynced() || !ab.wantPlay || ab.holding || ab.seeking || ab.settling
+        || !ab.sides.b.path || side.starting || side.video.ended) return;
+    ab.controlSeq += 1;
+    ab.playTask = null;
+    ab.holding = true;
+    Object.values(ab.sides).forEach((s) => {
+      abPauseMedia(s);
+      abSetEncodePaused(s, false);
+    });
+    abResumeIfReady();
   }
 
   function abQueueSideReload(key) {
     const side = ab.sides[key];
     abSyncSideLookUi(key);
-    if (!side || !side.path || side.clipUrl) return;
-    // Beide Seiten sofort pausieren, damit nichts versetzt weiterläuft
-    const sa = ab.sides.a, sb = ab.sides.b;
-    if (sa && sa.video) sa.video.pause();
-    if (sb && sb.video) sb.video.pause();
+    if (ab.closing || !side || !side.path || side.clipUrl) return;
+    // Den alten Wiederanlauf ebenfalls verwerfen, bevor der Look neu lädt.
+    abPauseBoth();
+    const sa = ab.sides.a;
+    const loadSeq = ab.loadSeq;
     if (side.lookTimer) clearTimeout(side.lookTimer);
     side.lookTimer = setTimeout(async () => {
       side.lookTimer = 0;
-      if (ab.closing) return;
+      if (ab.closing || loadSeq !== ab.loadSeq) return;
       if (side.starting) {
         side.lookAgain = true;
         return;
       }
+      const seq = ab.controlSeq;
+      const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
       const masterT = sa ? Math.max(0, abTime(sa)) : 0;
       const targetT = key === "b" ? Math.max(0, masterT + abOffsetB()) : masterT;
       abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau (beide Seiten pausiert) …")}`);
       await abStartSide(side, targetT);
-      if (ab.closing) return;
-      await abAlignAndSettleBoth(masterT, true);
-      if (ab.closing) return;
+      if (!current()) return;
+      await abAlignAndSettleBoth(masterT, true, current);
+      if (!current()) return;
       abUpdateStatusLine();
     }, 450);
   }
@@ -12758,11 +13087,12 @@
       side.hls = null;
     }
     try {
-      side.video.pause();
+      abPauseMedia(side);
       side.video.removeAttribute("src");
       side.video.load();
     } catch (e) { /* ignore */ }
     side.ready = false;
+    side.syncSeekTarget = null;
   }
 
   function abStale(side, epoch) {
@@ -12772,11 +13102,15 @@
   // Laufenden Start verwerfen: Token (noch ohne sid) und Session.
   function abAbortStart(side, token, sid) {
     abCancelToken(token);
-    if (side && side.token === token) side.token = "";
-    const stopId = sid || (side && side.sid) || "";
-    if (side && stopId && side.sid === stopId) side.sid = "";
+    const ownsSide = side && side.token === token;
+    const stopId = sid || (ownsSide ? side.sid : "");
     if (stopId) abStopSession(stopId);
-    if (side) abDetach(side);
+    // Eine verspätete Antwort gehört womöglich schon zu einem älteren Start.
+    // Dann nur dessen Session stoppen, das neue Video samt Session behalten.
+    if (!ownsSide) return;
+    side.token = "";
+    if (side.sid === stopId) side.sid = "";
+    abDetach(side);
   }
 
   function abDestroy(side) {
@@ -12785,6 +13119,9 @@
     const token = side.token;
     side.sid = "";
     side.token = "";
+    side.encodePaused = false;
+    side.encodePauseWanted = false;
+    side.encodePauseTask = null;
     abDetach(side);
     abStopSession(sid);
     abCancelToken(token);
@@ -12801,7 +13138,10 @@
   };
   const abSetTime = (side, t) => {
     side.lastTime = Math.max(0, t);
-    side.video.currentTime = Math.max(0, t - (side.offset || 0));
+    const localT = Math.max(0, t - (side.offset || 0));
+    if (Math.abs(side.video.currentTime - localT) < 0.001) return;
+    side.syncSeekTarget = localT;
+    side.video.currentTime = localT;
   };
   const abBufferedEnd = (side) => {
     const b = side.video.buffered;
@@ -12821,6 +13161,7 @@
     const epoch = (side.epoch || 0) + 1;
     side.epoch = epoch;
     const token = abNewToken();
+    let sessionId = "";
     const stale = () => abStale(side, epoch);
     const targetStart = Math.max(0, startSec || 0);
     side.lastTime = targetStart;
@@ -12833,11 +13174,13 @@
         side.mode = "direct";
         side.path = side.clipUrl;
         side.sid = "";
+        side.token = "";
         side.lookSummary = "";
         side.video.src = side.clipUrl;
         side.video.load();
         side.ready = true;
         side.video.addEventListener("loadedmetadata", () => {
+          if (stale()) return;
           const dur = Number(side.video.duration);
           if (Number.isFinite(dur) && dur > 0) side.duration = (side.offset || 0) + dur;
         }, { once: true });
@@ -12849,6 +13192,7 @@
       if (!side.info) {
         try {
           const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(side.path)}`)).json();
+          if (stale()) return false;
           if (pr && !pr.error) side.info = pr;
         } catch (e) { /* ignore */ }
       }
@@ -12859,8 +13203,13 @@
       const forceHls = ($("ab-playback") && $("ab-playback").value === "hls") || !!look;
       const codecs = (typeof window.fpDetectClientCodecs === "function") ? window.fpDetectClientCodecs() : ["h264"];
       const laSec = abLookaheadSec();
+      const preciseHls = window.Hls && window.Hls.isSupported();
+      // Nerd: etwas vor der Szene einsteigen. Der Copy-Fastseek (+0,5 s)
+      // darf keinen Keyframe HINTER dem Vergleichsanfang auswählen.
+      const sessionStart = preciseHls && !abIsStandalone() && ab.window
+        ? Math.max(0, targetStart - 1) : targetStart;
       const reqBody = {
-        path: side.path, audio: 0, subtitle: -1, start: targetStart,
+        path: side.path, audio: 0, subtitle: -1, start: sessionStart,
         profile: look ? "original" : "auto",
         platform: plat,
         client_direct_ok: !forceHls, client_codecs: codecs,
@@ -12896,13 +13245,14 @@
       const sess = d.session || {};
       side.sess = sess;
       side.plan = d.plan || null;
-      side.sid = sess.id || "";
+      sessionId = sess.id || "";
+      side.sid = sessionId;
       side.mode = sess.mode || "hls";
       side.encodePaused = false;
       side.lookSummary = sess.look_summary || "";
       side.duration = sess.duration || (d.info && d.info.duration) || side.duration || 0;
       abSyncSideLookUi(side.key);
-      if (stale()) { abAbortStart(side, token, side.sid); return false; }
+      if (stale()) { abAbortStart(side, token, sessionId); return false; }
       if (side.mode === "direct") {
         side.offset = 0;
         const directSid = side.sid;
@@ -12914,7 +13264,9 @@
           || `/api/media?root=${encodeURIComponent(side.root)}&path=${encodeURIComponent(side.path)}`;
         side.video.load();
         if (targetStart > 0) {
-          side.video.addEventListener("loadedmetadata", () => { try { side.video.currentTime = targetStart; } catch (e) { /* ignore */ } }, { once: true });
+          side.video.addEventListener("loadedmetadata", () => {
+            if (!stale()) abSetTime(side, targetStart);
+          }, { once: true });
         }
         side.ready = true;
         abUpdateSideBadge(side.key);
@@ -12924,31 +13276,36 @@
       // HLS: auf „ready“ warten, dann hls.js anhängen.
       side.offset = sess.start != null ? sess.start : targetStart;
       side.lastTime = side.offset;
-      const url = sess.playlist_url || `/api/player/session/${side.sid}/index.m3u8`;
+      const url = sess.playlist_url || `/api/player/session/${sessionId}/index.m3u8`;
+      let playlistReady = false;
       for (let i = 0; i < 60; i++) {
-        if (stale()) { abAbortStart(side, token, side.sid); return false; }
-        const st = await (await fetch(`/api/player/session/${side.sid}`)).json();
-        if (stale()) { abAbortStart(side, token, side.sid); return false; }
-        if (st.session && st.session.ready) break;
-        if (st.session && st.session.error) {
-          abSetStatus(`${side.key.toUpperCase()}: ${st.session.error}`, true);
-          abAbortStart(side, token, side.sid);
+        if (stale()) { abAbortStart(side, token, sessionId); return false; }
+        const st = await (await fetch(`/api/player/session/${sessionId}`)).json();
+        if (stale()) { abAbortStart(side, token, sessionId); return false; }
+        if (st.session && st.session.ready) { playlistReady = true; break; }
+        if (st.error || (st.session && st.session.error)) {
+          abSetStatus(`${side.key.toUpperCase()}: ${st.error || st.session.error}`, true);
+          abAbortStart(side, token, sessionId);
           return false;
         }
         await new Promise((r) => setTimeout(r, 150));
       }
-      if (stale()) { abAbortStart(side, token, side.sid); return false; }
+      if (stale() || !playlistReady) { abAbortStart(side, token, sessionId); return false; }
       const maxBuf = laSec > 0 ? Math.max(12, Math.min(120, laSec + 8)) : 60;
-      if (window.Hls && window.Hls.isSupported()) {
+      let timeline = Promise.resolve(true);
+      if (preciseHls) {
         side.hls = new window.Hls({
           enableWorker: true, lowLatencyMode: false,
           maxBufferLength: maxBuf, maxMaxBufferLength: maxBuf + 20,
           backBufferLength: Infinity, startPosition: 0, liveDurationInfinity: false,
+          liveMaxLatencyDurationCount: Infinity, maxLiveSyncPlaybackRate: 1,
         });
-        side.hls.loadSource(url);
-        side.hls.attachMedia(side.video);
+        // Vor loadSource/attachMedia anmelden, damit auch der erste Anker
+        // vor der gemeinsamen Seek-Barriere sicher erfasst wird.
+        timeline = abWaitHlsTimeline(side, side.hls,
+          () => !stale() && side.sid === sessionId);
         side.hls.on(window.Hls.Events.ERROR, (_, data) => {
-          if (!data) return;
+          if (stale() || side.sid !== sessionId || !data) return;
           const det = String(data.details || "");
           if (det === "bufferStalledError" || det === "bufferNudgeOnStall" || det.indexOf("Load") >= 0) {
             if (side.encodePaused) abSetEncodePaused(side, false);
@@ -12958,30 +13315,39 @@
             else abSetStatus(`${side.key.toUpperCase()}: ${det}`, true);
           }
         });
+        side.hls.loadSource(url);
+        side.hls.attachMedia(side.video);
       } else if (side.video.canPlayType("application/vnd.apple.mpegurl")) {
         side.video.src = url;
       } else {
         abSetStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
-        abAbortStart(side, token, side.sid);
+        abAbortStart(side, token, sessionId);
         return false;
       }
-      await abWaitMediaReady(side.video, 3000);
-      if (stale()) { abAbortStart(side, token, side.sid); return false; }
+      const [metadata, anchored] = await Promise.all([
+        abWaitMediaReady(side.video, 8000, 1, () => !stale()), timeline,
+      ]);
+      if (stale() || !metadata || !anchored) { abAbortStart(side, token, sessionId); return false; }
       side.ready = true;
       abUpdateSideBadge(side.key);
       return true;
+    } catch (e) {
+      if (!stale()) abSetStatus(`${side.key.toUpperCase()}: ${e}`, true);
+      abAbortStart(side, token, sessionId);
+      return false;
     } finally {
       if (side.epoch === epoch) {
         side.starting = false;
         if (side.lookAgain && !ab.closing) {
           side.lookAgain = false;
           abQueueSideReload(side.key);
-        }
+        } else abResumeIfReady();
       }
     }
   }
 
-  // Beide Seiten auf Filmzeit t setzen. HLS außerhalb des Puffers → Session neu ab t.
+  // Beide Seiten auf Filmzeit t setzen. Auch im Puffer bleiben beide pausiert,
+  // bis BEIDE Seeks fertig sind; HLS außerhalb des Puffers startet neu ab t.
   async function abSeekBoth(t, pauseAfter) {
     if (ab.closing) return;
     const sa = ab.sides.a, sb = ab.sides.b;
@@ -12990,27 +13356,37 @@
     if (win && win.end > win.start) {
       t = Math.max(win.start, Math.min(win.end - 0.05, t));
     }
+    const resume = !pauseAfter && (ab.wantPlay || !sa.video.paused || !sb.video.paused);
+    abPauseBoth();
+    const seq = ab.controlSeq;
+    const loadSeq = ab.loadSeq;
+    const current = () => !ab.closing && seq === ab.controlSeq && loadSeq === ab.loadSeq;
     ab.seeking = true;
-    const wasPaused = sa.video.paused;
-    const jobs = [];
-    const want = (side, tt_) => {
-      if (!side.path) return;
-      if (side.mode === "direct") { abSetTime(side, tt_); return; }
-      const inWin = tt_ >= (side.offset || 0) - 0.01 && tt_ <= abBufferedEnd(side) + 20;
-      if (side.ready && inWin) abSetTime(side, tt_);
-      else jobs.push(abStartSide(side, Math.max(0, tt_)).then(() => { abSetTime(side, tt_); }));
-    };
-    want(sa, t);
-    want(sb, t + abOffsetB());
-    if (jobs.length) {
-      abSetStatus(tt("Spule …"));
-      await Promise.all(jobs);
-      if (ab.closing) { ab.seeking = false; return; }
-      abSetStatus("");
+    let settled = false;
+    try {
+      const jobs = [];
+      const want = (side, target) => {
+        if (!side.path || side.mode === "direct") return;
+        const inWin = target >= (side.offset || 0) - 0.01 && target <= abBufferedEnd(side) + 20;
+        if (!side.ready || !inWin) jobs.push(abStartSide(side, Math.max(0, target)));
+      };
+      want(sa, t);
+      want(sb, t + abOffsetB());
+      if (jobs.length) {
+        abSetStatus(tt("Spule …"));
+        const ok = await Promise.all(jobs);
+        if (!current() || !ok.every(Boolean)) return;
+      }
+      settled = await abAlignAndSettleBoth(t, true, current);
+      if (!current()) return;
+      if (jobs.length) abUpdateStatusLine();
+    } finally {
+      if (current()) ab.seeking = false;
     }
-    ab.seeking = false;
-    if (pauseAfter || wasPaused) { sa.video.pause(); sb.video.pause(); }
-    else { sa.video.play().catch(() => {}); if (abSynced()) sb.video.play().catch(() => {}); }
+    if (current() && resume) {
+      if (settled) abPlayTogether();
+      else { ab.wantPlay = true; ab.holding = true; abResumeIfReady(); }
+    }
   }
 
   function abApplyMode() {
@@ -13089,6 +13465,8 @@
 
   async function abUnload(clearPaths) {
     ab.closing = true;
+    ab.loadSeq += 1;
+    abPauseBoth();
     const jobs = [];
     ["a", "b"].forEach((key) => {
       const side = ab.sides[key];
@@ -13117,6 +13495,8 @@
       side.offset = 0;
       side.lastTime = 0;
       side.encodePaused = false;
+      side.encodePauseWanted = false;
+      side.encodePauseTask = null;
       abUpdateSideBadge(key);
     });
     if (clearPaths) {
@@ -13162,7 +13542,9 @@
     });
 
     load.addEventListener("click", async () => {
-      ab.closing = false;
+      const loadSeq = abBeginLoad();
+      const seq = ab.controlSeq;
+      const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
       const sa = ab.sides.a, sb = ab.sides.b;
       sa.clipUrl = "";
       sb.clipUrl = "";
@@ -13187,12 +13569,14 @@
       if (sa.path && sa.path === sb.path && !sa.info) {
         try {
           const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(sa.path)}`)).json();
+          if (!current()) return;
           if (pr && !pr.error) {
             sa.info = pr;
             sb.info = pr;
           }
         } catch (e) { /* ignore */ }
       }
+      if (!current()) return;
       abSyncSideLookUi("a");
       abSyncSideLookUi("b");
       const badge = $("ab-badge");
@@ -13200,66 +13584,81 @@
       abSetStatus(tt("Starte Wiedergabe …"));
       abApplyMode();
       const ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
-      if (ab.closing) return;
-      await abAlignAndSettleBoth(0, true);
-      if (ab.closing) return;
-      if (badge) badge.textContent = ok.every(Boolean) ? tt("Geladen") : tt("Fehler");
-      if (ok.every(Boolean)) abUpdateStatusLine();
+      if (!current()) return;
+      const settled = ok.every(Boolean) && await abAlignAndSettleBoth(0, true, current);
+      if (!current()) return;
+      if (badge) badge.textContent = settled ? tt("Geladen") : tt("Fehler");
+      if (settled) abUpdateStatusLine();
       abLoadWeakSpots();
     });
 
-    // B auf A (+ Versatz) ziehen. Hart beim Start/Pause/Seek; laufend nur bei grobem Drift.
+    // Leichten Frame-Versatz laufen lassen. Während Start/Seek/Pufferpause
+    // übernimmt die gemeinsame Wartephase; hier nur groben laufenden Drift korrigieren.
     const alignB = (force) => {
-      if (ab.closing || !abSynced() || ab.seeking) return;
+      if (ab.closing || !abSynced() || ab.seeking || ab.settling || ab.holding) return;
       const sa = ab.sides.a, sb = ab.sides.b;
-      if (!sb.path || !sb.ready) return;
+      if (!sb.path || !sb.ready || sa.starting || sb.starting) return;
+      if (!force && (va.paused || vb.paused || va.seeking || vb.seeking
+          || va.readyState < 3 || vb.readyState < 3)) return;
       const t = Math.max(0, abTime(sa) + abOffsetB());
-      if (force || Math.abs(abTime(sb) - t) > 0.05) {
-        // Außerhalb des HLS-Fensters → Session neu statt ins Leere springen.
+      if (force || Math.abs(abTime(sb) - t) > 0.25) {
         if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 20)) {
           abSeekBoth(abTime(sa));
         } else {
           abSetTime(sb, t);
-          if (sb.video) sb.video.playbackRate = sa.video.playbackRate || 1;
         }
       }
     };
 
-    // A ist Master; B folgt (mit Versatz). Vor dem Start beide auf dieselbe Sekunde ziehen.
-    va.addEventListener("play", async () => {
-      if (ab.closing) return;
-      abSetEncodePaused(ab.sides.a, false);
-      abSetEncodePaused(ab.sides.b, false);
-      if (!abSynced() || !ab.sides.b.path) return;
-      alignB(true);
-      await Promise.all([
-        abWaitMediaReady(va, 1500),
-        abWaitMediaReady(vb, 1500),
-      ]);
-      alignB(true);
-      if (!va.paused) vb.play().catch(() => {});
-    });
-    va.addEventListener("pause", () => {
-      if (ab.closing) return;
-      if (abSynced()) {
-        vb.pause();
-        vb.playbackRate = va.playbackRate || 1;
-        alignB(true);
-      }
-      if (!ab.seeking) {
-        if (abBufferedAhead(ab.sides.a) >= 6) abSetEncodePaused(ab.sides.a, true);
-        if (abBufferedAhead(ab.sides.b) >= 6) abSetEncodePaused(ab.sides.b, true);
-      }
-    });
-    va.addEventListener("ratechange", () => { vb.playbackRate = va.playbackRate; });
-    va.addEventListener("seeking", () => alignB(true));
-    va.addEventListener("seeked", () => alignB(true));
     [ab.sides.a, ab.sides.b].forEach((side) => {
-      if (!side || !side.video) return;
-      side.video.addEventListener("progress", () => abThrottleSide(side));
-      side.video.addEventListener("timeupdate", () => abThrottleSide(side));
+      const video = side.video;
+      video.addEventListener("play", () => {
+        if (video.paused) return; // Event eines inzwischen abgebrochenen Starts.
+        abApplyPlaybackRate();
+        if (ab.closing || ab.seeking || ab.settling) { abPauseMedia(side); return; }
+        abSetEncodePaused(side, false);
+        if (!abSynced() || !ab.sides.b.path) {
+          if (side.key === "a") ab.wantPlay = true;
+          return;
+        }
+        if (ab.wantPlay && !ab.holding) return; // Gemeinsamer Start, kein neuer Auftrag.
+        abPlayTogether();
+      });
+      video.addEventListener("pause", () => {
+        if (side.syncPauses > 0) { side.syncPauses -= 1; return; }
+        if (ab.closing) return;
+        if (abSynced()) { abPauseBoth(); alignB(true); }
+        else if (side.key === "a") { ab.wantPlay = false; ab.controlSeq += 1; }
+        if (!ab.seeking && abBufferedAhead(side) >= 6) abSetEncodePaused(side, true);
+      });
+      video.addEventListener("seeking", () => {
+        if (side.syncSeekTarget != null
+            && Math.abs(video.currentTime - side.syncSeekTarget) < 0.05) return;
+        if (ab.closing || !abSynced() || ab.seeking || ab.settling || side.starting) return;
+        side.syncSeekTarget = null;
+        abSeekBoth(abTime(side) - (side.key === "b" ? abOffsetB() : 0));
+      });
+      video.addEventListener("seeked", () => {
+        side.syncSeekTarget = null;
+        abResumeIfReady();
+      });
+      video.addEventListener("waiting", () => abHoldForBuffer(side));
+      video.addEventListener("stalled", () => {
+        if (video.readyState < 3) abHoldForBuffer(side);
+      });
+      video.addEventListener("canplay", abResumeIfReady);
+      video.addEventListener("progress", () => { abThrottleSide(side); abResumeIfReady(); });
+      video.addEventListener("timeupdate", () => abThrottleSide(side));
     });
+    [va, vb].forEach((video) => {
+      video.addEventListener("ratechange", abApplyPlaybackRate);
+      video.addEventListener("loadedmetadata", abApplyPlaybackRate);
+    });
+    const speedEl = $("ab-speed");
+    if (speedEl) speedEl.addEventListener("change", abApplyPlaybackRate);
+    abApplyPlaybackRate();
     va.addEventListener("timeupdate", () => {
+      if (ab.closing) return;
       const seek = $("ab-seek"), time = $("ab-time");
       const sa = ab.sides.a;
       const win = ab.window;
@@ -13271,9 +13670,10 @@
         if (seek && !ab.seeking) seek.value = String(Math.round((Math.max(0, cur) / dur) * 1000));
         if (time) time.textContent = fmtClock(Math.max(0, cur)) + " / " + fmtClock(dur);
       }
-      if (boxed && abTime(sa) >= win.end - 0.05) {
-        va.pause();
-        vb.pause();
+      if (boxed && !ab.seeking && !ab.settling && !sa.starting && !ab.sides.b.starting
+          && abTime(sa) >= win.end - 0.05) {
+        abPauseBoth();
+        return;
       }
       // Leichten Frame-Versatz laufen lassen; nur bei grobem Drift (~0,25 s) nachziehen.
       const sb = ab.sides.b;
@@ -13284,12 +13684,12 @@
     });
 
     $("ab-play").addEventListener("click", () => {
-      if (va.paused) { va.play().catch(() => {}); } else { va.pause(); }
+      if (ab.wantPlay || !va.paused) { abPauseBoth(); alignB(true); }
+      else abPlayTogether();
     });
     // Einzelbild vor/zurück (beide): Framedauer aus 24 fps angenommen, wenn unbekannt.
     const step = (dir) => {
-      const fps = (ab.weak && ab.weak.fps) || 24;
-      va.pause(); vb.pause();
+      const fps = (ab.weak && ab.weak.fps) || (ab.sides.a.info && ab.sides.a.info.fps) || 24;
       abSeekBoth(Math.max(0, abTime(ab.sides.a) + dir / fps), true);
     };
     const sbk = $("ab-step-back"), sfw = $("ab-step-fwd");
@@ -13305,8 +13705,8 @@
       ab.seeking = false;
       if (dur) abSeekBoth(origin + (parseInt(e.target.value, 10) / 1000) * dur);
     });
-    va.addEventListener("ended", () => vb.pause());
-    vb.addEventListener("ended", () => va.pause());
+    va.addEventListener("ended", abPauseBoth);
+    vb.addEventListener("ended", abPauseBoth);
 
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
@@ -13425,10 +13825,8 @@
   // Beide A/B-Videos pausieren (z. B. beim Verlassen der Seite). HLS-Sessions
   // laufen serverseitig weiter, bis sie als idle aufgeräumt werden.
   function pauseAbVideos() {
-    Object.values(ab.sides).forEach((s) => {
-      if (s && s.video) { try { s.video.pause(); } catch (e) { /* ignore */ } }
-      abThrottleSide(s);
-    });
+    abPauseBoth();
+    Object.values(ab.sides).forEach(abThrottleSide);
   }
 
   /* ------------------------------------------------------------- DIAGNOSE */
