@@ -1012,6 +1012,32 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .dyn-badge.warn { background: color-mix(in srgb, var(--warn, #e0a83a) 25%, transparent); color: var(--text); }
 .dyn-badge.accent { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
 
+/* Laufzeit, Encoding-Details und belegbare Prüfergebnisse. */
+.runtime-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); }
+.runtime-row > div { min-width:0; overflow-wrap:anywhere; }
+.runtime-row small { font-variant-numeric:tabular-nums; }
+.encoding-details { margin-top:5px; font-size:11px; min-width:190px; }
+.encoding-details summary, .analysis-insights summary, .retention-settings summary { cursor:pointer; color:var(--accent); }
+.insight-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:6px 14px; margin:8px 0; }
+.insight-pair dt { color:var(--text-muted); font-size:11px; }
+.insight-pair dd { margin:2px 0; overflow-wrap:anywhere; font-size:12px; }
+.queue-table .insight-grid { display:block; }
+.queue-table .insight-pair { margin:5px 0; }
+.technical-json { max-height:240px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; font-size:11px; background:var(--surface-2); border-radius:6px; }
+.output-report { margin:12px 0; }
+.report-check { padding:8px; margin:6px 0; border:1px solid var(--border); border-radius:6px; font-size:12px; overflow-wrap:anywhere; }
+.report-check > strong { margin-right:8px; }
+.preview-provenance { padding:8px; margin:6px 0; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; font-size:11px; overflow-wrap:anywhere; }
+.ab-preview-notes { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.analysis-insights { margin:8px 0; padding:10px; border:1px solid var(--border); border-radius:8px; font-size:12px; }
+.analysis-insights .check { margin:8px 0; }
+.extra-scene form { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+.extra-scene label { display:flex; flex-direction:column; gap:4px; }
+.extra-scene input, #retention-days { width:110px; }
+.retention-settings { margin-bottom:12px; }
+.cleanup-files { max-height:180px; overflow:auto; font-size:12px; overflow-wrap:anywhere; }
+@media (max-width:680px) { .runtime-row { align-items:start; flex-direction:column; } .ab-preview-notes { grid-template-columns:1fr; } }
+
 /* Schwebende Tooltips (data-tip) – nicht vom Tabellen-Overflow abgeschnitten */
 .ui-tip {
   position: fixed;

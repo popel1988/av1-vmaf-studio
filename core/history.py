@@ -39,6 +39,9 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN encode_seconds REAL")
     if "steps_json" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN steps_json TEXT")
+    for name in ("details_json", "report_json"):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT")
 
 
 def job_kind_fields(settings) -> tuple[str, str, int]:
@@ -198,6 +201,8 @@ def record_job(item, duration: float = 0.0) -> None:
         json.dumps(source_summary(getattr(item, "info", None)), ensure_ascii=False),
         float(getattr(item, "encode_seconds", 0.0) or 0.0),
         _dump_steps(getattr(item, "steps", None)),
+        json.dumps(getattr(item, "details", {}) or {}, ensure_ascii=False, default=str),
+        json.dumps(getattr(item, "report", {}) or {}, ensure_ascii=False, default=str),
     )
     try:
         with _lock:
@@ -207,8 +212,8 @@ def record_job(item, duration: float = 0.0) -> None:
                 (id, title, path, status, platform, codec, rate_mode, quality,
                  vmaf, original_size, output_size, saved_bytes, duration,
                  created, finished, settings_json, output_path, source_json,
-                 encode_seconds, steps_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 encode_seconds, steps_json, details_json, report_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row,
             )

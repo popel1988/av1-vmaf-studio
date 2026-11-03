@@ -1258,7 +1258,7 @@
 
   function mediaUrl(path, startSec) {
     const audio = previewAudioIndex();
-    let u = `/api/media/stream?root=media&path=${encodeURIComponent(path)}&audio=${audio}`;
+    let u = `/api/media/stream?root=media&owner=editor&path=${encodeURIComponent(path)}&audio=${audio}`;
     if (startSec && startSec > 0) u += `&start=${encodeURIComponent(String(startSec))}`;
     return u;
   }
@@ -1363,6 +1363,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           path: ed.src.path,
+          owner: "editor",
           audio: previewAudioIndex(),
           subtitle: audioOpts().sub_index,
           start,

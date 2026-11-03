@@ -11,8 +11,10 @@ Kompatibilität:
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import re
 import os
 import shutil
 import signal
@@ -26,6 +28,7 @@ from typing import Optional
 
 from . import config, ffmpeg_utils as ff
 from . import media_stream as ms
+from . import runtime
 from .encoder import _TONEMAP_CHAIN
 
 logger = logging.getLogger("vcompress.player_hls")
@@ -116,6 +119,14 @@ def _spawn_ffmpeg(cmd: list[str], sid: str, work_dir: Path) -> subprocess.Popen:
     return proc
 
 
+def _playlist_size(path: Path) -> int:
+    """Stop/Idle-Cleanup darf zwischen Existenzprüfung und stat stattfinden."""
+    try:
+        return path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return 0
+
+
 def _tail_ffmpeg_log(work_dir: Path, n: int = 40) -> str:
     path = work_dir / "ffmpeg.log"
     try:
@@ -179,23 +190,69 @@ class PlayerSession:
     look_summary: str = ""
     client_token: str = ""
     cancel: bool = False
+    owner: str = "player"
+    label: str = ""
+    starting: bool = False
+    finished_at: Optional[float] = None
+    source: dict = field(default_factory=dict)
+    requested: dict = field(default_factory=dict)
+    effective: dict = field(default_factory=dict)
+    fallback_reasons: list[str] = field(default_factory=list)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    metrics: runtime.ProcessMetrics = field(default_factory=runtime.ProcessMetrics, repr=False)
 
     @property
     def playlist(self) -> Path:
         return self.work_dir / "index.m3u8"
 
     def touch(self) -> None:
-        self.last_access = time.time()
+        with self.lock:
+            self.last_access = time.time()
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, include_log: bool = True) -> dict:
+        with self.lock:
+            result = self._snapshot()
+        # Log-Dateien und Prozessmessung nicht unter dem Session-Lock lesen.
+        result["ffmpeg_log_tail"] = _tail_ffmpeg_log(self.work_dir) if include_log else ""
+        return result
+
+    def _snapshot(self) -> dict:
         ready = True
         playlist_url = ""
         if self.mode == "hls":
-            ready = self.playlist.is_file() and self.playlist.stat().st_size > 0
+            ready = _playlist_size(self.playlist) > 0
             playlist_url = f"/api/player/session/{self.id}/index.m3u8"
-        running = bool(self.proc and self.proc.poll() is None)
+        running = runtime.process_running(self.proc)
+        if self.cancel:
+            state = "stopping" if running or self.starting else "finished"
+        elif self.mode == "direct":
+            state = "running"
+        elif running:
+            state = "paused" if self.encode_paused else "running"
+        else:
+            state = "running" if self.starting else "finished"
+        if state == "finished":
+            self.finished_at = self.finished_at or time.time()
         return {
             "id": self.id,
+            "session_id": self.id,
+            "kind": "player_hls",
+            "owner": self.owner,
+            "label": self.label or self.title,
+            "state": state,
+            "pid": getattr(self.proc, "pid", None),
+            "process_running": running,
+            "created_at": self.created_at,
+            "finished_at": self.finished_at,
+            "last_access": self.last_access,
+            "starting": self.starting,
+            "can_stop": not self.cancel,
+            "source": copy.deepcopy(self.source),
+            "requested": copy.deepcopy(self.requested),
+            "effective": copy.deepcopy(self.effective),
+            "fallback": bool(self.fallback_reasons),
+            "fallback_reasons": list(self.fallback_reasons),
+            **self.metrics.sample(self.proc),
             "path": self.rel,
             "title": self.title,
             "mode": self.mode,
@@ -226,7 +283,6 @@ class PlayerSession:
             "audio_mode_label": self.audio_play_label(),
             "playback_label": self.playback_label(),
             "debug_cmd": self.debug_cmd,
-            "ffmpeg_log_tail": _tail_ffmpeg_log(self.work_dir) if self.work_dir else "",
             "last_client_error": self.last_client_error,
             "decision_summary": self.decision_summary,
             "decision_reasons": list(self.decision_reasons or []),
@@ -1269,6 +1325,109 @@ def _build_hls_cmd(
     return cmd
 
 
+def _record_effective(sess: PlayerSession, cmd: Optional[list[str]] = None,
+                      *, fallback_reason: str = "") -> None:
+    """Ist-Verarbeitung aus dem gebauten Kommando, nicht aus der UI-Auswahl.
+
+    Insbesondere kann player_preview_setup eine nicht verfügbare Engine und
+    BT.2390 auf CPU/Hable auflösen. VAAPI hat keine wählbare Kurve.
+    """
+    args = cmd or []
+
+    def arg(name: str, default: str = "") -> str:
+        try:
+            return args[args.index(name) + 1]
+        except (ValueError, IndexError):
+            return default
+
+    graph = arg("-vf") + "," + arg("-filter_complex")
+    engine, algo = None, None
+    for token, candidate in (("tonemap_cuda=", "cuda"),
+                             ("tonemap_opencl=", "opencl"),
+                             ("tonemap_vaapi=", "vaapi"),
+                             ("tonemapx=", "tonemapx"),
+                             ("libplacebo=", "libplacebo"),
+                             ("tonemap=tonemap=", "cpu")):
+        if token in graph:
+            engine = candidate
+            break
+    if engine and engine != "vaapi":
+        match = re.search(r"(?:tonemap=|tonemapping=)([a-z0-9.]+)", graph)
+        # CPU's first 'tonemap=' contains the filter option, not the curve.
+        if engine == "cpu":
+            match = re.search(r"tonemap=tonemap=([a-z0-9.]+)", graph)
+        algo = match.group(1).replace("bt.2390", "bt2390") if match else None
+    picture_tokens = {"deband": "gradfun=", "denoise": "hqdn3d=",
+                      "sharpen": "unsharp=", "grain": "noise=alls="}
+    look = sess.requested.get("look") or {}
+    picture = {key: look.get(key, "off") if token in graph else "off"
+               for key, token in picture_tokens.items()}
+    video_mode = "direct" if sess.mode == "direct" else (
+        "copy" if arg("-c:v", sess.encoder) == "copy" else "transcode")
+    sub_mode = "none"
+    if sess.subtitle_index >= 0:
+        if "overlay=" in graph:
+            sub_mode = "burn"
+        elif ms.is_text_subtitle(str(sess.source.get("subtitle_codec") or "")):
+            sub_mode = "external"
+        else:
+            sub_mode = "not_applied"
+    reasons = list(sess.fallback_reasons)
+
+    def reason(text: str) -> None:
+        if text not in reasons:
+            reasons.append(text)
+
+    if fallback_reason:
+        reason(fallback_reason)
+    if video_mode == "transcode":
+        selected_platform = sess.requested.get("platform")
+        if selected_platform not in (None, "", "auto", sess.platform):
+            reason(f"Encoder-Plattform {selected_platform} → {sess.platform}.")
+        selected_codec = sess.requested.get("codec")
+        if selected_codec and selected_codec != sess.codec:
+            reason(f"Zielcodec {selected_codec} → {sess.codec}.")
+    if look and sess.source.get("hdr") and look.get("tonemap"):
+        if engine != look.get("engine"):
+            reason(f"Tonemap-Engine {look.get('engine')} → {engine or 'nicht angewendet'}.")
+        if engine != "vaapi" and algo != look.get("algo"):
+            reason(f"Tonemap-Kurve {look.get('algo')} → {algo or 'nicht angewendet'}.")
+    elif look and engine:
+        reason(f"Browser-SDR benötigt Tonemap trotz Auswahl: {engine}/{algo or 'Treiberkurve'}.")
+    for key, value in picture.items():
+        if look.get(key, "off") != value:
+            reason(f"Vorschaufilter {key} nicht angewendet ({video_mode}).")
+    if sess.requested.get("burn_subs") and sub_mode != "burn":
+        reason("Untertitel-Burn-in nicht angewendet.")
+    actual_codec = sess.codec if video_mode == "transcode" else sess.source.get("codec", "")
+    from .encoder import command_details
+    observed_command = command_details(args) if args else None
+    effective = {
+        "command": observed_command,
+        "mode": sess.mode, "profile": sess.profile, "video_mode": video_mode,
+        "platform": sess.platform if video_mode == "transcode" else None,
+        "codec": actual_codec, "encoder": sess.encoder,
+        "audio_mode": sess.audio_play_mode(),
+        "tonemap": {"active": bool(engine), "engine": engine, "algo": algo},
+        "picture": picture,
+        "preview_applied": bool(engine or any(v != "off" for v in picture.values())),
+        "subtitle": {"index": sess.subtitle_index, "mode": sub_mode,
+                     "codec": sess.source.get("subtitle_codec", "")},
+        "binary": args[0] if args else None,
+        "fallback": bool(reasons), "fallback_reasons": list(reasons),
+    }
+    bits = []
+    if engine:
+        bits.append(f"{engine.upper()} / {algo or 'Treiberkurve'}")
+    bits.extend(f"{key} {value}" for key, value in picture.items() if value != "off")
+    if reasons:
+        bits.append("Fallback: " + " ".join(reasons))
+    with sess.lock:
+        sess.effective = effective
+        sess.fallback_reasons = reasons
+        sess.look_summary = " · ".join(bits)
+
+
 def _quality_params(profile: str, height: int, v_bitrate: int) -> tuple[int, int]:
     """Höhe/Bitrate aus Preset, Original oder Custom.
 
@@ -1309,8 +1468,10 @@ def start_session(
     audio_copy: bool = False,
     look: Optional[dict] = None,
     client_token: str = "",
+    owner: str = "player",
+    label: str = "",
 ) -> dict:
-    """Session starten (Direct-Play oder HLS)."""
+    """Session starten; owner/label sind optionale Runtime-Kontextmetadaten."""
     target = config.resolve_input(rel)
     if target is None or not target.is_file():
         return {"error": "Datei nicht gefunden"}
@@ -1414,10 +1575,27 @@ def start_session(
         decision_reasons=list(plan.get("reasons") or []),
         decision_strategy=str(plan.get("strategy") or ""),
         client_token=_clean_token(client_token),
+        owner=runtime.clean_owner(owner),
+        label=str(label or target.name)[:200],
+        starting=True,
+        source={
+            "path": rel,
+            "codec": ff.normalize_video_codec(getattr(info, "codec", "") if info else ""),
+            "hdr": bool(getattr(info, "is_hdr", False)) if info else False,
+            "width": int(getattr(info, "width", 0) or 0) if info else 0,
+            "height": int(getattr(info, "height", 0) or 0) if info else 0,
+            "subtitle_codec": sub_codec,
+        },
+        requested={"profile": requested, "platform": platform, "codec": codec,
+                   "subtitle": int(subtitle_index), "burn_subs": bool(burn_subs),
+                   "look": copy.deepcopy(preview), "raw_look": copy.deepcopy(look),
+                   "audio_index": int(audio_index), "audio_copy": want_audio_copy,
+                   "height": int(height or 0), "v_bitrate": int(v_bitrate or 0),
+                   "start_sec": start0, "lookahead_sec": la},
     )
 
     if _attach_session(sess):
-        stop_session(sid)
+        _finish_cancelled(sess)
         return {"error": "abgebrochen", "cancelled": True}
 
     source_vcodec = ff.normalize_video_codec(
@@ -1441,8 +1619,11 @@ def start_session(
     )
 
     if sess.mode == "direct":
+        _record_effective(sess)
+        with sess.lock:
+            sess.starting = False
         if sess.cancel or not _session_live(sess):
-            stop_session(sid)
+            _finish_cancelled(sess)
             return {"error": "abgebrochen", "cancelled": True}
         return {
             "session": sess.to_dict(),
@@ -1488,6 +1669,7 @@ def start_session(
             look=preview,
         )
 
+    _record_effective(sess, cmd)
     sess.debug_cmd = _cmd_preview(cmd, 800)
     _plog(
         sid,
@@ -1517,8 +1699,9 @@ def start_session(
     while time.time() < deadline:
         if sess.cancel or not _session_live(sess):
             break
-        if sess.playlist.is_file() and sess.playlist.stat().st_size > 0:
-            _plog(sid, "Playlist bereit (%s bytes)", sess.playlist.stat().st_size)
+        playlist_size = _playlist_size(sess.playlist)
+        if playlist_size > 0:
+            _plog(sid, "Playlist bereit (%s bytes)", playlist_size)
             break
         proc = sess.proc
         if proc is not None and proc.poll() is not None:
@@ -1553,6 +1736,10 @@ def start_session(
                 sess.warning = (sess.warning + "; " if sess.warning else "") + \
                     "HW-Encode fehlgeschlagen - Fallback CPU/H.264."
                 sess.error = ""
+                # Nach einem HW-Fehler auch den GPU-Tonemap-Pfad verlassen.
+                # Die Bildfilter bleiben erhalten, die SDR-Kurve ist CPU/Hable.
+                if preview:
+                    preview = dict(preview, engine="cpu", platform="cpu", algo="hable")
                 cmd = _build_hls_cmd(
                     target, work,
                     audio_index=sess.audio_index,
@@ -1567,6 +1754,7 @@ def start_session(
                     is_hdr=is_hdr,
                     look=preview,
                 )
+                _record_effective(sess, cmd, fallback_reason="HW-Verarbeitung fehlgeschlagen → CPU/H.264, Tonemap CPU/Hable falls aktiv.")
                 sess.debug_cmd = _cmd_preview(cmd, 800)
                 err = _assign_proc(sess, cmd)
                 if err == "abgebrochen" or sess.cancel or not _session_live(sess):
@@ -1580,6 +1768,8 @@ def start_session(
             break
         time.sleep(0.1)
 
+    with sess.lock:
+        sess.starting = False
     if sess.cancel or not _session_live(sess):
         _finish_cancelled(sess)
         return {"error": "abgebrochen", "cancelled": True}
@@ -1641,20 +1831,21 @@ def _clean_token(token: str) -> str:
     return raw
 
 
-def _signal_tree(pid: int, sig: int) -> None:
-    """Signal an FFmpeg und seine Helfer (eigene Prozessgruppe)."""
+def _signal_tree(pid: int, sig: int) -> bool:
+    """Signal ausschließlich an die eigene FFmpeg-Prozessgruppe."""
     if not pid or sig is None:
-        return
+        return False
     if os.name == "posix":
         try:
             os.killpg(pid, sig)
-            return
+            return True
         except OSError:
             pass
     try:
         os.kill(pid, sig)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def _pid_alive(pid: int) -> bool:
@@ -1683,13 +1874,18 @@ def _proc_state(pid: int) -> str:
     return parts[0] if parts else ""
 
 
+def _release_token(sess: PlayerSession) -> None:
+    with _LOCK:
+        token = sess.client_token
+        if token and _TOKENS.get(token) == sess.id:
+            _TOKENS.pop(token, None)
+
+
 def _drop_session(sess: PlayerSession) -> None:
     with _LOCK:
         if _SESSIONS.get(sess.id) is sess:
             _SESSIONS.pop(sess.id, None)
-        token = sess.client_token
-        if token and _TOKENS.get(token) == sess.id:
-            _TOKENS.pop(token, None)
+        _release_token(sess)
 
 
 def _session_live(sess: PlayerSession) -> bool:
@@ -1720,18 +1916,30 @@ def _assign_proc(sess: PlayerSession, cmd: list[str]) -> Optional[str]:
         proc = _spawn_ffmpeg(cmd, sess.id, sess.work_dir)
     except OSError as e:
         return str(e)
-    sess.proc = proc
+    with sess.lock:
+        sess.proc = proc
+        sess.finished_at = None
+    sess.metrics.sample(proc)
     if sess.cancel or not _session_live(sess):
         _kill(sess)
         return "abgebrochen"
     return None
 
 
+def _remove_stopped_files(sess: PlayerSession) -> None:
+    with sess.lock:
+        removable = sess.cancel and not sess.starting and not runtime.process_running(sess.proc)
+    if removable:
+        shutil.rmtree(sess.work_dir, ignore_errors=True)
+
+
 def _finish_cancelled(sess: PlayerSession) -> None:
-    sess.cancel = True
-    _drop_session(sess)
+    with sess.lock:
+        sess.cancel = True
+        sess.starting = False
+    _release_token(sess)
     _kill(sess)
-    shutil.rmtree(sess.work_dir, ignore_errors=True)
+    _remove_stopped_files(sess)
 
 
 def get_session(sid: str) -> Optional[PlayerSession]:
@@ -1760,17 +1968,50 @@ def cancel_client_token(token: str) -> bool:
     return stop_session(sid)
 
 
-def stop_session(sid: str) -> bool:
+def stop_session(sid: str, *, owner: Optional[str] = None) -> bool:
+    """Stop nur dieser Session; bis zum echten Prozessende bleibt sie sichtbar.
+
+    Optionales owner schränkt den Stop zusätzlich auf den erwarteten Kontext ein.
+    True bedeutet angenommen, nicht notwendigerweise bereits beendet (state).
+    """
     with _LOCK:
         sess = _SESSIONS.get(sid)
     if not sess:
+        return runtime.stop_session(sid, owner=owner)
+    if owner is not None and sess.owner != owner:
         return False
-    sess.cancel = True
-    _drop_session(sess)
+    with sess.lock:
+        sess.cancel = True
+    _release_token(sess)
     _kill(sess)
-    shutil.rmtree(sess.work_dir, ignore_errors=True)
-    _plog(sid, "Session gestoppt")
+    _remove_stopped_files(sess)
+    _plog(sid, "Stop angefordert (Prozess läuft=%s)", runtime.process_running(sess.proc))
     return True
+
+
+def status(sid: str) -> Optional[dict]:
+    """Status ohne Idle-Touch; None für unbekannte Session (auch Stream-SIDs)."""
+    with _LOCK:
+        sess = _SESSIONS.get(sid)
+    if sess:
+        return sess.to_dict()
+    return next((row for row in runtime.list_runtime_sessions() if row["id"] == sid), None)
+
+
+def list_runtime_sessions(*, owner: Optional[str] = None,
+                          include_finished: bool = True) -> list[dict]:
+    """Leichte Snapshots ohne Log-Reads und ohne Idle-Lebenszeit zu verlängern."""
+    with _LOCK:
+        sessions = list(_SESSIONS.values())
+    rows = []
+    for sess in sessions:
+        if owner is not None and sess.owner != owner:
+            continue
+        row = sess.to_dict(include_log=False)
+        if include_finished or row["state"] != "finished":
+            rows.append(row)
+    rows.extend(runtime.list_runtime_sessions(owner=owner, include_finished=include_finished))
+    return sorted(rows, key=lambda row: row["created_at"], reverse=True)
 
 
 def pause_encode(sid: str) -> dict:
@@ -1778,18 +2019,18 @@ def pause_encode(sid: str) -> dict:
     sess = get_session(sid)
     if not sess:
         return {"ok": False, "error": "Session nicht gefunden"}
-    if sess.mode != "hls":
-        return {"ok": True, "encode_paused": False, "skipped": True}
-    if not sess.proc or sess.proc.poll() is not None:
-        return {"ok": True, "encode_paused": False, "running": False}
-    if sess.encode_paused:
-        return {"ok": True, "encode_paused": True}
-    try:
-        _signal_tree(int(sess.proc.pid), signal.SIGSTOP)
+    with sess.lock:
+        if sess.mode != "hls":
+            return {"ok": True, "encode_paused": False, "skipped": True}
+        if sess.cancel or not runtime.process_running(sess.proc):
+            return {"ok": True, "encode_paused": False, "running": False}
+        if sess.encode_paused:
+            return {"ok": True, "encode_paused": True}
+        sig = getattr(signal, "SIGSTOP", None)
+        if sig is None or not _signal_tree(int(sess.proc.pid), sig):
+            return {"ok": False, "encode_paused": False, "error": "Prozess konnte nicht pausiert werden"}
         sess.encode_paused = True
         return {"ok": True, "encode_paused": True}
-    except OSError as e:
-        return {"ok": False, "error": str(e)}
 
 
 def resume_encode(sid: str) -> dict:
@@ -1797,28 +2038,29 @@ def resume_encode(sid: str) -> dict:
     sess = get_session(sid)
     if not sess:
         return {"ok": False, "error": "Session nicht gefunden"}
-    if sess.mode != "hls":
-        return {"ok": True, "encode_paused": False, "skipped": True}
-    if not sess.proc or sess.proc.poll() is not None:
-        return {"ok": True, "encode_paused": False, "running": False}
-    if not sess.encode_paused:
-        return {"ok": True, "encode_paused": False}
-    try:
-        _signal_tree(int(sess.proc.pid), signal.SIGCONT)
+    with sess.lock:
+        if sess.mode != "hls":
+            return {"ok": True, "encode_paused": False, "skipped": True}
+        if sess.cancel or not runtime.process_running(sess.proc):
+            return {"ok": True, "encode_paused": False, "running": False}
+        if not sess.encode_paused:
+            return {"ok": True, "encode_paused": False}
+        sig = getattr(signal, "SIGCONT", None)
+        if sig is None or not _signal_tree(int(sess.proc.pid), sig):
+            return {"ok": False, "encode_paused": True, "error": "Prozess konnte nicht fortgesetzt werden"}
         sess.encode_paused = False
         return {"ok": True, "encode_paused": False}
-    except OSError as e:
-        return {"ok": False, "error": str(e)}
 
 
 def _kill(sess: PlayerSession) -> None:
     """Beendet FFmpeg inklusive Helfer. Hängt nicht an Popen.poll() nach SIGSTOP."""
-    proc = sess.proc
-    sess.encode_paused = False
-    if proc is None:
+    with sess.lock:
+        proc = sess.proc
+        sess.encode_paused = False
+    if proc is None or not runtime.process_running(proc):
         return
     pid = int(proc.pid or 0)
-    if pid and _pid_alive(pid):
+    if pid and runtime.process_running(proc):
         if hasattr(signal, "SIGCONT"):
             _signal_tree(pid, signal.SIGCONT)
         if hasattr(signal, "SIGKILL"):
@@ -1841,7 +2083,7 @@ def _kill(sess: PlayerSession) -> None:
     except Exception as e:
         _plog(sess.id, "ffmpeg wait pid %s: %s", pid, e, level=logging.WARNING)
     state = _proc_state(pid) if pid else ""
-    if pid and _pid_alive(pid) and state not in ("Z", ""):
+    if runtime.process_running(proc):
         _plog(
             sess.id,
             "ffmpeg pid %s läuft nach Stop weiter (state=%s)",
@@ -1859,8 +2101,15 @@ def cleanup_idle(max_idle: float = _MAX_IDLE_SEC) -> int:
     n = 0
     for sid in dead:
         if stop_session(sid):
-            n += 1
-    return n
+            with _LOCK:
+                sess = _SESSIONS.get(sid)
+            if sess:
+                with sess.lock:
+                    finished = not sess.starting and not runtime.process_running(sess.proc)
+                if finished:
+                    _drop_session(sess)
+                    n += 1
+    return n + runtime.cleanup_idle(max_idle)
 
 
 def cleanup_all() -> None:
@@ -1868,6 +2117,7 @@ def cleanup_all() -> None:
         ids = list(_SESSIONS.keys())
     for sid in ids:
         stop_session(sid)
+    runtime.stop_all()
     if _ROOT.exists():
         for child in _ROOT.iterdir():
             if child.is_dir():

@@ -135,6 +135,7 @@ async def _startup() -> None:
     prof.ensure_builtins()
     # Warteschlange aus /data/queue.json wiederherstellen (offen + fertig).
     queue.restore()
+    app.state.retention_task = asyncio.create_task(_retention_loop())
     # Echte Encoder-Fähigkeiten im Hintergrund testen (nur falls noch kein Cache).
     from core import capabilities as caps
     caps.ensure_async(monitor)
@@ -159,6 +160,11 @@ async def _startup() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
+    retention = getattr(app.state, "retention_task", None)
+    if retention:
+        retention.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await retention
     queue.shutdown()
     from core.watcher import watcher
     watcher.stop()
@@ -1661,7 +1667,7 @@ async def preview_jobs(req: PreviewRequest):
     from core import job_plan
     if not req.paths:
         return JSONResponse({"error": "Keine Dateien"}, status_code=400)
-    return job_plan.preview_batch(req.paths, req.settings or {}, req.estimates or {})
+    return await asyncio.to_thread(job_plan.preview_batch, req.paths, req.settings or {}, req.estimates or {})
 
 
 class SizeTargetPreviewRequest(BaseModel):
@@ -2040,14 +2046,14 @@ async def clear_stats():
 async def vmaf_sessions():
     """Liste archivierter VMAF-Vergleiche für die Verlaufsauswahl."""
     from core import vmaf as vmaf_mod
-    return {"sessions": vmaf_mod.list_sessions()}
+    return {"sessions": await asyncio.to_thread(vmaf_mod.list_sessions)}
 
 
 @app.get("/api/vmaf/session/{name}")
 async def vmaf_session(name: str):
     """Gespeicherte Analyse eines früheren Vergleichs laden."""
     from core import vmaf as vmaf_mod
-    data = vmaf_mod.load_session(name)
+    data = await asyncio.to_thread(vmaf_mod.load_session, name)
     if data is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     return data
@@ -2079,7 +2085,7 @@ async def vmaf_clip(session: str, file: str):
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     cmd = ms.build_play_cmd(target, audio_index=None)
     return StreamingResponse(
-        ms.stream_bytes(cmd),
+        ms.async_stream_bytes(cmd, owner="preview", label=file, source=str(target)),
         media_type="video/mp4",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
@@ -2225,6 +2231,7 @@ class AppSettingsRequest(BaseModel):
     vmaf_target: Optional[float] = None
     vmaf_min_savings: Optional[float] = None
     keep_vmaf_clips: Optional[bool] = None
+    vmaf_clip_retention_days: Optional[int] = Field(default=None, ge=0, le=3650)
 
 
 @app.get("/api/settings")
@@ -2268,6 +2275,8 @@ async def set_app_settings(req: AppSettingsRequest):
         updates["vmaf_min_savings"] = req.vmaf_min_savings
     if req.keep_vmaf_clips is not None:
         updates["keep_vmaf_clips"] = req.keep_vmaf_clips
+    if req.vmaf_clip_retention_days is not None:
+        updates["vmaf_clip_retention_days"] = req.vmaf_clip_retention_days
     if not updates:
         cfg = app_settings.load()
     else:
@@ -2345,6 +2354,8 @@ async def media_stream(
     audio: int = 0,
     start: float = 0.0,
     acodec: str = "",
+    owner: str = "player",
+    label: str = "",
 ):
     """Live-Playback: Video copy + gewählte Tonspur als AAC (fragmentiertes MP4).
 
@@ -2365,7 +2376,7 @@ async def media_stream(
         audio_codec=acodec or "",
     )
     return StreamingResponse(
-        ms.stream_bytes(cmd),
+        ms.async_stream_bytes(cmd, owner=owner, label=label[:200] or target.name, source=str(target)),
         media_type="video/mp4",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
@@ -2389,6 +2400,8 @@ class PlayerSessionRequest(BaseModel):
     audio_copy: bool = False        # Ton nicht umcodieren (Stream-Copy)
     look: Optional[dict] = None     # Encode-Vorschau: Tonemap und Bildfilter
     client_token: str = ""          # A/B-Entladen kann den Start vor der Antwort abbrechen
+    owner: str = Field(default="player", pattern="^(player|ab_standard|ab_nerd|preview|editor)$")
+    label: str = Field(default="", max_length=200)
 
 
 @app.get("/api/player/options")
@@ -2454,6 +2467,7 @@ async def player_session_start(req: PlayerSessionRequest):
         audio_copy=bool(req.audio_copy),
         look=req.look,
         client_token=req.client_token or "",
+        owner=req.owner, label=req.label,
     )
 
 
@@ -2494,6 +2508,9 @@ async def player_session_cancel(req: PlayerCancelRequest):
 @app.delete("/api/player/session/{sid}")
 async def player_session_stop(sid: str):
     from core import player_hls
+    if sid.startswith("stream-"):
+        from core import runtime
+        return {"ok": await asyncio.to_thread(runtime.stop_session, sid)}
     return {"ok": await asyncio.to_thread(player_hls.stop_session, sid)}
 
 
@@ -2547,7 +2564,7 @@ async def media_vtt(path: str, root: str = "media", subtitle: int = 0):
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     cmd = ms.build_vtt_cmd(target, int(subtitle))
     return StreamingResponse(
-        ms.stream_bytes(cmd),
+        ms.async_stream_bytes(cmd, owner="preview", label="WebVTT", source=str(target)),
         media_type="text/vtt; charset=utf-8",
         headers={"Cache-Control": "no-store"},
     )
@@ -2639,7 +2656,19 @@ def _details_from_history(rec: dict) -> dict:
             "status": rec.get("status") or "—", "path": src_abs,
             "from_history": True, "settings": settings,
             "source": src, "output": out, "stats": stats,
-            "steps": steps}
+            "steps": steps,
+            "encoding_details": _history_json(rec.get("details_json")),
+            "output_report": _history_json(rec.get("report_json")),
+            "output_path": out_abs}
+
+
+def _history_json(raw):
+    import json
+    try:
+        result = json.loads(raw) if isinstance(raw, str) else raw
+        return result if isinstance(result, dict) else None
+    except (TypeError, ValueError):
+        return None
 
 
 @app.get("/api/queue/{item_id}/details")
@@ -2705,6 +2734,12 @@ async def queue_details(item_id: str):
         "dv_prompt": item.dv_prompt,
         "vmaf": item.vmaf,
         "steps": item.to_dict().get("steps") or [],
+        "progress": item.progress,
+        "phase": item.to_dict().get("phase"),
+        "encoding_details": item.to_dict().get("details"),
+        "details": item.to_dict().get("details"),
+        "output_report": item.to_dict().get("output_report"),
+        "output_path": item.output_path,
     }
 
 
@@ -2811,6 +2846,134 @@ async def config_paths():
     return data
 
 
+def _active_archive_sessions() -> set[str]:
+    from core import player_hls
+    names = set()
+    state = queue.state()
+    for item in state.get("items") or []:
+        if item.get("status") in ("wartend", "vmaf-test", "in arbeit", "auswahl"):
+            session = (item.get("vmaf") or {}).get("session")
+            if session:
+                names.add(session)
+    for row in player_hls.list_runtime_sessions(include_finished=False):
+        source = row.get("source") or {}
+        raw = source.get("path", "") if isinstance(source, dict) else str(source)
+        for root in (config.VMAF_SESSIONS_DIR, config.PREVIEW_DIR):
+            rel = _rel_to(root, raw) if raw else None
+            if rel:
+                names.add(rel.split("/", 1)[0])
+    return names
+
+
+async def _retention_loop() -> None:
+    from core import app_settings, storage_policy
+    while True:
+        try:
+            days = app_settings.load().get("vmaf_clip_retention_days", 0)
+            if days > 0:
+                plan = await asyncio.to_thread(storage_policy.dry_run_cleanup,
+                    min_age_days=days, active_sessions=_active_archive_sessions)
+                await asyncio.to_thread(storage_policy.apply_cleanup, plan,
+                    active_sessions=_active_archive_sessions)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("Testclip-Aufbewahrung konnte nicht ausgeführt werden")
+        await asyncio.sleep(3600)
+
+
+class RetentionRequest(BaseModel):
+    days: int = Field(default=30, ge=1, le=3650)
+    token: str = ""
+
+
+# Ein Plan wird serverseitig gehalten; Clients dürfen keine Dateipfade für die
+# Bereinigung einschleusen. Kurze Gültigkeit und erneute Prüfung beim Löschen.
+_retention_plans: dict = {}
+_retention_plan_lock = asyncio.Lock()
+
+
+@app.post("/api/data/retention/preview")
+async def retention_preview(req: RetentionRequest):
+    import time
+    import secrets
+    from core import storage_policy
+    plan = await asyncio.to_thread(storage_policy.dry_run_cleanup,
+        min_age_days=req.days, active_sessions=_active_archive_sessions)
+    token = secrets.token_urlsafe(24)
+    async with _retention_plan_lock:
+        expired = [key for key, saved in _retention_plans.items() if time.time() - saved[0] > 600]
+        for key in expired:
+            _retention_plans.pop(key, None)
+        if len(_retention_plans) >= 20:
+            _retention_plans.pop(next(iter(_retention_plans)))
+        _retention_plans[token] = (time.time(), plan)
+    return {**plan, "token": token,
+            "files": [{"session": c["session"], "file": c["filename"],
+                       "path": c["session"] + "/" + c["filename"]}
+                      for c in plan.get("candidates", [])]}
+
+
+@app.post("/api/data/retention/apply")
+async def retention_apply(req: RetentionRequest):
+    import time
+    from core import storage_policy
+    async with _retention_plan_lock:
+        saved = _retention_plans.pop(req.token, None)
+    if not saved or time.time() - saved[0] > 600 or saved[1]["min_age_days"] != req.days:
+        return JSONResponse({"error": "Bereinigungsplan fehlt oder ist abgelaufen"}, status_code=409)
+    return await asyncio.to_thread(storage_policy.apply_cleanup, saved[1],
+                                   active_sessions=_active_archive_sessions)
+
+
+class ArchiveProtectionRequest(BaseModel):
+    protected: bool
+
+
+@app.post("/api/vmaf/session/{name}/protection")
+async def archive_protection(name: str, req: ArchiveProtectionRequest):
+    from core import storage_policy
+    result = await asyncio.to_thread(storage_policy.set_session_protected, name, req.protected)
+    return result if result is not None else JSONResponse({"error": "Archiv fehlt oder ist beschäftigt"}, status_code=409)
+
+
+class ExtraSceneRequest(BaseModel):
+    session: str
+    start: float = Field(ge=0, allow_inf_nan=False)
+    seconds: float = Field(default=15, ge=3, le=120, allow_inf_nan=False)
+
+
+@app.post("/api/vmaf/extra-scene")
+async def extra_scene(req: ExtraSceneRequest):
+    from core import vmaf as vm
+    from core.queue_manager import build_job_settings
+    data = await asyncio.to_thread(vm.load_session, req.session)
+    if not data or not data.get("source_available"):
+        return JSONResponse({"error": "Quelle nicht verfügbar"}, status_code=409)
+    source = config.resolve_input(data.get("source_path", ""))
+    if source is None or not source.is_file():
+        return JSONResponse({"error": "Quelle liegt außerhalb der Medienordner"}, status_code=403)
+    context = data.get("archive_context") or {}
+    if (context.get("source") or {}).get("status") == "changed":
+        return JSONResponse({"error": "Quelle wurde verändert; neue vollständige Analyse erforderlich"}, status_code=409)
+    info = await asyncio.to_thread(ff.ffprobe, source)
+    if not info or not info.duration or req.start + req.seconds > info.duration:
+        return JSONResponse({"error": "Szene liegt außerhalb der Quelldauer"}, status_code=422)
+    params = dict(data.get("params") or {})
+    # Altes Archiv ohne gespeicherte Einstellungen nicht als gleichen Test ausgeben.
+    if not params or not params.get("test_values"):
+        return JSONResponse({"error": "Gespeicherte Testeinstellungen fehlen"}, status_code=409)
+    params.update(workflow="compare_only", vmaf_check=True, samples=1,
+                  sample_mode="even", sample_ranges=[[req.start, req.seconds]],
+                  clip_seconds=int(req.seconds), post_processing="keep",
+                  on_duplicate="overwrite", batch_id="")
+    item = await asyncio.to_thread(queue.add_file, str(source), build_job_settings(params))
+    if item is None:
+        return JSONResponse({"error": "Nachprüfung konnte nicht eingereiht werden"}, status_code=409)
+    return {"ok": True, "id": item.id, "parent_session": req.session,
+            "separate_analysis": True}
+
+
 class DataDeleteRequest(BaseModel):
     root: str = Field(..., pattern="^(vmaf|previews|work)$")
     path: str = ""
@@ -2884,6 +3047,53 @@ async def hardware():
     return monitor.snapshot().to_dict()
 
 
+_job_process_metrics: dict = {}
+
+
+def _queue_live_snapshot() -> dict:
+    state = queue.state()
+    # Die Kommandohistorie und vollständige Prüfberichte nur auf Anforderung
+    # senden, nicht pro Sekunde erneut an jeden WebSocket-Client.
+    for item in state.get("items") or []:
+        details = item.get("details") or {}
+        item["details"] = {key: val for key, val in details.items() if key != "commands"}
+        report = item.get("output_report") or {}
+        if report:
+            brief = {key: report[key] for key in ("schema_version", "generated_at", "output_path", "summary") if key in report}
+            item["report"] = brief
+            item["output_report"] = brief
+    return state
+
+
+def _runtime_snapshot(queue_state: Optional[dict] = None) -> dict:
+    from core import player_hls, runtime
+    sessions = player_hls.list_runtime_sessions(include_finished=False)
+    state = queue_state if queue_state is not None else _queue_live_snapshot()
+    with queue._lock:
+        processes = {key: getattr(runner, "proc", None) for key, runner in queue._active.items()}
+        for key in list(_job_process_metrics):
+            if key not in processes:
+                _job_process_metrics.pop(key, None)
+        meters = {key: _job_process_metrics.setdefault(key, runtime.ProcessMetrics()) for key in processes}
+    for item in state.get("items") or []:
+        if item.get("id") not in state.get("active_ids", []):
+            continue
+        proc = processes.get(item["id"])
+        measurements = meters[item["id"]].sample(proc) if item["id"] in meters else {}
+        sessions.append({"kind": "job", "id": item["id"], "owner": "job",
+                         "pid": getattr(proc, "pid", None), **measurements,
+                         "label": item.get("title"), "path": item.get("path"),
+                         "state": "running", "mode": "job", "can_stop": False,
+                         "phase": item.get("phase"), "progress": item.get("progress"),
+                         "effective": item.get("details") or {}})
+    return {"sessions": sessions}
+
+
+@app.get("/api/runtime")
+async def runtime_snapshot():
+    return await asyncio.to_thread(_runtime_snapshot)
+
+
 # ------------------------------------------------------------------- WebSocket
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
@@ -2895,9 +3105,11 @@ async def ws(websocket: WebSocket):
         while True:
             # Hardware-Snapshot kann blockieren (subprocess) -> Thread auslagern
             snap = await asyncio.to_thread(monitor.snapshot)
+            queue_state = _queue_live_snapshot()
             payload = {
                 "hardware": snap.to_dict(),
-                "queue": queue.state(),
+                "queue": queue_state,
+                "runtime": await asyncio.to_thread(_runtime_snapshot, queue_state),
             }
             await websocket.send_json(payload)
             await asyncio.sleep(config.METRICS_INTERVAL)

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import config
+from . import provenance as provenance_api
+from . import storage_policy
 from . import ffmpeg_utils as ff
 from .encoder import (
     EncodeRunner, build_encode_cmd, reference_tonemap_setup,
@@ -392,6 +394,11 @@ class VmafResult:
                         for j, p in enumerate(s2_pairs)
                         if isinstance(p, dict)
                     ]
+                for key in ("frame_count", "p1_count", "scored_seconds", "scored_offset"):
+                    if s.get(key) is not None:
+                        item[key] = s[key]
+                if s.get("clip"):
+                    item["clip"] = s["clip"]
                 frames = s.get("frames") or []
                 if frames:
                     item["frames"] = frames
@@ -447,10 +454,12 @@ class VmafAnalysis:
     sample_windows: list = field(default_factory=list)
     sample_starts: list = field(default_factory=list)  # [(start, länge)] je Szene
     visual_only: bool = False   # Clips ohne libvmaf, zum Abspielen im A/B-Player
+    provenance: dict = field(default_factory=dict)
+    source_duration: float = 0.0
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
-        return {
+        data = {
             **({"sample_starts": [[round(float(s), 3), round(float(l), 3)]
                                   for s, l in self.sample_starts]}
                if self.sample_starts else {}),
@@ -471,7 +480,11 @@ class VmafAnalysis:
                  "target_anchor": self.target_anchor}
                if self.target_lo else {}),
             **({"sample_windows": self.sample_windows} if self.sample_windows else {}),
+            "provenance": self.provenance,
+            "source_duration": self.source_duration,
         }
+        data["coverage"] = provenance_api.analysis_coverage(data, self.source_duration)
+        return data
 
 
 StatusCb = Optional[Callable[[str], None]]
@@ -560,13 +573,15 @@ def _extract_reference(
     idx: int, status: StatusCb, crop: str = "",
     tonemap_algo: str = "hable", tonemap_desat: float = 0.0,
     tonemap_peak: float = 0.0, tonemap_engine: str = "cpu",
-    platform: str = "cpu",
+    platform: str = "cpu", provenance: Optional[dict] = None,
 ) -> Path:
     ref = work / f"reference_{idx}.mkv"
     binary, pre, piece = reference_tonemap_setup(
         tonemap_engine, platform, tonemap_algo, tonemap_desat, tonemap_peak,
         active=bool(tonemap and info.is_hdr),
     )
+    if provenance is not None:
+        provenance_api.record_binary(provenance, "reference", binary)
     cmd = [binary, "-y", "-hide_banner"]
     cmd += pre
     cmd += ["-ss", str(start), "-t", str(clip_len), "-i", str(info.path)]
@@ -715,6 +730,7 @@ def _run_libvmaf(
     spans = [end - start for start, end in (
         _scored_window(dist_dur), _scored_window(ref_dur))]
     data["scored_seconds"] = max(0.0, min(spans))
+    data["scored_offset"] = _scored_window(ref_dur)[0]
     if with_xpsnr and xlog.exists():
         parsed = _parse_xpsnr(xlog)
         if parsed:
@@ -762,6 +778,8 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "xpsnr_min": float(xp.get("xpsnr_min") or 0.0),
         "frames": _downsample_vmaf(series),
     }
+    if data.get("scored_offset") is not None:
+        out["scored_offset"] = float(data["scored_offset"])
     cambi_pool = pooled.get("cambi")
     if isinstance(cambi_pool, dict) and cambi_pool.get("mean") is not None:
         out["cambi"] = float(cambi_pool["mean"])
@@ -1070,6 +1088,27 @@ def measure_output_vmaf(
         _cleanup(work)
 
 
+def _with_active_session(function):
+    from functools import wraps
+    from dataclasses import replace
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        positional = list(args)
+        opts = kwargs.get("opts") if "opts" in kwargs else (positional[5] if len(positional) > 5 else None)
+        opts = opts or VmafOptions()
+        session = opts.session_name or opts.item_id or uuid.uuid4().hex[:8]
+        opts = replace(opts, session_name=session)
+        if len(positional) > 5:
+            positional[5] = opts
+        else:
+            kwargs["opts"] = opts
+        with storage_policy.active_session(session):
+            return function(*positional, **kwargs)
+    return wrapped
+
+
+@_with_active_session
 def analyze(
     info: VideoInfo,
     platform: str,
@@ -1108,12 +1147,33 @@ def analyze(
     work = config.WORK_DIR / f"vmaf_{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True, exist_ok=True)
 
-    model_name, _ = _model_for(info, True)
+    from dataclasses import asdict
+    model_name, model_path = _model_for(info, True)
+    effective_params = {
+        **dict(opts.params or {}), "options": asdict(opts),
+        "platform": platform, "codec": codec, "target_height": target_height,
+        "tonemap": tonemap, "preserve_hdr": preserve_hdr, "film_grain": film_grain,
+        "denoise": denoise, "sharpen": sharpen, "grain": grain,
+        "deinterlace": deinterlace, "aq_strength": aq_strength, "crop": crop,
+        "encoder_speed": encoder_speed, "b_frames": b_frames,
+        "keyint_sec": keyint_sec, "nvenc_tune": nvenc_tune,
+        "tonemap_algo": tonemap_algo, "tonemap_desat": tonemap_desat,
+        "tonemap_peak": tonemap_peak, "tonemap_engine": tonemap_engine,
+        "deband": deband, "svt_look": svt_look, "edge_seconds": _EDGE_SEC,
+    }
     analysis = VmafAnalysis(
         model="" if opts.visual_only else model_name,
         rate_mode=opts.rate_mode,
         clip_seconds=opts.clip_seconds,
         visual_only=bool(opts.visual_only),
+        source_duration=float(info.duration or 0),
+        provenance=provenance_api.capture(
+            source_path=str(info.path),
+            model_name="" if opts.visual_only else model_name,
+            model_path=None if opts.visual_only else model_path,
+            params=effective_params,
+            source_info={key: getattr(info, key, None) for key in (
+                "duration", "width", "height", "fps", "pix_fmt", "bit_depth", "is_4k")}),
     )
     use_bitrate = opts.rate_mode in ("bitrate", "abr")
     values = [v for v in opts.test_values[:4] if v > 0]
@@ -1277,8 +1337,10 @@ def analyze(
                     kw["passlog"] = passlog
                 elif nv_two:
                     kw["two_pass"] = True
-                return build_encode_cmd(
+                command = build_encode_cmd(
                     info, test_file, p, c, quality, target_height, tonemap, **kw)
+                provenance_api.record_binary(analysis.provenance, "encode", command[0])
+                return command
 
             runner = EncodeRunner(on_progress=lambda pr: emit(
                 "encode", fps=pr.fps, sub=pr.percent))
@@ -1372,9 +1434,11 @@ def analyze(
                 "xpsnr_min": (metrics or {}).get("xpsnr_min") or 0.0,
                 "frames": (metrics or {}).get("frames") or [],
             }
+            scene["clip"] = test_file.name
             if metrics:
-                for field in ("frame_count", "p1_count", "scored_seconds"):
-                    scene[field] = metrics.get(field) or 0
+                for field in ("frame_count", "p1_count", "scored_seconds", "scored_offset"):
+                    if metrics.get(field) is not None:
+                        scene[field] = metrics[field]
             if metrics and metrics.get("cambi") is not None:
                 scene["cambi"] = metrics["cambi"]
             if metrics and metrics.get("cambi_max") is not None:
@@ -1498,7 +1562,7 @@ def analyze(
                 info, work, tonemap, start, clip_len, si, status, crop=crop,
                 tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
                 tonemap_peak=tonemap_peak, tonemap_engine=tonemap_engine,
-                platform=platform)
+                platform=platform, provenance=analysis.provenance)
             references.append((ref, start, clip_len))
             if opts.generate_screenshots:
                 ref_shots.append(_extract_frame(
@@ -1557,7 +1621,7 @@ def analyze(
             _pick_recommended(analysis, opts.target_vmaf)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
-                          source_path=opts.source_path, params=opts.params)
+                          source_path=opts.source_path or str(info.path), params=opts.params)
         elif not cancelled():
             # Kein einziges Ergebnis – Grund weiterreichen, damit der Job nicht
             # kommentarlos „fertig"/leer wird.
@@ -1571,7 +1635,7 @@ def analyze(
 
 
 def _session_meta_path(sess: str) -> Path:
-    return config.PREVIEW_DIR / sess / "analysis.json"
+    return storage_policy.session_directory(config.PREVIEW_DIR, sess) / "analysis.json"
 
 
 def _save_session(sess: str, analysis: VmafAnalysis, title: str,
@@ -1593,8 +1657,13 @@ def _save_session(sess: str, analysis: VmafAnalysis, title: str,
             "source_available": src_ok,
             "params": params or {},
         }
-        target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except OSError as e:
+        with storage_policy.session_guard(sess):
+            # Bei erneutem Speichern eines noch aktiven Laufs Schutz nicht verlieren.
+            if target.is_file():
+                previous = json.loads(target.read_text(encoding="utf-8"))
+                payload["protected"] = bool(previous.get("protected", False))
+            provenance_api.atomic_json_write(target, payload)
+    except (OSError, ValueError) as e:
         logger.warning("VMAF-Session konnte nicht gespeichert werden: %s", e)
 
 
@@ -1607,6 +1676,13 @@ def list_sessions() -> list[dict]:
     for meta in root.glob("*/analysis.json"):
         try:
             data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("analysis"), dict):
+            continue
+        try:
+            if _session_meta_path(meta.parent.name) != meta or meta.is_symlink():
+                continue
         except (OSError, ValueError):
             continue
         analysis = data.get("analysis", {})
@@ -1625,6 +1701,9 @@ def list_sessions() -> list[dict]:
             "multi_codec": analysis.get("multi_codec", False),
             "recommended_label": (rec or {}).get("label", ""),
             "source_available": src_ok,
+            "protected": bool(data.get("protected", False)),
+            "archive_context": provenance_api.archive_context(data),
+            "coverage": provenance_api.analysis_coverage(analysis),
         })
     out.sort(key=lambda d: d.get("created", 0), reverse=True)
     return out
@@ -2336,20 +2415,22 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
 
 def repick_session(session: str) -> Optional[dict]:
     """Gespeicherte Session neu einordnen und zurückschreiben."""
-    data = load_session(session)
-    if data is None or not isinstance(data.get("analysis"), dict):
-        return None
-    params = data.get("params") or {}
     try:
-        target = float(params.get("target_vmaf") or 0)
-    except (TypeError, ValueError):
-        target = 0.0
-    repick_analysis(data["analysis"], target)
-    try:
-        _session_meta_path(session).write_text(
-            json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    except OSError as e:
+        with storage_policy.session_guard(session):
+            data = load_session(session)
+            if data is None or not isinstance(data.get("analysis"), dict):
+                return None
+            params = data.get("params") or {}
+            try:
+                target = float(params.get("target_vmaf") or 0)
+            except (TypeError, ValueError):
+                target = 0.0
+            repick_analysis(data["analysis"], target)
+            saved = {k: v for k, v in data.items() if k not in ("archive_context", "coverage")}
+            provenance_api.atomic_json_write(_session_meta_path(session), saved)
+    except (OSError, ValueError) as e:
         logger.warning("Neu-Einordnung konnte nicht gespeichert werden: %s", e)
+        return None
     return data
 
 
@@ -2357,11 +2438,13 @@ def load_session(name: str) -> Optional[dict]:
     """Gespeicherte Analyse eines Vergleichs laden (oder None)."""
     if not name or "/" in name or "\\" in name or name.startswith("."):
         return None
-    meta = _session_meta_path(name)
-    if not meta.exists():
-        return None
     try:
+        meta = _session_meta_path(name)
+        if meta.is_symlink() or not meta.is_file():
+            return None
         data = json.loads(meta.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
     except (OSError, ValueError):
         return None
     analysis = data.get("analysis")
@@ -2375,7 +2458,7 @@ def load_session(name: str) -> Optional[dict]:
             except (TypeError, ValueError):
                 target = 0.0
             repick_analysis(analysis, target)
-    return data
+    return provenance_api.enrich_session(data)
 
 
 def sessions_for_source(abs_path: str, limit: int = 20) -> list[dict]:

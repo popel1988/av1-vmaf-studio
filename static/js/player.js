@@ -725,6 +725,8 @@
 
   async function stopSession() {
     destroyPlayback();
+    const provenance = document.getElementById("fp-provenance");
+    if (provenance) provenance.innerHTML = "";
     if (fp.sid) {
       try { await fetch(`/api/player/session/${fp.sid}`, { method: "DELETE" }); }
       catch (e) { /* ignore */ }
@@ -932,6 +934,7 @@
       lookahead_sec: fp.lookahead,
       audio_copy: audioCopy,
       look: playerLook(),
+      owner: "player",
     };
     try {
       await stopSession();
@@ -977,6 +980,8 @@
         return;
       }
 
+      const provenance = document.getElementById("fp-provenance");
+      if (provenance && window.StudioInsights) provenance.innerHTML = window.StudioInsights.previewHtml(sess);
       renderPlan(d.plan || {
         strategy: sess.decision_strategy,
         summary: sess.decision_summary,

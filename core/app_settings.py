@@ -26,6 +26,8 @@ _DEFAULTS: dict[str, Any] = {
     "vmaf_min_savings": 0.0,
     # Encodierte Szenenclips im VMAF-Archiv behalten (Abspielen unter dem Bild).
     "keep_vmaf_clips": True,
+    # Opt-in: nur alte Testvideos entfernen, keine Messwerte/Screenshots.
+    "vmaf_clip_retention_days": 0,
     # Benannte Unterbibliotheken: [{id, name, path}, ...]
     "libraries": [],
 }
@@ -64,6 +66,8 @@ def load() -> dict:
                             raw.get("vmaf_min_savings"))
                     if "keep_vmaf_clips" in raw:
                         data["keep_vmaf_clips"] = bool(raw.get("keep_vmaf_clips"))
+                    if "vmaf_clip_retention_days" in raw:
+                        data["vmaf_clip_retention_days"] = _normalize_retention_days(raw.get("vmaf_clip_retention_days"))
                     libs = raw.get("libraries")
                     if isinstance(libs, list):
                         data["libraries"] = _normalize_libraries(libs)
@@ -121,6 +125,8 @@ def save(updates: dict) -> dict:
                 updates.get("vmaf_min_savings"))
         if "keep_vmaf_clips" in updates:
             cur["keep_vmaf_clips"] = bool(updates.get("keep_vmaf_clips"))
+        if "vmaf_clip_retention_days" in updates:
+            cur["vmaf_clip_retention_days"] = _normalize_retention_days(updates.get("vmaf_clip_retention_days"))
         if "libraries" in updates:
             cur["libraries"] = _normalize_libraries(list(updates.get("libraries") or []))
         return _write(cur)
@@ -169,6 +175,13 @@ def _normalize_p1_anchor(value) -> str:
 
 def vmaf_p1_anchor() -> str:
     return _normalize_p1_anchor(load().get("vmaf_p1_anchor", "both"))
+
+
+def _normalize_retention_days(value) -> int:
+    try:
+        return max(0, min(3650, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def keep_vmaf_clips() -> bool:

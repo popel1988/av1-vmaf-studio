@@ -3,6 +3,7 @@ Runner, der den Live-Fortschritt (FPS, Bitrate, ETA) über `-progress` ausliest.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -1034,6 +1035,71 @@ def mobile_output_args(info: VideoInfo, platform: str, mobile: dict, *,
     return args
 
 
+def command_details(cmd: list[str], output: Optional[str] = None) -> dict:
+    """JSON-safe facts from the command, not inferred encoder defaults.
+
+    With multiple outputs only options preceding the primary output are read.
+    Absent native options remain None: driver/encoder defaults are not verified.
+    """
+    argv = [str(x) for x in cmd]
+    primary = argv.index(str(output)) if output and str(output) in argv else len(argv)
+    tokens = argv[1:primary]
+    options: dict = {}
+    flags = {"-y", "-n", "-hide_banner", "-nostats", "-an", "-sn", "-vn"}
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if not token.startswith("-"):
+            i += 1
+            continue
+        value = None
+        if token not in flags and i + 1 < len(tokens):
+            nxt = tokens[i + 1]
+            if not nxt.startswith("-") or re.match(r"^-\d", nxt):
+                value = nxt
+                i += 1
+        options.setdefault(token, []).append(value)
+        i += 1
+
+    def last(*names):
+        for name in names:
+            if options.get(name):
+                return options[name][-1]
+        return None
+
+    filters = last("-vf", "-filter:v", "-filter_complex")
+    tone = None
+    for marker, engine in (("tonemap_cuda=", "cuda"), ("tonemap_opencl=", "opencl"),
+                           ("tonemap_vaapi=", "vaapi"), ("tonemapx=", "tonemapx"),
+                           ("libplacebo=", "libplacebo"), ("tonemap=", "cpu")):
+        if marker in (filters or ""):
+            tone = engine
+            break
+    enc = last("-c:v", "-c:v:0", "-vcodec", "-c", "-codec")
+    backend = ("copy" if enc == "copy" else "nvidia" if "nvenc" in (enc or "")
+               else "intel_qsv" if "qsv" in (enc or "")
+               else "vaapi" if "vaapi" in (enc or "")
+               else "cpu" if (enc or "").startswith("lib") else None)
+    return {
+        "argv": argv, "binary": argv[0] if argv else "", "output": output,
+        "encoder": enc, "backend": backend, "preset": last("-preset", "-preset:v", "-cpu-used"),
+        "rate_control": {key: last("-" + key) for key in
+                         ("crf", "cq", "qp", "global_quality", "b:v", "maxrate", "bufsize", "rc")},
+        "pass": last("-pass"), "multipass": last("-multipass"),
+        "b_frames": last("-bf", "-bf:v"), "keyint": last("-g", "-g:v"),
+        "tune": last("-tune", "-tune:v"), "pixel_format": last("-pix_fmt"),
+        "encoder_params": {key: last("-" + key) for key in
+                           ("svtav1-params", "aom-params", "x265-params", "x264-params")},
+        "filters": filters, "tonemap_engine": tone,
+        "hardware": {"decode": last("-hwaccel"),
+                     "frame_format": last("-hwaccel_output_format"),
+                     "devices": list(options.get("-init_hw_device") or []),
+                     "filter_device": last("-filter_hw_device")},
+        "maps": list(options.get("-map") or []),
+        "inputs": list(options.get("-i") or []), "options": options,
+    }
+
+
 @dataclass
 class EncodeProgress:
     percent: float = 0.0
@@ -1051,8 +1117,10 @@ _SPEED_RE = re.compile(r"([\d.]+)x")
 class EncodeRunner:
     """Führt ein FFmpeg-Encode aus und meldet den Fortschritt per Callback."""
 
-    def __init__(self, on_progress: Optional[Callable[[EncodeProgress], None]] = None):
+    def __init__(self, on_progress: Optional[Callable[[EncodeProgress], None]] = None,
+                 on_command: Optional[Callable[[list[str]], None]] = None):
         self.on_progress = on_progress
+        self.on_command = on_command
         self.proc: Optional[subprocess.Popen] = None
         self._cancel = False
 
@@ -1071,6 +1139,12 @@ class EncodeRunner:
         Puffer (z. B. gesprächiger QSV/VAAPI-Init) nicht mit dem stdout-Lesen
         deadlockt und der komplette Fehlertext für die Diagnose erhalten bleibt.
         """
+        if self.on_command:
+            try:
+                self.on_command(list(cmd))
+            except Exception:
+                # Observability cannot stop an encode, but failure must be visible.
+                logging.getLogger(__name__).exception("Encoding command reporting failed")
         self.proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

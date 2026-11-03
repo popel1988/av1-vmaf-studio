@@ -164,7 +164,9 @@ def apply_requeue_conflict(settings_dict: dict, src_path: str, mode: str) -> tup
 def preview_batch(paths: list[str], settings_dict: dict,
                   estimates: Optional[dict] = None) -> dict:
     """Dry-Run für mehrere Pfade. estimates: rel/abs path -> {est_saved_bytes,...}."""
+    from dataclasses import asdict
     from .queue_manager import build_job_settings
+    from .storage_policy import storage_plan
 
     estimates = estimates or {}
     settings = build_job_settings(settings_dict or {})
@@ -189,4 +191,5 @@ def preview_batch(paths: list[str], settings_dict: dict,
         "duplicates": dup_count,
         "items": items,
         "on_duplicate": getattr(settings, "on_duplicate", "ask") or "ask",
+        "storage": storage_plan(items, asdict(settings), estimates),
     }

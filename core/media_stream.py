@@ -1,8 +1,11 @@
 """Browser-kompatibles Live-Playback: Video copy + Audio→AAC (+ optional WebVTT)."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -105,34 +108,77 @@ def build_vtt_cmd(path: Path, subtitle_index: int) -> list[str]:
     ]
 
 
-def stream_bytes(cmd: list[str], chunk: int = 65536) -> Iterator[bytes]:
-    """Führt FFmpeg aus und liefert stdout-Chunks (Prozess wird am Ende beendet)."""
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-    )
-    assert proc.stdout is not None
+class _MediaProcess:
+    """Registriert nur eigene Prozesse; stderr darf stdout nie blockieren."""
+
+    def __init__(self, cmd, *, owner="player", label="", source=""):
+        from . import runtime
+        from .encoder import command_details
+        self.log = tempfile.TemporaryFile()
+        try:
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=self.log,
+                                         stdin=subprocess.DEVNULL,
+                                         start_new_session=os.name == "posix")
+            self.sid = runtime.register_process(
+                self.proc, owner=owner, label=label, source=source,
+                effective={**command_details(cmd), "video_mode": "none" if "webvtt" in cmd else "copy",
+                           "audio_mode": "none" if "-an" in cmd else (
+                               "copy" if "-c:a" in cmd and cmd[cmd.index("-c:a") + 1] == "copy" else "aac")})
+        except BaseException:
+            proc = getattr(self, "proc", None)
+            if proc is not None:
+                proc.kill()
+                proc.wait(timeout=5)
+            self.log.close()
+            raise
+
+    def close(self):
+        from . import runtime
+        try:
+            runtime.stop_session(self.sid)
+            if self.proc.poll() is not None:
+                self.log.seek(0, 2)
+                size = self.log.tell()
+                self.log.seek(max(0, size - 400))
+                err = self.log.read()
+                if self.proc.returncode not in (0, None, -9, 255) and err:
+                    logger.debug("stream ffmpeg rc=%s: %s", self.proc.returncode,
+                                 err.decode("utf-8", "replace"))
+        finally:
+            if self.proc.stdout:
+                self.proc.stdout.close()
+            self.log.close()
+            runtime.finish_process(self.sid)
+
+
+def stream_bytes(cmd: list[str], chunk: int = 65536, *, owner="player", label="", source="") -> Iterator[bytes]:
+    """Synchroner Aufrufer: bei EOF/close wird der eigene Prozess beendet."""
+    stream = _MediaProcess(cmd, owner=owner, label=label, source=source)
     try:
         while True:
-            data = proc.stdout.read(chunk)
+            data = stream.proc.stdout.read(chunk)
             if not data:
                 break
             yield data
     finally:
-        try:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=5)
-        except Exception:
-            pass
-        err = b""
-        try:
-            if proc.stderr:
-                err = proc.stderr.read() or b""
-        except Exception:
-            pass
-        if proc.returncode not in (0, None, -9, 255) and err:
-            logger.debug("stream ffmpeg rc=%s: %s", proc.returncode,
-                         err.decode("utf-8", "replace")[-400:])
+        stream.close()
+
+
+async def async_stream_bytes(cmd: list[str], chunk: int = 65536, *, owner="player", label="", source=""):
+    """HTTP-Disconnect beendet FFmpeg auch während eines blockierten Pipe-Reads.
+
+    Einen synchronen Generator allein kann Starlette während read() nicht
+    schließen. Hier erreicht Cancellation das finally sofort; das Aufräumen
+    läuft abgeschirmt in einem Thread, der zuerst den Prozess beendet.
+    """
+    stream = _MediaProcess(cmd, owner=owner, label=label, source=source)
+    try:
+        while True:
+            data = await asyncio.to_thread(stream.proc.stdout.read, chunk)
+            if not data:
+                break
+            yield data
+    finally:
+        # shield schützt den Cleanup-Task auch vor der CancelScope des HTTP-
+        # Streams. Der Thread existiert unabhängig vom geschlossenen Request.
+        await asyncio.shield(asyncio.create_task(asyncio.to_thread(stream.close)))

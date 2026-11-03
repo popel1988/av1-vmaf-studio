@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -20,9 +21,10 @@ from typing import Optional
 from . import config
 from . import ffmpeg_utils as ff
 from . import vmaf as vmaf_mod
+from . import output_report
 from .encoder import (
     EncodeProgress, EncodeRunner, TONEMAP_ALGO_LABELS, TONEMAP_ENGINE_LABELS,
-    build_encode_cmd, deinterlace_filter, normalize_deband, normalize_svt_look,
+    build_encode_cmd, command_details, deinterlace_filter, normalize_deband, normalize_svt_look,
     normalize_tonemap_algo, normalize_tonemap_desat, normalize_tonemap_engine,
     normalize_tonemap_peak, tonemap_algo_for_engine, tonemap_engine_for,
 )
@@ -39,16 +41,31 @@ STATUS_FAILED = "fehlgeschlagen"
 STATUS_CANCELLED = "abgebrochen"
 
 
+_PHASE_KEYS = {
+    "Quelle prüfen": "source.probe", "Auto-Crop": "source.crop",
+    "Bitrate-Verlauf": "analysis.bitrate", "DV-Vorabtest": "hdr.dv_preflight",
+    "Zwei-Pass · Analyse": "encode.pass1", "Zwei-Pass · Encode": "encode.pass2",
+    "Qualitätsprüfung": "verify.vmaf", "Integritäts-Check": "verify.integrity",
+    "Dolby Vision": "hdr.dolby_vision", "HDR10+": "hdr.hdr10_plus",
+    "Audio-Optimierung": "remux.audio", "Ausgabe-Prüfbericht": "verify.report",
+    "Ausgabe-Grenzen": "verify.caps", "Container-Statistik": "output.statistics",
+    "Original-Nachbehandlung": "output.postprocess", "NFO kopieren": "output.nfo",
+    "Splitten": "output.split", "Chunked Encode": "chunk.setup",
+}
+
+
 def _end_step(item: "QueueItem") -> None:
     """Laufenden Schritt abschließen und seine Dauer merken."""
     name = str(getattr(item, "_step_name", "") or "")
     t0 = float(getattr(item, "_step_t0", 0) or 0)
+    meta = getattr(item, "_step_meta", {})
     item._step_name = ""
     item._step_t0 = 0.0
+    item._step_meta = {}
     if not name or t0 <= 0:
         return
     secs = round(max(0.0, time.time() - t0), 1)
-    item.steps.append({"name": name, "seconds": secs})
+    item.steps.append({"name": name, "seconds": secs, **meta})
 
 
 def _step_label(item: "QueueItem", fallback: str) -> str:
@@ -56,14 +73,91 @@ def _step_label(item: "QueueItem", fallback: str) -> str:
     return msg or fallback
 
 
-def _begin_step(item: "QueueItem", name: str) -> None:
-    """Neuen Schritt starten. Der vorherige wird dabei abgeschlossen."""
+def _begin_step(item: "QueueItem", name: str, key: str = "", **context) -> None:
+    """Stable keys supplement the legacy display label without changing it."""
     _end_step(item)
     label = " ".join(str(name or "").split())
     if not label:
         return
     item._step_name = label[:160]
     item._step_t0 = time.time()
+    item._step_meta = {"key": key or _PHASE_KEYS.get(label, "encode.main"),
+                       "started_at": item._step_t0, "context": context}
+
+
+def _validate_sample_ranges(raw) -> list:
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, (list, tuple)) or len(raw) > 5:
+        raise ValueError("Invalid targeted sample ranges")
+    result = []
+    for pair in raw:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError("Invalid targeted sample range")
+        start, length = map(float, pair)
+        if not all(math.isfinite(v) for v in (start, length)) or start < 0 or not 3 <= length <= 120:
+            raise ValueError("Targeted sample range out of bounds")
+        result.append([start, length])
+    return result
+
+
+def _phase_totals(steps: list) -> dict:
+    totals = {}
+    for step in steps:
+        key = step.get("key", "legacy")
+        totals[key] = round(totals.get(key, 0.0) + step["seconds"], 1)
+    return totals
+
+
+def _capture_command(item: "QueueItem", cmd: list, output=None) -> None:
+    primary = (str(output) if output is not None and str(output) in [str(x) for x in cmd]
+               else str(cmd[-1]) if cmd else "")
+    detail = command_details(cmd, primary)
+    detail.update(phase_key=getattr(item, "_step_meta", {}).get("key"),
+                  attempt=item.verify_attempts or 1,
+                  context=dict(getattr(item, "_step_meta", {}).get("context") or {}))
+    requested = item.details.setdefault("requested", asdict(item.settings))
+    detail["fallbacks"] = []
+    requested_tone = requested.get("tonemap_engine", "cpu")
+    if detail["tonemap_engine"] and requested_tone != detail["tonemap_engine"]:
+        detail["fallbacks"].append({"key": "tonemap_engine", "requested": requested_tone,
+                                    "actual": detail["tonemap_engine"], "reason": "resolved_command"})
+    item.details["schema_version"] = 1
+    item.details["effective_settings"] = asdict(item.settings)
+    item.details["command"] = detail
+    commands = list(item.details.get("commands") or [])
+    commands.append(detail)
+    item.details["commands"] = commands[-60:]
+    item.details["command_count"] = int(item.details.get("command_count") or 0) + 1
+    if getattr(item, "_step_meta", None):
+        item._step_meta["context"]["command_index"] = item.details["command_count"]
+
+
+def _queue_runner(item: "QueueItem", on_progress=None, output=None) -> EncodeRunner:
+    def capture(cmd):
+        try:
+            _capture_command(item, cmd, output)
+        except Exception as exc:
+            item.details.setdefault("errors", []).append(
+                {"key": "command.capture_failed", "error": str(exc)[-500:]})
+            logger.exception("Command details failed: %s", item.title)
+    return EncodeRunner(on_progress=on_progress, on_command=capture)
+
+
+def _chunk_status(item: "QueueItem", message: str) -> None:
+    item.message = message
+    match = re.search(r"Segment (\d+)/(\d+) \(CQ (\d+)\)", message)
+    if match:
+        _begin_step(item, message, "chunk.encode", chunk=int(match[1]),
+                    chunks=int(match[2]), quality=int(match[3]))
+    elif "analysiert" in message:
+        count = re.search(r"(\d+) Segmente", message)
+        _begin_step(item, message, "chunk.analysis", chunks=int(count[1]) if count else None)
+    elif "zusammengefügt" in message:
+        _begin_step(item, message, "chunk.concat")
+    elif "gemuxt" in message:
+        _begin_step(item, message, "chunk.mux")
+    item.details["command_scope"] = "chunk_segments_only"  # concat/mux use a separate runner
 
 
 def _steps_public(item: "QueueItem") -> list:
@@ -79,7 +173,8 @@ def _steps_public(item: "QueueItem") -> list:
             secs = round(max(0.0, float(raw.get("seconds") or 0)), 1)
         except (TypeError, ValueError):
             secs = 0.0
-        out.append({"name": name, "seconds": secs})
+        out.append({"name": name, "seconds": secs,
+                    **{k: raw[k] for k in ("key", "started_at", "context") if k in raw}})
     name = str(getattr(item, "_step_name", "") or "")
     t0 = float(getattr(item, "_step_t0", 0) or 0)
     if name and t0 > 0:
@@ -87,6 +182,7 @@ def _steps_public(item: "QueueItem") -> list:
             "name": name,
             "seconds": round(max(0.0, time.time() - t0), 1),
             "running": True,
+            **getattr(item, "_step_meta", {}),
         })
     return out
 
@@ -105,7 +201,8 @@ def _steps_from_saved(raw) -> list:
             secs = round(max(0.0, float(step.get("seconds") or 0)), 1)
         except (TypeError, ValueError):
             secs = 0.0
-        out.append({"name": name[:160], "seconds": secs})
+        out.append({"name": name[:160], "seconds": secs,
+                    **{k: step[k] for k in ("key", "started_at", "context") if k in step}})
     return out
 
 # Container-Endung je Zielcodec
@@ -185,6 +282,8 @@ class JobSettings:
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     ssimulacra2_frames: int = 3    # Standbilder je Stichprobe für SSIMULACRA2
     sample_mode: str = "even"     # even | bitrate
+    # Nur für separate gezielte Nachprüfungen; unverändert zum VMAF-Pfad reichen.
+    sample_ranges: list = field(default_factory=list)
     scene_min_pct: int = 10        # ruhige Szene mindestens so viel % vom Median
     credits_at: float = 0.0        # Filmzeit (s), ab der keine Testszenen mehr liegen
     generate_screenshots: bool = True
@@ -259,7 +358,9 @@ class QueueItem:
     started_at: float = 0.0
     finished_at: float = 0.0
     duration: float = 0.0
-    steps: list = field(default_factory=list)  # [{"name", "seconds"}] abgeschlossene Schritte
+    steps: list = field(default_factory=list)  # Legacy labels plus stable phase keys/context
+    details: dict = field(default_factory=dict)  # Requested settings and observed FFmpeg commands
+    report: Optional[dict] = None               # Observational output audit, never a safety override
 
     def _normalize_live_vmaf(self) -> None:
         """Alte Läufe: Szene mit VMAF ≥ 99 auf jeder Stufe aus Schnitt und Empfehlung."""
@@ -290,6 +391,7 @@ class QueueItem:
             dur = (self.finished_at or time.time()) - self.started_at
         else:
             dur = 0.0
+        steps = _steps_public(self)
         return {
             "id": self.id,
             "title": self.title,
@@ -324,7 +426,12 @@ class QueueItem:
             "finished_at": self.finished_at,
             "duration": round(dur, 1),
             "duration_human": ff.human_duration(dur) if dur else "—",
-            "steps": _steps_public(self),
+            "steps": steps,
+            "phase": next((step for step in reversed(steps) if step.get("running")), None),
+            "phase_seconds": _phase_totals(steps),
+            "details": self.details,
+            "report": self.report,
+            "output_report": self.report,
         }
 
 
@@ -408,7 +515,9 @@ class QueueManager:
                 "started_at": it.started_at,
                 "finished_at": it.finished_at,
                 "duration": it.duration,
-                "steps": list(it.steps or []),
+                "steps": _steps_public(it),
+                "details": it.details,
+                "output_report": it.report,
             }
             # „Auswahl"-Jobs: VMAF-Analyse bzw. DV-Rückfrage mitsichern.
             if it.status == STATUS_AWAITING and it.vmaf:
@@ -507,6 +616,9 @@ class QueueManager:
                     finished_at=float(d.get("finished_at", 0) or 0),
                     duration=float(d.get("duration", 0) or 0),
                     steps=_steps_from_saved(d.get("steps")) if (is_terminal or is_awaiting) else [],
+                    details=d.get("details") if isinstance(d.get("details"), dict) else {},
+                    report=(d.get("output_report", d.get("report"))
+                            if isinstance(d.get("output_report", d.get("report")), dict) else None),
                 )
                 self._items.append(item)
                 restored += 1
@@ -583,6 +695,7 @@ class QueueManager:
             title=p.name,
             path=str(p),
             settings=settings,
+            details={"schema_version": 1, "requested": asdict(settings)},
             group_id=group_id or uuid.uuid4().hex[:8],
         )
         info = ffprobe(p) if p.is_file() else None
@@ -1004,12 +1117,18 @@ class QueueManager:
         return info, err
 
     def _process(self, item: QueueItem) -> None:
+        item.details.setdefault("schema_version", 1)
+        item.details.setdefault("requested", asdict(item.settings))
+        item.report = None
+        _begin_step(item, "Quelle prüfen")
         info, probe_err = self._open_source(item)
+        _end_step(item)
         if info is None:
             item.status = STATUS_FAILED
             item.error = f"ffprobe: {probe_err or 'kein gültiges Video'}"
             return
         item.info = info.to_dict()
+        item.details["source"] = item.info
 
         s = item.settings
 
@@ -1082,9 +1201,11 @@ class QueueManager:
             item.status = STATUS_ANALYZING
             item.message = ("Testclips ohne VMAF …" if s.visual_only
                             else "VMAF-Analyse läuft …")
-            sample_starts = []
+            sample_starts = _validate_sample_ranges(s.sample_ranges)
+            if sample_starts and (not info.duration or any(start + length > info.duration for start, length in sample_starts)):
+                raise ValueError("Die gezielte Stichprobe liegt außerhalb der aktuellen Quelldauer")
             sample_windows = []
-            if s.sample_mode == "bitrate":
+            if not sample_starts and s.sample_mode == "bitrate":
                 item.message = "Bitrate-Verlauf der Quelle …"
                 self._refresh_global_msg()
                 _begin_step(item, "Bitrate-Verlauf")
@@ -1151,7 +1272,9 @@ class QueueManager:
                     status=lambda m: setattr(item, "message", m),
                     cancelled=lambda: item.id in self._cancel_ids,
                     progress=lambda d: setattr(item, "progress", d),
-                    on_step=lambda name: _begin_step(item, name),
+                    on_step=lambda name: _begin_step(
+                        item, name, "analysis.reference" if name.startswith("Referenz")
+                        else "analysis.candidate"),
                 )
             finally:
                 _end_step(item)
@@ -1344,7 +1467,10 @@ class QueueManager:
                               f"{item.vmaf_verify:.1f} < Ziel {s.verify_min:.0f}.")
             self._run_integrity(item, s, info, out_path)
             self._run_caps(item, s, out_path)
+            _begin_step(item, "Container-Statistik")
             ff.add_mkv_statistics_tags(out_path)
+            self._run_output_report(item, info, out_path)
+            _begin_step(item, "Original-Nachbehandlung")
             self._post_process(item, out_path)
             self._copy_nfo_beside(item)
             item.status = STATUS_DONE
@@ -1359,7 +1485,9 @@ class QueueManager:
         # Auto-Crop einmalig erkennen (Chunked umgeht den Standard-Encode-Pfad).
         if s.autocrop and not item.crop:
             item.message = "Auto-Crop: schwarze Balken werden erkannt …"
+            _begin_step(item, "Auto-Crop")
             item.crop = ff.detect_crop(info)
+            _end_step(item)
             if item.crop:
                 logger.info("Auto-Crop erkannt (%s): crop=%s", item.title, item.crop)
         if not self._ensure_dv_preflight(item, s, info):
@@ -1400,6 +1528,8 @@ class QueueManager:
         }
 
         def set_active(runner) -> None:
+            if runner is not None:
+                runner.on_command = lambda cmd: _capture_command(item, cmd)
             with self._lock:
                 self._active[item.id] = runner
 
@@ -1407,7 +1537,7 @@ class QueueManager:
             info, out_path, s,
             set_active=set_active,
             cancelled=lambda: item.id in self._cancel_ids,
-            status=lambda m: setattr(item, "message", m),
+            status=lambda m: _chunk_status(item, m),
             progress=lambda d: setattr(item, "progress", d),
             enc_kw=enc_kw,
         )
@@ -1438,7 +1568,10 @@ class QueueManager:
                 item.saved_bytes = max(0, item.original_size - item.output_size)
                 self._run_integrity(item, s, info, out_path)
                 self._run_caps(item, s, out_path)
+                _begin_step(item, "Container-Statistik")
                 ff.add_mkv_statistics_tags(out_path)
+                self._run_output_report(item, info, out_path)
+                _begin_step(item, "Original-Nachbehandlung")
                 self._post_process(item, out_path)
                 self._copy_nfo_beside(item)
                 item.status = STATUS_DONE
@@ -1484,7 +1617,7 @@ class QueueManager:
 
         cmd = audio_opt.build_remux_cmd(info, out_path, settings)
         _log_cmd(item, cmd)
-        runner = EncodeRunner(on_progress=on_prog)
+        runner = _queue_runner(item, on_progress=on_prog, output=out_path)
         with self._lock:
             self._active[item.id] = runner
         rc, stderr = runner.run(cmd, info.duration)
@@ -1504,7 +1637,10 @@ class QueueManager:
             item.saved_bytes = max(0, item.original_size - item.output_size)
             self._run_integrity(item, s, info, out_path)
             self._run_caps(item, s, out_path)
+            _begin_step(item, "Container-Statistik")
             ff.add_mkv_statistics_tags(out_path)
+            self._run_output_report(item, info, out_path)
+            _begin_step(item, "Original-Nachbehandlung")
             self._post_process(item, out_path)
             self._copy_nfo_beside(item)
             item.status = STATUS_DONE
@@ -1552,7 +1688,8 @@ class QueueManager:
         s = item.settings
         item.status = STATUS_RUNNING
         item.message = label
-        _begin_step(item, label)
+        _begin_step(item, label, {"edit": "remux.edit", "concat": "remux.concat",
+                                  "editor": "remux.editor"}.get(s.video_mode, "remux.copy"))
         self._refresh_global_msg()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         _log_job_start(item, info, out_path, label)
@@ -1567,7 +1704,7 @@ class QueueManager:
             }
 
         _log_cmd(item, cmd)
-        runner = EncodeRunner(on_progress=on_prog)
+        runner = _queue_runner(item, on_progress=on_prog, output=out_path)
         with self._lock:
             self._active[item.id] = runner
         rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
@@ -1587,7 +1724,10 @@ class QueueManager:
             item.saved_bytes = item.original_size - item.output_size
             self._run_integrity(item, s, info, out_path)
             self._run_caps(item, s, out_path)
+            _begin_step(item, "Container-Statistik")
             ff.add_mkv_statistics_tags(out_path)
+            self._run_output_report(item, info, out_path)
+            _begin_step(item, "Original-Nachbehandlung")
             self._post_process(item, out_path)
             self._copy_nfo_beside(item)
             item.status = STATUS_DONE
@@ -1710,9 +1850,10 @@ class QueueManager:
             outputs = []
             for idx, (cmd, out_path) in enumerate(cmds, start=1):
                 item.message = f"Ausschnitt {idx}/{len(cmds)} …"
-                _begin_step(item, f"Ausschnitt {idx}/{len(cmds)}")
+                _begin_step(item, f"Ausschnitt {idx}/{len(cmds)}", "output.cut",
+                            part=idx, parts=len(cmds))
                 _log_cmd(item, cmd)
-                runner = EncodeRunner()
+                runner = _queue_runner(item, output=out_path)
                 with self._lock:
                     self._active[item.id] = runner
                 try:
@@ -1730,7 +1871,7 @@ class QueueManager:
                                  item.title, rc, stderr)
                     return
                 outputs.append(str(out_path))
-            item.output_path = outputs[0] if outputs else ""
+            self._run_split_reports(item, info, [Path(path) for path in outputs])
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
             item.message = ""
@@ -1752,7 +1893,10 @@ class QueueManager:
         pattern.parent.mkdir(parents=True, exist_ok=True)
         _log_job_start(item, info, pattern, "Splitten")
         _log_cmd(item, cmd)
-        runner = EncodeRunner()
+        output_glob = pattern.name.replace("%03d", "*")
+        previous = {path: (path.stat().st_mtime_ns, path.stat().st_size)
+                    for path in pattern.parent.glob(output_glob) if path.is_file()}
+        runner = _queue_runner(item, output=pattern)
         with self._lock:
             self._active[item.id] = runner
         rc, stderr = runner.run(cmd, getattr(info, "duration", 0.0) or 0.0)
@@ -1764,6 +1908,10 @@ class QueueManager:
             logger.error("Splitten fehlgeschlagen: %s (Exit %s)\nSTDERR:\n%s",
                          item.title, rc, stderr)
         else:
+            outputs = [path for path in sorted(pattern.parent.glob(output_glob))
+                       if path.is_file() and previous.get(path) !=
+                       (path.stat().st_mtime_ns, path.stat().st_size)]
+            self._run_split_reports(item, info, outputs)
             item.status = STATUS_DONE
             item.progress["percent"] = 100.0
             item.message = ""
@@ -1825,7 +1973,7 @@ class QueueManager:
                 br = min(br, cap) if br > 0 else cap
             enc_kw["bitrate_kbps"] = br
 
-        runner = EncodeRunner(on_progress=on_prog)
+        runner = _queue_runner(item, on_progress=on_prog, output=out_path)
         with self._lock:
             self._active[item.id] = runner
 
@@ -2043,7 +2191,7 @@ class QueueManager:
                 deband=s.deband,
                 svt_look=s.svt_look,
             )
-            runner = EncodeRunner()
+            runner = _queue_runner(item, output=test_out)
             with self._lock:
                 self._active[item.id] = runner
             rc, stderr = runner.run(cmd, 1.0)
@@ -2281,6 +2429,7 @@ class QueueManager:
             self._group_skip.add(item.group_id)
         return msg
 
+    @staticmethod
     def _run_caps(item: QueueItem, s: "JobSettings", out_path: Path) -> None:
         """Größen-/Bitrate-Obergrenzen prüfen (Warnung, safe_replace blockieren)."""
         item.caps_failed = False
@@ -2288,17 +2437,22 @@ class QueueManager:
         max_br = int(getattr(s, "max_video_bitrate_kbps", 0) or 0)
         if max_mb <= 0 and max_br <= 0:
             return
+        _begin_step(item, "Ausgabe-Grenzen")
         reasons = []
         size = out_path.stat().st_size if out_path.exists() else 0
+        cap_check = {"size_checked": bool(max_mb <= 0 or size > 0),
+                     "bitrate_checked": max_br <= 0}
+        item.details["cap_check"] = cap_check
         if max_mb > 0 and size > max_mb * 1024 * 1024:
             reasons.append(f"Größe {size / (1024 * 1024):.1f} MB > Cap {max_mb:.0f} MB")
         if max_br > 0 and size > 0:
             dur = 0.0
             try:
-                info2, _ = ff.probe_with_error(out_path)
+                info2, probe_error = ff.probe_with_error(out_path)
                 if info2:
                     dur = float(info2.duration or 0)
                     vbr = int(getattr(info2, "video_bitrate", 0) or 0)
+                    cap_check["bitrate_checked"] = bool(vbr > 0 or dur > 1)
                     if vbr > max_br * 1000:
                         reasons.append(
                             f"Video-Bitrate {vbr // 1000} kbit/s > Cap {max_br} kbit/s")
@@ -2307,14 +2461,90 @@ class QueueManager:
                         if overall > max_br * 1000 * 1.15:
                             reasons.append(
                                 f"Ø-Bitrate ~{overall // 1000} kbit/s > Cap {max_br} kbit/s")
-            except Exception:
-                pass
+                else:
+                    item.details.setdefault("errors", []).append(
+                        {"key": "caps.bitrate_probe", "error": probe_error or "probe_unavailable"})
+            except Exception as exc:
+                item.details.setdefault("errors", []).append(
+                    {"key": "caps.bitrate_probe", "error": str(exc)[-500:]})
+                logger.warning("Cap probe failed (%s): %s", item.title, exc)
+        cap_check["checked"] = cap_check["size_checked"] and cap_check["bitrate_checked"]
+        _end_step(item)
         if reasons:
             item.caps_failed = True
             msg = "; ".join(reasons)
             item.error = ((item.error + " ") if item.error else "") + \
                 f"Cap-Warnung: {msg}."
             logger.warning("Cap überschritten (%s): %s", item.title, msg)
+
+    @staticmethod
+    def _run_split_reports(item: QueueItem, info, paths: list[Path]) -> None:
+        """Multi-output audit without adding destructive processing to split jobs."""
+        reports = []
+        for path in paths:
+            QueueManager._run_output_report(item, info, path)
+            reports.append(item.report)
+        if not reports:
+            item.report = output_report.build_report(
+                {}, None, errors=[{"key": "output.discovery", "error": "no_split_outputs_found"}])
+            return
+        item.output_path = str(paths[0])
+        item.extra_outputs = [str(path) for path in paths[1:]]
+        combined = [dict(check, output_path=report["output_path"])
+                    for report in reports for check in report["checks"]]
+        item.report = dict(reports[0], outputs=reports, checks=combined,
+                           summary=output_report._summary(combined),
+                           errors=[error for report in reports for error in report.get("errors", [])])
+        item.report["summary"]["outputs_audited"] = len(reports)
+
+    @staticmethod
+    def _run_output_report(item: QueueItem, info, out_path: Path) -> None:
+        """Audit before any source move/delete; never reinterpret safety checks."""
+        _begin_step(item, "Ausgabe-Prüfbericht")
+        try:
+            commands = item.details.get("commands") or []
+            command = next((c for c in reversed(commands)
+                            if c.get("output") == str(out_path)), {})
+            source = item.info or info.to_dict()
+            sources = {}
+            for index, path in enumerate(command.get("inputs") or []):
+                # Only known source metadata: external audio/concat inputs are
+                # deliberately unknown rather than guessed from input zero.
+                if str(path) in (str(item.path), str(source.get("path")), str(info.path)):
+                    sources[index] = source
+            chapters, source_chapter_error = None, None
+            chapter_input = output_report._option(command, "-map_chapters")
+            if chapter_input != "-1" and (0 in sources or chapter_input is not None):
+                chapter_index = int(chapter_input) if str(chapter_input).isdigit() else 0
+                if chapter_index in sources:
+                    chapters, source_chapter_error = output_report.probe_chapters(
+                        Path(sources[chapter_index].get("path") or item.path))
+            errors = list(item.details.get("errors") or [])
+            if source_chapter_error:
+                errors.append({"key": "source.chapters.probe", "error": source_chapter_error})
+            plan = output_report.build_plan(
+                source, asdict(item.settings), command, sources=sources,
+                chapters=chapters, estimate=item.details.get("size_estimate"))
+            actual_info, probe_error = probe_with_error(out_path)
+            actual = actual_info.to_dict() if actual_info is not None else None
+            actual_chapters, chapter_error = output_report.probe_chapters(out_path)
+            s = item.settings
+            item.report = output_report.build_report(
+                plan, actual, output_path=str(out_path), actual_chapters=actual_chapters,
+                integrity_ok=item.integrity_ok, integrity_msg=item.integrity_msg,
+                vmaf_score=item.vmaf_verify,
+                vmaf_target=s.verify_min if s.verify_vmaf else None,
+                caps_enabled=bool(s.max_output_mb > 0 or s.max_video_bitrate_kbps > 0),
+                caps_checked=bool((item.details.get("cap_check") or {}).get("checked")),
+                caps_failed=item.caps_failed, probe_error=probe_error,
+                chapter_error=chapter_error, errors=errors, operation_error=item.error)
+        except Exception as exc:
+            logger.exception("Output report failed: %s", item.title)
+            item.report = output_report.build_report(
+                {}, None, output_path=str(out_path),
+                errors=[{"key": "report.generation", "error": str(exc)[-1000:]}])
+        finally:
+            _end_step(item)
 
     # ------------------------------------------------------------ Postprocessing
     def _copy_nfo_beside(self, item: "QueueItem") -> None:
@@ -2324,6 +2554,7 @@ class QueueManager:
         if not item.output_path:
             return
         from . import library
+        _begin_step(item, "NFO kopieren")
         try:
             library.copy_nfo_beside(Path(item.path), Path(item.output_path))
         except OSError as e:
@@ -2355,8 +2586,12 @@ class QueueManager:
                     f"Original behalten (Sicherheit): {reason}."
                 logger.warning("Sichere Nachbehandlung – Original behalten (%s): %s",
                                item.title, reason)
+                if item.report is not None:
+                    output_report.record_postprocessing(
+                        item.report, mode, item.output_path, error=reason, blocked=True)
                 return  # Original bleibt unangetastet, Output liegt in der Standard-Ausgabe
 
+        post_error = ""
         try:
             if mode == "inplace":
                 # Original durch neues File ersetzen (am Originalort)
@@ -2371,6 +2606,10 @@ class QueueManager:
             # mode == "keep": Original bleibt, Output liegt in der Standard-Ausgabe
         except OSError as e:
             item.error = f"Post-Processing-Warnung: {e}"
+            post_error = str(e)
+        if item.report is not None:
+            output_report.record_postprocessing(
+                item.report, mode, item.output_path, error=post_error)
 
     def shutdown(self) -> None:
         self._stop = True
@@ -2510,6 +2749,7 @@ def build_job_settings(d: dict) -> JobSettings:
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         ssimulacra2_frames=max(0, min(7, int(d.get("ssimulacra2_frames") if d.get("ssimulacra2_frames") is not None else 3))),
         sample_mode="bitrate" if d.get("sample_mode") == "bitrate" else "even",
+        sample_ranges=_validate_sample_ranges(d.get("sample_ranges")),
         scene_min_pct=max(5, min(60, int(d.get("scene_min_pct", 10) or 10))),
         credits_at=max(0.0, min(48 * 3600.0, float(d.get("credits_at", 0) or 0))),
         generate_screenshots=bool(d.get("generate_screenshots", True)),

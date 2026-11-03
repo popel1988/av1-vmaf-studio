@@ -888,6 +888,7 @@
               </select>
               <span class="badge" id="vmaf-model-badge"></span>
               <p class="hint" id="vmaf-sample-note" hidden></p>
+              <div id="analysis-insights" class="analysis-insights" data-no-i18n hidden></div>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-csv" type="button">CSV exportieren</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-repick" type="button" disabled>Neu einordnen</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-nerd" type="button">Daten für Nerds</button>
@@ -1033,6 +1034,11 @@
           </div>
         </section>
 
+        <section class="card span-3" data-page="queue diag" data-no-i18n>
+          <div class="card-head"><h3 id="runtime-heading"></h3><button class="btn btn-ghost btn-sm" id="runtime-refresh"></button></div>
+          <div class="card-body"><p class="hint" id="runtime-note"></p><div id="runtime-list" aria-live="off"></div></div>
+        </section>
+
         <!-- CARD 5: Warteschlange -->
         <section class="card span-3" data-page="queue">
           <div class="card-head">
@@ -1078,6 +1084,7 @@
             </div>
           </div>
           <div class="card-body">
+            <details class="retention-settings" data-no-i18n><summary id="retention-heading"></summary><div id="retention-settings"></div></details>
             <div class="data-toolbar">
               <div class="field" style="margin:0">
                 <label>Bereich</label>
@@ -2941,6 +2948,7 @@
               </aside>
             </div>
             <p class="muted" id="fp-status" style="margin-top:8px;font-size:12px"></p>
+            <div id="fp-provenance"></div>
           </div>
         </section>
 
@@ -3091,6 +3099,7 @@
               </div>
               {% endfor %}
             </div>
+            <div class="ab-preview-notes"><div id="ab-provenance-a"></div><div id="ab-provenance-b"></div></div>
             <div class="ab-videos" id="ab-videos">
               <div class="ab-pane"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
               <div class="ab-pane"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
@@ -3636,6 +3645,7 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
   <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/insights.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/player.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/editor.js?v={{ asset_version }}" defer></script>

@@ -49,6 +49,8 @@
     outPick: null,      // Zielordner-Picker (prefix/root/path)
   };
 
+  if (window.StudioInsights) window.StudioInsights.connect({getState: () => state, openJob: (id) => openQueueDetails(id)});
+
   // Absoluten Pfad in einen relativen Medienpfad umwandeln.
   function inputRelPath(abs) {
     if (!abs) return "";
@@ -3268,6 +3270,7 @@
       let settled = false;
       openModal(tt("Dry-Run Vorschau"), `
         ${table}
+        ${window.StudioInsights ? window.StudioInsights.storageHtml(preview.storage) : ""}
         <div class="lib-actions" style="margin-top:12px">
           <button class="btn btn-primary" id="preview-go">${tt("Trotzdem starten")}</button>
           <button class="btn btn-ghost" id="preview-cancel">${tt("Abbrechen")}</button>
@@ -3308,7 +3311,7 @@
     const jobs = preview.items || preview.jobs || [];
     const dups = jobs.filter((j) => j.duplicate);
     const onDup = (settings.on_duplicate || "ask").toLowerCase();
-    if (forcePreview || onDup === "ask") {
+    if (forcePreview || onDup === "ask" || (preview.storage && (preview.storage.insufficient || preview.storage.unknown))) {
       return showPreviewModal(preview);
     }
     if (dups.length && onDup !== "overwrite" && onDup !== "skip") {
@@ -3546,6 +3549,7 @@
       const data = JSON.parse(ev.data);
       if (data.hardware) updateHardware(data.hardware);
       if (data.queue) updateQueue(data.queue);
+      if (data.runtime && window.StudioInsights) window.StudioInsights.renderRuntime(data.runtime);
     };
   }
 
@@ -3822,7 +3826,8 @@
     if (!list.length) return "";
     const rows = list.map((s) => {
       const cls = s.running ? " class=\"is-running\"" : "";
-      return `<li${cls}><span>${escapeHtml(s.name)}</span><span>${formatDuration(s.seconds)}</span></li>`;
+      const label = window.StudioInsights ? window.StudioInsights.phaseLabel(s) : s.name;
+      return `<li${cls}><span>${escapeHtml(label)}</span><span>${formatDuration(s.seconds)}</span></li>`;
     }).join("");
     return `<ul class="queue-steps">${rows}</ul>`;
   }
@@ -3881,6 +3886,7 @@
       body.innerHTML = '<tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>';
       return;
     }
+    const expanded = new Set([...body.querySelectorAll("tr[data-details]")].filter(tr => tr.querySelector("details[open]")).map(tr => tr.dataset.details));
     const DONE = ["fertig", "fehlgeschlagen", "abgebrochen"];
     body.innerHTML = view.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
@@ -3919,7 +3925,7 @@
         <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${dvBox}${extraOut}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status)}</td>
-        <td>${settingsLabel(it)}</td>
+        <td>${settingsLabel(it)}${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(it) : ""}</td>
         <td>${dur}${finished}${stepsHtml(it.steps)}</td>
         <td class="good">${it.saved_human}</td>
         <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}</td>
@@ -3943,8 +3949,12 @@
         fetch(`/api/queue/${b.dataset.move}/move?direction=${b.dataset.dir}`, { method: "POST" });
       });
     });
-    body.querySelectorAll(".queue-steps").forEach((ul) => {
+    body.querySelectorAll(".queue-steps, .encoding-details").forEach((ul) => {
       ul.addEventListener("click", (e) => e.stopPropagation());
+    });
+    body.querySelectorAll("tr[data-details]").forEach(tr => {
+      const detail = tr.querySelector("details");
+      if (detail && expanded.has(tr.dataset.details)) detail.open = true;
     });
     bindDvPromptButtons(body);
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
@@ -4515,6 +4525,7 @@
     const badge = $("vmaf-model-badge");
     if (badge) badge.textContent = "Kein aktueller Vergleich – oben einen früheren auswählen";
     setSampleWindowNote(null);
+    if (window.StudioInsights) window.StudioInsights.analysis(null);
   }
 
   async function showArchivedSession(name) {
@@ -4564,6 +4575,7 @@
       renderScreenshots(vmaf);
       if (state.vmafNerd) refreshNerdFrames();
       state.vmafArchiveData = data;
+      if (window.StudioInsights) window.StudioInsights.analysis(vmaf, data);
       const applied = $("vmaf-archive-applied");
       if (applied) applied.textContent = "";
     } catch (e) { /* ignorieren */ }
@@ -6277,6 +6289,7 @@
 
   function showVmafChart(vmaf) {
     state.vmafShown = vmaf;
+    if (window.StudioInsights) window.StudioInsights.analysis(vmaf);
     const course = document.querySelector(".vmaf-course");
     const pair = document.querySelector(".vmaf-graph-pair");
     const visualNote = $("vmaf-visual-note");
@@ -8035,7 +8048,7 @@
   }
 
   function _playerStreamUrl(root, rel, audioIdx, startSec, audioCodec) {
-    let u = `/api/media/stream?root=${encodeURIComponent(root || "media")}`
+    let u = `/api/media/stream?owner=preview&root=${encodeURIComponent(root || "media")}`
       + `&path=${encodeURIComponent(rel)}&audio=${audioIdx}`;
     if (startSec && startSec > 0) u += `&start=${encodeURIComponent(String(startSec))}`;
     if (audioCodec) u += `&acodec=${encodeURIComponent(audioCodec)}`;
@@ -8294,6 +8307,7 @@
       ${dvModalBox}
       <div class="stat-grid modal-stats">${statChips}</div>
       ${stepsHtml(d.steps)}
+      ${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(d) + window.StudioInsights.reportHtml(d.output_report) : ""}
       <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
       ${playToggle}
       <div id="modal-player">${player}</div>
@@ -12928,6 +12942,9 @@
     const sumEl = $(`ab-look-summary-${key}`);
     const tagEl = $(`ab-tag-${key}`);
     const up = key.toUpperCase();
+    const provenance = $(`ab-provenance-${key}`);
+    if (provenance && window.StudioInsights) provenance.innerHTML = side && side.path
+      ? window.StudioInsights.previewHtml({...side.sess, mode: side.mode, label: up}) : "";
     if (!side || !side.path) {
       if (sumEl) sumEl.textContent = "—";
       if (tagEl) tagEl.textContent = up;
@@ -13347,6 +13364,8 @@
         client_direct_ok: !forceHls, client_codecs: codecs,
         lookahead_sec: laSec, audio_copy: false,
         client_token: token,
+        owner: abIsStandalone() ? "ab_standard" : "ab_nerd",
+        label: side.key.toUpperCase(),
       };
       if (look) reqBody.look = look;
       if (stale()) { abAbortStart(side, token); return false; }
