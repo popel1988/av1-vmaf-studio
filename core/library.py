@@ -441,11 +441,16 @@ def _dynamic_match_one(info, dynamic_filter: str) -> bool:
     if dynamic_filter == "dv":
         return bool(info.dolby_vision)
     if dynamic_filter.startswith("dv"):
-        try:
-            want = int(dynamic_filter[2:])
-        except ValueError:
-            return bool(info.dolby_vision)
-        return bool(info.dolby_vision) and (info.dv_profile or 0) == want
+        want = dynamic_filter[2:]
+        if not info.dolby_vision:
+            return False
+        if not want:
+            return True
+        label = str(getattr(info, "dv_profile_label", "") or "") or (
+            str(info.dv_profile) if info.dv_profile else "")
+        if "." in want:
+            return label == want
+        return label == want or label.startswith(want + ".")
     return True
 
 
@@ -536,6 +541,7 @@ def _run(root_rel: str, filters: dict) -> None:
                     "est_saved_bytes": proj["est_saved_bytes"],
                     "est_saved_human": ff.human_size(proj["est_saved_bytes"]),
                     "suggest": sug,
+                    **ff.extra_probe_fields(info),
                 })
                 _state["total_size_bytes"] += info.size_bytes
                 _state["total_saved_bytes"] += proj["est_saved_bytes"]
@@ -566,7 +572,8 @@ def export_csv(root: Optional[str] = None) -> str:
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Pfad", "Ordner", "Codec", "Aufloesung", "Bitrate",
-                "HDR/DV", "Dauer", "Groesse", "Einsparung", "Vorschlag"])
+                "HDR/DV", "Dauer", "Groesse", "Einsparung", "Vorschlag",
+                "Encoder", "Bildrate", "Zeilensprung", "Kapitel", "Tonsprachen"])
     for m in matched:
         dv = m.get("hdr_type") or ("Dolby Vision" if m.get("dolby_vision") else
                                    ("HDR" if m.get("is_hdr") else "SDR"))
@@ -576,6 +583,11 @@ def export_csv(root: Optional[str] = None) -> str:
             dv, m.get("duration_human", ""), m.get("size_human", ""),
             m.get("est_saved_human", ""),
             (m.get("suggest") or {}).get("label", ""),
+            m.get("encoder", ""),
+            " ".join(str(x) for x in (m.get("fps") or "", m.get("frame_rate_mode") or "") if x),
+            "ja" if m.get("interlaced") else "",
+            m.get("chapter_count") or "",
+            _audio_languages(m.get("audio")),
         ])
     return buf.getvalue()
 
@@ -614,8 +626,20 @@ def file_details(video: Path, probe: bool = True) -> dict:
         "profile": info.profile or "",
         "codec": info.codec,
         "resolution": f"{info.width}x{info.height}",
+        **ff.extra_probe_fields(info),
         **extras,
     }
+
+
+def _audio_languages(audio) -> str:
+    found = []
+    for track in audio or []:
+        if not isinstance(track, dict):
+            continue
+        lang = str(track.get("language") or "").strip().lower()
+        if lang and lang != "und" and lang not in found:
+            found.append(lang.upper())
+    return ", ".join(found)
 
 
 def collect_nfo(video: Path, include_text: bool = False) -> Optional[dict]:

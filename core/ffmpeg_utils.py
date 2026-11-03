@@ -49,6 +49,36 @@ class VideoInfo:
     container: str = ""
     audio: list = field(default_factory=list)
     subtitles: list = field(default_factory=list)
+    # Weiteres aus demselben ffprobe-Aufruf. Leer heißt unbekannt, nicht verneint.
+    encoder: str = ""
+    muxer: str = ""
+    container_title: str = ""
+    sar: str = ""
+    dar: str = ""
+    anamorphic: bool = False
+    rotation: int = 0
+    frame_rate_mode: str = ""      # cfr | vfr | "" (unbekannt)
+    fps_nominal: float = 0.0
+    video_start: float = 0.0
+    level_label: str = ""
+    metadata_frames: int = 0
+    chapters: list = field(default_factory=list)
+    chapter_count: int = 0
+    video_tracks: list = field(default_factory=list)
+    attachments: list = field(default_factory=list)
+    max_cll: int = 0
+    max_fall: int = 0
+    master_max: float = 0.0
+    master_min: float = 0.0
+    # None = der Dolby-Vision-Datensatz nennt das Feld nicht.
+    dv_level: Optional[int] = None
+    dv_version: str = ""
+    dv_profile_label: str = ""
+    dv_rpu: Optional[bool] = None
+    dv_el: Optional[bool] = None
+    dv_bl: Optional[bool] = None
+    dv_compatibility: Optional[int] = None
+    dv_compatibility_label: str = ""
 
     @property
     def is_4k(self) -> bool:
@@ -113,6 +143,7 @@ class VideoInfo:
             "container": self.container,
             "audio": self.audio,
             "subtitles": self.subtitles,
+            **extra_probe_fields(self),
         }
 
 
@@ -127,7 +158,7 @@ def probe_with_error(path: Path, input_args: Optional[list] = None,
     cmd = [config.FFPROBE, "-v", "error"]
     cmd += list(input_args or [])
     cmd += [
-        "-show_streams", "-show_format",
+        "-show_streams", "-show_format", "-show_chapters",
         "-of", "json",
         str(path),
     ]
@@ -148,17 +179,46 @@ def probe_with_error(path: Path, input_args: Optional[list] = None,
         data = json.loads(out.stdout)
     except json.JSONDecodeError:
         return None, "ffprobe-Ausgabe nicht lesbar (kein gültiges JSON)."
+    if not isinstance(data, dict):
+        return None, "ffprobe-Ausgabe nicht lesbar (kein gültiges JSON)."
+    return info_from_probe(data, path, size_bytes)
 
-    streams = data.get("streams", [])
-    fmt = data.get("format", {})
-    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+
+_LOSSLESS_AUDIO = {
+    "flac", "alac", "truehd", "mlp", "tta", "wavpack", "als", "shorten",
+    "ape", "dst", "tak", "wmalossless", "s302m",
+}
+_LOSSY_AUDIO = {
+    "aac", "ac3", "eac3", "mp1", "mp2", "mp3", "opus", "vorbis", "cook",
+    "sipr", "gsm", "nellymoser", "speex", "amr_nb", "amr_wb", "qdm2",
+    "atrac3", "atrac3p", "wmav1", "wmav2", "wmapro",
+}
+_AV1_LEVELS = {
+    0: "2.0", 1: "2.1", 2: "2.2", 3: "2.3", 4: "3.0", 5: "3.1", 6: "3.2",
+    7: "3.3", 8: "4.0", 9: "4.1", 10: "4.2", 11: "4.3", 12: "5.0", 13: "5.1",
+    14: "5.2", 15: "5.3", 16: "6.0", 17: "6.1", 18: "6.2", 19: "6.3",
+    20: "7.0", 21: "7.1", 22: "7.2", 23: "7.3",
+}
+_CHAPTER_LIMIT = 80
+_ATTACHMENT_LIMIT = 40
+
+
+def info_from_probe(data: dict, path: Path,
+                    size_bytes: Optional[int] = None) -> tuple[Optional[VideoInfo], Optional[str]]:
+    """Baut VideoInfo aus einem ffprobe-JSON. Kein zweiter Prozess, kein Decode."""
+    streams = data.get("streams") or []
+    if not isinstance(streams, list):
+        return None, "ffprobe-Ausgabe nicht lesbar (kein gültiges JSON)."
+    fmt = data.get("format") or {}
+    if not isinstance(fmt, dict):
+        fmt = {}
+    videos = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
+    video = next((s for s in videos if not _attached_pic(s)), None) or (videos[0] if videos else None)
     if video is None:
         return None, "Kein Video-Stream gefunden."
 
     duration = _f(video.get("duration")) or _f(fmt.get("duration")) or 0.0
-    # Video-Bitrate robust bestimmen: ffprobe-bit_rate -> BPS-/Statistik-Tags
-    # (viele MKVs liefern keine Stream-bit_rate, aber mkvmerge-Tags).
-    bit_rate = _stream_bitrate(video, video.get("tags", {}) or {}, duration)
+    bit_rate = _stream_bitrate(video, video.get("tags") or {}, duration)
     overall_bitrate = int(_f(fmt.get("bit_rate")) or 0)
     if size_bytes is None:
         try:
@@ -174,29 +234,37 @@ def probe_with_error(path: Path, input_args: Optional[list] = None,
     hdr_type, dovi, dv_profile, hdr10_plus = _detect_hdr(transfer, video)
     field_order = str(video.get("field_order") or "").lower()
     interlaced = field_order in {"tt", "bb", "tb", "bt"}
-
-    # Audio-/Untertitel-Spuren strukturiert sammeln
-    audio = [_audio_entry(s, i, duration) for i, s in
-             enumerate(s for s in streams if s.get("codec_type") == "audio")]
-    subs = [_subtitle_entry(s, i) for i, s in
-            enumerate(s for s in streams if s.get("codec_type") == "subtitle")]
+    fps, frame_mode, fps_nominal = _frame_rates(video)
+    sar, dar, anamorphic = _aspects(video)
+    light = _hdr_light(video)
+    dovi = _dovi_config(video)
+    codec = str(video.get("codec_name") or "?")
+    level = str(video.get("level") or "")
+    chapters = _chapters(data.get("chapters") or [])
+    stream_tags = video.get("tags") or {}
+    format_tags = fmt.get("tags") or {}
+    encoder = _tool_tag(stream_tags)
+    muxer = _tool_tag(format_tags)
+    if muxer == encoder:
+        muxer = ""
+    frames = int(_f(video.get("nb_frames")) or 0)
 
     info = VideoInfo(
         path=str(path),
         width=int(video.get("width") or 0),
         height=int(video.get("height") or 0),
         duration=duration,
-        codec=video.get("codec_name", "?"),
+        codec=codec,
         pix_fmt=pix_fmt,
         color_transfer=video.get("color_transfer", "") or "",
         color_primaries=video.get("color_primaries", "") or "",
         color_space=video.get("color_space", "") or "",
         color_range=(video.get("color_range", "") or "").lower(),
         bit_rate=bit_rate,
-        size_bytes=size_bytes,
-        profile=str(video.get("profile", "") or ""),
-        level=str(video.get("level", "") or ""),
-        fps=_parse_fraction(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+        size_bytes=int(size_bytes or 0),
+        profile=str(video.get("profile") or ""),
+        level=level,
+        fps=fps,
         bit_depth=_bit_depth(pix_fmt, video),
         hdr_type=hdr_type,
         dolby_vision=dovi,
@@ -206,30 +274,414 @@ def probe_with_error(path: Path, input_args: Optional[list] = None,
         interlaced=interlaced,
         overall_bitrate=overall_bitrate,
         container=fmt.get("format_name", "") or "",
-        audio=audio,
-        subtitles=subs,
+        audio=[_audio_entry(s, i, duration) for i, s in
+               enumerate(s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio")],
+        subtitles=[_subtitle_entry(s, i) for i, s in
+                   enumerate(s for s in streams if isinstance(s, dict) and s.get("codec_type") == "subtitle")],
+        encoder=encoder,
+        muxer=muxer,
+        container_title=_container_title(format_tags, stream_tags),
+        sar=sar,
+        dar=dar,
+        anamorphic=anamorphic,
+        rotation=_rotation(video),
+        frame_rate_mode=frame_mode,
+        fps_nominal=fps_nominal,
+        video_start=round(_f(video.get("start_time")) or 0.0, 3),
+        level_label=level_label(codec, level),
+        metadata_frames=frames if frames > 0 else 0,
+        chapters=chapters[:_CHAPTER_LIMIT],
+        chapter_count=len(chapters),
+        video_tracks=_video_tracks(videos, videos.index(video)),
+        dv_level=dovi["level"],
+        dv_version=dovi["version"],
+        dv_profile_label=dovi["profile_label"],
+        dv_rpu=dovi["rpu"],
+        dv_el=dovi["el"],
+        dv_bl=dovi["bl"],
+        dv_compatibility=dovi["compatibility"],
+        dv_compatibility_label=dovi["compatibility_label"],
+        attachments=_attachments(streams)[:_ATTACHMENT_LIMIT],
+        max_cll=int(light.get("max_cll") or 0),
+        max_fall=int(light.get("max_fall") or 0),
+        master_max=float(light.get("master_max") or 0.0),
+        master_min=float(light.get("master_min") or 0.0),
     )
     return info, None
 
 
+def extra_probe_fields(info: VideoInfo) -> dict:
+    """Felder, die der Bibliotheksscan zusätzlich zum bisherigen Eintrag speichert."""
+    return {
+        "probe_rev": 3,
+        "pix_fmt": info.pix_fmt,
+        "color_transfer": info.color_transfer,
+        "color_primaries": info.color_primaries,
+        "color_space": info.color_space,
+        "color_range": info.color_range,
+        "level": info.level,
+        "level_label": info.level_label,
+        "hdr10_plus": info.hdr10_plus,
+        "interlaced": info.interlaced,
+        "field_order": info.field_order,
+        "overall_bitrate": info.overall_bitrate,
+        "overall_bitrate_human": _bitrate_human(info.overall_bitrate),
+        "encoder": info.encoder,
+        "muxer": info.muxer,
+        "container_title": info.container_title,
+        "sar": info.sar,
+        "dar": info.dar,
+        "anamorphic": info.anamorphic,
+        "rotation": info.rotation,
+        "frame_rate_mode": info.frame_rate_mode,
+        "fps_nominal": round(info.fps_nominal, 3) if info.fps_nominal else 0,
+        "video_start": info.video_start,
+        "metadata_frames": info.metadata_frames,
+        "chapters": info.chapters,
+        "chapter_count": info.chapter_count,
+        "video_tracks": info.video_tracks,
+        "attachments": info.attachments,
+        "max_cll": info.max_cll,
+        "max_fall": info.max_fall,
+        "master_max": info.master_max,
+        "master_min": info.master_min,
+        "dv_level": info.dv_level,
+        "dv_version": info.dv_version,
+        "dv_profile_label": info.dv_profile_label,
+        "dv_rpu": info.dv_rpu,
+        "dv_el": info.dv_el,
+        "dv_bl": info.dv_bl,
+        "dv_compatibility": info.dv_compatibility,
+        "dv_compatibility_label": info.dv_compatibility_label,
+    }
+
+
+def level_label(codec: str, level: str) -> str:
+    """ffprobe-Level in die übliche Schreibweise. Unbekannt bleibt roh."""
+    raw = str(level or "").strip()
+    if not raw or raw.lower() in {"-99", "-1", "unknown", "n/a"}:
+        return ""
+    if not raw.isdigit():
+        return raw
+    n = int(raw)
+    c = (codec or "").lower()
+    if "264" in c or c in {"avc", "h264"}:
+        if 10 <= n <= 62:
+            return f"{n // 10}.{n % 10}"
+    if "265" in c or c in {"hevc", "hev1", "hvc1"}:
+        if 30 <= n <= 186 and n % 3 == 0:
+            return f"{n // 30}.{(n % 30) // 3}"
+    if c in {"av1", "av01", "libsvtav1"} and n in _AV1_LEVELS:
+        return _AV1_LEVELS[n]
+    return raw
+
+
+def _attached_pic(stream: dict) -> bool:
+    return bool((stream.get("disposition") or {}).get("attached_pic"))
+
+
+def _ratio_value(text: str) -> Optional[float]:
+    if ":" not in text:
+        return None
+    num, _, den = text.partition(":")
+    n, d = _f(num), _f(den)
+    if not n or not d or n <= 0 or d <= 0:
+        return None
+    return n / d
+
+
+def _aspect_text(value) -> str:
+    text = str(value or "").strip()
+    if text.lower() in {"", "0:1", "0:0", "n/a", "nan"}:
+        return ""
+    return text if _ratio_value(text) is not None else ""
+
+
+def _aspects(video: dict) -> tuple[str, str, bool]:
+    sar = _aspect_text(video.get("sample_aspect_ratio"))
+    dar = _aspect_text(video.get("display_aspect_ratio"))
+    sar_value = _ratio_value(sar) if sar else None
+    return sar, dar, bool(sar_value is not None and abs(sar_value - 1.0) > 0.01)
+
+
+def _frame_rates(video: dict) -> tuple[float, str, float]:
+    """Kleine 23,976/24-Abweichung bleibt konstant. Echte Zeitbasen werden variabel."""
+    avg = _parse_fraction(video.get("avg_frame_rate"))
+    real = _parse_fraction(video.get("r_frame_rate"))
+    display = avg if 1.0 <= avg <= 120.0 else (real if 1.0 <= real <= 120.0 else (avg or real or 0.0))
+    if not (avg > 0 and real > 0):
+        return display, "", 0.0
+    different = abs(avg - real) / max(avg, real) > 0.01
+    implausible = not (1.0 <= avg <= 120.0 and 1.0 <= real <= 120.0)
+    if different or implausible:
+        nominal = real if 1.0 <= real <= 120.0 and real != display else 0.0
+        return display, "vfr", nominal
+    return display, "cfr", 0.0
+
+
+def _degrees(value) -> int:
+    number = _f(value)
+    if number is None:
+        return 0
+    deg = int(round(number)) % 360
+    if deg > 180:
+        deg -= 360
+    return 0 if deg == 0 else deg
+
+
+def _rotation(video: dict) -> int:
+    for side in video.get("side_data_list") or []:
+        if isinstance(side, dict) and side.get("rotation") is not None:
+            deg = _degrees(side.get("rotation"))
+            if deg:
+                return deg
+    return _degrees(_tag_lookup(video.get("tags") or {}, "rotate"))
+
+
+def _tool_tag(tags: dict) -> str:
+    for name in ("encoder", "encoding_tool"):
+        value = _tag_lookup(tags or {}, name)
+        if value:
+            return " ".join(str(value).split())[:180]
+    return ""
+
+
+def _container_title(format_tags: dict, stream_tags: dict) -> str:
+    for tags in (format_tags, stream_tags):
+        value = _tag_lookup(tags or {}, "title")
+        if value:
+            return " ".join(str(value).split())[:200]
+    return ""
+
+
+def _hdr_light(video: dict) -> dict:
+    out = {}
+    for side in video.get("side_data_list") or []:
+        if not isinstance(side, dict):
+            continue
+        kind = str(side.get("side_data_type") or "").lower()
+        if "content light" in kind:
+            content = _f(side.get("max_content"))
+            average = _f(side.get("max_average"))
+            if content and content > 0:
+                out["max_cll"] = int(round(content))
+            if average and average > 0:
+                out["max_fall"] = int(round(average))
+        elif "mastering display" in kind:
+            peak = _f(side.get("max_luminance"))
+            floor = _f(side.get("min_luminance"))
+            if peak and peak > 0:
+                out["master_max"] = round(peak, 2)
+            if floor is not None and peak and peak > 0:
+                out["master_min"] = round(floor, 4)
+    return out
+
+
+def _chapters(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for chapter in raw:
+        if not isinstance(chapter, dict):
+            continue
+        start = _f(chapter.get("start_time"))
+        if start is None:
+            base = _parse_fraction(str(chapter.get("time_base") or ""))
+            origin = _f(chapter.get("start"))
+            start = origin * base if origin is not None and base else 0.0
+        title = _tag_lookup(chapter.get("tags") or {}, "title") or ""
+        out.append({"start": round(max(0.0, start or 0.0), 3),
+                    "title": " ".join(str(title).split())[:120]})
+    return out
+
+
+def _video_tracks(streams: list, primary_index: int) -> list[dict]:
+    tracks = [_video_track(stream, index, primary_index) for index, stream in enumerate(streams)]
+    _infer_enhancement(tracks)
+    return tracks
+
+
+def _video_track(stream: dict, index: int, primary_index: int) -> dict:
+    """Eine Videospur mit eigener HDR-/Dolby-Vision-Konfiguration."""
+    dovi = _dovi_config(stream)
+    transfer = (stream.get("color_transfer") or "").lower()
+    hdr_type, _present, _profile, hdr10_plus = _detect_hdr(transfer, stream)
+    light = _hdr_light(stream)
+    pix = str(stream.get("pix_fmt") or "")
+    bitrate = _stream_bitrate(stream, stream.get("tags") or {}, _f(stream.get("duration")) or 0.0)
+    fps, frame_mode, fps_nominal = _frame_rates(stream)
+    if _attached_pic(stream):
+        role = "cover"
+    elif dovi["present"] and dovi["el"] is True and dovi["bl"] is False:
+        role = "enhancement"
+    elif index == primary_index:
+        role = "base"
+    else:
+        role = "video"
+    return {
+        "index": index,
+        "role": role,
+        "el_inferred": False,
+        "codec": str(stream.get("codec_name") or ""),
+        "profile": str(stream.get("profile") or ""),
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "attached_pic": role == "cover",
+        "pix_fmt": pix,
+        "bit_depth": _bit_depth(pix, stream) if pix else 0,
+        "fps": round(fps, 3) if fps else 0,
+        "frame_rate_mode": frame_mode,
+        "fps_nominal": round(fps_nominal, 3) if fps_nominal else 0,
+        "bitrate": bitrate,
+        "bitrate_human": _bitrate_human(bitrate) if bitrate else "",
+        "hdr_type": hdr_type,
+        "hdr10_plus": hdr10_plus,
+        "dolby_vision": dovi["present"],
+        "dv_profile": dovi["profile"],
+        "dv_profile_label": dovi["profile_label"],
+        "dv_level": dovi["level"],
+        "dv_version": dovi["version"],
+        "dv_rpu": dovi["rpu"],
+        "dv_el": dovi["el"],
+        "dv_bl": dovi["bl"],
+        "dv_compatibility": dovi["compatibility"],
+        "dv_compatibility_label": dovi["compatibility_label"],
+        "color_transfer": stream.get("color_transfer") or "",
+        "color_primaries": stream.get("color_primaries") or "",
+        "color_space": stream.get("color_space") or "",
+        "color_range": (stream.get("color_range") or "").lower(),
+        "max_cll": int(light.get("max_cll") or 0),
+        "max_fall": int(light.get("max_fall") or 0),
+        "master_max": float(light.get("master_max") or 0.0),
+        "master_min": float(light.get("master_min") or 0.0),
+    }
+
+
+def _infer_enhancement(tracks: list[dict]) -> None:
+    """Profil 7 nennt die Enhancement Layer oft nur am Hauptbild.
+
+    Eine einzelne weitere HEVC-Spur ohne eigenen Dolby-Datensatz ist dann die
+    Layer. Mehrere weitere Spuren bleiben unzugeordnet.
+    """
+    base = next((track for track in tracks if track["role"] == "base"), None)
+    if base is None or base.get("dv_el") is not True:
+        return
+    if any(track["role"] == "enhancement" for track in tracks):
+        return
+    candidates = [track for track in tracks
+                  if track["role"] == "video" and track["codec"] in _EL_CODECS]
+    if len(candidates) == 1:
+        candidates[0]["role"] = "enhancement"
+        candidates[0]["el_inferred"] = True
+
+
+def _attachments(streams) -> list[dict]:
+    out = []
+    for stream in streams:
+        if not isinstance(stream, dict) or stream.get("codec_type") != "attachment":
+            continue
+        tags = stream.get("tags") or {}
+        out.append({
+            "codec": str(stream.get("codec_name") or ""),
+            "filename": str(_tag_lookup(tags, "filename") or "")[:180],
+            "mimetype": str(_tag_lookup(tags, "mimetype") or "")[:120],
+        })
+    return out
+
+
+def _audio_delivery(codec: str, profile: str) -> str:
+    c = (codec or "").lower()
+    p = (profile or "").lower()
+    if c.startswith("pcm_") or c in _LOSSLESS_AUDIO or "truehd" in c:
+        return "lossless"
+    if c == "dts" and "ma" in p:
+        return "lossless"
+    if "lossless" in p:
+        return "lossless"
+    if c in _LOSSY_AUDIO or c == "dts" or c.startswith("wma"):
+        return "lossy"
+    return ""
+
+
+def _title_tokens(title: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9äöü]+", (title or "").lower()))
+
+
+_DV_COMPAT_LABEL = {1: "HDR10", 2: "SDR", 4: "HLG", 6: "HDR10"}
+_DV_PROFILE_MINOR = {1: "1", 2: "2", 4: "4"}
+_EL_CODECS = {"hevc", "dvhe", "hev1", "h265"}
+
+
+def _int_or_none(value) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flag_or_none(side: dict, name: str) -> Optional[bool]:
+    if name not in side:
+        return None
+    raw = side.get(name)
+    number = _int_or_none(raw)
+    return bool(number) if number is not None else bool(raw)
+
+
+def _dv_profile_label(profile: int, compatibility: Optional[int]) -> str:
+    if not profile:
+        return ""
+    minor = _DV_PROFILE_MINOR.get(compatibility if compatibility is not None else -1)
+    if profile in (8, 10) and minor:
+        return f"{profile}.{minor}"
+    return str(profile)
+
+
+def _dovi_config(video: dict) -> dict:
+    """Dolby-Vision-Konfiguration einer Spur. Fehlende Flags bleiben None."""
+    empty = {"present": False, "profile": 0, "level": None, "version": "",
+             "rpu": None, "el": None, "bl": None, "compatibility": None,
+             "compatibility_label": "", "profile_label": ""}
+    for side in video.get("side_data_list") or []:
+        if not isinstance(side, dict):
+            continue
+        kind = str(side.get("side_data_type") or "").lower()
+        if "dolby vision" not in kind and "dovi" not in kind:
+            continue
+        profile = _int_or_none(side.get("dv_profile")) or 0
+        major = _int_or_none(side.get("dv_version_major"))
+        minor = _int_or_none(side.get("dv_version_minor"))
+        compatibility = _int_or_none(side.get("dv_bl_signal_compatibility_id"))
+        return {
+            "present": True,
+            "profile": profile,
+            "level": _int_or_none(side.get("dv_level")),
+            "version": f"{major}.{minor}" if major is not None and minor is not None else "",
+            "rpu": _flag_or_none(side, "rpu_present_flag"),
+            "el": _flag_or_none(side, "el_present_flag"),
+            "bl": _flag_or_none(side, "bl_present_flag"),
+            "compatibility": compatibility,
+            "compatibility_label": _DV_COMPAT_LABEL.get(compatibility if compatibility is not None else -1, ""),
+            "profile_label": _dv_profile_label(profile, compatibility),
+        }
+    return empty
+
+
+def _has_hdr10_plus(video: dict) -> bool:
+    for side in video.get("side_data_list") or []:
+        if not isinstance(side, dict):
+            continue
+        kind = str(side.get("side_data_type") or "").lower()
+        if "hdr10+" in kind or "hdr10plus" in kind or "dynamic hdr plus" in kind:
+            return True
+    return False
+
+
 def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int, bool]:
     """Bestimmt HDR-Typ, Dolby Vision, DV-Profil und ob HDR10+ vorliegt."""
-    dovi = False
-    dv_profile = 0
-    hdr10_plus = False
-    for sd in video.get("side_data_list", []) or []:
-        t = str(sd.get("side_data_type", "")).lower()
-        if "dolby vision" in t or "dovi" in t:
-            dovi = True
-            # ffprobe liefert bei DV-Konfig-Records das Feld "dv_profile".
-            raw = sd.get("dv_profile")
-            if raw is not None:
-                try:
-                    dv_profile = int(raw)
-                except (TypeError, ValueError):
-                    pass
-        if "hdr10+" in t or "hdr10plus" in t or "dynamic hdr plus" in t:
-            hdr10_plus = True
+    dovi = _dovi_config(video)
+    hdr10_plus = _has_hdr10_plus(video)
     if transfer in ("smpte2084", "smptest2084"):
         base = "HDR10+" if hdr10_plus else "HDR10"
     elif transfer == "arib-std-b67":
@@ -238,9 +690,10 @@ def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int, bool]:
         base = "HDR10+"
     else:
         base = "SDR"
-    if dovi:
-        label = f"Dolby Vision {dv_profile}" if dv_profile else "Dolby Vision"
-        return (f"{label} + {base}" if base != "SDR" else label), True, dv_profile, hdr10_plus
+    if dovi["present"]:
+        name = dovi["profile_label"]
+        label = "Dolby Vision" + (f" {name}" if name else "")
+        return (f"{label} + {base}" if base != "SDR" else label), True, dovi["profile"], hdr10_plus
     return base, False, 0, hdr10_plus
 
 
@@ -302,33 +755,60 @@ def _audio_entry(s: dict, index: int = 0, container_duration: float = 0.0) -> di
     tags = s.get("tags", {}) or {}
     disp = s.get("disposition", {}) or {}
     br = _stream_bitrate(s, tags, container_duration)
+    codec = s.get("codec_name", "?")
+    profile = str(s.get("profile") or "")
+    title = tags.get("title", "") or tags.get("TITLE", "") or ""
+    tokens = _title_tokens(title)
+    bits = int(_f(s.get("bits_per_raw_sample") or s.get("bits_per_sample")) or 0)
     return {
         "index": index,  # relativer Audio-Index (0:a:index)
         "pid": s.get("id") or "",  # MPEG-TS-PID (Blu-ray: Sprach-Zuordnung aus CLIPINF)
-        "codec": s.get("codec_name", "?"),
+        "codec": codec,
+        "profile": profile,
         "channels": s.get("channels", 0),
         "layout": s.get("channel_layout", "") or "",
         "sample_rate": s.get("sample_rate", "") or "",
+        "bits": bits if bits > 0 else 0,
+        "delivery": _audio_delivery(str(codec or ""), profile),
         "bitrate": br,
         "bitrate_human": _bitrate_human(br) if br else "—",
         "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
-        "title": tags.get("title", "") or tags.get("TITLE", "") or "",
+        "title": title,
         "forced": bool(disp.get("forced")),
         "default": bool(disp.get("default")),
+        "commentary": bool(disp.get("comment")) or bool(tokens & {"commentary", "kommentar"}),
+        "hearing_impaired": bool(disp.get("hearing_impaired")),
+        "visual_impaired": bool(disp.get("visual_impaired")),
+        "original": bool(disp.get("original")),
+        "dub": bool(disp.get("dub")),
     }
+
+
+def _subtitle_kind(codec: str) -> str:
+    c = (codec or "").lower()
+    if not c or c == "none":
+        return ""
+    if c in _SUB_IMAGE or "pgs" in c:
+        return "image"
+    return "text"
 
 
 def _subtitle_entry(s: dict, index: int = 0) -> dict:
     tags = s.get("tags", {}) or {}
     disp = s.get("disposition", {}) or {}
+    codec = s.get("codec_name", "?")
     return {
         "index": index,  # relativer Untertitel-Index (0:s:index)
         "pid": s.get("id") or "",
-        "codec": s.get("codec_name", "?"),
+        "codec": codec,
+        "kind": _subtitle_kind(str(codec or "")),
         "language": tags.get("language", "") or tags.get("LANGUAGE", "") or "und",
         "title": tags.get("title", "") or tags.get("TITLE", "") or "",
         "forced": bool(disp.get("forced")),
         "default": bool(disp.get("default")),
+        "commentary": bool(disp.get("comment")),
+        "hearing_impaired": bool(disp.get("hearing_impaired")),
+        "visual_impaired": bool(disp.get("visual_impaired")),
     }
 
 

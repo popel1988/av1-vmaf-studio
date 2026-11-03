@@ -1514,7 +1514,7 @@ class LibraryScanRequest(BaseModel):
     codecs_exclude: list[str] = []
     target_codec: str = "av1"        # Ziel für die Einspar-Projektion
     dynamic_filter: str = ""         # (alt) einzelner Dynamik-Filter
-    dynamic_filters: list[str] = []  # Mehrfach-Auswahl: sdr|hdr|dv|dv5|dv7|dv8
+    dynamic_filters: list[str] = []  # sdr|hdr|dv|dv5|dv7|dv8|dv8.1|dv8.2|dv8.4|dv10|dv10.1
     skip_optimized: bool = False     # bereits effiziente Dateien ausblenden
     skip_processed: bool = False     # bereits verarbeitete Dateien ausblenden
 

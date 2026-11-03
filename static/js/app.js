@@ -472,12 +472,12 @@
         const data = await (await fetch(searchUrl(S.path, q))).json();
         if (data.error) { listEl.innerHTML = `<div class="browser-loading">${escapeHtml(data.error)}</div>`; return; }
         const paint = () => {
-          listEl.innerHTML = "";
-          (data.files || []).forEach((f) => {
-            const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
+        listEl.innerHTML = "";
+        (data.files || []).forEach((f) => {
+          const label = f.folder ? `${f.name}  ·  ${f.folder}/` : f.name;
             listEl.appendChild(fileRow(f, label));
-          });
-          if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
+        });
+        if (!(data.files || []).length) listEl.innerHTML = '<div class="browser-loading">Keine Treffer.</div>';
         };
         S.visible = data.files || [];
         S.repaint = paint;
@@ -1291,23 +1291,36 @@
     if (info.fps) chips.push(chip("FPS", info.fps));
     chips.push(chip("Dynamik", info.hdr_type, info.is_hdr ? "warn" : "", hdrChipTip(info)));
     if (info.dolby_vision) {
-      chips.push(chip("Dolby Vision", info.dv_profile ? "Profil " + info.dv_profile : "ja", "accent",
-        hdrChipTip(info)));
+      const dv = dvFactLine(info) || (info.dv_profile ? "Profil " + info.dv_profile : "ja");
+      chips.push(chip("Dolby Vision", escapeHtml(dv), "accent", hdrChipTip(info)));
     }
     chips.push(chip("Größe", info.size_human));
     chips.push(chip("Dauer", info.duration_human));
     if (info.overall_bitrate) chips.push(chip("Gesamt-Bitrate", info.overall_bitrate_human));
     chips.push(chip("Video-Bitrate", info.video_bitrate_human));
     chips.push(chip("Pixelformat", info.pix_fmt));
-    if (info.color_primaries) chips.push(chip("Farbraum", info.color_primaries));
+    const colorBits = probeColorBits(info);
+    if (colorBits) chips.push(chip("Farbmetadaten", escapeHtml(colorBits)));
     chips.push(chip("Container", (info.container || "—").split(",")[0]));
+    if (info.interlaced) chips.push(chip("Zeilensprung", escapeHtml(fieldOrderLabel(info.field_order) || tt("Zeilensprung")), "warn"));
+    if (info.frame_rate_mode === "vfr") {
+      const nominal = info.fps_nominal ? ` · ${tt("Raster")} ${info.fps_nominal} fps` : "";
+      chips.push(chip("Bildrate", `${tt("variabel")}${nominal}`, "warn"));
+    }
+    if (info.anamorphic) chips.push(chip("Seitenverhältnis", escapeHtml(info.dar || info.sar || "")));
+    if (info.rotation) chips.push(chip("Drehung", `${info.rotation}°`, "warn"));
+    if (info.encoder) chips.push(chip("Encoder", escapeHtml(shortTool(info.encoder))));
+    if (info.chapter_count) chips.push(chip("Kapitel", String(info.chapter_count)));
+    const light = probeLightLabel(info);
+    if (light) chips.push(chip("Spitzenhelligkeit", escapeHtml(light)));
 
     let audio = "";
     if (info.audio && info.audio.length) {
       // Standard: alle Spuren behalten.
       state.audioTracks = info.audio.map((a, i) => (a.index != null ? a.index : i));
+      const mixed = info.audio.some((a) => a && a.dub) && info.audio.some((a) => a && a.original);
       audio = `<div class="track-block"><div class="track-title">Audiospuren (${info.audio.length}) · einzeln konfigurierbar</div>` +
-        info.audio.map((a, i) => audioTrackRow(a, i)).join("") +
+        info.audio.map((a, i) => audioTrackRow(a, i, mixed)).join("") +
         `</div>`;
     }
     let subs = "";
@@ -1325,8 +1338,10 @@
 
   function subtitleTrackRow(s, i) {
     const idx = s.index != null ? s.index : i;
+    const notes = trackNotes(s, "sub").map(escapeHtml).join(" · ");
     const info = `${escapeHtml((s.language || "und").toUpperCase())} · ` +
       `${escapeHtml((s.codec || "?").toUpperCase())}` +
+      `${notes ? " · " + notes : ""}` +
       `${s.title ? " · " + escapeHtml(s.title) : ""}`;
     return `<div class="track-sub" data-index="${idx}">
       <label class="check track-enable">
@@ -1359,11 +1374,88 @@
     ["aac", "AAC"], ["opus", "Opus"], ["ac3", "AC3"], ["eac3", "E-AC3"], ["flac", "FLAC"],
   ];
 
-  function audioTrackRow(a, i) {
+  function trackCodecLabel(t) {
+    const codec = String((t && t.codec) || "?");
+    const profile = String((t && t.profile) || "").trim();
+    if (profile && profile.toLowerCase() !== codec.toLowerCase()) return profile;
+    return codec.toUpperCase();
+  }
+
+  function sampleRateLabel(v) {
+    const n = parseInt(v, 10);
+    if (!n) return "";
+    return (n % 1000 === 0 ? String(n / 1000) : (n / 1000).toFixed(1)) + " kHz";
+  }
+
+  function trackNotes(t, kind, originMixed) {
+    const notes = [];
+    if (!t) return notes;
+    if (kind === "audio") {
+      const rate = sampleRateLabel(t.sample_rate);
+      if (rate) notes.push(rate);
+      if (t.bits) notes.push(t.bits + " bit");
+      if (t.delivery === "lossless") notes.push(tt("verlustfrei"));
+      else if (t.delivery === "lossy") notes.push(tt("verlustbehaftet"));
+    } else if (t.kind === "image") {
+      notes.push(tt("Bilduntertitel"));
+    }
+    if (t.commentary) notes.push(tt("Kommentar"));
+    if (t.hearing_impaired) notes.push(tt("Hörgeschädigt"));
+    if (t.visual_impaired) notes.push(tt("Sehgeschädigt"));
+    if (originMixed && t.original) notes.push(tt("Originalton"));
+    if (originMixed && t.dub) notes.push(tt("Synchronfassung"));
+    return notes;
+  }
+
+  const COLOR_NAMES = {
+    bt709: "BT.709", bt470bg: "BT.601", smpte170m: "BT.601",
+    bt2020: "BT.2020", bt2020nc: "BT.2020", bt2020c: "BT.2020",
+    smpte2084: "PQ", "arib-std-b67": "HLG",
+    tv: "begrenzt", mpeg: "begrenzt", pc: "voll", jpeg: "voll",
+  };
+
+  function colorName(v) {
+    const raw = String(v || "").trim();
+    if (!raw || raw === "unknown" || raw === "reserved") return "";
+    const mapped = COLOR_NAMES[raw.toLowerCase()];
+    if (!mapped) return raw;
+    return mapped === "begrenzt" || mapped === "voll" ? tt(mapped) : mapped;
+  }
+
+  function probeColorBits(info) {
+    if (!info) return "";
+    return [info.color_primaries, info.color_transfer, info.color_space, info.color_range]
+      .map(colorName).filter(Boolean)
+      .filter((v, i, all) => all.indexOf(v) === i).join(" · ");
+  }
+
+  function fieldOrderLabel(order) {
+    const map = { tt: "oberes Feld zuerst", bb: "unteres Feld zuerst" };
+    return map[order] ? tt(map[order]) : "";
+  }
+
+  function shortTool(value) {
+    const text = String(value || "").trim();
+    return text.length > 56 ? text.slice(0, 56) + "…" : text;
+  }
+
+  function probeLightLabel(info) {
+    if (!info) return "";
+    const bits = [];
+    if (info.max_cll) bits.push("MaxCLL " + info.max_cll);
+    if (info.max_fall) bits.push("MaxFALL " + info.max_fall);
+    if (info.master_max) bits.push(info.master_max + " cd/m²");
+    return bits.join(" · ");
+  }
+
+  function audioTrackRow(a, i, originMixed) {
     const idx = a.index != null ? a.index : i;
+    const codec = trackCodecLabel(a);
+    const notes = trackNotes(a, "audio", originMixed).map(escapeHtml).join(" · ");
     const info = `${escapeHtml((a.language || "und").toUpperCase())} · ` +
-      `${escapeHtml(a.codec.toUpperCase())} · ${a.channels}ch` +
-      `${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""} · ${a.bitrate_human}` +
+      `${escapeHtml(codec)} · ${a.channels}ch` +
+      `${a.layout ? " (" + escapeHtml(a.layout) + ")" : ""}` +
+      `${notes ? " · " + notes : ""} · ${escapeHtml(a.bitrate_human || "—")}` +
       `${a.title ? " · " + escapeHtml(a.title) : ""}`;
     const codecOpts = AUDIO_CODEC_OPTS.map(([v, l]) =>
       `<option value="${v}">${l}</option>`).join("");
@@ -4409,11 +4501,11 @@
         if (other && other !== sel) other.value = val;
       });
       if (val) showArchivedSession(val);
-      else showLiveVmaf();
+        else showLiveVmaf();
     };
     [$("vmaf-history"), $("nerd-history")].forEach((sel) => {
       if (sel) sel.addEventListener("change", () => onHistory(sel));
-    });
+      });
     const back = $("btn-vmaf-live");
     if (back) back.addEventListener("click", showLiveVmaf);
     const applyBtn = $("btn-vmaf-apply");
@@ -5144,10 +5236,10 @@
         if (stage) { stage.style.display = "none"; stage.innerHTML = ""; }
         gal.style.display = "grid";
         gal.dataset.count = 1;
-        gal.innerHTML = items.map((it) =>
-          `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
-          `<img src="${it.src}" alt="" /></figure>`
-        ).join("");
+    gal.innerHTML = items.map((it) =>
+      `<figure><figcaption>${escapeHtml(it.label || "")}</figcaption>` +
+      `<img src="${it.src}" alt="" /></figure>`
+    ).join("");
         return;
       }
 
@@ -6181,9 +6273,9 @@
           if (row && details.open) loadVmafLowContext(details, row, vmaf);
         });
       });
-      body.querySelectorAll("[data-take]").forEach((b) =>
-        b.addEventListener("click", () =>
-          transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
+    body.querySelectorAll("[data-take]").forEach((b) =>
+      b.addEventListener("click", () =>
+        transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
       body.querySelectorAll("[data-vmaf-row]").forEach((tr) => {
         const row = vmaf.results[Number(tr.dataset.vmafRow)];
         if (!row) return;
@@ -7478,8 +7570,8 @@
     datasets.push({
       label: sceneMode ? `VMAF · Szene ${scene + 1}` : "VMAF-Mittel",
       data: scores, yAxisID: "y",
-      borderColor: col.accent, backgroundColor: "transparent",
-      pointBackgroundColor: pointColors, pointRadius, pointHoverRadius: 9,
+            borderColor: col.accent, backgroundColor: "transparent",
+            pointBackgroundColor: pointColors, pointRadius, pointHoverRadius: 9,
       tension: 0.3, borderWidth: 2.5, fill: false, spanGaps: true,
     });
     if (hasLow) {
@@ -7492,9 +7584,9 @@
       });
     }
     datasets.push({
-      label: "Ersparnis %", data: savings, yAxisID: "y1",
-      borderColor: col.accent2, backgroundColor: "transparent",
-      borderDash: [5, 4], pointRadius: 3, tension: 0.3, borderWidth: 1.8,
+            label: "Ersparnis %", data: savings, yAxisID: "y1",
+            borderColor: col.accent2, backgroundColor: "transparent",
+            borderDash: [5, 4], pointRadius: 3, tension: 0.3, borderWidth: 1.8,
       fill: false,
     });
 
@@ -8240,7 +8332,7 @@
     if (!info) return `<p class="muted">Keine Analyse verfügbar.</p>`;
     const rows = [];
     rows.push(`<tr><th>Container</th><td>${escapeHtml(info.container || "—")} · ${escapeHtml(info.resolution || "—")} · ${info.duration ? Math.round(info.duration) + "s" : "—"}</td></tr>`);
-    const v = `${info.codec || "—"}${info.is_hdr ? " · HDR" : ""}${info.dolby_vision ? " · DV" + (info.dv_profile ? " " + info.dv_profile : "") : ""}`;
+    const v = `${info.codec || "—"}${info.is_hdr ? " · HDR" : ""}${info.dolby_vision ? " · " + (libDvBadge(info) || "DV") : ""}`;
     const vbr = (info.video_bitrate_human && info.video_bitrate_human !== "—")
       ? ` · ${info.video_bitrate_human}`
       : (info.overall_bitrate_human && info.overall_bitrate_human !== "—" ? ` · ${info.overall_bitrate_human} gesamt` : "");
@@ -8482,9 +8574,9 @@
       }
       syncEncVmafRate(false);
     } else {
-      set("opt-rate-mode", s.rate_mode, "change");
-      if (s.rate_mode === "cq") set("opt-quality", s.quality);
-      else set("opt-bitrate", s.quality);
+    set("opt-rate-mode", s.rate_mode, "change");
+    if (s.rate_mode === "cq") set("opt-quality", s.quality);
+    else set("opt-bitrate", s.quality);
     }
     set("opt-resolution", s.target_height ? String(s.target_height) : "");
     set("opt-hdr-mode", s.hdr_mode, "change");
@@ -8743,7 +8835,12 @@
       { value: "dv", label: "Dolby Vision (alle)" },
       { value: "dv5", label: "DV Profil 5" },
       { value: "dv7", label: "DV Profil 7" },
-      { value: "dv8", label: "DV Profil 8" },
+      { value: "dv8", label: "DV Profil 8 (alle)" },
+      { value: "dv8.1", label: "DV Profil 8.1" },
+      { value: "dv8.2", label: "DV Profil 8.2" },
+      { value: "dv8.4", label: "DV Profil 8.4" },
+      { value: "dv10", label: "DV Profil 10 (alle)" },
+      { value: "dv10.1", label: "DV Profil 10.1" },
     ], { placeholder: "Alle", onChange: () => libRefreshView() });
 
     const cancel = $("btn-lib-cancel");
@@ -8872,10 +8969,7 @@
       if (d === "sdr") return !m.is_hdr;
       if (d === "hdr") return !!m.is_hdr && !m.dolby_vision;
       if (d === "dv") return !!m.dolby_vision;
-      if (d.startsWith("dv")) {
-        const want = parseInt(d.slice(2), 10);
-        return !!m.dolby_vision && (!want || (m.dv_profile || 0) === want);
-      }
+      if (d.startsWith("dv")) return libDvFilterMatch(m, d.slice(2));
       return true;
     });
   }
@@ -8950,8 +9044,7 @@
       byCodec[c] = (byCodec[c] || 0) + 1;
       if (m.dolby_vision) {
         dv += 1;
-        const p = Number(m.dv_profile) || 0;
-        const key = p > 0 ? String(p) : "?";
+        const key = libDvProfileName(m) || "?";
         byDvProfile[key] = (byDvProfile[key] || 0) + 1;
       } else if (m.is_hdr) {
         hdr += 1;
@@ -8969,11 +9062,8 @@
       .sort((a, b) => b.count - a.count || a.mode.localeCompare(b.mode));
     const dv_profiles = Object.keys(byDvProfile)
       .map((k) => ({ profile: k, count: byDvProfile[k] }))
-      .sort((a, b) => {
-        const na = parseInt(a.profile, 10), nb = parseInt(b.profile, 10);
-        if (!isNaN(na) && !isNaN(nb)) return na - nb;
-        return String(a.profile).localeCompare(String(b.profile));
-      });
+      .sort((a, b) => libProfileOrder(a.profile) - libProfileOrder(b.profile)
+        || String(a.profile).localeCompare(String(b.profile)));
     const top_hogs = (matched || []).slice()
       .sort((a, b) => (b.est_saved_bytes || 0) - (a.est_saved_bytes || 0))
       .slice(0, 10)
@@ -9044,7 +9134,7 @@
       "Dauer", "Groesse", "Einsparung", "Vorschlag",
     ].join(";")];
     rows.forEach((m) => {
-      const dyn = m.dolby_vision ? ("DV" + (m.dv_profile ? " P" + m.dv_profile : ""))
+      const dyn = m.dolby_vision ? (libDvBadge(m) || "DV")
         : (m.is_hdr ? (m.hdr_type || "HDR") : "SDR");
       lines.push([
         m.path, m.folder, m.codec, m.resolution, m.video_bitrate_human, dyn,
@@ -9420,8 +9510,36 @@
     }
   }
 
+  function libDvProfileName(m) {
+    if (!m) return "";
+    if (m.dv_profile_label) return String(m.dv_profile_label);
+    const profile = Number(m.dv_profile) || 0;
+    return profile ? String(profile) : "";
+  }
+
+  function libDvBadge(m) {
+    const name = libDvProfileName(m);
+    return name ? "DV P" + name : (m && m.dolby_vision ? "DV" : "");
+  }
+
+  function libProfileOrder(name) {
+    const parts = String(name || "").split(".");
+    const major = parseInt(parts[0], 10);
+    const minor = parts.length > 1 ? parseInt(parts[1], 10) : -1;
+    if (isNaN(major)) return 1000;
+    return major * 100 + (isNaN(minor) ? -1 : minor);
+  }
+
+  function libDvFilterMatch(m, want) {
+    if (!m || !m.dolby_vision) return false;
+    if (!want) return true;
+    const name = libDvProfileName(m);
+    if (String(want).includes(".")) return name === String(want);
+    return name === String(want) || name.startsWith(String(want) + ".");
+  }
+
   function libDynamicLabel(m) {
-    if (m.dolby_vision) return "DV" + (m.dv_profile ? " P" + m.dv_profile : "");
+    if (m.dolby_vision) return libDvBadge(m);
     if (m.is_hdr) return libHdrModeKey(m) || (m.hdr_type || "HDR");
     return "SDR";
   }
@@ -9434,19 +9552,7 @@
     if (!m) return "";
     const sug = (m.suggest && m.suggest.label) ? m.suggest.label : "";
     const auto = sug ? ` ${tt("Auto-Vorschlag")}: ${sug}.` : "";
-    if (m.dolby_vision) {
-      const p = Number(m.dv_profile) || 0;
-      if (p === 5) {
-        return tt("Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).") + auto;
-      }
-      if (p === 7) {
-        return tt("Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto: HEVC → 8.1 (auch GPU). AV1 → 10.1 nur mit CPU/SVT, nicht mit NVIDIA.") + auto;
-      }
-      if (p === 8 || p === 10) {
-        return tt("Dolby Vision Single-Layer mit HDR10-Fallback. Auto übernimmt die RPU. AV1-DV nur per CPU/SVT – NVIDIA fällt auf HDR10 zurück.") + auto;
-      }
-      return tt("Dolby Vision erkannt. Auto wählt Übernehmen oder Tone-Mapping je nach Profil. AV1-DV nur CPU/SVT, nicht NVIDIA.") + auto;
-    }
+    if (m.dolby_vision) return libDvProfileTip(libDvProfileName(m)) + auto;
     if (m.is_hdr) {
       const k = libHdrModeKey(m);
       if (k === "HDR10+") {
@@ -9495,10 +9601,12 @@
 
   function libDvProfileTip(profile) {
     const p = String(profile || "");
-    if (p === "5") return tt("Profil 5: kein HDR10-Fallback. Ohne DV-fähigen Player falsch – Auto: Tone-Mapping.");
-    if (p === "7") return tt("Profil 7: Blu-ray dual-layer. Auto: HEVC 8.1 (GPU möglich), AV1 10.1 nur CPU/SVT – nicht NVIDIA.");
-    if (p === "8") return tt("Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.");
-    if (p === "10") return tt("Profil 10: DV in AV1. Übernehmen nur mit CPU/SVT – NVIDIA/NVENC kann die RPU nicht einbetten.");
+    if (p === "5") return tt("Dolby Vision Profil 5: IPTPQc2 ohne HDR10-Fallback – nur mit DV-Player korrekt. Auto mappt nach SDR (sicher).");
+    if (p === "7") return tt("Dolby Vision Profil 7 (Blu-ray, zwei Layer). Auto: HEVC → 8.1 (auch GPU). AV1 → 10.1 nur mit CPU/SVT, nicht mit NVIDIA.");
+    if (p === "8" || p === "8.1") return tt("Profil 8: Single-Layer + HDR10-Fallback. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.");
+    if (p === "8.2") return tt("Profil 8.2: Single-Layer mit SDR-Basis. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.");
+    if (p === "8.4") return tt("Profil 8.4: Single-Layer mit HLG-Basis. Auto übernimmt die RPU. AV1 nur CPU/SVT, nicht NVIDIA.");
+    if (p === "10" || p === "10.1") return tt("Profil 10: DV in AV1. Übernehmen nur mit CPU/SVT – NVIDIA/NVENC kann die RPU nicht einbetten.");
     return tt("Dolby-Vision-Profil laut Datei-Metadaten.");
   }
 
@@ -9548,7 +9656,7 @@
         <td title="${escapeHtml(m.path)}">
           <div class="lib-name-cell">
             <button type="button" class="lib-toggle" data-path="${escapeHtml(m.path)}"
-              title="${escapeHtml(tt("Ton, Untertitel und NFO anzeigen"))}"
+              title="${escapeHtml(tt("Ton, Untertitel, Technik und NFO"))}"
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
               <span class="lib-name">${escapeHtml(m.name)}</span>
@@ -9558,9 +9666,9 @@
           </div>
         </td>
         <td>${escapeHtml((m.codec || "").toUpperCase())}</td>
-        <td>${escapeHtml(m.resolution)}</td>
+        <td>${libResolutionHtml(m)}</td>
         <td><span class="dyn-badge ${dynCls}" data-tip="${escapeHtml(libDynamicTip(m))}">${escapeHtml(dyn)}</span></td>
-        <td>${escapeHtml(m.video_bitrate_human)}</td>
+        <td>${libBitrateHtml(m)}</td>
         <td>${escapeHtml(m.duration_human || "—")}</td>
         <td>${escapeHtml(m.size_human)}</td>
         <td>${opt}</td>
@@ -9614,11 +9722,93 @@
       .filter(Boolean).join(" ").toLowerCase();
   }
 
+  const LIB_PROBE_KEYS = [
+    "probe_rev", "pix_fmt", "color_transfer", "color_primaries", "color_space", "color_range",
+    "level", "level_label", "hdr10_plus", "interlaced", "field_order",
+    "overall_bitrate", "overall_bitrate_human", "encoder", "muxer", "container_title",
+    "sar", "dar", "anamorphic", "rotation", "frame_rate_mode", "fps_nominal", "video_start",
+    "metadata_frames", "chapters", "chapter_count", "video_tracks", "attachments",
+    "max_cll", "max_fall", "master_max", "master_min",
+    "dv_level", "dv_version", "dv_profile_label", "dv_rpu", "dv_el", "dv_bl",
+    "dv_compatibility", "dv_compatibility_label",
+  ];
+
+  function libCopyProbe(target, source) {
+    if (!source) return;
+    LIB_PROBE_KEYS.forEach((key) => {
+      if (source[key] !== undefined) target[key] = source[key];
+    });
+  }
+
+  function libLangs(audio) {
+    const langs = [];
+    (audio || []).forEach((track) => {
+      const lang = String((track && track.language) || "").trim().toLowerCase();
+      if (!lang || lang === "und" || langs.includes(lang)) return;
+      langs.push(lang);
+    });
+    if (!langs.length) return "";
+    const shown = langs.slice(0, 4).map((lang) => lang.toUpperCase());
+    if (langs.length > 4) shown.push("+" + (langs.length - 4));
+    return shown.join(", ");
+  }
+
+  function libFlagHtml(m) {
+    const flags = [];
+    if (m.interlaced) {
+      flags.push([tt("Zeilensprung"), tt("Das Video ist zeilengebunden. Vor dem Encode sollte es deinterlaced werden.")]);
+    }
+    if (m.frame_rate_mode === "vfr") {
+      flags.push(["VFR", tt("Die Bildrate ist nicht konstant.")]);
+    }
+    if (m.anamorphic) flags.push([m.dar ? "DAR " + m.dar : "SAR " + (m.sar || ""), ""]);
+    if (m.rotation) flags.push([m.rotation + "°", tt("Drehung")]);
+    return flags.filter((flag) => flag[0]).map(([text, tip]) =>
+      `<span class="lib-flag"${tip ? ` data-tip="${escapeHtml(tip)}"` : ""}>${escapeHtml(text)}</span>`).join("");
+  }
+
+  function libResolutionHtml(m) {
+    const sub = [];
+    if (m.anamorphic && m.dar) sub.push("DAR " + m.dar);
+    else if (m.dar && m.width && m.height) {
+      const stored = m.width / m.height;
+      const shown = String(m.dar).split(":");
+      const dar = shown.length === 2 ? Number(shown[0]) / Number(shown[1]) : 0;
+      if (dar && Math.abs(stored - dar) / dar > 0.02) sub.push("DAR " + m.dar);
+    }
+    if (m.rotation) sub.push(m.rotation + "°");
+    return escapeHtml(m.resolution || "—")
+      + (sub.length ? `<div class="lib-sub">${escapeHtml(sub.join(" · "))}</div>` : "");
+  }
+
+  function libBitrateHtml(m) {
+    const video = escapeHtml(m.video_bitrate_human || "—");
+    const overall = Number(m.overall_bitrate) || 0;
+    const stream = Number(m.video_bitrate) || 0;
+    if (overall > 0 && stream > 0 && overall > stream * 1.12 && m.overall_bitrate_human) {
+      return `${video}<div class="lib-sub">${escapeHtml(tt("inkl. Ton"))} ${escapeHtml(m.overall_bitrate_human)}</div>`;
+    }
+    return video;
+  }
+
+  function libClock(sec) {
+    const total = Math.max(0, Math.round(Number(sec) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const mm = String(m).padStart(h ? 2 : 1, "0");
+    const ss = String(s).padStart(2, "0");
+    return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
   function libFileMetaLine(m) {
     const d = libMergedDetails(m);
     const parts = [];
     if (Array.isArray(d.audio)) {
-      parts.push(`${d.audio.length} ${tt("Ton")}`);
+      const langs = libLangs(d.audio);
+      parts.push(langs
+        ? `${d.audio.length} ${tt("Ton")} · ${escapeHtml(langs)}`
+        : `${d.audio.length} ${tt("Ton")}`);
     }
     if (Array.isArray(d.subtitles) || (d.sidecars && d.sidecars.length)) {
       const n = (d.subtitles || []).length + (d.sidecars || []).length;
@@ -9627,12 +9817,13 @@
     if (d.nfo) {
       parts.push(`<button type="button" class="lib-nfo-badge" data-path="${escapeHtml(m.path)}">NFO</button>`);
     }
-    return parts.join(" · ");
+    const flags = libFlagHtml(d);
+    return parts.join(" · ") + (flags ? ` ${flags}` : "");
   }
 
   function libMergedDetails(m) {
     const extra = (state.libDetails && state.libDetails[m.path]) || {};
-    return {
+    const merged = {
       audio: extra.audio || m.audio,
       subtitles: extra.subtitles || m.subtitles,
       nfo: libPickNfo(extra.nfo, m.nfo),
@@ -9645,17 +9836,20 @@
       error: extra.error,
       loading: extra.loading,
     };
+    libCopyProbe(merged, m);
+    libCopyProbe(merged, extra);
+    return merged;
   }
 
-  function libTrackLabel(t, kind) {
+  function libTrackLabel(t, kind, originMixed) {
     const lang = String(t.language || "und").toUpperCase();
-    const codec = (t.codec || "?").toUpperCase();
-    const bits = [lang, codec];
+    const bits = [lang, trackCodecLabel(t)];
     if (kind === "audio") {
       if (t.layout) bits.push(t.layout);
       else if (t.channels) bits.push(t.channels + " ch");
       if (t.bitrate_human && t.bitrate_human !== "—") bits.push(t.bitrate_human);
     }
+    bits.push(...trackNotes(t, kind, originMixed));
     const flags = [t.default ? tt("Standard") : "", t.forced ? tt("Forced") : ""].filter(Boolean);
     let s = bits.filter(Boolean).join(" · ");
     if (flags.length) s += ` (${flags.join(", ")})`;
@@ -9681,9 +9875,10 @@
     const audio = Array.isArray(d.audio) ? d.audio : [];
     const subs = Array.isArray(d.subtitles) ? d.subtitles : [];
     const sides = Array.isArray(d.sidecars) ? d.sidecars : [];
+    const origin = audio.some((t) => t && t.dub) && audio.some((t) => t && t.original);
     const aList = audio.length
       ? `<ul class="lib-track-list">${audio.map((t) =>
-          `<li>${escapeHtml(libTrackLabel(t, "audio"))}</li>`).join("")}</ul>`
+          `<li>${escapeHtml(libTrackLabel(t, "audio", origin))}</li>`).join("")}</ul>`
       : `<p class="muted">${tt("Keine Tonspur")}</p>`;
     const sItems = subs.map((t) => `<li>${escapeHtml(libTrackLabel(t, "sub"))}</li>`);
     sides.forEach((s) => {
@@ -9697,8 +9892,8 @@
     if (d.profile) tech.push(d.profile);
     if (d.bit_depth) tech.push(d.bit_depth + " bit");
     if (d.fps) tech.push((Math.round(d.fps * 100) / 100) + " fps");
-    const techLine = tech.length
-      ? `<p class="lib-nfo-tech">${escapeHtml(tech.join(" · "))}</p>` : "";
+    const techLine = d.probe_rev >= 2 ? libTechHtml(d) : (tech.length
+      ? `<p class="lib-nfo-tech">${escapeHtml(tech.join(" · "))}</p>` : "");
     return `<div class="lib-detail">
       <div class="lib-detail-col">
         <strong>${tt("Tonspuren")} (${audio.length})</strong>
@@ -9708,7 +9903,94 @@
         <strong>${tt("Untertitel")} (${subs.length}${sides.length ? ` + ${sides.length}` : ""})</strong>
         ${sList}
       </div>
-    </div>${techLine}`;
+      ${techLine}
+    </div>`;
+  }
+
+  function dvFactLine(d, opts) {
+    if (!d || !d.dolby_vision) return "";
+    const bits = [];
+    const profile = d.dv_profile_label || (d.dv_profile ? String(d.dv_profile) : "");
+    if (profile) bits.push(tt("Profil") + " " + profile);
+    if (d.dv_level != null && d.dv_level !== "") bits.push("Level " + d.dv_level);
+    if (d.dv_version) bits.push(d.dv_version);
+    if (d.dv_compatibility_label) bits.push(tt("Basiskompatibilität") + " " + d.dv_compatibility_label);
+    if (d.dv_rpu === true) bits.push("RPU");
+    else if (d.dv_rpu === false) bits.push(tt("kein RPU"));
+    if (!(opts && opts.role)) {
+      if (d.dv_el === true && d.dv_bl !== false) bits.push(tt("Enhancement Layer in dieser Spur"));
+      else if (d.dv_el === true) bits.push(tt("Enhancement Layer"));
+    }
+    if (d.dv_bl === false) bits.push(tt("ohne Basisschicht"));
+    return bits.join(" · ");
+  }
+
+  function libVideoTracksHtml(d) {
+    const tracks = Array.isArray(d.video_tracks) ? d.video_tracks : [];
+    const notable = tracks.length > 1 || tracks.some((track) => track && (track.role === "enhancement" || track.el_inferred));
+    if (!notable) return "";
+    const lines = tracks.map((track) => {
+      if (!track) return "";
+      const role = track.el_inferred ? tt("mögliche Enhancement Layer")
+        : track.role === "base" ? tt("Hauptbild")
+        : track.role === "enhancement" ? tt("Enhancement Layer")
+        : track.role === "cover" ? tt("Titelbild")
+        : tt("Videospur");
+      const size = track.width && track.height ? `${track.width}×${track.height}` : "";
+      const hdr = track.dolby_vision
+        ? dvFactLine(track, { role: true })
+        : (track.hdr_type && track.hdr_type !== "SDR" ? track.hdr_type : "");
+      return [role, (track.codec || "").toUpperCase(), track.profile, size,
+        track.bit_depth ? track.bit_depth + " bit" : "",
+        track.bitrate_human || "", hdr].filter(Boolean).join(" · ");
+    }).filter(Boolean);
+    if (!lines.length) return "";
+    return `<div class="lib-tech-block"><strong>${escapeHtml(tt("Videospuren"))} (${tracks.length})</strong><ul class="lib-track-list">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></div>`;
+  }
+
+  function libTechHtml(d) {
+    const rows = [];
+    const add = (label, value) => { if (value) rows.push([label, value]); };
+    add(tt("Container"), [d.container, d.container_title].filter(Boolean).join(" · "));
+    add(tt("Profil"), [d.profile, d.level_label || d.level].filter(Boolean).join(" · "));
+    const picture = [d.pix_fmt, d.bit_depth ? d.bit_depth + " bit" : ""].filter(Boolean).join(" · ");
+    add(tt("Bild"), picture);
+    let fps = d.fps ? d.fps + " fps" : "";
+    if (d.frame_rate_mode === "vfr") {
+      fps = [fps, tt("variabel"), d.fps_nominal ? `${tt("Raster")} ${d.fps_nominal} fps` : ""].filter(Boolean).join(" · ");
+    }
+    add(tt("Bildrate"), fps);
+    add(tt("Farbmetadaten"), probeColorBits(d));
+    const aspect = [d.sar ? "SAR " + d.sar : "", d.dar ? "DAR " + d.dar : ""].filter(Boolean).join(" · ");
+    add(tt("Seitenverhältnis"), aspect);
+    if (d.rotation) add(tt("Drehung"), d.rotation + "°");
+    if (d.interlaced) add(tt("Zeilensprung"), fieldOrderLabel(d.field_order) || tt("Zeilensprung"));
+    add("Dolby Vision", dvFactLine(d));
+    add(tt("Encoder"), d.encoder);
+    if (d.muxer && d.muxer !== d.encoder) add(tt("Muxer"), d.muxer);
+    add(tt("Spitzenhelligkeit"), probeLightLabel(d));
+    if (Number(d.video_start) >= 0.5) add(tt("Startversatz"), libClock(d.video_start));
+    if (d.metadata_frames) add(tt("Frames laut Metadaten"), String(d.metadata_frames));
+    const grid = rows.map(([label, value]) =>
+      `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
+    const videos = libVideoTracksHtml(d);
+    const chapters = Array.isArray(d.chapters) ? d.chapters : [];
+    const count = Number(d.chapter_count) || chapters.length;
+    let chapterHtml = "";
+    if (count) {
+      const shown = chapters.slice(0, 8);
+      const more = count - shown.length;
+      chapterHtml = `<div class="lib-tech-block"><strong>${escapeHtml(tt("Kapitel"))} (${count})</strong><ul class="lib-chapter-list">${shown.map((chapter) =>
+        `<li><span class="muted">${escapeHtml(libClock(chapter.start))}</span> ${escapeHtml(chapter.title || "—")}</li>`).join("")}</ul>`
+        + (more > 0 ? `<p class="muted">+ ${more} ${escapeHtml(tt("weitere"))}</p>` : "") + `</div>`;
+    }
+    const files = Array.isArray(d.attachments) ? d.attachments : [];
+    const attachHtml = files.length
+      ? `<div class="lib-tech-block"><strong>${escapeHtml(tt("Anhänge"))}</strong><ul class="lib-track-list">${files.map((file) =>
+          `<li>${escapeHtml(file.filename || file.codec || tt("Anhang"))}${file.mimetype ? " · " + escapeHtml(file.mimetype) : ""}</li>`).join("")}</ul></div>`
+      : "";
+    if (!grid && !videos && !chapterHtml && !attachHtml) return "";
+    return `<div class="lib-tech-wrap"><strong>${escapeHtml(tt("Technik"))}</strong><dl class="lib-tech">${grid}</dl>${videos}${chapterHtml}${attachHtml}</div>`;
   }
 
   function libNfoIsStub(nfo) {
@@ -9783,17 +10065,18 @@
     const cached = state.libDetails && state.libDetails[path];
     const haveTracks = Array.isArray(row.audio) || (cached && Array.isArray(cached.audio));
     const haveNfo = !libNfoIsStub(row.nfo) || (cached && !libNfoIsStub(cached.nfo));
-    if (!haveTracks || !haveNfo) {
+    const haveFacts = row.probe_rev === 3 || (cached && cached.probe_rev === 3);
+    if (!haveTracks || !haveNfo || !haveFacts) {
       if (!state.libDetails) state.libDetails = {};
       state.libDetails[path] = {
         ...(cached || {}),
-        loading: !haveTracks,
+        loading: !haveTracks || !haveFacts,
         nfoLoading: !haveNfo,
       };
     }
     renderLibrary();
-    if (haveTracks && haveNfo) return;
-    await libEnsureDetails(path, { probe: !haveTracks });
+    if (haveTracks && haveNfo && haveFacts) return;
+    await libEnsureDetails(path, { probe: !haveTracks || !haveFacts });
     renderLibrary();
   }
 
@@ -9823,6 +10106,9 @@
         if (d.sidecars) row.sidecars = d.sidecars;
         if (d.container) row.container = d.container;
         if (d.fps) row.fps = d.fps;
+        if (d.bit_depth) row.bit_depth = d.bit_depth;
+        if (d.profile) row.profile = d.profile;
+        libCopyProbe(row, d);
       }
     } catch (e) {
       state.libDetails[path] = {
@@ -9955,13 +10241,13 @@
     }
     const btn = e.target.closest(".lib-act");
     if (btn) {
-      e.stopPropagation();
-      const path = btn.dataset.path;
-      const name = btn.dataset.name;
-      const act = btn.dataset.act;
-      if (act === "play") { playMedia("media", path, name); return; }
-      const row = (state.libRows || []).find((m) => m.path === path);
-      libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
+    e.stopPropagation();
+    const path = btn.dataset.path;
+    const name = btn.dataset.name;
+    const act = btn.dataset.act;
+    if (act === "play") { playMedia("media", path, name); return; }
+    const row = (state.libRows || []).find((m) => m.path === path);
+    libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
       return;
     }
     if (e.target.closest("input, a, select, textarea")) return;
@@ -12812,7 +13098,7 @@
     const plan = side.plan || {};
     const srcCodec = (info.codec || "").toUpperCase();
     const isDv = !!info.dolby_vision;
-    const dvProf = info.dv_profile ? ` P${info.dv_profile}` : "";
+    const dvProf = libDvProfileName(info) ? ` P${libDvProfileName(info)}` : "";
     const isHdr = !!info.is_hdr;
     const modeEl = $(`ab-${side.key}-filter-mode`);
     const filterOn = abIsStandalone() && (!modeEl || modeEl.value === "on");
