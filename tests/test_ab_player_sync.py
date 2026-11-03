@@ -32,7 +32,12 @@ class Element {
   constructor() {
     this.listeners = new Map(); this.value = ""; this.checked = false;
     this.style = { setProperty() {} };
-    this.classList = { contains: (name) => name === "is-nerd", toggle() {} };
+    const classes = new Set();
+    this.classList = {
+      contains: (name) => classes.has(name),
+      toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
+      add: (name) => classes.add(name), remove: (name) => classes.delete(name),
+    };
   }
   addEventListener(type, fn, opts) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -48,6 +53,7 @@ class Element {
     }
   }
   click() { this.emit("click"); }
+  querySelectorAll() { return []; }
 }
 class Video extends Element {
   constructor() {
@@ -106,7 +112,9 @@ class Video extends Element {
 const elements = {};
 for (const id of ["btn-ab-load", "btn-ab-unload", "ab-play", "ab-seek", "ab-sync",
                  "ab-offset", "ab-card", "ab-badge", "ab-status", "ab-speed",
-                 "ab-step-back", "ab-step-fwd"]) {
+                 "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b",
+                 "ab-root-a", "ab-root-b", "ab-same-source", "ab-mode", "ab-zoom",
+                 "ab-playback", "ab-weak"]) {
   elements[id] = new Element();
 }
 elements["ab-video-a"] = new Video();
@@ -114,10 +122,15 @@ elements["ab-video-b"] = new Video();
 elements["ab-sync"].checked = true;
 elements["ab-offset"].value = "0";
 elements["ab-speed"].value = "1";
+elements["ab-mode"].value = "side";
+elements["ab-zoom"].value = "fit";
+elements["ab-playback"].value = "auto";
+elements["ab-root-a"].value = elements["ab-root-b"].value = "media";
+elements["ab-card"].classList.add("is-nerd");
 const $ = (id) => elements[id] || null;
 const window = { addEventListener() {}, devicePixelRatio: 1 };
 const localStorage = { getItem: () => null, setItem() {} };
-const state = { abJob: "", vmafSession: "test", vmafSource: { path: "source.mkv" } };
+const state = { currentPage: "vmafnerd", abJob: "", vmafSession: "test", vmafSource: { path: "source.mkv" } };
 const tt = (text) => text;
 const fmtClock = (value) => String(value);
 function navTo() {}
@@ -134,8 +147,26 @@ function fetch(url, options) {
 
 
 MOCK_HLS = r"""
+// Die Validierungsbedingungen aus hls.js 1.5.17/src/config.ts (mergeConfig).
+// Der frühere Dummy akzeptierte das ungültige Paar und übersah die Regression.
+function validateHlsConfig(config) {
+  if ((config.liveSyncDurationCount || config.liveMaxLatencyDurationCount)
+      && (config.liveSyncDuration || config.liveMaxLatencyDuration)) {
+    throw new Error("Illegal hls.js config: don't mix count and duration");
+  }
+  if (config.liveMaxLatencyDurationCount !== undefined
+      && (config.liveSyncDurationCount === undefined
+          || config.liveMaxLatencyDurationCount <= config.liveSyncDurationCount)) {
+    throw new Error('Illegal hls.js config: "liveMaxLatencyDurationCount" must be greater than "liveSyncDurationCount"');
+  }
+  if (config.liveMaxLatencyDuration !== undefined
+      && (config.liveSyncDuration === undefined || config.liveMaxLatencyDuration <= config.liveSyncDuration)) {
+    throw new Error('Illegal hls.js config: "liveMaxLatencyDuration" must be greater than "liveSyncDuration"');
+  }
+}
 class MockHls {
-  constructor(config) {
+  constructor(config = {}) {
+    validateHlsConfig(config);
     this.config = config; this.listeners = new Map(); this.destroyed = false;
     MockHls.instances.push(this);
   }
@@ -197,6 +228,12 @@ class AbPlayerSyncTests(unittest.TestCase):
         start = cls.source.index("  function clipPlayUrl(")
         end = cls.source.index("  /* ------------------------------------------------------------- DIAGNOSE */", start)
         cls.transport = cls.source[start:end]
+        start = cls.source.index("  function navTo(")
+        end = cls.source.index("  function settleVmafCharts(", start)
+        cls.navigation = cls.source[start:end]
+        start = cls.source.index("  function syncAbChrome(")
+        end = cls.source.index("  function screenshotAbPicks(", start)
+        cls.navigation += cls.source[start:end]
 
     def setUp(self):
         self.js = quickjs.Context()
@@ -294,6 +331,170 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertAlmostEqual(self.value("abTime(b)"), 1 / 24)
         self.assertEqual(self.value("[a.video.paused, b.video.paused]"), [True, True])
         self.assertEqual(self.value("[a.video.playbackRate, b.video.playbackRate]"), [0.25, 0.25])
+
+    def enable_real_navigation(self):
+        self.js.eval('''
+          function applyPageVisibility() {}
+          function refreshNerdFrames() {}
+          function rememberScreenshotPicks() {}
+          function picksFromClipIds() { return []; }
+          function settleVmafCharts() {}
+        ''' + self.navigation)
+
+    def test_hls_config_reproduces_old_error_and_accepts_current_pair(self):
+        self.js.eval(MOCK_HLS)
+        with self.assertRaisesRegex(Exception, "liveMaxLatencyDurationCount"):
+            self.js.eval("new MockHls({liveMaxLatencyDurationCount: Infinity});")
+        self.evaluate("abStartSide(a, 0);")
+        self.assertTrue(self.value("a.ready"))
+        self.assertEqual(self.value("a.hls.config.liveSyncDurationCount"), 3)
+        self.assertTrue(self.value("a.hls.config.liveMaxLatencyDurationCount === Infinity"))
+        self.assertEqual(self.value("a.hls.config.maxLiveSyncPlaybackRate"), 1)
+
+    def test_both_standalone_sides_start_with_valid_hls_config(self):
+        self.js.eval(MOCK_HLS)
+        self.evaluate("ab.context = 'standalone'; abStartSide(a, 0); abStartSide(b, 0);")
+        self.assertEqual(self.value("[a.ready, b.ready]"), [True, True])
+        self.assertEqual(self.value("MockHls.instances.length"), 2)
+
+    def test_nerd_start_does_not_overwrite_standalone_files(self):
+        self.evaluate("""
+          $('ab-path-a').value = 'normal-source.mkv';
+          $('ab-path-b').value = 'normal-encode.mkv';
+          openClipAb([{kind:'enc', clip:'first.mp4', len:15},
+                      {kind:'enc', clip:'second.mp4', len:15}], {stay:true});
+        """)
+        self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"),
+                         ['normal-source.mkv', 'normal-encode.mkv'])
+        self.assertIn("first.mp4", self.value("a.clipUrl"))
+        self.assertIn("second.mp4", self.value("b.clipUrl"))
+        self.js.eval(MOCK_HLS)
+        self.evaluate("""
+          openClipAb([{kind:'ref', start:64, len:15},
+                      {kind:'enc', clip:'second.mp4', start:64, len:15}], {stay:true});
+        """)
+        self.assertEqual(self.value("a.path"), 'source.mkv')
+        self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"),
+                         ['normal-source.mkv', 'normal-encode.mkv'])
+
+    def test_hidden_standard_load_cannot_replace_nerd_clips(self):
+        self.evaluate("""
+          $('ab-path-a').value = 'normal-source.mkv';
+          $('ab-path-b').value = 'normal-encode.mkv';
+          openClipAb([{kind:'enc', clip:'first.mp4', len:15},
+                      {kind:'enc', clip:'second.mp4', len:15}], {stay:true});
+          $('btn-ab-load').click();
+        """)
+        self.assertIn('first.mp4', self.value('a.video.src'))
+        self.assertIn('second.mp4', self.value('b.video.src'))
+        self.assertTrue(self.value('[a.ready, b.ready].every(Boolean)'))
+
+    def test_unload_only_clears_files_in_standalone_context(self):
+        self.evaluate("""
+          $('ab-path-a').value = 'normal-source.mkv';
+          $('ab-path-b').value = 'normal-encode.mkv';
+          abUnload(true);
+        """)
+        self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"),
+                         ['normal-source.mkv', 'normal-encode.mkv'])
+        self.evaluate("abSwitchContext('abcompare'); abUnload(true);")
+        self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"), ['', ''])
+
+    def test_nav_nerd_to_standard_destroys_streams_and_preserves_file_selection(self):
+        self.enable_real_navigation()
+        self.js.eval(MOCK_HLS)
+        self.evaluate("""
+          $('ab-path-a').value = 'normal-source.mkv';
+          $('ab-path-b').value = 'normal-encode.mkv';
+          openClipAb([{kind:'ref', start:64, len:8},
+                      {kind:'enc', start:64, len:8, clip:'encoded.mp4'}], {stay:true});
+          abPlayTogether();
+        """)
+        old_sid = self.value("a.sid")
+        self.evaluate("navTo('abcompare');")
+        self.assertEqual(self.value("[ab.context, state.currentPage]"), ['standalone', 'abcompare'])
+        self.assertTrue(self.value("abIsStandalone()"))
+        self.assertEqual(self.value("[a.path, b.path, a.clipUrl, b.clipUrl, a.video.src, b.video.src]"), [''] * 6)
+        self.assertEqual(self.value("[a.video.paused, b.video.paused]"), [True, True])
+        self.assertTrue(self.value("MockHls.instances[0].destroyed"))
+        self.assertIn(f"/api/player/session/{old_sid}", self.value("fetchCalls.filter(c => c.options && c.options.method === 'DELETE').map(c => c.url)"))
+        self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"),
+                         ['normal-source.mkv', 'normal-encode.mkv'])
+        self.assertIsNone(self.value("ab.window"))
+        self.assertFalse(self.value("$('ab-card').classList.contains('is-nerd')"))
+        self.evaluate("$('btn-ab-load').click();")
+        self.assertEqual(self.value("hlsStarts.slice(-2).map(r => r.path)"),
+                         ['normal-source.mkv', 'normal-encode.mkv'])
+        self.assertEqual(self.value("[a.ready, b.ready]"), [True, True])
+
+    def test_nav_standard_to_nerd_unloads_and_restores_each_context_controls(self):
+        self.enable_real_navigation()
+        self.evaluate("navTo('abcompare');")
+        self.evaluate("""
+          $('ab-speed').value = '0.5'; $('ab-speed').emit('change');
+          $('ab-offset').value = '0.3'; $('ab-sync').checked = false;
+          state.abJob = 'normal-job';
+          a.path = 'normal-source.mkv'; a.video.src = a.path;
+          b.path = 'normal-encode.mkv'; b.video.src = b.path;
+          navTo('vmafnerd', {keepAb:true});
+        """)
+        self.assertEqual(self.value("[a.path, b.path, a.video.src, b.video.src]"), [''] * 4)
+        self.assertEqual(self.value("[$('ab-speed').value, $('ab-offset').value, $('ab-sync').checked, state.abJob]"), ['1', '0', True, ''])
+        self.evaluate("$('ab-speed').value = '0.25'; $('ab-speed').emit('change'); navTo('abcompare');")
+        self.assertEqual(self.value("[$('ab-speed').value, $('ab-offset').value, $('ab-sync').checked, state.abJob]"), ['0.5', '0.3', False, 'normal-job'])
+        self.assertEqual(self.value("[a.video.playbackRate, b.video.playbackRate]"), [0.5, 0.5])
+        self.evaluate("navTo('vmafnerd', {keepAb:true});")
+        self.assertEqual(self.value("$('ab-speed').value"), '0.25')
+
+    def test_direct_open_nerd_switches_before_start_not_after(self):
+        self.enable_real_navigation()
+        self.js.eval(MOCK_HLS)
+        self.evaluate("navTo('abcompare');")
+        self.evaluate("""
+          openClipAb([{kind:'ref', start:64, len:8},
+                      {kind:'enc', start:64, len:8, clip:'encoded.mp4'}]);
+        """)
+        self.assertEqual(self.value("[ab.context, state.currentPage]"), ['nerd', 'vmafnerd'])
+        self.assertEqual(self.value("$('ab-badge').textContent"), 'Geladen')
+        self.assertEqual(self.value("hlsStarts.map(r => r.start)"), [63])
+        self.assertEqual(self.value("[abTime(a), abTime(b)]"), [64, 64])
+        self.assertEqual(self.value("[a.ready, b.ready]"), [True, True])
+
+    def test_switching_same_context_does_not_unload(self):
+        self.enable_real_navigation()
+        self.evaluate("abPlayTogether(); navTo('vmafnerd', {keepAb:true});")
+        self.assertEqual(self.value("[a.path, b.path]"), ['a', 'b'])
+        self.assert_playing_together()
+
+    def test_late_nerd_session_after_nav_cannot_repopulate_standard_player(self):
+        self.enable_real_navigation()
+        self.evaluate("""
+          let finishSession;
+          fetchImpl = (url) => {
+            if (url.startsWith('/api/probe')) return Promise.resolve(response({fps:24}));
+            if (url === '/api/player/session') return new Promise(r => {finishSession = r;});
+            return Promise.resolve(response({ok:true}));
+          };
+          openClipAb([{kind:'ref', start:64, len:8},
+                      {kind:'enc', start:64, len:8, clip:'encoded.mp4'}], {stay:true});
+        """)
+        self.evaluate("navTo('abcompare'); finishSession(response({session:{id:'late-nerd', mode:'hls'}}));")
+        self.assertEqual(self.value("[a.path, b.path, a.video.src, b.video.src, a.sid]"), [''] * 5)
+        self.assertIn('/api/player/session/late-nerd', self.value("fetchCalls.filter(c => c.options && c.options.method === 'DELETE').map(c => c.url)"))
+
+    def test_weak_spot_response_from_other_context_is_ignored(self):
+        self.enable_real_navigation()
+        self.evaluate("navTo('abcompare');")
+        self.evaluate("""
+          let finishSpots;
+          state.abJob = 'normal-job';
+          fetchImpl = () => new Promise(r => {finishSpots = r;});
+          abLoadWeakSpots();
+          navTo('vmafnerd', {keepAb:true});
+          finishSpots(response({spots:[{time:100, scene:0, vmaf:80}]}));
+        """)
+        self.assertIsNone(self.value("ab.weak"))
+        self.assertEqual(self.value("$('ab-weak').innerHTML"), '')
 
     def test_complete_script_parses(self):
         self.js.eval("new Function(" + json.dumps(self.source) + ")")
@@ -528,6 +729,7 @@ class AbPlayerSyncTests(unittest.TestCase):
     def test_standalone_hls_does_not_add_nerd_preroll(self):
         self.js.eval(MOCK_HLS)
         self.evaluate("""
+          ab.context = 'standalone';
           $('ab-card').classList.contains = () => false;
           ab.window = {start: 64, end: 72};
           abStartSide(a, 64);

@@ -114,6 +114,9 @@ class LowContextFrontendTests(unittest.TestCase):
         start = cls.source.index("  function vmafLowContextLines(")
         end = cls.source.index("  function vmafCell(", start)
         cls.context = cls.source[start:end]
+        start = cls.source.index("  function vmafBrief(")
+        end = cls.source.index("  function lineMatchesKey(", start)
+        cls.table = cls.source[start:end]
 
     def setUp(self):
         self.js = quickjs.Context()
@@ -223,6 +226,111 @@ class LowContextFrontendTests(unittest.TestCase):
         self.assertIn("Als Kompromiss empfohlen", html)
         self.assertIn("nur 3 Extremframes", html)
         self.assertEqual(self.evaluate('vmafMissLabel({p1:88})'), "Low-Kriterium verfehlt")
+
+    def test_context_only_explains_failed_active_scenes(self):
+        self.js.eval('''
+          const r = {vmaf:96, scene_scores:[
+            {scene:0, p1:88, frame_count:337},
+            {scene:1, p1:94, frame_count:337},
+            {scene:2, p1:80, idle:true, frame_count:337},
+            {scene:3, p1:89, frame_count:337},
+            {scene:4, p1:90, frame_count:337},
+            {scene:5, frame_count:337}
+          ]};
+        ''')
+        self.assertEqual(self.evaluate('vmafLowContextScenes(r, {target_lo:94}).map(sc => sc.scene)'), [0, 3])
+        html = self.evaluate('vmafLowContextHtml(r, {target_lo:94})')
+        self.assertIn('<strong>Szene 1</strong>', html)
+        self.assertIn('<strong>Szene 4</strong>', html)
+        for scene in [2, 3, 5, 6]:
+            self.assertNotIn(f'<strong>Szene {scene}</strong>', html)
+        self.assertEqual(html.count('Verwendete Low-Grenze:'), 1)
+        self.assertEqual(html.count('nur die getesteten Ausschnitte'), 1)
+
+    def test_unaffected_results_and_disabled_floor_have_no_context(self):
+        self.assertEqual(self.evaluate('vmafLowContextHtml({vmaf:96, scene_scores:[{scene:0,p1:94}]}, {target_lo:94})'), '')
+        # A failed mean alone is not a failed Low criterion.
+        self.assertEqual(self.evaluate('vmafLowContextHtml({vmaf:92, scene_scores:[{scene:0,p1:90}]}, {target_lo:94})'), '')
+        self.assertEqual(self.evaluate('vmafLowContextHtml({vmaf:96, scene_scores:[{scene:0,p1:80,idle:true}]}, {target_lo:94})'), '')
+        self.js.eval('gap = 0;')
+        self.assertEqual(self.evaluate('vmafLowContextHtml({vmaf:96, scene_scores:[{scene:0,p1:80}]}, {target_lo:94})'), '')
+
+    def test_lazy_fetch_only_loads_affected_scenes(self):
+        self.js.eval('''
+          const v = {session:"session", target_lo:94}; state.vmafShown = v;
+          const r = {label:"A", vmaf:96, scene_scores:[
+            {scene:0,p1:89}, {scene:1,p1:95}, {scene:2,p1:80,idle:true}
+          ]};
+          const d = details(); loadVmafLowContext(d, r, v);
+        ''')
+        self.drain()
+        self.assertEqual(len(self.evaluate('calls')), 1)
+        self.assertIn('scene=0&full=1', self.evaluate('calls[0]'))
+        self.assertIn('<strong>Szene 1</strong>', self.evaluate('d.body.innerHTML'))
+        self.assertNotIn('<strong>Szene 2</strong>', self.evaluate('d.body.innerHTML'))
+
+    def test_unaffected_result_never_fetches_frame_logs(self):
+        self.js.eval('''
+          const v = {session:"session", target_lo:94}; state.vmafShown = v;
+          const d = details();
+          loadVmafLowContext(d, {vmaf:96, scene_scores:[{scene:0,p1:95}]}, v);
+        ''')
+        self.drain()
+        self.assertEqual(self.evaluate('calls'), [])
+        self.assertEqual(self.evaluate('d.body.innerHTML'), '')
+
+    def test_full_width_context_rows_keep_result_mapping_and_badge_linebreak(self):
+        self.js.eval(r'''
+          function syncKeepSourceBanner() {}
+          function nerdSharedLine() { return ""; }
+          function tt(s) { return s; }
+          function vmafResultKey(r) { return r.label; }
+          function bitrateReport() { return ""; }
+          function vmafCell() { return ""; }
+          function vmafRowOff() { return false; }
+          function vmafRowColor() { return "blue"; }
+          function vmafSpread() { return null; }
+          const highlights = [];
+          function highlightVmafSeries(key) { highlights.push(key); }
+          function tableWrap() {
+            const body = {
+              innerHTML:"", rows:[],
+              querySelectorAll(selector) {
+                if (selector !== "[data-vmaf-row]") return [];
+                this.rows = Array.from(this.innerHTML.matchAll(/<tr[^>]*data-vmaf-row="(\d+)"/g), (match) => ({
+                  dataset:{vmafRow:match[1]}, listeners:{},
+                  addEventListener(type, fn) { this.listeners[type] = fn; }
+                }));
+                return this.rows;
+              }
+            };
+            return {body, querySelector:s => s === "tbody" ? body : {},};
+          }
+          const wraps = [tableWrap(), tableWrap()];
+          const document = {querySelectorAll: () => wraps};
+        ''' + self.table)
+        self.js.eval('''
+          const v = {target_lo:94, results:[
+            {label:"A", vmaf:96, scene_scores:[{scene:0,p1:89}], predicted_human:"1 GB", savings_percent:20},
+            {label:"B", vmaf:96, scene_scores:[{scene:0,p1:95}], predicted_human:"2 GB", savings_percent:10},
+            {label:"C", vmaf:96, scene_scores:[{scene:0,p1:88}], predicted_human:"3 GB", savings_percent:5}
+          ]};
+          state.vmafShown = v; fillVmafTable(v);
+        ''')
+        for table in range(2):
+            html = self.evaluate(f'wraps[{table}].body.innerHTML')
+            self.assertEqual(html.count('colspan="6"'), 2)
+            self.assertEqual(html.count('<summary>1%-Low einordnen</summary>'), 2)
+            self.assertIn('<tr class="vmaf-context-row" data-vmaf-row="0"><td colspan="6"><details', html)
+            self.assertNotIn('data-low-row="1"', html)
+            self.assertIn('96.00<br><span class="badge vmaf-miss"', html)
+            self.assertEqual(self.evaluate(f'wraps[{table}].body.rows.map(row => row.dataset.vmafRow)'), ['0', '0', '1', '2', '2'])
+            self.js.eval(f'wraps[{table}].body.rows[2].listeners.mouseenter();')
+            self.assertEqual(self.evaluate('highlights[highlights.length - 1]'), 'B')
+            self.js.eval(f'wraps[{table}].body.rows[4].listeners.mouseenter();')
+            self.assertEqual(self.evaluate('highlights[highlights.length - 1]'), 'C')
+        self.js.eval('v.visual_only = true; fillVmafTable(v);')
+        self.assertNotIn('vmaf-context-row', self.evaluate('wraps[0].body.innerHTML'))
 
     def test_context_escapes_external_values(self):
         html = self.evaluate('vmafLowContextHtml({vmaf:96, scene_scores:[{scene:"<script>", p1:88}]}, {target_lo:94})')

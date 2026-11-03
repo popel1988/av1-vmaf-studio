@@ -1827,6 +1827,7 @@ input[type="range"]::-moz-range-thumb {
 .badge-fail { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); border-color: transparent; }
 .badge.recommended { background: var(--good); color: #04121a; border: none; }
 .badge.vmaf-miss {
+  display: inline-block; white-space: nowrap;
   background: color-mix(in srgb, var(--warn, #f59e0b) 22%, transparent);
   color: var(--warn, #d97706); border: none; margin-top: 4px;
 }
@@ -1914,9 +1915,10 @@ input[type="range"]::-moz-range-thumb {
 }
 .vmaf-table-wrap .vmaf-result-details { margin-top: 2px; font-weight: 400; font-size: 12px; color: var(--text-muted); }
 .vmaf-table-wrap .vmaf-result-details summary { cursor: pointer; }
-.vmaf-low-context { margin-top: 4px; font-size: 12px; font-weight: 400; color: var(--text-muted); }
-.vmaf-low-context > summary { cursor: pointer; }
-.vmaf-low-body { max-width: 48rem; white-space: normal; line-height: 1.45; }
+.vmaf-table-wrap .data-table .vmaf-context-row > td { padding: 0 8px 8px; }
+.vmaf-low-context { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.vmaf-low-context > summary { cursor: pointer; padding: 3px 0; }
+.vmaf-low-body { white-space: normal; line-height: 1.45; overflow-wrap: anywhere; }
 .vmaf-low-body p { margin: 5px 0; }
 .vmaf-low-body section { margin-top: 10px; }
 .vmaf-low-body strong { color: var(--text); }

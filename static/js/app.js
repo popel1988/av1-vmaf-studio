@@ -94,6 +94,9 @@
     // kein Ton/Video weiterläuft.
     const abPages = ["abcompare", "vmafnerd"];
     if (abPages.includes(state.currentPage) && !abPages.includes(page)) pauseAbVideos();
+    // Gleiche Oberfläche, aber getrennte Dateien/Einstellungen und keine
+    // mitwandernden Decoder-/FFmpeg-Sessions zwischen Standard und Nerd.
+    if (abPages.includes(page)) abSwitchContext(page);
     if (state.currentPage === "player" && page !== "player"
         && typeof window.stopFullPlayer === "function") {
       window.stopFullPlayer();
@@ -5572,7 +5575,14 @@
     return lines;
   }
 
+  function vmafLowContextScenes(r, vmaf) {
+    const floor = vmafSceneFloor(r, vmafTargetLo(vmaf), vmafP1GapValue());
+    return (r.scene_scores || []).filter((sc) => !sc.idle && vmafSceneP1Miss(sc, floor));
+  }
+
   function vmafLowContextHtml(r, vmaf, packs = new Map()) {
+    const scenes = vmafLowContextScenes(r, vmaf);
+    if (!scenes.length) return "";
     const lo = vmafTargetLo(vmaf);
     const gap = vmafP1GapValue();
     const anchor = vmafP1Anchor();
@@ -5587,7 +5597,7 @@
     const miss = vmafResultMiss(r, lo, gap);
     if (r.recommended && miss) lines.push("Als Kompromiss empfohlen: Nicht alle Zielkriterien sind erfüllt. Die Kontextangaben ändern die Auswahlregel nicht.");
     let html = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
-    (r.scene_scores || []).forEach((sc) => {
+    scenes.forEach((sc) => {
       const pack = packs.get(sc.scene);
       const series = pack && (pack.series || []).find((s) => s.label === (r.label || ""));
       const text = vmafLowContextLines(sc, series, floor);
@@ -5603,6 +5613,8 @@
   async function loadVmafLowContext(details, r, vmaf) {
     const body = details.querySelector(".vmaf-low-body");
     if (!body || !details.open || details.dataset.loading) return;
+    const scenes = vmafLowContextScenes(r, vmaf);
+    if (!scenes.length) { body.innerHTML = ""; return; }
     const session = vmaf.session || state.vmafSession;
     if (!session) {
       body.innerHTML = vmafLowContextHtml(r, vmaf)
@@ -5614,7 +5626,7 @@
     let cache = vmafLowLogCache.get(vmaf);
     if (!cache) { cache = new Map(); vmafLowLogCache.set(vmaf, cache); }
     const packs = new Map();
-    await Promise.all((r.scene_scores || []).map(async (sc) => {
+    await Promise.all(scenes.map(async (sc) => {
       const key = `${session}:${sc.scene}`;
       if (!cache.has(key)) {
         const pending = fetch(`/api/vmaf/frames?session=${encodeURIComponent(session)}&scene=${sc.scene}&full=1`)
@@ -5791,7 +5803,8 @@
           : `Zielkriterien nicht vollständig erfüllt (Ziel ${Math.round(lo)}, schwächste Szene ≥ ${Math.round(lo - gap)}).`));
     missBox.innerHTML = `<span>${escapeHtml(lead)}</span> `
       + misses.map((line) => `<span>${escapeHtml(line)}</span>`).join(" ")
-      + `<span>Ein verfehltes Low-Kriterium ist kein Nachweis sichtbar schlechter Qualität. „1%-Low einordnen“ an der Ergebniszeile erklärt Framebasis, Häufigkeit und Dauer.</span>`;
+      + ((vmaf.results || []).some((r) => vmafLowContextScenes(r, vmaf).length)
+        ? `<span>Ein verfehltes Low-Kriterium ist kein Nachweis sichtbar schlechter Qualität. „1%-Low einordnen“ unter der betroffenen Ergebniszeile erklärt Framebasis, Häufigkeit und Dauer.</span>` : "");
     missBox.style.display = "";
   }
 
@@ -6020,7 +6033,7 @@
     const lo = vmafTargetLo(state.vmafShown);
     const miss = vmafResultMiss(r, lo, vmafP1GapValue());
     if (miss) {
-      s += ` <span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">${vmafMissLabel(miss)}</span>`;
+      s += `<br><span class="badge vmaf-miss" title="${escapeHtml(vmafMissText(r, miss, lo))}">${vmafMissLabel(miss)}</span>`;
     }
     return s;
   }
@@ -6034,20 +6047,22 @@
       const bits = bitrateReport(r);
       const more = [bits, vmaf.visual_only ? "" : vmafCell(r)].filter(Boolean).join("<br>");
       const missed = !vmaf.visual_only && vmafResultMiss(r, vmafTargetLo(vmaf), vmafP1GapValue());
+      const lowContext = !vmaf.visual_only && vmafLowContextScenes(r, vmaf).length
+        ? `<tr class="vmaf-context-row" data-vmaf-row="${idx}"><td colspan="6">`
+          + `<details class="vmaf-low-context" data-low-row="${idx}"><summary>1%-Low einordnen</summary>`
+          + `<div class="vmaf-low-body">${vmafLowContextHtml(r, vmaf)}</div></details></td></tr>` : "";
       return `
-      <tr class="${r.recommended ? "row-recommended" : ""} ${missed ? "row-target-miss" : ""}">
+      <tr data-vmaf-row="${idx}" class="${r.recommended ? "row-recommended" : ""} ${missed ? "row-target-miss" : ""}">
         <td><input type="checkbox" data-vmaf-key="${escapeHtml(key)}" title="${escapeHtml(tip)}"${vmafRowOff(key) ? "" : " checked"}></td>
         <td><span class="nerd-swatch" style="background:${vmafRowColor(r, idx)}"></span>${escapeHtml(key)}
-          <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details>
-          ${!vmaf.visual_only && (r.scene_scores || []).length
-            ? `<details class="vmaf-low-context" data-low-row="${idx}"><summary>1%-Low einordnen</summary><div class="vmaf-low-body">${vmafLowContextHtml(r, vmaf)}</div></details>` : ""}</td>
+          <details class="vmaf-result-details"><summary>${escapeHtml(tt("Szenen und Maße"))}</summary>${more}</details></td>
         <td>${vmafBrief(r)}</td>
         <td>${r.predicted_human}</td>
         <td class="${r.savings_percent >= 0 ? "good" : "bad"}">${r.savings_percent}%</td>
         <td class="vmaf-row-actions">
           <button class="btn btn-sm ${r.recommended ? "is-rec" : "btn-ghost"}" data-take="${idx}" title="${escapeHtml(r.recommended && vmaf.pick_warning ? vmaf.pick_warning : "Diese Einstellung ins Encoding übernehmen")}">→ Encoding</button>
         </td>
-      </tr>`;
+      </tr>${lowContext}`;
     }).join("");
     document.querySelectorAll(".vmaf-table-wrap").forEach((wrap) => {
       let sharedEl = wrap.querySelector(".vmaf-nerd-shared");
@@ -6073,8 +6088,8 @@
       body.querySelectorAll("[data-take]").forEach((b) =>
         b.addEventListener("click", () =>
           transferToEncode(vmaf.results[parseInt(b.dataset.take, 10)])));
-      body.querySelectorAll("tr").forEach((tr, idx) => {
-        const row = vmaf.results[idx];
+      body.querySelectorAll("[data-vmaf-row]").forEach((tr) => {
+        const row = vmaf.results[Number(tr.dataset.vmafRow)];
         if (!row) return;
         const key = vmafResultKey(row);
         tr.addEventListener("mouseenter", () => highlightVmafSeries(key));
@@ -12481,7 +12496,11 @@
   }
 
   async function openClipAb(picks, opts) {
-    if (!ab.sides.a || !ab.sides.b) return;
+    if (!ab.sides.a || !ab.sides.b || clipAbBlock(picks)) return;
+    // Vor dem Start umschalten, sonst würde navTo den eben begonnenen
+    // Nerd-Ladevorgang als ausgehenden Standard-Kontext wieder entladen.
+    if (!opts || !opts.stay) navTo("vmafnerd", { keepAb: true });
+    abSwitchContext("vmafnerd");
     const loadSeq = abBeginLoad();
     const seq = ab.controlSeq;
     const refs = picks.filter((p) => p.kind === "ref");
@@ -12492,17 +12511,16 @@
     sb.clipUrl = "";
     sa.path = "";
     sb.path = "";
+    sa.info = null;
+    sb.info = null;
     state.abJob = "";
     const off = $("ab-offset");
     if (off) off.value = "0";
     const pickedIds = idsForPicks(picks);
     if (pickedIds.length) state.clipPickIds = pickedIds;
-    if (!opts || !opts.stay) navTo("vmafnerd", { keepAb: true });
     abApplyMode();
     const badge = $("ab-badge");
     if (badge) badge.textContent = tt("Lädt …");
-    const pathA = $("ab-path-a");
-    const pathB = $("ab-path-b");
     let ok;
     let masterT = 0;
     if (refs.length === 1) {
@@ -12516,8 +12534,6 @@
       sa.offset = 0;
       sb.clipUrl = clipPlayUrl(enc.clip);
       sb.offset = start;
-      if (pathA) pathA.value = state.vmafSource.path;
-      if (pathB) pathB.value = "";
       abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
       ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
     } else {
@@ -12527,8 +12543,6 @@
       sb.clipUrl = clipPlayUrl(encs[1].clip);
       sa.offset = 0;
       sb.offset = 0;
-      if (pathA) pathA.value = "";
-      if (pathB) pathB.value = "";
       abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
       ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
     }
@@ -12549,6 +12563,8 @@
   // (EVENT-Playlist) – ein Sprung außerhalb des Puffers startet die Session neu.
   const ab = {
     sides: {},          // {a: side, b: side}
+    context: state.currentPage === "vmafnerd" ? "nerd" : "standalone",
+    contexts: {},       // UI-Auswahl je Kontext; keine laufenden Sessions speichern.
     mode: "side",       // side | wipe
     wipe: 50,           // Kante in %
     seeking: false,
@@ -12563,6 +12579,38 @@
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
   };
+
+  function abSwitchContext(page) {
+    const next = page === "vmafnerd" ? "nerd" : "standalone";
+    if (ab.context === next) return;
+    const defaults = {
+      "ab-sync": true, "ab-offset": "0", "ab-speed": "1",
+      "ab-mode": "side", "ab-zoom": "fit", "ab-playback": "auto",
+    };
+    const saved = { job: state.abJob || "", controls: {}, wipe: ab.wipe };
+    Object.keys(defaults).forEach((id) => {
+      const el = $(id);
+      if (el) saved.controls[id] = id === "ab-sync" ? el.checked : el.value;
+    });
+    ab.contexts[ab.context] = saved;
+    // abUnload invalidiert Starts/Seeks synchron; Server-Cleanup darf danach
+    // auslaufen. Alte Antworten können keine neuen Videos mehr übernehmen.
+    abUnload(false);
+    ab.context = next;
+    const restore = ab.contexts[next];
+    const controls = restore ? restore.controls : defaults;
+    Object.keys(defaults).forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      const value = controls[id] == null ? defaults[id] : controls[id];
+      if (id === "ab-sync") el.checked = !!value;
+      else el.value = value;
+    });
+    state.abJob = restore ? restore.job : "";
+    ab.wipe = restore ? restore.wipe : 50;
+    abApplyMode();
+    abApplyPlaybackRate();
+  }
 
   function abMakeSide(key) {
     return {
@@ -12704,8 +12752,8 @@
   }
 
   function abIsStandalone() {
-    const card = $("ab-card");
-    return !(card && card.classList.contains("is-nerd"));
+    // Nicht vom erst nach dem Seitenwechsel aktualisierten CSS ableiten.
+    return ab.context !== "nerd";
   }
 
   function abSyncSourceUi() {
@@ -13298,7 +13346,10 @@
           enableWorker: true, lowLatencyMode: false,
           maxBufferLength: maxBuf, maxMaxBufferLength: maxBuf + 20,
           backBufferLength: Infinity, startPosition: 0, liveDurationInfinity: false,
-          liveMaxLatencyDurationCount: Infinity, maxLiveSyncPlaybackRate: 1,
+          // hls.js 1.5.x validiert das Paar vor dem Zusammenführen mit Defaults.
+          // Kein Live-Edge-Nachziehen: der A/B-Vergleich hält seine Filmposition.
+          liveSyncDurationCount: 3, liveMaxLatencyDurationCount: Infinity,
+          maxLiveSyncPlaybackRate: 1,
         });
         // Vor loadSource/attachMedia anmelden, damit auch der erste Anker
         // vor der gemeinsamen Seek-Barriere sicher erfasst wird.
@@ -13438,10 +13489,12 @@
     if (!box) return;
     ab.weak = null;
     if (!state.abJob) { box.style.display = "none"; box.innerHTML = ""; return; }
+    const job = state.abJob, loadSeq = ab.loadSeq, context = ab.context;
     let d = null;
     try {
-      d = await (await fetch(`/api/compare/weak-spots?job=${encodeURIComponent(state.abJob)}`)).json();
+      d = await (await fetch(`/api/compare/weak-spots?job=${encodeURIComponent(job)}`)).json();
     } catch (e) { d = null; }
+    if (ab.loadSeq !== loadSeq || ab.context !== context || state.abJob !== job) return;
     if (!d || !(d.spots || []).length) { box.style.display = "none"; box.innerHTML = ""; return; }
     ab.weak = d;
     const chips = d.spots.map((sp, i) =>
@@ -13465,7 +13518,7 @@
 
   async function abUnload(clearPaths) {
     ab.closing = true;
-    ab.loadSeq += 1;
+    const unloadSeq = ++ab.loadSeq;
     abPauseBoth();
     const jobs = [];
     ["a", "b"].forEach((key) => {
@@ -13499,7 +13552,7 @@
       side.encodePauseTask = null;
       abUpdateSideBadge(key);
     });
-    if (clearPaths) {
+    if (clearPaths && abIsStandalone()) {
       if ($("ab-path-a")) $("ab-path-a").value = "";
       if ($("ab-path-b")) $("ab-path-b").value = "";
     }
@@ -13517,7 +13570,7 @@
     abSyncSideLookUi("a");
     abSyncSideLookUi("b");
     await Promise.all(jobs);
-    if (ab.closing) abSetStatus(tt("Video entladen."));
+    if (ab.closing && ab.loadSeq === unloadSeq) abSetStatus(tt("Video entladen."));
   }
 
   function initAbCompare() {
@@ -13542,6 +13595,7 @@
     });
 
     load.addEventListener("click", async () => {
+      if (!abIsStandalone()) return;
       const loadSeq = abBeginLoad();
       const seq = ab.controlSeq;
       const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
@@ -13796,12 +13850,15 @@
       openFilePickerModal({
         title: `Video ${which.toUpperCase()} wählen`,
         onPick: async (f) => {
+          if (!abIsStandalone()) return;
+          const loadSeq = ab.loadSeq;
           $("ab-path-" + which).value = f.rel;
           const rootEl = $("ab-root-" + which);
           if (rootEl) rootEl.value = "media";
           state.abJob = "";  // manuelle Wahl → keine Job-Schwachstellen mehr
           try {
             const pr = await (await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`)).json();
+            if (!abIsStandalone() || ab.loadSeq !== loadSeq || $("ab-path-" + which).value !== f.rel) return;
             if (pr && !pr.error) {
               if (ab.sides[which]) ab.sides[which].info = pr;
               const same = !!($("ab-same-source") && $("ab-same-source").checked);
