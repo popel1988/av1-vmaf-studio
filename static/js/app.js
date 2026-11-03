@@ -3142,13 +3142,22 @@
       document.body.appendChild(tip);
     }
     let showTimer = 0;
+    let hideTimer = 0;
     let current = null;
 
     const hide = () => {
       clearTimeout(showTimer);
+      clearTimeout(hideTimer);
       showTimer = 0;
+      hideTimer = 0;
+      if (current) {
+        const ids = (current.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== tip.id);
+        if (ids.length) current.setAttribute("aria-describedby", ids.join(" "));
+        else current.removeAttribute("aria-describedby");
+      }
       tip.hidden = true;
       tip.textContent = "";
+      tip.classList.remove("is-rich");
       current = null;
     };
     const place = (el) => {
@@ -3165,31 +3174,56 @@
     };
     const show = (el) => {
       const raw = (el.getAttribute("data-tip") || "").trim();
-      if (!raw) return;
+      if (!raw || el.isConnected === false) return;
+      hide();
       current = el;
-      tip.textContent = tt(raw);
+      // Nur unsere intern erzeugte, escapte Vorlage übernehmen; kein HTML
+      // aus data-tip/title oder beliebigen API-Zeichenketten interpretieren.
+      const rich = el.getAttribute("data-tip-rich") === "ssimulacra2"
+        ? el.querySelector("template.ui-tip-content") : null;
+      if (rich && rich.content) {
+        tip.appendChild(rich.content.cloneNode(true));
+        tip.classList.add("is-rich");
+      } else tip.textContent = tt(raw);
+      const ids = (el.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+      if (!ids.includes(tip.id)) ids.push(tip.id);
+      el.setAttribute("aria-describedby", ids.join(" "));
       tip.hidden = false;
+      tip.scrollTop = 0;
       place(el);
     };
 
     document.addEventListener("pointerover", (e) => {
       const el = e.target.closest && e.target.closest("[data-tip]");
-      if (!el || el === current) return;
+      if (!el) return;
+      clearTimeout(hideTimer);
+      if (el === current) return;
       clearTimeout(showTimer);
       showTimer = setTimeout(() => show(el), 260);
     });
     document.addEventListener("pointerout", (e) => {
       const el = e.target.closest && e.target.closest("[data-tip]");
       if (!el) return;
-      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
-      if (el === current || showTimer) hide();
+      if (e.relatedTarget && (el.contains(e.relatedTarget) || tip.contains(e.relatedTarget))) return;
+      if (el === current && tip.classList.contains("is-rich")) {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(hide, 140); // Maus darf den Abstand zum Tooltip überqueren.
+      } else if (el === current || showTimer) hide();
     });
     document.addEventListener("focusin", (e) => {
       const el = e.target.closest && e.target.closest("[data-tip]");
       if (el) { clearTimeout(showTimer); show(el); }
     });
     document.addEventListener("focusout", hide);
-    window.addEventListener("scroll", hide, true);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+    tip.addEventListener("pointerenter", () => { clearTimeout(hideTimer); });
+    tip.addEventListener("pointerleave", (e) => {
+      if (!current || (e.relatedTarget && current.contains(e.relatedTarget))) return;
+      hide();
+    });
+    window.addEventListener("scroll", (e) => {
+      if (!tip.contains(e.target)) hide(); // Lange Szenenlisten im Tooltip selbst scrollbar.
+    }, true);
     window.addEventListener("resize", hide);
   }
 
@@ -5486,91 +5520,125 @@
     return { cls, text: x.toFixed(1), word };
   }
 
-  function ssimulacra2BreakdownLines(r) {
-    const lines = [];
+  // Tooltip-Einzelwerte unabhängig vom Minimum einfärben. Die Warnlogik der
+  // äußeren Pille bleibt unverändert; ein guter Mittelwert darf grün bleiben,
+  // während ein schwaches Einzelbild daneben rot sichtbar ist.
+  function ssimulacra2ValuePill(label, value) {
+    const n = value == null ? NaN : Number(value);
+    const valid = Number.isFinite(n);
+    const cls = !valid ? "" : (n < 50 ? "bad" : (n < 70 ? "warn" : (n >= 85 ? "good" : "")));
+    const word = !valid ? "Nicht gemessen" : (n < 50 ? "deutlich schlechter"
+      : (n < 70 ? "sichtbare Verluste" : (n < 85 ? "sehr gut" : "kaum unterscheidbar")));
+    const score = valid ? vmafLowNumber(n, 1) : "—";
+    return `<span class="metric-pill s2-tip-value ${cls}">${escapeHtml(label)}: ${score}`
+      + ` <span class="s2-tip-rating">· ${escapeHtml(tt(word))}</span></span>`;
+  }
+
+  function ssimulacra2TooltipHtml(r) {
+    const text = (s) => escapeHtml(tt(s));
+    let html = `<div class="s2-tip"><strong>SSIMULACRA2</strong>`
+      + `<div class="s2-tip-values">${ssimulacra2ValuePill(tt("Gesamtmittel"), r.ssimulacra2)}`
+      + (r.ssimulacra2_min != null ? ssimulacra2ValuePill(tt("Schwächstes Bild"), r.ssimulacra2_min) : "") + `</div>`;
     (r.scene_scores || []).forEach((sc) => {
-      if (sc.ssimulacra2 == null) return;
-      const vals = Array.isArray(sc.ssimulacra2_scores) && sc.ssimulacra2_scores.length
-        ? sc.ssimulacra2_scores.map((v, i) => `B${i + 1}: ${Number(v).toFixed(1)}`).join(", ")
-        : (sc.ssimulacra2_min != null ? `min ${Number(sc.ssimulacra2_min).toFixed(1)}` : "");
-      lines.push(`Szene ${sc.scene + 1}: Ø ${Number(sc.ssimulacra2).toFixed(1)}${vals ? ` (${vals})` : ""}`);
+      const scores = Array.isArray(sc.ssimulacra2_scores) ? sc.ssimulacra2_scores : [];
+      if (sc.ssimulacra2 == null && !scores.length && sc.ssimulacra2_min == null) return;
+      html += `<section class="s2-tip-scene"><strong>${text(`Szene ${Number(sc.scene) + 1}`)}</strong>`
+        + `<div class="s2-tip-values">${ssimulacra2ValuePill(tt("Szenenmittel"), sc.ssimulacra2)}</div>`;
+      if (scores.length) {
+        html += `<div class="s2-tip-values">` + scores.map((v, i) =>
+          ssimulacra2ValuePill(tt(`Bild ${i + 1}`), v)).join("") + `</div>`;
+      } else if (sc.ssimulacra2_min != null) {
+        html += `<div class="s2-tip-values">${ssimulacra2ValuePill(tt("Schwächstes Bild"), sc.ssimulacra2_min)}</div>`;
+      }
+      html += `</section>`;
     });
-    return lines;
+    return html + `<p class="s2-tip-note">${text("Standbild-Vergleich: Höher bedeutet näher am Original. Die Farbe bewertet jeden Wert einzeln, nicht die gesamte Szene.")}</p>`
+      + `<p class="s2-tip-note">${text("Nur zur Orientierung; ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich. Die Empfehlung bleibt beim VMAF.")}</p></div>`;
   }
 
   function ssimulacra2Pill(r) {
     if (r.ssimulacra2 == null) return "";
     const m = ssimulacra2Mark(r.ssimulacra2, r.ssimulacra2_min);
     const mn = r.ssimulacra2_min != null ? ` (min ${Number(r.ssimulacra2_min).toFixed(1)})` : "";
-    const breakdown = ssimulacra2BreakdownLines(r);
-    const tip = [
-      `SSIMULACRA2 ${m.text}${mn} – ${m.word}.`,
-      ...(breakdown.length ? ["", ...breakdown, ""] : []),
-      "Standbild-Vergleich (Skala bis 100, höher = näher an der Quelle):",
-      "≥ 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbare Verluste · < 50 deutlich schlechter.",
-      "Fällt ein einzelnes Standbild unter 50, wird trotz gutem Mittelwert vor dem Einbruch gewarnt.",
-    ].join("\n");
-    return `<span class="metric-pill ${m.cls}" title="${escapeHtml(tip)}">SSIMULACRA2 ${m.text}${mn} · ${m.word}</span>`;
+    return `<span class="metric-pill ${m.cls}" tabindex="0" data-tip="${escapeHtml(tt("SSIMULACRA2 – Szenen und Einzelbilder"))}" data-tip-rich="ssimulacra2">`
+      + `SSIMULACRA2 ${m.text}${mn} · ${escapeHtml(tt(m.word))}`
+      + `<template class="ui-tip-content">${ssimulacra2TooltipHtml(r)}</template></span>`;
   }
 
-  // Nur Erläuterung: keine neue Freigaberegel, keine Auswertung der Graph-Minima.
-  function vmafLowContextLines(sc, series, floor) {
+  // Nur Einordnung: 5%/10% gehen NICHT in Empfehlung, Floor oder Score ein.
+  // Neue Werte ausschließlich aus vollständigen Logs, nie aus der Graphkurve.
+  function vmafLowContextData(sc, series, floor) {
     const meta = (series && series.low_context) || {};
-    const count = Number(meta.count || (series && series.count) || sc.frame_count) || 0;
-    const k = count > 0 ? Math.max(1, Math.floor(count * 0.01)) : 0;
-    const seconds = Number(meta.scored_seconds || sc.scored_seconds) || 0;
-    const lines = [];
-    if (count > 0) {
-      lines.push(`1%-Low: Mittel der ${k} schlechtesten von ${count} bewerteten Frames`
-        + (seconds > 0 ? ` aus ca. ${seconds.toFixed(2)} s bewerteter Dauer.` : "."));
-      if (k === 1) {
-        lines.push("Hier bestimmt ein einziges Bild das Low. Das ist ein Extremwert, keine Aussage über einen anhaltenden Qualitätsverlust.");
-        if (count < 100) lines.push(`Bei dieser kurzen Framebasis entspricht das eine Bild ${(100 / count).toFixed(1)} % der Stichprobe: Es wird immer mindestens ein Frame verwendet.`);
-      } else if (k < 10) lines.push(`Hier bestimmen nur ${k} Extremframes das Low. Sie müssen nicht zusammenhängen; einzelne Ausreißer haben viel Gewicht.`);
-      else lines.push("Die schlechtesten Frames müssen nicht zusammenhängen. Auch ein Low aus vielen Bildern beschreibt keine zusammenhängende Dauer.");
-    } else {
-      lines.push("Die Anzahl bewerteter Frames fehlt. Aus den Tiefstwerten der verkürzten Graphkurve lässt sich die Framebasis nicht bestimmen.");
-    }
-    if (sc.idle) {
-      lines.push("Diese Szene zählt nicht zur Empfehlung; ihr Low löst keinen Ausschluss aus.");
-      return lines;
-    }
-    if (floor == null) {
-      lines.push("Low-Floor ausgeschaltet: Das Low ist informativ und kein Mindestkriterium der Empfehlung.");
-      return lines;
-    }
-    const p1 = sc.p1 == null ? NaN : Number(sc.p1);
-    if (Number.isFinite(p1)) {
-      lines.push(p1 + 1e-9 < floor
-        ? `Low-Kriterium nicht erfüllt: ${p1.toFixed(2)} unter Grenze ${floor.toFixed(2)}. Das ist ein Warnsignal, kein Nachweis sichtbar schlechter Qualität.`
-        : `Low-Kriterium erfüllt: ${p1.toFixed(2)} bei Grenze ${floor.toFixed(2)}. Das garantiert nicht, dass Verluste unsichtbar sind.`);
-    }
+    const rawCount = Number(meta.count || (series && series.count) || sc.frame_count);
+    const count = Number.isInteger(rawCount) && rawCount > 0 ? rawCount : 0;
+    const rawSeconds = Number(meta.scored_seconds || sc.scored_seconds);
+    const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0 ? rawSeconds : 0;
     const frames = (series && series.frames) || [];
-    if (!(count > 0) || frames.length !== count
-        || frames.some((f) => f.vmaf == null || !Number.isFinite(Number(f.vmaf)))) {
-      lines.push("Häufigkeit und Dauer benötigen das vollständige Frame-Log; aus der verkürzten Kurve wird nichts hochgerechnet.");
-      return lines;
-    }
-    let under = 0, longest = 0, run = 0, previous = null;
-    frames.forEach((f, i) => {
+    const scores = frames.map((f) => {
+      const value = f.vmaf_raw == null ? f.vmaf : f.vmaf_raw;
+      return value == null ? NaN : Number(value);
+    });
+    const complete = count > 0 && frames.length === count && scores.every(Number.isFinite);
+    const ordered = complete ? [...scores].sort((a, b) => a - b) : [];
+    const storedP1 = sc.p1 == null ? NaN : Number(sc.p1);
+    const lows = [1, 5, 10].map((percent) => {
+      const n = count ? Math.max(1, Math.floor(count * (percent / 100))) : 0;
+      const value = percent === 1 && Number.isFinite(storedP1) ? storedP1
+        : (complete ? ordered.slice(0, n).reduce((sum, score) => sum + score, 0) / n : null);
+      return { percent, count: n, value };
+    });
+    let under = 0, longest = 0, run = 0, runs = 0, previous = null;
+    if (complete && floor != null) frames.forEach((f, i) => {
       const n = f.n == null ? i : Number(f.n);
-      const score = f.vmaf_raw == null ? Number(f.vmaf) : Number(f.vmaf_raw);
-      if (score < floor) {
+      if (scores[i] < floor) {
+        const continues = run > 0 && previous != null && n === previous + 1;
+        if (!continues) runs++;
+        run = continues ? run + 1 : 1;
         under++;
-        run = previous != null && n === previous + 1 ? run + 1 : 1;
         longest = Math.max(longest, run);
       } else run = 0;
       previous = n;
     });
-    if (!under) {
-      lines.push("Kein bewerteter Frame liegt unter dieser Grenze.");
+    return { count, seconds, complete, lows, under, longest, runs,
+      longestSeconds: seconds && complete ? longest * seconds / count : null };
+  }
+
+  function vmafLowNumber(value, digits = 2) {
+    const fixed = Number(value).toFixed(digits);
+    return typeof window !== "undefined" && window.I18N && window.I18N.lang === "en"
+      ? fixed : fixed.replace(".", ",");
+  }
+
+  function vmafLowContextLines(sc, series, floor, data = vmafLowContextData(sc, series, floor)) {
+    if (sc.idle) return ["Diese Szene zählt nicht zur Empfehlung."];
+    if (floor == null) return ["Low-Grenze ausgeschaltet; die Low-Werte dienen nur zur Information."];
+    if (!data.complete) return ["5%-/10%-Low und Abschnitte unter der Grenze benötigen das vollständige Frame-Log."];
+    const { under, count, longest, longestSeconds, runs } = data;
+    if (!under) return ["Kein bewerteter Frame liegt unter der Grenze."];
+    const length = `${longest} Frame${longest === 1 ? "" : "s"}`
+      + (longestSeconds != null ? ` (ca. ${vmafLowNumber(longestSeconds)} s)` : "");
+    const lines = [`Unter Grenze ${vmafLowNumber(floor)}: ${under} von ${count} Frames (${vmafLowNumber(under / count * 100, 1)} %) · längster Abschnitt: ${length}.`];
+    // Beschreibt die zeitliche Verteilung, nicht die Sichtbarkeit/Qualität.
+    if (under === count && runs === 1 && longest > 1) {
+      lines.push("Die gesamte bewertete Szene liegt unter der Grenze, nicht nur eine einzelne Stelle.");
+    } else if (longest === 1) {
+      lines.push(under === 1 ? "Ein einzelnes Bild liegt unter der Grenze; kein anhaltender Abschnitt."
+        : "Nur einzelne Bilder liegen unter der Grenze, keine direkt aufeinanderfolgenden.");
+    } else if (longestSeconds == null) {
+      lines.push(runs === 1 ? "Ein zusammenhängender Abschnitt; die Dauer ist mangels Zeitangabe unbekannt."
+        : "Mehrere Abschnitte; ihre Dauer ist mangels Zeitangabe unbekannt.");
+    } else if (longestSeconds <= 0.25) {
+      lines.push(runs === 1 ? "Ein sehr kurzer Abschnitt. Diese Stelle gezielt im A/B-Vergleich prüfen."
+        : "Mehrere sehr kurze Abschnitte, jeweils höchstens etwa eine Viertelsekunde.");
+    } else if (longestSeconds < 1) {
+      lines.push(runs === 1 ? "Ein kurzer Abschnitt von weniger als einer Sekunde. Im A/B-Vergleich prüfen."
+        : "Mehrere kurze Abschnitte, jeweils unter einer Sekunde; nicht nur einzelne Bilder.");
+    } else if (longestSeconds < 3) {
+      lines.push(runs === 1 ? "Die Unterschreitung hält mindestens eine Sekunde an, nicht nur wenige Bilder."
+        : "Mehrere Abschnitte; mindestens einer dauert eine Sekunde oder länger.");
     } else {
-      lines.push(`${under} von ${count} Frames (${(under / count * 100).toFixed(1)} %) unter dieser Grenze; längste Folge: ${longest} Frame${longest === 1 ? "" : "s"}`
-        + (seconds > 0 ? ` (ca. ${(longest * seconds / count).toFixed(2)} s).` : "."));
-      if (longest === 1) lines.push("Nur einzelne Unterschreitungen, keine direkt aufeinanderfolgenden. Auch Einzelbilder können etwa als Flackern auffallen.");
-      else if (longest === under) lines.push("Die Unterschreitungen liegen in einem zusammenhängenden Abschnitt. Diese Stelle gezielt im A/B-Vergleich prüfen.");
-      else lines.push("Es gibt zusammenhängende Unterschreitungen und weitere schwache Frames. Die längste Folge beschreibt nur einen Teil davon.");
-      if (Number.isFinite(p1) && p1 + 1e-9 >= floor) lines.push("Trotz erfülltem Low-Kriterium liegen Frames unter der Grenze: Das Low ist ein Mittelwert, kein Einzelbild-Minimum.");
+      lines.push(runs === 1 ? "Ein längerer Abschnitt von mindestens drei Sekunden, kein kurzer Ausreißer."
+        : "Mehrere Abschnitte; der längste dauert mindestens drei Sekunden.");
     }
     return lines;
   }
@@ -5587,25 +5655,41 @@
     const gap = vmafP1GapValue();
     const anchor = vmafP1Anchor();
     const floor = vmafSceneFloor(r, lo, gap, anchor);
-    const lines = [];
-    if (floor != null) {
-      const rule = anchor === "mean" ? "Gesamtmittel − Abstand"
-        : (anchor === "target" ? "Ziel − Abstand" : "höhere Grenze aus Ziel − Abstand und Gesamtmittel − Abstand");
-      lines.push(`Verwendete Low-Grenze: ${floor.toFixed(2)} (${rule}; Abstand ${gap}).`);
-      if (anchor === "both" && Number(r.vmaf) > lo) lines.push("Hier hebt das Gesamtmittel die Grenze über Ziel − Abstand an. Sehr gute andere Szenen können die Konsistenzanforderung an die schwächste Szene verschärfen.");
-    }
-    const miss = vmafResultMiss(r, lo, gap);
-    if (r.recommended && miss) lines.push("Als Kompromiss empfohlen: Nicht alle Zielkriterien sind erfüllt. Die Kontextangaben ändern die Auswahlregel nicht.");
-    let html = lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+    const rule = anchor === "mean" ? "Gesamtmittel − Abstand"
+      : (anchor === "target" ? "Ziel − Abstand" : "höhere Grenze aus Ziel − Abstand und Gesamtmittel − Abstand");
+    const tip = `${rule}; Abstand ${gap}.`
+      + (anchor === "both" && Number(r.vmaf) > lo ? " Hier hebt das Gesamtmittel die Grenze über Ziel − Abstand an." : "");
+    let html = `<p class="vmaf-low-limit" title="${escapeHtml(tip)}">Low-Grenze: <strong>${vmafLowNumber(floor)}</strong></p>`;
+    if (r.recommended && vmafResultMiss(r, lo, gap)) html += `<p>Als Kompromiss empfohlen; nicht alle Zielkriterien erfüllt.</p>`;
     scenes.forEach((sc) => {
       const pack = packs.get(sc.scene);
       const series = pack && (pack.series || []).find((s) => s.label === (r.label || ""));
-      const text = vmafLowContextLines(sc, series, floor);
-      if (packs.has(sc.scene) && !series) text.push("Das Frame-Log dieser Einstellung fehlt im Archiv oder konnte nicht geladen werden. Erneutes Öffnen versucht den Abruf nochmals.");
+      const data = vmafLowContextData(sc, series, floor);
+      const text = packs.has(sc.scene) && !series
+        ? ["Frame-Log nicht verfügbar. Erneutes Öffnen versucht den Abruf nochmals."]
+        : vmafLowContextLines(sc, series, floor, data);
+      const metrics = data.lows.map((low) => {
+        const value = low.value == null ? "—" : vmafLowNumber(low.value);
+        const basis = data.count ? `${low.count} von ${data.count} Frames` : "Frameanzahl unbekannt";
+        const explanation = `Durchschnitt der schlechtesten ${low.percent} % der bewerteten Frames, abgerundet auf mindestens ein Bild. `
+          + (low.percent === 1 ? "Empfindlich für einzelne Ausreißer; dieser Low-Wert zählt für die Empfehlung."
+            : "Bezieht mehr schwache Frames ein. Nur Zusatzinformation, kein Empfehlungskriterium.");
+        return `<div title="${escapeHtml(explanation)}"><strong>${low.percent}%-Low: ${value}</strong><span>${basis}</span></div>`;
+      }).join("");
       html += `<section><strong>Szene ${Number(sc.scene) + 1}</strong>`
+        + `<div class="vmaf-low-metrics">${metrics}</div>`
         + text.map((line) => `<p>${escapeHtml(line)}</p>`).join("") + `</section>`;
     });
-    return html + `<p>Die Angaben beschreiben nur die getesteten Ausschnitte, nicht den gesamten Film. Hohe Originalbitrate allein beweist weder sichtbare Verluste noch deren Unbedenklichkeit. Sekunden sind Näherungen aus dem bewerteten Fenster, nicht aus der nominellen Cliplänge. Empfehlungslogik unverändert.</p>`;
+    return html + `<details class="vmaf-low-help"><summary>Was bedeuten die Werte?</summary>`
+      + `<p>Alle Low-Werte sind Durchschnitte der jeweils schlechtesten Frames, keine Perzentil-Grenzwerte. Höher bedeutet näher am Original.</p>`
+      + `<p><strong>1%-Low:</strong> die schwächsten 1 %; empfindlich für einzelne Ausreißer. Nur dieser Low-Wert zählt für die Empfehlung. `
+      + `<strong>5%-Low:</strong> die schwächsten 5 %; bezieht mehr Bilder ein. `
+      + `<strong>10%-Low:</strong> die schwächsten 10 %; zeigt einen noch größeren Teil der schwächeren Bilder. 5 % und 10 % dienen nur zur Einordnung.</p>`
+      + `<p>Die Gruppen überlappen und werden nicht addiert. Die Frameanzahl wird abgerundet, mindestens ein Bild; bei kurzen Clips können deshalb mehrere Low-Werte identisch sein. Die ausgewählten Bilder müssen nicht zusammenhängen.</p>`
+      + `<p><strong>Unter Grenze:</strong> Anzahl und Anteil aller Frames unter der Low-Grenze. `
+      + `<strong>Längster Abschnitt:</strong> die längste ununterbrochene Folge darunter, nicht die Summe aller Unterschreitungen. Sekunden sind Näherungen aus der bewerteten Szenendauer.</p>`
+      + `<p>Berechnung der Low-Grenze: ${escapeHtml(tip)}</p></details>`
+      + `<p class="vmaf-low-note">Nur zur Einordnung der getesteten Szenen. Ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich.</p>`;
   }
 
   // Pro sichtbarem Analyseobjekt und Szene teilen sich die Ergebniszeilen einen Abruf.

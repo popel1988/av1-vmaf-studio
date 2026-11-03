@@ -1028,6 +1028,18 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   pointer-events: none;
   white-space: pre-wrap;
 }
+.ui-tip.is-rich {
+  max-width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow-y: auto; overscroll-behavior: contain;
+  pointer-events: auto; white-space: normal; overflow-wrap: anywhere;
+}
+.s2-tip-scene { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+.s2-tip-values { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.s2-tip-values .metric-pill { margin: 0; vertical-align: baseline; }
+.s2-tip-rating { font-weight: 400; font-size: 10.5px; }
+.s2-tip-note { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); }
+[data-tip-rich]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [data-tip] { cursor: help; }
 button[data-tip], .btn[data-tip] { cursor: pointer; }
 label[data-tip], th[data-tip], .chip[data-tip], .lib-dash-title[data-tip] {
@@ -1922,6 +1934,12 @@ input[type="range"]::-moz-range-thumb {
 .vmaf-low-body p { margin: 5px 0; }
 .vmaf-low-body section { margin-top: 10px; }
 .vmaf-low-body strong { color: var(--text); }
+.vmaf-low-metrics { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.vmaf-low-metrics > div { display: flex; flex-direction: column; }
+.vmaf-low-metrics strong { white-space: nowrap; }
+.vmaf-low-help { margin-top: 10px; }
+.vmaf-low-help > summary { cursor: pointer; }
+.vmaf-low-note { font-size: 11px; }
 .vmaf-table-wrap input[type="checkbox"] { margin: 2px 0 0; }
 .vmaf-chart-scenes { flex-wrap: wrap; margin: 0 0 8px; }
 .vmaf-chart-scenes:empty { display: none; }

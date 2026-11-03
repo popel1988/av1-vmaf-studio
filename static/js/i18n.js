@@ -5419,6 +5419,129 @@
     [/^abgebrochen$/, function () { return "annulé"; }]
   ];
 
+  // Low-Kontext: Textknoten (auch zwischen <strong>-Elementen) und Tooltips.
+  // Gemeinsam gepflegte Schlüssel, damit EN/ES/FR denselben Umfang abdecken.
+  var LOW_CONTEXT_TEXTS = {
+    "1%-Low einordnen": ["Understand the 1% low", "Interpretar la media del peor 1 %", "Comprendre la moyenne du pire 1 %"],
+    "Was bedeuten die Werte?": ["What do these values mean?", "¿Qué significan estos valores?", "Que signifient ces valeurs ?"],
+    "Low-Grenze:": ["Low threshold:", "Umbral de la media baja:", "Seuil de la moyenne basse :"],
+    "Frameanzahl unbekannt": ["Frame count unknown", "Número de fotogramas desconocido", "Nombre d’images inconnu"],
+    "1%-Low:": ["1% low:", "Media del peor 1 %:", "Moyenne du pire 1 % :"],
+    "5%-Low:": ["5% low:", "Media del peor 5 %:", "Moyenne du pire 5 % :"],
+    "10%-Low:": ["10% low:", "Media del peor 10 %:", "Moyenne du pire 10 % :"],
+    "Unter Grenze:": ["Below threshold:", "Por debajo del umbral:", "Sous le seuil :"],
+    "Längster Abschnitt:": ["Longest stretch:", "Tramo más largo:", "Séquence la plus longue :"],
+    "Diese Szene zählt nicht zur Empfehlung.": ["This scene is not used for the recommendation.", "Esta escena no se utiliza para la recomendación.", "Cette scène n’est pas prise en compte dans la recommandation."],
+    "Low-Grenze ausgeschaltet; die Low-Werte dienen nur zur Information.": ["Low threshold disabled; the low values are informational only.", "Umbral desactivado; las medias bajas son solo informativas.", "Seuil désactivé ; les moyennes basses sont uniquement indicatives."],
+    "5%-/10%-Low und Abschnitte unter der Grenze benötigen das vollständige Frame-Log.": ["The 5%/10% lows and stretches below the threshold require the complete frame log.", "Las medias del peor 5 % y 10 % y los tramos bajo el umbral requieren el registro completo de fotogramas.", "Les moyennes des pires 5 % et 10 % et les séquences sous le seuil nécessitent le journal complet des images."],
+    "Kein bewerteter Frame liegt unter der Grenze.": ["No scored frame is below the threshold.", "Ningún fotograma evaluado está por debajo del umbral.", "Aucune image évaluée n’est sous le seuil."],
+    "Die gesamte bewertete Szene liegt unter der Grenze, nicht nur eine einzelne Stelle.": ["The entire scored scene is below the threshold, not just one part.", "Toda la escena evaluada está por debajo del umbral, no solo un punto concreto.", "Toute la scène évaluée est sous le seuil, pas seulement un passage."],
+    "Ein einzelnes Bild liegt unter der Grenze; kein anhaltender Abschnitt.": ["One frame is below the threshold; there is no sustained stretch.", "Un solo fotograma está por debajo del umbral; no hay un tramo sostenido.", "Une seule image est sous le seuil ; il ne s’agit pas d’une séquence prolongée."],
+    "Nur einzelne Bilder liegen unter der Grenze, keine direkt aufeinanderfolgenden.": ["Only isolated frames are below the threshold, none consecutive.", "Solo hay fotogramas aislados por debajo del umbral, ninguno consecutivo.", "Seules des images isolées sont sous le seuil, aucune consécutive."],
+    "Ein zusammenhängender Abschnitt; die Dauer ist mangels Zeitangabe unbekannt.": ["One continuous stretch; its duration is unknown because timing data is missing.", "Un tramo continuo; su duración se desconoce por falta de datos de tiempo.", "Une séquence continue ; sa durée est inconnue faute de données temporelles."],
+    "Mehrere Abschnitte; ihre Dauer ist mangels Zeitangabe unbekannt.": ["Several stretches; their duration is unknown because timing data is missing.", "Varios tramos; su duración se desconoce por falta de datos de tiempo.", "Plusieurs séquences ; leur durée est inconnue faute de données temporelles."],
+    "Ein sehr kurzer Abschnitt. Diese Stelle gezielt im A/B-Vergleich prüfen.": ["One very short stretch. Check this specific part in the A/B comparison.", "Un tramo muy breve. Comprobar ese punto en la comparación A/B.", "Une séquence très brève. Vérifier ce passage précis dans la comparaison A/B."],
+    "Mehrere sehr kurze Abschnitte, jeweils höchstens etwa eine Viertelsekunde.": ["Several very short stretches, each at most about a quarter of a second.", "Varios tramos muy breves, cada uno de aproximadamente un cuarto de segundo como máximo.", "Plusieurs séquences très brèves, chacune d’environ un quart de seconde au maximum."],
+    "Ein kurzer Abschnitt von weniger als einer Sekunde. Im A/B-Vergleich prüfen.": ["One short stretch lasting less than a second. Check it in the A/B comparison.", "Un tramo breve de menos de un segundo. Comprobarlo en la comparación A/B.", "Une courte séquence de moins d’une seconde. À vérifier dans la comparaison A/B."],
+    "Mehrere kurze Abschnitte, jeweils unter einer Sekunde; nicht nur einzelne Bilder.": ["Several short stretches, each under a second; not just isolated frames.", "Varios tramos breves, cada uno de menos de un segundo; no solo fotogramas aislados.", "Plusieurs courtes séquences, chacune de moins d’une seconde ; pas seulement des images isolées."],
+    "Die Unterschreitung hält mindestens eine Sekunde an, nicht nur wenige Bilder.": ["The values stay below the threshold for at least a second, not just a few frames.", "Los valores permanecen bajo el umbral al menos un segundo, no solo unos pocos fotogramas.", "Les valeurs restent sous le seuil pendant au moins une seconde, pas seulement quelques images."],
+    "Mehrere Abschnitte; mindestens einer dauert eine Sekunde oder länger.": ["Several stretches; at least one lasts a second or longer.", "Varios tramos; al menos uno dura un segundo o más.", "Plusieurs séquences ; au moins une dure une seconde ou plus."],
+    "Ein längerer Abschnitt von mindestens drei Sekunden, kein kurzer Ausreißer.": ["One longer stretch lasting at least three seconds, not a brief outlier.", "Un tramo más largo de al menos tres segundos, no una desviación breve.", "Une séquence plus longue d’au moins trois secondes, pas un bref écart isolé."],
+    "Mehrere Abschnitte; der längste dauert mindestens drei Sekunden.": ["Several stretches; the longest lasts at least three seconds.", "Varios tramos; el más largo dura al menos tres segundos.", "Plusieurs séquences ; la plus longue dure au moins trois secondes."],
+    "Als Kompromiss empfohlen; nicht alle Zielkriterien erfüllt.": ["Recommended as a compromise; not all target criteria are met.", "Recomendado como compromiso; no se cumplen todos los criterios objetivo.", "Recommandé comme compromis ; tous les critères cibles ne sont pas remplis."],
+    "Frame-Log nicht verfügbar. Erneutes Öffnen versucht den Abruf nochmals.": ["Frame log unavailable. Reopen to retry loading it.", "Registro de fotogramas no disponible. Volver a abrir para reintentar la carga.", "Journal des images indisponible. Rouvrir pour réessayer le chargement."],
+    "Vollständige Frame-Logs sind erst für einen gespeicherten Vergleich verfügbar.": ["Complete frame logs are only available for a saved comparison.", "Los registros completos de fotogramas solo están disponibles para comparaciones guardadas.", "Les journaux complets des images ne sont disponibles que pour une comparaison enregistrée."],
+    "Vollständige Frame-Logs werden gelesen …": ["Reading complete frame logs…", "Leyendo los registros completos de fotogramas…", "Lecture des journaux complets des images…"],
+    "Alle Low-Werte sind Durchschnitte der jeweils schlechtesten Frames, keine Perzentil-Grenzwerte. Höher bedeutet näher am Original.": ["All low values are averages of the respective worst frames, not percentile cutoffs. Higher means closer to the original.", "Todas las medias bajas son promedios de los peores fotogramas de cada grupo, no límites de percentiles. Un valor mayor indica más similitud con el original.", "Toutes les moyennes basses sont des moyennes des pires images de chaque groupe, et non des seuils de percentile. Une valeur plus élevée indique une plus grande proximité avec l’original."],
+    "die schwächsten 1 %; empfindlich für einzelne Ausreißer. Nur dieser Low-Wert zählt für die Empfehlung.": ["the worst 1%; sensitive to individual outliers. Only this low value is used for the recommendation.", "el peor 1 %; sensible a desviaciones aisladas. Solo esta media baja se utiliza para la recomendación.", "le pire 1 % ; sensible aux écarts isolés. Seule cette moyenne basse intervient dans la recommandation."],
+    "die schwächsten 5 %; bezieht mehr Bilder ein.": ["the worst 5%; includes more frames.", "el peor 5 %; incluye más fotogramas.", "les pires 5 % ; inclut davantage d’images."],
+    "die schwächsten 10 %; zeigt einen noch größeren Teil der schwächeren Bilder. 5 % und 10 % dienen nur zur Einordnung.": ["the worst 10%; covers an even larger group of weaker frames. The 5% and 10% lows are for context only.", "el peor 10 %; abarca un grupo aún mayor de fotogramas débiles. Las medias del 5 % y 10 % solo aportan contexto.", "les pires 10 % ; couvre un groupe encore plus large d’images faibles. Les moyennes à 5 % et 10 % servent uniquement de contexte."],
+    "Die Gruppen überlappen und werden nicht addiert. Die Frameanzahl wird abgerundet, mindestens ein Bild; bei kurzen Clips können deshalb mehrere Low-Werte identisch sein. Die ausgewählten Bilder müssen nicht zusammenhängen.": ["The groups overlap and are not added together. Frame counts are rounded down, with a minimum of one frame; several low values may therefore be identical for short clips. The selected frames need not be consecutive.", "Los grupos se solapan y no se suman. El número de fotogramas se redondea hacia abajo, con un mínimo de uno; por eso varias medias bajas pueden coincidir en clips cortos. Los fotogramas seleccionados no tienen que ser consecutivos.", "Les groupes se chevauchent et ne s’additionnent pas. Le nombre d’images est arrondi à l’entier inférieur, avec un minimum d’une image ; plusieurs moyennes basses peuvent donc être identiques pour les clips courts. Les images sélectionnées ne sont pas nécessairement consécutives."],
+    "Anzahl und Anteil aller Frames unter der Low-Grenze.": ["the count and percentage of all frames below the low threshold.", "número y porcentaje de todos los fotogramas por debajo del umbral.", "le nombre et le pourcentage de toutes les images sous le seuil."],
+    "die längste ununterbrochene Folge darunter, nicht die Summe aller Unterschreitungen. Sekunden sind Näherungen aus der bewerteten Szenendauer.": ["the longest uninterrupted sequence below the threshold, not the total of all dips. Seconds are estimates based on the scored scene duration.", "la secuencia ininterrumpida más larga bajo el umbral, no la suma de todas las caídas. Los segundos son estimaciones basadas en la duración evaluada de la escena.", "la plus longue suite ininterrompue sous le seuil, et non le cumul de toutes les baisses. Les secondes sont estimées à partir de la durée évaluée de la scène."],
+    "Nur zur Einordnung der getesteten Szenen. Ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich.": ["For context on the tested scenes only. Use the A/B comparison to judge whether the difference is visually distracting.", "Solo como contexto de las escenas probadas. La comparación A/B permite juzgar si la diferencia molesta visualmente.", "Uniquement pour situer les scènes testées. La comparaison A/B permet de juger si la différence gêne visuellement."],
+    "Low-Kriterium verfehlt": ["Low criterion not met", "Criterio de media baja no cumplido", "Critère de moyenne basse non rempli"],
+    "Mittelwertziel verfehlt": ["Mean target not met", "Objetivo de media no alcanzado", "Objectif de moyenne non atteint"],
+    "Zielkriterien verfehlt": ["Target criteria not met", "Criterios objetivo no cumplidos", "Critères cibles non remplis"],
+    "Ein verfehltes Low-Kriterium ist kein Nachweis sichtbar schlechter Qualität. „1%-Low einordnen“ unter der betroffenen Ergebniszeile erklärt Framebasis, Häufigkeit und Dauer.": ["A missed low criterion does not prove visibly poor quality. ‘Understand the 1% low’ below the affected result explains the frame counts, frequency and duration.", "No cumplir el criterio de media baja no demuestra una mala calidad visible. «Interpretar la media del peor 1 %», debajo del resultado afectado, explica el número de fotogramas, la frecuencia y la duración.", "Un critère de moyenne basse non rempli ne prouve pas une mauvaise qualité visible. « Comprendre la moyenne du pire 1 % », sous le résultat concerné, explique le nombre d’images, la fréquence et la durée."]
+  };
+  [DICT, DICT_ES, DICT_FR].forEach(function (dict, index) {
+    Object.keys(LOW_CONTEXT_TEXTS).forEach(function (key) { dict[key] = LOW_CONTEXT_TEXTS[key][index]; });
+  });
+
+  var S2_TOOLTIP_TEXTS = {
+    "SSIMULACRA2 – Szenen und Einzelbilder": ["SSIMULACRA2 – scenes and individual images", "SSIMULACRA2 – escenas e imágenes individuales", "SSIMULACRA2 – scènes et images individuelles"],
+    "Gesamtmittel": ["Overall mean", "Media global", "Moyenne globale"],
+    "Szenenmittel": ["Scene mean", "Media de la escena", "Moyenne de la scène"],
+    "Schwächstes Bild": ["Weakest image", "Imagen más débil", "Image la plus faible"],
+    "Nicht gemessen": ["Not measured", "Sin medir", "Non mesuré"],
+    "kaum unterscheidbar": ["barely distinguishable", "apenas distinguible", "à peine perceptible"],
+    "sehr gut": ["very good", "muy bueno", "très bon"],
+    "sichtbare Verluste": ["visible differences", "diferencias visibles", "différences visibles"],
+    "deutlich schlechter": ["noticeably worse", "claramente peor", "nettement moins bon"],
+    "Einbruch im Standbild": ["drop in a still image", "caída en una imagen fija", "baisse sur une image fixe"],
+    "gut (mit Ausreißer)": ["good (with an outlier)", "bueno (con una desviación aislada)", "bon (avec un écart isolé)"],
+    "schwach": ["weak", "débil", "faible"],
+    "sichtbar": ["visible differences", "diferencias visibles", "différences visibles"],
+    "Standbild-Vergleich: Höher bedeutet näher am Original. Die Farbe bewertet jeden Wert einzeln, nicht die gesamte Szene.": ["Still-image comparison: higher means closer to the original. Each value is colored separately, not the whole scene.", "Comparación de imágenes fijas: un valor mayor indica más similitud con el original. El color clasifica cada valor por separado, no la escena completa.", "Comparaison d’images fixes : une valeur plus élevée indique une plus grande proximité avec l’original. La couleur classe chaque valeur séparément, pas la scène entière."],
+    "Nur zur Orientierung; ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich. Die Empfehlung bleibt beim VMAF.": ["For guidance only; use the A/B comparison to judge whether the difference is visually distracting. Recommendations remain based on VMAF.", "Solo como orientación; la comparación A/B permite juzgar si la diferencia molesta visualmente. La recomendación sigue basándose en VMAF.", "À titre indicatif uniquement ; la comparaison A/B permet de juger si la différence gêne visuellement. La recommandation reste fondée sur VMAF."]
+  };
+  [DICT, DICT_ES, DICT_FR].forEach(function (dict, index) {
+    Object.keys(S2_TOOLTIP_TEXTS).forEach(function (key) { dict[key] = S2_TOOLTIP_TEXTS[key][index]; });
+  });
+
+  function lowContextRules(language) {
+    var en = language === "en", es = language === "es";
+    function num(s) { return en ? s.replace(/,/g, ".") : s.replace(/\./g, ","); }
+    function low(p) { return en ? p + "% low" : (es ? "Media del peor " + p + " %" : "Moyenne du pire " + p + " %"); }
+    function miss(text) {
+      var m = text.match(/^(?:Mittel ([\d.,]+) unter Ziel ([\d.,]+), )?(?:Szene (\d+), )?Low-Kriterium: 1%-Low ([\d.,]+) unter ([\d.,]+)$/);
+      if (!m) return text;
+      var mean = m[1] ? (en ? "Mean " + num(m[1]) + " below target " + num(m[2]) + ", " : (es ? "Media " + num(m[1]) + " bajo el objetivo " + num(m[2]) + ", " : "Moyenne " + num(m[1]) + " sous la cible " + num(m[2]) + ", ")) : "";
+      var scene = m[3] ? (en ? "scene " : (es ? "escena " : "scène ")) + m[3] + ", " : "";
+      return mean + scene + (en ? "Low criterion: 1% low " + num(m[4]) + " below " + num(m[5]) : (es ? "Criterio de media baja: media del peor 1 % " + num(m[4]) + " bajo " + num(m[5]) : "Critère de moyenne basse : moyenne du pire 1 % " + num(m[4]) + " sous " + num(m[5])));
+    }
+    return [
+      [/^((?:Mittel [\d.,]+ unter Ziel [\d.,]+, )?(?:Szene \d+, )?Low-Kriterium: 1%-Low [\d.,]+ unter [\d.,]+)$/, function (m) { return miss(m[1]); }],
+      [/^(.+): ((?:Mittel [\d.,]+ unter Ziel [\d.,]+, )?(?:Szene \d+, )?Low-Kriterium: 1%-Low [\d.,]+ unter [\d.,]+)\.$/, function (m) { return m[1] + (en || es ? ": " : " : ") + miss(m[2]) + "."; }],
+      [/^Zielkriterien nicht vollständig erfüllt \(Ziel (\d+), (nur Mittel|schwächste Szene ≥ Filmschnitt−\d+|schwächste Szene ≥ \d+(?: und ≥ Filmschnitt−\d+)?)\)\.$/, function (m) {
+        var detail = m[2].replace("nur Mittel", en ? "mean only" : (es ? "solo media" : "moyenne seule"))
+          .replace("schwächste Szene", en ? "weakest scene" : (es ? "escena más débil" : "scène la plus faible"))
+          .replace("Filmschnitt", en ? "overall mean" : (es ? "media global" : "moyenne globale"))
+          .replace(" und ", en ? " and " : (es ? " y " : " et "));
+        return (en ? "Target criteria not fully met (target " : (es ? "No se cumplen todos los criterios objetivo (objetivo " : "Critères cibles partiellement remplis (cible ")) + m[1] + ", " + detail + ").";
+      }],
+      [/^(1|5|10)%-Low: ([\d.,]+|—)$/, function (m) { return low(m[1]) + (en || es ? ": " : " : ") + num(m[2]); }],
+      [/^(\d+) von (\d+) Frames$/, function (m) { return en ? m[1] + " of " + m[2] + " frames" : (es ? m[1] + " de " + m[2] + " fotogramas" : m[1] + " sur " + m[2] + " images"); }],
+      [/^Szene (\d+)$/, function (m) { return (en ? "Scene " : (es ? "Escena " : "Scène ")) + m[1]; }],
+      [/^Bild (\d+)$/, function (m) { return (en ? "Image " : (es ? "Imagen " : "Image ")) + m[1]; }],
+      [/^Unter Grenze ([\d.,]+): (\d+) von (\d+) Frames \(([\d.,]+) %\) · längster Abschnitt: (\d+) Frames?(?: \(ca\. ([\d.,]+) s\))?\.$/, function (m) {
+        var length = m[5] + (en ? (m[5] === "1" ? " frame" : " frames") : (es ? (m[5] === "1" ? " fotograma" : " fotogramas") : (m[5] === "1" ? " image" : " images")));
+        if (m[6]) length += " (" + (en ? "approx. " : (es ? "aprox. " : "env. ")) + num(m[6]) + " s)";
+        return en ? "Below threshold " + num(m[1]) + ": " + m[2] + " of " + m[3] + " frames (" + num(m[4]) + "%) · longest stretch: " + length + "."
+          : (es ? "Bajo el umbral " + num(m[1]) + ": " + m[2] + " de " + m[3] + " fotogramas (" + num(m[4]) + " %) · tramo más largo: " + length + "."
+            : "Sous le seuil " + num(m[1]) + " : " + m[2] + " sur " + m[3] + " images (" + num(m[4]) + " %) · séquence la plus longue : " + length + ".");
+      }],
+      [/^Durchschnitt der schlechtesten (1|5|10) % der bewerteten Frames, abgerundet auf mindestens ein Bild\. (Empfindlich für einzelne Ausreißer; dieser Low-Wert zählt für die Empfehlung\.|Bezieht mehr schwache Frames ein\. Nur Zusatzinformation, kein Empfehlungskriterium\.)$/, function (m) {
+        return en ? "Average of the worst " + m[1] + "% of scored frames, rounded down to at least one frame. " + (m[1] === "1" ? "Sensitive to individual outliers; this low value is used for the recommendation." : "Includes more weak frames. Additional information only, not a recommendation criterion.")
+          : (es ? "Promedio del peor " + m[1] + " % de los fotogramas evaluados, redondeado hacia abajo a un mínimo de uno. " + (m[1] === "1" ? "Sensible a desviaciones aisladas; esta media baja se utiliza para la recomendación." : "Incluye más fotogramas débiles. Solo información adicional, no un criterio de recomendación.")
+            : "Moyenne des pires " + m[1] + " % des images évaluées, nombre arrondi à l’entier inférieur avec un minimum d’une image. " + (m[1] === "1" ? "Sensible aux écarts isolés ; cette moyenne basse intervient dans la recommandation." : "Inclut davantage d’images faibles. Information complémentaire uniquement, pas un critère de recommandation."));
+      }],
+      [/^(Berechnung der Low-Grenze: )?(Gesamtmittel − Abstand|Ziel − Abstand|höhere Grenze aus Ziel − Abstand und Gesamtmittel − Abstand); Abstand ([\d.,]+)\.( Hier hebt das Gesamtmittel die Grenze über Ziel − Abstand an\.)?$/, function (m) {
+        var mean = m[2] === "Gesamtmittel − Abstand", target = m[2] === "Ziel − Abstand";
+        var rule = en ? (mean ? "overall mean − gap" : (target ? "target − gap" : "higher of target − gap and overall mean − gap"))
+          : (es ? (mean ? "media global − margen" : (target ? "objetivo − margen" : "el mayor valor entre objetivo − margen y media global − margen"))
+            : (mean ? "moyenne globale − écart" : (target ? "cible − écart" : "le plus élevé de cible − écart et moyenne globale − écart")));
+        return (m[1] ? (en ? "Low threshold calculation: " : (es ? "Cálculo del umbral: " : "Calcul du seuil : ")) : "") + rule
+          + (en ? "; gap " : (es ? "; margen " : " ; écart ")) + num(m[3]) + "."
+          + (m[4] ? (en ? " Here the overall mean raises the threshold above target − gap." : (es ? " Aquí la media global eleva el umbral por encima de objetivo − margen." : " Ici, la moyenne globale relève le seuil au-dessus de cible − écart.")) : "");
+      }]
+    ];
+  }
+  RULES = lowContextRules("en").concat(RULES);
+  RULES_ES = lowContextRules("es").concat(RULES_ES);
+  RULES_FR = lowContextRules("fr").concat(RULES_FR);
+
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, CODE: 1, NOSCRIPT: 1 };
   var ATTRS = ["placeholder", "title", "data-tip"];
 
