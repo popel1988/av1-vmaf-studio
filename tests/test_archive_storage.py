@@ -141,7 +141,8 @@ class RetentionTests(unittest.TestCase):
         self.video = self.clips/'test_cpu_av1_28_s0.mkv'
         self.video.write_bytes(b'clip')
         self.keep = [self.metadata,self.folder/'scene0_ref.jpg',self.clips/'metrics.json',
-                     self.clips/'reference_0.mkv',self.clips/'user_movie.mkv']
+                     self.clips/'reference_0.mkv',self.clips/'user_movie.mkv',
+                     self.clips/'source_s0.mkv']
         for path in self.keep[1:]:
             path.write_bytes(b'keep')
         for path in [self.video,*self.keep]:
@@ -149,6 +150,16 @@ class RetentionTests(unittest.TestCase):
 
     def plan(self,**kwargs):
         return policy.dry_run_cleanup(min_age_days=30,**kwargs)
+
+    def test_source_remux_plays_and_survives_cleanup(self):
+        from core import vmaf as vmaf_mod
+        src = self.clips / "source_s0.mkv"
+        self.assertEqual(vmaf_mod.clip_path(self.session, "source_s0.mkv"), src.resolve())
+        self.assertIsNone(vmaf_mod.clip_path(self.session, "../source_s0.mkv"))
+        planned = self.plan()
+        self.assertEqual(policy.apply_cleanup(planned)["deleted"], 1)
+        self.assertTrue(src.exists())
+        self.assertFalse(self.video.exists())
 
     def test_dry_run_is_non_destructive_apply_only_removes_owned_test_clip(self):
         planned = self.plan()

@@ -5042,7 +5042,14 @@
     if (!fullDetail || ui.s2Idx == null || ui.s2Idx >= maxS2Stills) ui.s2Idx = -1;
 
     let refSrc = "";
+    let sourceClip = "";
+    let sourceLead = 0;
     results.forEach((x) => {
+      const srcShot = x.shots.find((sh) => sh.scene === sc);
+      if (srcShot && srcShot.source_clip && !sourceClip) {
+        sourceClip = srcShot.source_clip;
+        sourceLead = Number(srcShot.source_lead) || 0;
+      }
       const s = x.shots.find((sh) => sh.scene === sc);
       if (ui.s2Idx >= 0) {
         const scObj = (x.r.scene_scores || []).find((v) => v.scene === sc);
@@ -5068,6 +5075,7 @@
         sub: ui.s2Idx >= 0 ? `Szene ${sc + 1} · S2-Bild ${ui.s2Idx + 1}` : `Szene ${sc + 1}`,
         ref: true,
         start: sceneStart, len: sceneLen,
+        sourceClip, lead: sourceLead,
       });
     results.forEach((x) => {
       const s = x.shots.find((sh) => sh.scene === sc);
@@ -5155,6 +5163,7 @@
           <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""}"
                data-src="${t.src}" data-cap="${escapeHtml(cap)}"
                data-kind="${t.ref ? "ref" : "enc"}" data-clip="${escapeHtml(t.clip || "")}"
+               data-source="${escapeHtml(t.sourceClip || "")}" data-lead="${Number(t.lead) || 0}"
                data-start="${Number(t.start) || 0}" data-len="${Number(t.len) || 0}">
             <label class="shot-check" title="Für Vergleich auswählen">
               <input type="checkbox" ${t.ref ? "checked" : ""} />
@@ -5204,7 +5213,8 @@
         src: t.dataset.src,
         label: t.dataset.cap,
         kind: t.dataset.kind || "",
-        clip: t.dataset.clip || "",
+        clip: t.dataset.kind === "ref" ? (t.dataset.source || "") : (t.dataset.clip || ""),
+        lead: Number(t.dataset.lead) || 0,
         start: Number(t.start || t.dataset.start) || 0,
         len: Number(t.len || t.dataset.len) || 0,
       }));
@@ -12978,9 +12988,11 @@
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
     if (refs.length === 1 && encs.length === 1) {
-      const src = state.vmafSource;
-      if (!src || src.available === false || !src.path) return "Quelle nicht mehr verfügbar";
       if (!encs[0].clip || !state.vmafSession || !(encs[0].len > 0)) return "Testclip fehlt";
+      if (!refs[0].clip) {
+        const src = state.vmafSource;
+        if (!src || src.available === false || !src.path) return "Quelle nicht mehr verfügbar";
+      }
       return "";
     }
     if (!refs.length && encs.length === 2) {
@@ -13024,13 +13036,21 @@
       masterT = start;
       const len = enc.len || refs[0].len || 0;
       ab.window = len > 0 ? { start, end: start + len } : null;
-      sa.path = state.vmafSource.path;
-      sa.root = "media";
-      sa.offset = 0;
       sb.clipUrl = clipPlayUrl(enc.clip);
       sb.offset = start;
       abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
-      ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
+      if (refs[0].clip) {
+        const lead = Math.max(0, Number(refs[0].lead) || 0);
+        sa.clipUrl = clipPlayUrl(refs[0].clip);
+        sa.path = "";
+        sa.offset = start - lead;
+        ok = await Promise.all([abStartSide(sa, lead), abStartSide(sb, 0)]);
+      } else {
+        sa.path = state.vmafSource.path;
+        sa.root = "media";
+        sa.offset = 0;
+        ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
+      }
     } else {
       const len = encs[0].len || encs[1].len || 0;
       ab.window = len > 0 ? { start: 0, end: len } : null;

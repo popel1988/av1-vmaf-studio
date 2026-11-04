@@ -453,6 +453,7 @@ class VmafAnalysis:
     target_anchor: str = ""    # both | target | mean
     sample_windows: list = field(default_factory=list)
     sample_starts: list = field(default_factory=list)  # [(start, länge)] je Szene
+    source_clips: list = field(default_factory=list)  # Remux je Szene: file, lead, length
     visual_only: bool = False   # Clips ohne libvmaf, zum Abspielen im A/B-Player
     provenance: dict = field(default_factory=dict)
     source_duration: float = 0.0
@@ -480,6 +481,7 @@ class VmafAnalysis:
                  "target_anchor": self.target_anchor}
                if self.target_lo else {}),
             **({"sample_windows": self.sample_windows} if self.sample_windows else {}),
+            **({"source_clips": self.source_clips} if self.source_clips else {}),
             "provenance": self.provenance,
             "source_duration": self.source_duration,
         }
@@ -599,6 +601,77 @@ def _extract_reference(
         status(f"Referenz-Clip {idx + 1} wird extrahiert …")
     _run_logged(cmd, f"VMAF-Referenz {idx}")
     return ref
+
+
+def _source_clip_name(scene: int) -> str:
+    try:
+        name = f"source_s{int(scene)}.mkv"
+    except (TypeError, ValueError):
+        return ""
+    return name if _SOURCE_CLIP.match(name) else ""
+
+
+def _keyframe_before(path: Path, start: float) -> float:
+    """Letzter Video-Keyframe bei oder vor der Szenenzeit. Sonst die Zeit selbst."""
+    start = max(0.0, float(start))
+    begin = max(0.0, start - 30.0)
+    cmd = [
+        config.FFPROBE, "-v", "error",
+        "-select_streams", "v:0", "-skip_frame", "nokey",
+        "-read_intervals", f"{begin:.3f}%{start + 0.05:.3f}",
+        "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return start
+    best = None
+    for line in (proc.stdout or "").splitlines():
+        piece = line.strip().split(",")[0]
+        try:
+            pts = float(piece)
+        except ValueError:
+            continue
+        if 0 <= pts <= start + 0.002:
+            best = pts if best is None else max(best, pts)
+    return start if best is None else best
+
+
+def _extract_source_remux(
+    info: VideoInfo, work: Path, start: float, clip_len: float, idx: int,
+) -> tuple[str, float]:
+    """Videospur der Szene als Kopie. Der Vorlauf bis zum Keyframe bleibt im Clip.
+
+    Der Testclip beginnt framegenau bei ``start``. Die Kopie beginnt am Keyframe
+    davor. ``lead`` ist der Abstand, den der Player im Remux überspringt.
+    """
+    name = _source_clip_name(idx)
+    if not name:
+        return "", 0.0
+    dest = work / name
+    key = _keyframe_before(Path(info.path), start)
+    lead = max(0.0, round(float(start) - key, 3))
+    span = round(max(0.1, float(clip_len) + lead), 3)
+    cmd = [
+        config.FFMPEG, "-y", "-hide_banner",
+        "-ss", f"{key:.3f}", "-i", str(info.path),
+        "-t", f"{span:.3f}",
+        "-map", "0:v:0", "-c", "copy", "-an", "-sn",
+        "-avoid_negative_ts", "make_zero",
+        str(dest),
+    ]
+    res = _run_logged(cmd, f"Quell-Remux Szene {idx + 1}")
+    if res.returncode != 0 or not dest.is_file() or dest.stat().st_size <= 0:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return "", 0.0
+    return name, lead
 
 
 def _vmaf_threads() -> int:
@@ -864,7 +937,7 @@ def _extract_frame(
     base = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
     if fps and fps > 0:
         frame_no = max(0, int(round(fps * (clip_len / 2.0))))
-        base += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-vsync", "0"]
+        base += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-fps_mode", "passthrough"]
     else:
         base += ["-ss", str(max(0.0, clip_len / 2.0)), "-frames:v", "1"]
     base += ["-q:v", "2", str(config.PREVIEW_DIR / out_rel)]
@@ -889,7 +962,7 @@ def _png_at(src: Path, dest: Path, at_sec: float, fps: float) -> bool:
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-i", str(src)]
     if fps and fps > 0:
         frame_no = max(0, int(round(fps * max(0.0, at_sec))))
-        cmd += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-vsync", "0"]
+        cmd += ["-vf", f"select=eq(n\\,{frame_no})", "-frames:v", "1", "-fps_mode", "passthrough"]
     else:
         cmd += ["-ss", f"{max(0.0, at_sec):.3f}", "-frames:v", "1"]
     cmd += [str(dest)]
@@ -1543,7 +1616,21 @@ def analyze(
         references: list[tuple[Optional[Path], float, float]] = []
         ref_shots: list[str] = []  # Referenz-Screenshot je Szene (einmalig)
         dims = ff.crop_dims(crop)  # Vergleichsauflösung bei Auto-Crop
+        source_clips: list[dict] = []
         for si, (start, clip_len) in enumerate(sample_specs):
+            if cancelled():
+                break
+            if status:
+                status(f"Quellclip · Szene {si + 1}")
+            source_name, source_lead = _extract_source_remux(
+                info, work, float(start), float(clip_len), si)
+            if source_name:
+                source_clips.append({
+                    "scene": si,
+                    "file": source_name,
+                    "lead": source_lead,
+                    "length": round(float(clip_len), 3),
+                })
             if opts.visual_only:
                 references.append((None, start, clip_len))
                 if opts.generate_screenshots:
@@ -1568,6 +1655,7 @@ def analyze(
                 ref_shots.append(_extract_frame(
                     ref, f"{sess}/scene{si}_ref.jpg", clip_len, info.fps,
                     label=f"Ref Szene {si}"))
+        analysis.source_clips = source_clips
 
         base_pc = (runs[0][0], runs[0][1])
         for run in runs:
@@ -1710,6 +1798,7 @@ def list_sessions() -> list[dict]:
 
 
 _CLIP_NAME = re.compile(r"^test_[A-Za-z0-9._-]+_s\d+\.mkv$")
+_SOURCE_CLIP = re.compile(r"^source_s\d+\.mkv$")
 
 
 def _clip_name(platform: str, codec: str, value, scene) -> str:
@@ -1745,6 +1834,14 @@ def annotate_clips(session: str, analysis: dict) -> None:
     analysis["session"] = session
     root = config.VMAF_SESSIONS_DIR / session
     seconds = float(analysis.get("clip_seconds") or 0)
+    leads: dict[int, float] = {}
+    for item in analysis.get("source_clips") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            leads[int(item.get("scene"))] = float(item.get("lead") or 0)
+        except (TypeError, ValueError):
+            continue
     for raw in analysis.get("results") or []:
         if not isinstance(raw, dict):
             continue
@@ -1764,6 +1861,14 @@ def annotate_clips(session: str, analysis: dict) -> None:
                         shot["kbps"] = kbps
             else:
                 shot.pop("clip", None)
+            source_name = _source_clip_name(shot.get("scene", -1))
+            source_path = root / source_name if source_name else None
+            if source_path is not None and source_path.is_file():
+                shot["source_clip"] = source_name
+                shot["source_lead"] = round(float(leads.get(int(shot.get("scene") or 0), 0.0)), 3)
+            else:
+                shot.pop("source_clip", None)
+                shot.pop("source_lead", None)
             if shot.get("kbps"):
                 shot_kbps.append(int(shot["kbps"]))
         if raw.get("video_kbps"):
@@ -1779,11 +1884,15 @@ def annotate_clips(session: str, analysis: dict) -> None:
             raw["video_bitrate_human"] = ff._bitrate_human(kbps * 1000)
 
 
+def _playable_clip(filename: str) -> bool:
+    return bool(filename and (_CLIP_NAME.match(filename) or _SOURCE_CLIP.match(filename)))
+
+
 def clip_path(session: str, filename: str) -> Optional[Path]:
-    """Testclip unter vmaf/<session>/, nur der erwartete Dateiname."""
+    """Testclip oder Quell-Remux unter vmaf/<session>/, nur der erwartete Dateiname."""
     if not session or "/" in session or "\\" in session or session.startswith("."):
         return None
-    if not filename or not _CLIP_NAME.match(filename):
+    if not _playable_clip(filename):
         return None
     root = (config.VMAF_SESSIONS_DIR / session).resolve()
     target = (root / filename).resolve()

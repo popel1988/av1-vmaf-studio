@@ -377,6 +377,24 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("[$('ab-path-a').value, $('ab-path-b').value]"),
                          ['normal-source.mkv', 'normal-encode.mkv'])
 
+    def test_source_remux_starts_with_the_encode_and_old_runs_use_the_file(self):
+        self.evaluate("""
+          openClipAb([{kind:'ref', start:64, len:15, clip:'source_s0.mkv', lead:2.5},
+                      {kind:'enc', clip:'second.mp4', start:64, len:15}], {stay:true});
+        """)
+        self.assertIn("source_s0.mkv", self.value("a.clipUrl"))
+        self.assertIn("source_s0.mkv", self.value("a.path"))
+        self.assertAlmostEqual(self.value("a.offset"), 61.5)
+        self.assertAlmostEqual(self.value("b.offset"), 64)
+        self.assertIn("second.mp4", self.value("b.clipUrl"))
+        self.evaluate("""
+          openClipAb([{kind:'ref', start:64, len:15},
+                      {kind:'enc', clip:'second.mp4', start:64, len:15}], {stay:true});
+        """)
+        self.assertEqual(self.value("a.path"), "source.mkv")
+        self.assertEqual(self.value("a.clipUrl"), "")
+        self.assertEqual(self.value("a.offset"), 0)
+
     def test_hidden_standard_load_cannot_replace_nerd_clips(self):
         self.evaluate("""
           $('ab-path-a').value = 'normal-source.mkv';
