@@ -12800,6 +12800,7 @@
     return (state.clipPickIds || []).map((id) => byId[id]).filter(Boolean).map((c) => ({
       kind: c.kind,
       clip: c.clip || "",
+      lead: Number(c.lead) || 0,
       start: c.start,
       len: c.len,
       label: c.label,
@@ -12871,6 +12872,19 @@
     return state.chartScene != null ? state.chartScene : (scenes[0] ?? 0);
   }
 
+  function sourceClipOf(vmaf, scene) {
+    let clip = "";
+    let lead = 0;
+    (vmaf && vmaf.results || []).forEach((r) => {
+      const shot = shotsOf(r).find((s) => s.scene === scene);
+      if (shot && shot.source_clip && !clip) {
+        clip = shot.source_clip;
+        lead = Number(shot.source_lead) || 0;
+      }
+    });
+    return { clip, lead };
+  }
+
   function nerdAbChoices(vmaf, scene) {
     const choices = [];
     let start = 0;
@@ -12882,8 +12896,12 @@
       len = Number(sc.length) || len;
     });
     const src = state.vmafSource;
-    if (src && src.available !== false && src.path) {
-      choices.push({ id: "ref", label: tt("Original"), kind: "ref", start, len });
+    const remux = sourceClipOf(vmaf, scene);
+    if (remux.clip || (src && src.available !== false && src.path)) {
+      choices.push({
+        id: "ref", label: tt("Original"), kind: "ref",
+        clip: remux.clip, lead: remux.lead, start, len,
+      });
     }
     (vmaf.results || []).forEach((r, i) => {
       const shot = shotsOf(r).find((s) => s.scene === scene);
@@ -12969,6 +12987,7 @@
     const toPick = (c) => ({
       kind: c.kind,
       clip: c.clip || "",
+      lead: Number(c.lead) || 0,
       start: c.start,
       len: c.len,
       label: c.label,

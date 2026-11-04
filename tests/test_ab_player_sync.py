@@ -225,7 +225,7 @@ class AbPlayerSyncTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = APP_JS.read_text(encoding="utf-8")
-        start = cls.source.index("  function clipPlayUrl(")
+        start = cls.source.index("  function picksFromClipIds(")
         end = cls.source.index("  /* ------------------------------------------------------------- DIAGNOSE */", start)
         cls.transport = cls.source[start:end]
         start = cls.source.index("  function navTo(")
@@ -394,6 +394,21 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("a.path"), "source.mkv")
         self.assertEqual(self.value("a.clipUrl"), "")
         self.assertEqual(self.value("a.offset"), 0)
+
+    def test_nerd_choice_uses_the_source_remux(self):
+        self.evaluate("""
+          function shotsOf(r) { return r.screenshots || []; }
+          function vmafSceneList() { return [0]; }
+          state.chartScene = 0;
+          state.vmafShown = { results: [{ label: "ABR 6000", scene_scores: [{ scene: 0, start: 4700.889, length: 15 }],
+            screenshots: [{ scene: 0, clip: "test_s0.mkv", source_clip: "source_s0.mkv", source_lead: 0.819 }] }] };
+          state.clipPickIds = ["ref", "r0"];
+          const picks = picksFromClipIds();
+          openClipAb(picks, { stay: true });
+        """)
+        self.assertIn("source_s0.mkv", self.value("a.clipUrl"))
+        self.assertAlmostEqual(self.value("a.offset"), 4700.889 - 0.819)
+        self.assertIn("test_s0.mkv", self.value("b.clipUrl"))
 
     def test_hidden_standard_load_cannot_replace_nerd_clips(self):
         self.evaluate("""

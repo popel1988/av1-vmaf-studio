@@ -77,7 +77,7 @@ def _split_location(raw_host: str, share: str, subpath: str) -> tuple[str, str, 
     """smb://, cifs:// und UNC auf Server, Freigabe und Unterordner verteilen.
 
     Ein extra eingetragener Freigabename bleibt. Die Adresse darf nur den
-    Server nennen, zum Beispiel smb://192.168.168.200/.
+    Server nennen, zum Beispiel smb://server/.
     """
     raw = str(raw_host or "").replace("\x00", "").strip()
     lower = raw.lower()
