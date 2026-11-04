@@ -7,12 +7,11 @@
 # =============================================================================
 services:
   av1-vmaf-studio:
-    build: .
-    # Default image is :latest (FFmpeg 9, VMAF v1, NVIDIA driver 610+ for NVENC).
-    # Hosts whose driver is older than 610 pull the previous line instead:
+    image: ghcr.io/popel1988/av1-vmaf-studio:latest
+    # Local build instead of the published image:
+    # build: .
+    # Hosts whose NVIDIA driver is older than 610 use:
     # image: ghcr.io/popel1988/av1-vmaf-studio:latest-legacy
-    # Or use the GHCR image directly (no local build):
-    # image: ghcr.io/popel1988/av1-vmaf-studio:latest
     container_name: av1-vmaf-studio
     restart: unless-stopped
 

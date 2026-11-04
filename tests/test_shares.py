@@ -87,6 +87,32 @@ class ShareTests(unittest.TestCase):
         self.assertNotIn("ro", options)
         self.assertFalse(any(item.startswith("credentials=") for item in options))
 
+    def test_smb_url_is_only_the_server(self):
+        spec, err = shares.normalize({
+            "name": "NAS", "host": "smb://192.168.168.200/", "share": "video",
+            "username": "daniel", "password": "geheim",
+        })
+        self.assertEqual(err, "")
+        self.assertEqual(spec["host"], "192.168.168.200")
+        self.assertEqual(spec["share"], "video")
+        self.assertEqual(spec["subpath"], "")
+
+    def test_smb_url_can_carry_share_and_folder(self):
+        spec, err = shares.normalize({
+            "name": "NAS", "host": r"\\192.168.168.200\video\Filme",
+            "username": "daniel", "password": "geheim",
+        })
+        self.assertEqual(err, "")
+        self.assertEqual(spec["host"], "192.168.168.200")
+        self.assertEqual(spec["share"], "video")
+        self.assertEqual(spec["subpath"], "Filme")
+        filled, err = shares.normalize({
+            "name": "NAS", "host": "smb://nas.local:445/anders/weg",
+            "share": "video", "username": "daniel", "password": "x",
+        })
+        self.assertEqual(err, "")
+        self.assertEqual((filled["host"], filled["share"], filled["subpath"]), ("nas.local", "video", ""))
+
     def test_mount_errors_stay_short(self):
         self.assertEqual(shares._explain_mount("mount error(13): Permission denied"), "Anmeldung abgelehnt")
         self.assertEqual(shares._explain_mount("No route to host"), "Server nicht erreichbar")

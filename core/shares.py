@@ -73,6 +73,39 @@ def _clean(value, limit: int = 80) -> str:
     return str(value or "").replace("\x00", "").strip()[:limit]
 
 
+def _split_location(raw_host: str, share: str, subpath: str) -> tuple[str, str, str]:
+    """smb://, cifs:// und UNC auf Server, Freigabe und Unterordner verteilen.
+
+    Ein extra eingetragener Freigabename bleibt. Die Adresse darf nur den
+    Server nennen, zum Beispiel smb://192.168.168.200/.
+    """
+    raw = str(raw_host or "").replace("\x00", "").strip()
+    lower = raw.lower()
+    for prefix in ("smb://", "cifs://"):
+        if lower.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    raw = raw.replace("\\", "/").split("?", 1)[0].split("#", 1)[0].strip()
+    while raw.startswith("/"):
+        raw = raw[1:]
+    head, _, tail = raw.partition("/")
+    if "@" in head:
+        head = head.rsplit("@", 1)[-1]
+    if head.count(":") == 1:
+        server, port = head.split(":", 1)
+        if port.isdigit():
+            head = server
+    parts = [part for part in ([head] + (tail.split("/") if tail else [])) if part]
+    if not parts:
+        return "", share, subpath
+    host = parts[0]
+    if not share and len(parts) > 1:
+        share = parts[1]
+        if not subpath and len(parts) > 2:
+            subpath = "/".join(parts[2:])
+    return host, share, subpath
+
+
 def _valid_host(host: str) -> bool:
     if not host or len(host) > 253 or host.startswith("-") or ".." in host:
         return False
@@ -89,8 +122,10 @@ def _valid_share(name: str) -> bool:
 def normalize(fields: dict, previous: Optional[dict] = None) -> tuple[dict, str]:
     """Formulardaten prüfen. Ein leeres Passwort behält das gespeicherte."""
     name = _clean(fields.get("name"))
-    host = _clean(fields.get("host"), 253)
-    share = _clean(fields.get("share"))
+    host, share, sub_in = _split_location(
+        fields.get("host"), _clean(fields.get("share")), str(fields.get("subpath") or ""))
+    host = host.strip()[:253]
+    share = _clean(share)
     if not name:
         return {}, "Name fehlt"
     if not _valid_host(host):
@@ -114,7 +149,7 @@ def normalize(fields: dict, previous: Optional[dict] = None) -> tuple[dict, str]
     vers = _clean(fields.get("vers") or "auto", 8) or "auto"
     if vers not in _VERSIONS:
         vers = "auto"
-    subpath = config.safe_subdir(str(fields.get("subpath") or ""))
+    subpath = config.safe_subdir(sub_in)
     spec = {
         "name": name,
         "host": host,
