@@ -1,16 +1,12 @@
-# =============================================================================
-#  Video Studio – universal stack definition (Portainer)
+# Video Studio (Portainer / Compose).
 #
-#  One media tree under /media (read + write). Default output is set in the
-#  app settings (default: /media/output). All GPU devices are passed through
-#  (Intel/AMD via /dev/dri, Nvidia via the container runtime).
-# =============================================================================
+# Linux: Intel and AMD, iGPU or dGPU, via /dev/dri. NVIDIA via deploy below.
+# Windows Docker Desktop: NVIDIA only. /dev/dri does not exist there.
+# NVIDIA driver older than 610: use the latest-legacy image.
 services:
   av1-vmaf-studio:
     image: ghcr.io/popel1988/av1-vmaf-studio:latest
-    # Local build instead of the published image:
     # build: .
-    # Hosts whose NVIDIA driver is older than 610 use:
     # image: ghcr.io/popel1988/av1-vmaf-studio:latest-legacy
     container_name: av1-vmaf-studio
     restart: unless-stopped
@@ -18,44 +14,29 @@ services:
     ports:
       - "${WEB_PORT:-8080}:8080"
 
-    # Set paths conveniently in Portainer under "Environment variables"
-    # (MEDIA_PATH) – no need to edit this file.
     volumes:
-      # Full media tree (sources + encodes)
+      # Set MEDIA_PATH and DATA_PATH in Portainer. Keep DATA_PATH absolute
+      # so updates do not drop the queue and settings.
       - ${MEDIA_PATH:-/media}:/media
-      # Persistent app data (settings, queue.json, history.db, cache).
-      # IMPORTANT: use a stable absolute host path across rebuilds/updates
-      # (e.g. DATA_PATH=/volume1/docker/av1-studio/data). A relative ./data
-      # is fine only if the stack always starts from the same directory.
       - ${DATA_PATH:-./data}:/data
-      # --- Extra media folders (optional) ----------------------------------
-      # To mount separate trees, add more volume mounts and list them under
-      # MEDIA_DIRS below (Name=/path).
-      # Example:
+      # Extra trees: mount them and name them in MEDIA_DIRS (Name=/path).
       # - /mnt/nas/movies:/media/movies
       # - /mnt/nas/shows:/media/shows
 
-    # --- Hardware access ---------------------------------------------------
-    # privileged gives full access to sysfs/DRM (clean GPU metrics)
-    # and lets the app mount SMB shares added in the settings.
+    # GPU metrics and SMB shares added in the UI.
     privileged: true
 
-    # Intel/AMD GPU (VAAPI/QSV) – pass through DRM render nodes
+    # Intel/AMD render nodes, iGPU and dGPU. On Windows, delete this if
+    # compose refuses to start because /dev/dri is missing.
     devices:
       - /dev/dri:/dev/dri
 
-    # Nvidia is requested in the deploy reservation below. Do not add
-    # runtime: nvidia on top of that. Docker Desktop then mounts only CUDA
-    # and omits libnvidia-encode, so the GPU is visible but every NVENC
-    # encode fails with "minimum driver 610".
+    # Do not add runtime: nvidia. Docker Desktop then mounts CUDA only,
+    # and NVENC fails because libnvidia-encode is missing.
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics
-      # This image is based on CUDA 12.6 (Ubuntu 24.04). If the host Nvidia
-      # driver is older than that runtime, the nvidia-container-toolkit may
-      # refuse to start with a CUDA version error. Uncomment the next line to
-      # skip that check. It does not raise the NVENC API version: drivers
-      # older than 610 still need the latest-legacy image for NVENC.
+      # Host driver older than CUDA 12.6. Does not enable NVENC below 610.
       # - NVIDIA_DISABLE_REQUIRE=true
       - PUID=0
       - PGID=0
@@ -63,54 +44,30 @@ services:
       - DATA_DIR=/data
       - MEDIA_DIR=/media
       - RETAIN_VMAF_SESSIONS=true
-      # --- Extra media folders (optional) ---------------------------------
-      # Expose the extra mounts above as named roots.
-      # Format: "Name=/path" separated by ; (or newline).
-      # Without this variable, only the single /media mount is used.
       # - MEDIA_DIRS=Movies=/media/movies;Shows=/media/shows
-      # --- Logging --------------------------------------------------------
-      # Log verbosity: DEBUG | INFO | WARNING | ERROR (default INFO).
-      # At the start of each encode, all parameters are logged.
       - LOG_LEVEL=INFO
-      # Log the full FFmpeg command line for every encode (1/0).
       - LOG_FFMPEG_CMD=1
-      # --- Intel iGPU (VAAPI) / AMD VAAPI ---------------------------------
-      # Force the Intel media driver (needed for Intel iGPUs like UHD 730).
-      - LIBVA_DRIVER_NAME=iHD
-      # DRM render node of the GPU to use. IMPORTANT with multiple GPUs
-      # (Nvidia + Intel iGPU): renderD128 may NOT be the Intel iGPU –
-      # set it to renderD129 or similar. Check inside the container with:
-      #   vainfo --display drm --device /dev/dri/renderD128
+      # Libva selects iHD (Intel) or radeonsi (AMD). Force iHD only when
+      # the wrong driver is chosen.
+      # - LIBVA_DRIVER_NAME=iHD
+      # With several GPUs, renderD128 may be NVIDIA. Check with:
+      # vainfo --display drm --device /dev/dri/renderD128
       - VAAPI_DEVICE=/dev/dri/renderD128
-      # Intel encoder backend: "vaapi" (default) or "qsv". The image
-      # (Ubuntu 24.04, libva + oneVPL) supports both. Set QSV only if needed.
       # - INTEL_ENCODER=qsv
 
-    # Modern GPU reservation (Compose v2.4+/Portainer). On Intel/AMD-only
-    # hosts without Nvidia, the entire deploy block can be removed.
-    #
-    # Optional: CPU/RAM limits (commented out). Exceeding memory makes the
-    # kernel OOM-kill the container – tune values to your host.
-    # GPU VRAM is not limited here. Also keep parallel encodes in the app
-    # low if the host is tight on resources.
+    # Delete this block on hosts without NVIDIA.
+    # Optional CPU/RAM caps. GPU memory is not limited.
     deploy:
       resources:
         # limits:
-        #   cpus: "8.0"       # max CPU cores (share)
-        #   memory: 24G       # hard RAM limit
-        # reservations:
-        #   cpus: "2.0"       # optional minimum reserve
-        #   memory: 4G
+        #   cpus: "8.0"
+        #   memory: 24G
         reservations:
           devices:
             - driver: nvidia
               count: all
               capabilities: [gpu, compute, utility, video]
 
-    # --- Finer alternative TO 'privileged: true' -------------------------
-    # (comment out privileged and use the following instead)
-    # cap_add:
-    #   - SYS_ADMIN
-    # group_add:
-    #   - video
-    #   - render
+    # Instead of privileged: true
+    # cap_add: [SYS_ADMIN]
+    # group_add: [video, render]
