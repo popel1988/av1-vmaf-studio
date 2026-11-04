@@ -44,8 +44,10 @@ services:
     devices:
       - /dev/dri:/dev/dri
 
-    # Nvidia: runtime + capabilities (nvidia-container-toolkit required)
-    runtime: nvidia
+    # Nvidia is requested in the deploy reservation below. Do not add
+    # runtime: nvidia on top of that. Docker Desktop then mounts only CUDA
+    # and omits libnvidia-encode, so the GPU is visible but every NVENC
+    # encode fails with "minimum driver 610".
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics

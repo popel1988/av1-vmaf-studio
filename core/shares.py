@@ -115,7 +115,7 @@ def _valid_host(host: str) -> bool:
 def _valid_share(name: str) -> bool:
     if not name or name in (".", "..") or len(name) > 80:
         return False
-    forbidden = set('\\/\x00\r\n\t;|&$`"\'')
+    forbidden = set('\\/\x00\r\n\t;|$`"\'')
     return not any(ch in forbidden for ch in name)
 
 
