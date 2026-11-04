@@ -454,8 +454,8 @@ def _hardware_section(monitor) -> dict:
 def _storage_section() -> dict:
     checks: list[dict] = []
     dirs = [
-        (f"Media [{name}]", base, True)
-        for name, base in config.MEDIA_ROOTS
+        (f"Media [{name}]", base, name not in config.share_root_names())
+        for name, base in config.all_media_roots()
     ] + [
         ("Standard-Ausgabe", config.default_output_path(), True),
         ("Daten", config.DATA_DIR, True),

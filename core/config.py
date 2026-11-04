@@ -115,12 +115,50 @@ def _parse_roots(env_name: str, default_dir: Path,
 
 
 MEDIA_ROOTS: "list[tuple[str, Path]]" = _parse_roots("MEDIA_DIRS", MEDIA_DIR, "media")
+# SMB-Freigaben aus den Einstellungen. Werden erst nach dem Einhängen gefüllt.
+_SHARE_ROOTS: "list[tuple[str, Path]]" = []
 MULTI_MEDIA = len(MEDIA_ROOTS) > 1
+
+
+def all_media_roots() -> "list[tuple[str, Path]]":
+    """Lokale Medienwurzeln plus eingehängte Netzwerkfreigaben."""
+    return list(MEDIA_ROOTS) + list(_SHARE_ROOTS)
+
+
+def share_root_names() -> set[str]:
+    return {name for name, _ in _SHARE_ROOTS}
+
+
+def set_share_roots(roots: "list[tuple[str, Path]]") -> None:
+    """Eingehängte Freigaben als zusätzliche Wurzeln bekannt machen."""
+    global _SHARE_ROOTS, MULTI_MEDIA
+    _SHARE_ROOTS = list(roots)
+    MULTI_MEDIA = len(all_media_roots()) > 1
+
+
+def _resolved(path: Path) -> Optional[Path]:
+    try:
+        return path.resolve()
+    except OSError:
+        return None
 
 
 def media_roots_public() -> "list[dict]":
     """Roots für UI/API (Name + Pfad + Existenz)."""
-    return [{"name": n, "path": str(p), "exists": p.exists()} for n, p in MEDIA_ROOTS]
+    shares = share_root_names()
+    out = []
+    for name, path in all_media_roots():
+        try:
+            exists = path.exists()
+        except OSError:
+            exists = False
+        out.append({
+            "name": name,
+            "path": str(path),
+            "exists": exists,
+            "share": name in shares,
+        })
+    return out
 
 
 def safe_subdir(sub: str) -> str:
@@ -150,15 +188,16 @@ def resolve_input(rel: str) -> Optional[Path]:
     ``upload:<filename>`` verweist auf eine Datei im Upload-Ordner.
     """
     raw = (rel or "").strip()
+    roots = all_media_roots()
     if raw:
         candidate = Path(raw)
         if candidate.is_absolute():
-            try:
-                target = candidate.resolve()
-            except OSError:
+            target = _resolved(candidate)
+            if target is None:
                 return None
-            for _, base in MEDIA_ROOTS:
-                if _within(target, base.resolve()):
+            for _, base in roots:
+                resolved = _resolved(base)
+                if resolved is not None and _within(target, resolved):
                     return target
             return None
     if raw.startswith("upload:"):
@@ -170,23 +209,36 @@ def resolve_input(rel: str) -> Optional[Path]:
         return target if _within(target, base) and target.is_file() else None
 
     rel = raw.strip("/")
-    if len(MEDIA_ROOTS) == 1:
-        name, base = MEDIA_ROOTS[0]
-        base = base.resolve()
+    if len(roots) == 1:
+        name, base = roots[0]
+        resolved = _resolved(base)
+        if resolved is None:
+            return None
         first, _, rest = rel.partition("/")
         if first == name:
             rel = rest
-        target = (base / rel).resolve() if rel else base
-        return target if _within(target, base) else None
+        target = _resolved(resolved / rel) if rel else resolved
+        return target if target is not None and _within(target, resolved) else None
     if not rel:
         return None
     first, _, rest = rel.partition("/")
-    for name, base in MEDIA_ROOTS:
+    for name, base in roots:
         if name == first:
-            b = base.resolve()
-            target = (b / rest).resolve() if rest else b
-            return target if _within(target, b) else None
-    return None
+            resolved = _resolved(base)
+            if resolved is None:
+                return None
+            target = _resolved(resolved / rest) if rest else resolved
+            return target if target is not None and _within(target, resolved) else None
+    # Bestehende Pfade ohne Wurzel-Prefix bleiben im lokalen Medienbaum,
+    # auch wenn inzwischen Freigaben dazugekommen sind.
+    if not MEDIA_ROOTS:
+        return None
+    _, base = MEDIA_ROOTS[0]
+    resolved = _resolved(base)
+    if resolved is None:
+        return None
+    target = _resolved(resolved / rel) if rel else resolved
+    return target if target is not None and _within(target, resolved) else None
 
 
 def rel_input(abs_path) -> Optional[str]:
@@ -195,14 +247,18 @@ def rel_input(abs_path) -> Optional[str]:
     Einzel-Root: Unterpfad ohne Prefix.
     Multi-Root: "Root-Name/Unterpfad".
     """
-    ap = Path(abs_path).resolve()
-    for name, base in MEDIA_ROOTS:
-        b = base.resolve()
-        if _within(ap, b):
-            sub = ap.relative_to(b).as_posix()
-            if len(MEDIA_ROOTS) == 1:
-                return "" if sub == "." else sub
-            return name if sub == "." else f"{name}/{sub}"
+    ap = _resolved(Path(abs_path))
+    if ap is None:
+        return None
+    roots = all_media_roots()
+    for name, base in roots:
+        resolved = _resolved(base)
+        if resolved is None or not _within(ap, resolved):
+            continue
+        sub = ap.relative_to(resolved).as_posix()
+        if len(roots) == 1:
+            return "" if sub == "." else sub
+        return name if sub == "." else f"{name}/{sub}"
     return None
 
 
@@ -243,7 +299,16 @@ def scan_targets(root_rel: str) -> "list[Path]":
         target = resolve_input(rel)
         if target and target.is_dir():
             return [target]
-    return [b.resolve() for _, b in MEDIA_ROOTS if b.exists()]
+    found: list[Path] = []
+    for _, base in all_media_roots():
+        resolved = _resolved(base)
+        try:
+            exists = resolved is not None and resolved.exists()
+        except OSError:
+            exists = False
+        if exists and resolved is not None:
+            found.append(resolved)
+    return found
 
 
 def iter_input_files(root_rel: str, exts: set) -> "Iterator[Path]":

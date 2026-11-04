@@ -37,7 +37,8 @@ services:
       # - /mnt/nas/shows:/media/shows
 
     # --- Hardware access ---------------------------------------------------
-    # privileged gives full access to sysfs/DRM (clean GPU metrics).
+    # privileged gives full access to sysfs/DRM (clean GPU metrics)
+    # and lets the app mount SMB shares added in the settings.
     privileged: true
 
     # Intel/AMD GPU (VAAPI/QSV) – pass through DRM render nodes

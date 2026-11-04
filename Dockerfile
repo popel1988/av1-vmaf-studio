@@ -46,6 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libdrm2 \
         # --- MKV-Werkzeuge (mkvpropedit für Bitraten-/Statistik-Tags) ---
         mkvtoolnix \
+        # --- SMB-Freigaben aus den Einstellungen (mount.cifs) ---
+        cifs-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------ Neueres libva bauen

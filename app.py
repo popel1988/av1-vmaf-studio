@@ -144,6 +144,8 @@ async def _startup() -> None:
     from core.watcher import watcher
     watcher.attach(queue)
     watcher.start()
+    from core import shares
+    shares.restore_async()
     logger = logging.getLogger("vcompress.startup")
     logger.info("FFmpeg-Binary: %s | FFprobe: %s", config.FFMPEG, config.FFPROBE)
     logger.info("FFmpeg-Version: %s", ff.ffmpeg_version())
@@ -359,7 +361,17 @@ async def browse_input(path: str = "", kind: str = "video"):
     rel_here = config.rel_input(target) or ""
     # Elternpfad: leer, wenn wir auf einem Root-Top stehen (dann zur Root-Liste
     # bei Multi-Media bzw. zum Root-Inhalt bei Einzel-Root).
-    is_root_top = any(target.resolve() == b.resolve() for _, b in config.MEDIA_ROOTS)
+    try:
+        here = target.resolve()
+    except OSError:
+        here = None
+    is_root_top = False
+    if here is not None:
+        for _, base in config.all_media_roots():
+            resolved = config._resolved(base)
+            if resolved is not None and here == resolved:
+                is_root_top = True
+                break
     if is_root_top:
         # Multi-Root: von einem Root-Top zurück zur virtuellen Wurzel ("").
         parent = "" if config.MULTI_MEDIA else None
@@ -1759,8 +1771,9 @@ def _resolve_under_input(raw: str):
             rp = p.resolve()
         except OSError:
             return None
-        for _, base in config.MEDIA_ROOTS:
-            if config._within(rp, base.resolve()):
+        for _, base in config.all_media_roots():
+            resolved = config._resolved(base)
+            if resolved is not None and config._within(rp, resolved):
                 return rp if rp.exists() else None
         return None
     target = config.resolve_input(raw)
@@ -2258,7 +2271,7 @@ async def set_app_settings(req: AppSettingsRequest):
             probe = config.resolve_input(rel)
             if probe is None and config.MULTI_MEDIA:
                 first = rel.split("/", 1)[0]
-                if first not in {n for n, _ in config.MEDIA_ROOTS}:
+                if first not in {n for n, _ in config.all_media_roots()}:
                     return JSONResponse(
                         {"error": "Pfad liegt außerhalb der Media-Roots"},
                         status_code=400)
@@ -2329,6 +2342,59 @@ async def libraries_delete(lib_id: str):
     if not ok:
         return JSONResponse({"error": err}, status_code=404)
     return {"libraries": app_settings.list_libraries()}
+
+
+class ShareRequest(BaseModel):
+    name: str = ""
+    host: str = ""
+    share: str = ""
+    subpath: str = ""
+    username: str = ""
+    password: str = ""
+    domain: str = ""
+    guest: bool = False
+    readonly: bool = True
+    vers: str = "auto"
+
+
+def _share_payload(error: str = "") -> dict:
+    from core import shares
+    body = {"shares": shares.list_public(), "media_roots": config.media_roots_public()}
+    if error:
+        body["error"] = error
+    return body
+
+
+@app.get("/api/shares")
+async def shares_list():
+    return _share_payload()
+
+
+@app.post("/api/shares")
+async def shares_add(req: ShareRequest):
+    from core import shares
+    _public, err = await asyncio.to_thread(shares.add, req.model_dump())
+    if err and not _public:
+        return JSONResponse({"error": err}, status_code=400)
+    return _share_payload(err)
+
+
+@app.post("/api/shares/{share_id}/connect")
+async def shares_connect(share_id: str):
+    from core import shares
+    err = await asyncio.to_thread(shares.reconnect, share_id)
+    if err == "Nicht gefunden":
+        return JSONResponse({"error": err}, status_code=404)
+    return _share_payload(err)
+
+
+@app.delete("/api/shares/{share_id}")
+async def shares_delete(share_id: str):
+    from core import shares
+    err = await asyncio.to_thread(shares.remove, share_id)
+    if err:
+        return JSONResponse({"error": err}, status_code=404)
+    return _share_payload()
 
 
 def _resolve_media_root(path: str, root: str = "media"):

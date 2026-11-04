@@ -1698,9 +1698,10 @@
             <span class="badge" id="media-settings-badge">—</span>
           </div>
           <div class="card-body">
-            <p class="hint">Ein Medienbaum (<code>/media</code>). Die Standard-Ausgabe ist ein
+            <p class="hint">Lokaler Medienbaum (<code>/media</code>). Die Standard-Ausgabe ist ein
               Ordner darin – z.&nbsp;B. <code>output</code> → <code>/media/output</code>.
-              Pro Job kannst du stattdessen „neben der Quelle“ oder einen anderen Ordner wählen.</p>
+              Pro Job kannst du stattdessen „neben der Quelle“ oder einen anderen Ordner wählen.
+              Netzwerkfreigaben richtest du in der Karte darunter ein.</p>
             <div class="field">
               <label>Standard-Ausgabeordner (relativ zum Medienbaum)</label>
               <div class="subdir-row">
@@ -1776,6 +1777,66 @@
               <button type="button" class="btn btn-ghost btn-sm" data-min-sav="5">5 %</button>
               <button type="button" class="btn btn-primary btn-sm" id="btn-p1-gap-save">Speichern</button>
             </div>
+          </div>
+        </section>
+
+        <section class="card share-card" data-page="settings">
+          <div class="card-head">
+            <h3><span class="card-idx">⇄</span> Netzwerkfreigaben</h3>
+            <span class="badge" id="share-badge">—</span>
+          </div>
+          <div class="card-body">
+            <p class="hint">SMB-Freigabe eines Netzwerkspeichers, zum Beispiel ein NAS. Der laufende Container hängt sie selbst ein, ohne Eintrag in der Compose-Datei. Danach erscheint sie im Dateibrowser wie ein lokaler Ordner. Die Standard-Ausgabe bleibt auf dem lokalen Medienbaum. Vorgabe ist nur lesen.</p>
+            <form id="share-form">
+              <div class="share-grid">
+                <div class="field">
+                  <label for="share-name">Name</label>
+                  <input type="text" id="share-name" maxlength="80" placeholder="Filme" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-host">Server</label>
+                  <input type="text" id="share-host" maxlength="253" placeholder="192.168.1.20" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-share">Freigabename</label>
+                  <input type="text" id="share-share" maxlength="80" placeholder="video" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-sub">Ordner in der Freigabe</label>
+                  <input type="text" id="share-sub" maxlength="200" placeholder="optional" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-user">Benutzername</label>
+                  <input type="text" id="share-user" maxlength="128" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-pass">Passwort</label>
+                  <input type="password" id="share-pass" maxlength="256" autocomplete="new-password" />
+                </div>
+                <div class="field">
+                  <label for="share-domain">Domäne</label>
+                  <input type="text" id="share-domain" maxlength="128" autocomplete="off" />
+                </div>
+                <div class="field">
+                  <label for="share-vers">SMB-Version</label>
+                  <select id="share-vers" class="select">
+                    <option value="auto">Automatisch</option>
+                    <option value="3.1.1">3.1.1</option>
+                    <option value="3.0">3.0</option>
+                    <option value="2.1">2.1</option>
+                  </select>
+                </div>
+              </div>
+              <div class="share-flags">
+                <label class="check"><input type="checkbox" id="share-guest" /> Gastzugang (ohne Benutzer)</label>
+                <label class="check"><input type="checkbox" id="share-ro" checked /> Nur lesen</label>
+              </div>
+              <div class="lib-actions">
+                <button type="submit" class="btn btn-primary btn-sm" id="share-add">Freigabe hinzufügen</button>
+              </div>
+            </form>
+            <p class="hint" id="share-msg"></p>
+            <ul class="share-list" id="share-list"></ul>
           </div>
         </section>
         </div>

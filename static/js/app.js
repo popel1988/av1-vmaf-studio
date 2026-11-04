@@ -2059,6 +2059,117 @@
     });
   }
 
+  function applyMediaRoots(roots) {
+    if (!window.APP_CONFIG || !Array.isArray(roots)) return;
+    APP_CONFIG.mediaRoots = roots;
+    APP_CONFIG.multiMedia = roots.length > 1;
+    const label = $("input-dir");
+    if (!label) return;
+    label.textContent = roots.length > 1
+      ? `${roots.length} Ordner: ${roots.map((r) => r.name).join(", ")}`
+      : ((roots[0] && roots[0].path) || "/media");
+  }
+
+  function initShares() {
+    const form = $("share-form");
+    if (!form) return;
+    const msg = $("share-msg");
+    const list = $("share-list");
+    const badge = $("share-badge");
+    const guest = $("share-guest");
+    const syncGuest = () => {
+      const on = !!(guest && guest.checked);
+      ["share-user", "share-pass", "share-domain"].forEach((id) => {
+        const el = $(id);
+        if (el) el.disabled = on;
+      });
+    };
+    if (guest) guest.addEventListener("change", syncGuest);
+    syncGuest();
+    let poll = 0;
+    const paint = (data) => {
+      if (!data) return;
+      if (msg) msg.textContent = data.error || "";
+      if (Array.isArray(data.media_roots)) applyMediaRoots(data.media_roots);
+      if (!Array.isArray(data.shares) || !list) return;
+      const shares = data.shares;
+      const up = shares.filter((item) => item.mounted).length;
+      if (badge) badge.textContent = shares.length ? `${up}/${shares.length} ${tt("verbunden")}` : tt("Keine Freigabe");
+      list.innerHTML = shares.length ? shares.map((item) => {
+        const where = `//${item.host}/${item.share}${item.subpath ? "/" + item.subpath : ""}`;
+        const state = item.busy ? tt("verbinde …")
+          : (item.mounted ? tt("verbunden") : (item.error || tt("nicht verbunden")));
+        return `<li class="share-item"><div><strong>${escapeHtml(item.name)}</strong> `
+          + `<span class="muted">${escapeHtml(where)}</span>`
+          + `<p class="${item.mounted ? "good" : ""}">${escapeHtml(state)}</p></div>`
+          + `<div class="lib-actions">`
+          + `<button type="button" class="btn btn-ghost btn-sm" data-share-act="connect" data-id="${escapeHtml(item.id)}">${escapeHtml(tt("Erneut verbinden"))}</button>`
+          + `<button type="button" class="btn btn-ghost btn-sm" data-share-act="delete" data-id="${escapeHtml(item.id)}">${escapeHtml(tt("Entfernen"))}</button>`
+          + `</div></li>`;
+      }).join("") : `<li class="muted">${escapeHtml(tt("Keine Netzwerkfreigabe"))}</li>`;
+      if (poll) clearTimeout(poll);
+      if (shares.some((item) => item.busy)) poll = setTimeout(load, 1500);
+    };
+    const load = async () => {
+      try {
+        paint(await (await fetch("/api/shares")).json());
+      } catch (e) {
+        if (msg) msg.textContent = String(e);
+      }
+    };
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const btn = $("share-add");
+      if (btn) btn.disabled = true;
+      if (msg) msg.textContent = "";
+      const body = {
+        name: $("share-name").value.trim(),
+        host: $("share-host").value.trim(),
+        share: $("share-share").value.trim(),
+        subpath: $("share-sub").value.trim(),
+        username: $("share-user").value.trim(),
+        password: $("share-pass").value,
+        domain: $("share-domain").value.trim(),
+        guest: !!(guest && guest.checked),
+        readonly: $("share-ro") ? $("share-ro").checked : true,
+        vers: $("share-vers") ? $("share-vers").value : "auto",
+      };
+      try {
+        const res = await fetch("/api/shares", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        paint(data);
+        if (res.ok && !data.error) {
+          ["share-name", "share-host", "share-share", "share-sub", "share-user", "share-pass", "share-domain"]
+            .forEach((id) => { const el = $(id); if (el) el.value = ""; });
+        }
+      } catch (e) {
+        if (msg) msg.textContent = String(e);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    if (list) list.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-share-act]");
+      if (!btn) return;
+      const id = btn.dataset.id;
+      if (btn.dataset.shareAct === "delete" && !confirm(tt("Freigabe entfernen?"))) return;
+      btn.disabled = true;
+      const drop = btn.dataset.shareAct === "delete";
+      try {
+        const res = await fetch(`/api/shares/${encodeURIComponent(id)}${drop ? "" : "/connect"}`,
+          { method: drop ? "DELETE" : "POST" });
+        paint(await res.json());
+      } catch (e) {
+        if (msg) msg.textContent = String(e);
+      }
+    });
+    load();
+  }
+
   function initMediaSettings() {
     const inp = $("cfg-default-output");
     if (!inp) return;
@@ -14710,6 +14821,7 @@
     initDiagnostics();
     initOutTargets();
     initMediaSettings();
+    initShares();
     initVmafP1Gap();
     initEncoderSpeed();
     initEncoderBench();

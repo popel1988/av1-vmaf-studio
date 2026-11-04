@@ -262,6 +262,14 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   flex-direction: column;
 }
 .settings-duo > .card .lib-actions { margin-top: auto; }
+.settings-duo > .share-card { grid-column: 1 / -1; height: auto; }
+.share-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; }
+.share-flags { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 8px; }
+.share-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.share-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.share-item p { margin: 2px 0 0; }
+#share-msg:empty { display: none; }
+#share-msg { color: var(--warn, #e0a83a); }
 .settings-duo .vmaf-rec-fields { margin: 4px 0 8px; }
 .settings-duo .vmaf-rec-fields .field > label { min-height: 0; }
 .card-head {
