@@ -5001,46 +5001,10 @@
     return [];
   }
 
-  function renderScreenshots(vmaf, gridEl) {
-    const grid = gridEl || $("vmaf-screenshots");
-    if (!grid) return;
-    const isMain = grid === $("vmaf-screenshots");
-    const isNerd = grid === $("nerd-screenshots");
-    const isMainOrNerd = isMain || isNerd;
-    const fullDetail = !isMain;
-    const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
-    const all = (vmaf.results || [])
-      .map((r) => ({ r, shots: shotsOf(r) }))
-      .filter((x) => x.shots.length);
-    if (!all.length) { grid.innerHTML = ""; return; }
-
-    const groups = [...new Set(all.map((x) => x.r.shotGroup).filter(Boolean))];
-    if (groups.length && (ui.group == null || !groups.includes(ui.group)))
-      ui.group = groups[0];
-    const results = groups.length
-      ? all.filter((x) => x.r.shotGroup === ui.group)
-      : all;
-
-    const scenes = [...new Set(
-      results.flatMap((x) => x.shots.map((s) => s.scene))
-    )].sort((a, b) => a - b);
-    if (ui.scene == null || !scenes.includes(ui.scene))
-      ui.scene = scenes[0];
-    const sc = ui.scene;
-    if (isMainOrNerd) state.shotScene = sc;
-
-    let maxS2Stills = 0;
-    if (fullDetail) {
-      results.forEach((x) => {
-        const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
-        if (s && Array.isArray(s.ssimulacra2_pairs)) {
-          const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
-          if (valid > maxS2Stills) maxS2Stills = valid;
-        }
-      });
-    }
-    if (!fullDetail || ui.s2Idx == null || ui.s2Idx >= maxS2Stills) ui.s2Idx = -1;
-
+  function buildShotTiles(vmaf, results, sc, opts) {
+    const ui = opts.ui;
+    const fullDetail = opts.fullDetail;
+    const isMainOrNerd = opts.isMainOrNerd;
     let refSrc = "";
     let sourceClip = "";
     let sourceLead = 0;
@@ -5125,6 +5089,50 @@
         });
       }
     });
+    return tiles;
+  }
+
+  function renderScreenshots(vmaf, gridEl) {
+    const grid = gridEl || $("vmaf-screenshots");
+    if (!grid) return;
+    const isMain = grid === $("vmaf-screenshots");
+    const isNerd = grid === $("nerd-screenshots");
+    const isMainOrNerd = isMain || isNerd;
+    const fullDetail = !isMain;
+    const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
+    const all = (vmaf.results || [])
+      .map((r) => ({ r, shots: shotsOf(r) }))
+      .filter((x) => x.shots.length);
+    if (!all.length) { grid.innerHTML = ""; return; }
+
+    const groups = [...new Set(all.map((x) => x.r.shotGroup).filter(Boolean))];
+    if (groups.length && (ui.group == null || !groups.includes(ui.group)))
+      ui.group = groups[0];
+    const results = groups.length
+      ? all.filter((x) => x.r.shotGroup === ui.group)
+      : all;
+
+    const scenes = [...new Set(
+      results.flatMap((x) => x.shots.map((s) => s.scene))
+    )].sort((a, b) => a - b);
+    if (ui.scene == null || !scenes.includes(ui.scene))
+      ui.scene = scenes[0];
+    const sc = ui.scene;
+    if (isMainOrNerd) state.shotScene = sc;
+
+    let maxS2Stills = 0;
+    if (fullDetail) {
+      results.forEach((x) => {
+        const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
+        if (s && Array.isArray(s.ssimulacra2_pairs)) {
+          const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
+          if (valid > maxS2Stills) maxS2Stills = valid;
+        }
+      });
+    }
+    if (!fullDetail || ui.s2Idx == null || ui.s2Idx >= maxS2Stills) ui.s2Idx = -1;
+
+    const tiles = buildShotTiles(vmaf, results, sc, { ui, fullDetail, isMainOrNerd });
     if (!tiles.length) { grid.innerHTML = ""; return; }
 
     const groupTabs = groups.length > 1
@@ -5162,6 +5170,7 @@
           return `
           <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""}"
                data-src="${t.src}" data-cap="${escapeHtml(cap)}"
+               data-key="${escapeHtml(t.ref ? "ref" : t.label)}"
                data-kind="${t.ref ? "ref" : "enc"}" data-clip="${escapeHtml(t.clip || "")}"
                data-source="${escapeHtml(t.sourceClip || "")}" data-lead="${Number(t.lead) || 0}"
                data-start="${Number(t.start) || 0}" data-len="${Number(t.len) || 0}">
@@ -5200,24 +5209,41 @@
         renderScreenshots(vmaf, grid);
       }));
 
+    const galleryItem = (t) => ({
+      src: t.src,
+      label: `${t.label} · ${t.sub}`,
+      kind: t.ref ? "ref" : "enc",
+      key: t.ref ? "ref" : (t.label || ""),
+    });
+    const sceneNav = scenes.length > 1 ? {
+      current: sc,
+      scenes: scenes.map((n) => ({ id: n, label: sceneTabText(vmaf, n) })),
+      itemsFor: (n) => buildShotTiles(vmaf, results, n, { ui, fullDetail, isMainOrNerd }).map(galleryItem),
+      onScene: (n) => {
+        ui.scene = n;
+        if (isMainOrNerd) {
+          state.chartScene = n;
+          showVmafChart(vmaf);
+        }
+        renderScreenshots(vmaf, grid);
+      },
+    } : null;
     const cmpBtn = grid.querySelector(".shot-compare");
     const abBtn = grid.querySelector(".shot-ab");
-    const allSceneItems = () => [...grid.querySelectorAll(".shot-tile")].map((t) => ({
+    const tilePick = (t) => ({
       src: t.dataset.src,
       label: t.dataset.cap,
       kind: t.dataset.kind || "",
-    }));
+      key: t.dataset.key || (t.dataset.kind === "ref" ? "ref" : ""),
+      clip: t.dataset.kind === "ref" ? (t.dataset.source || "") : (t.dataset.clip || ""),
+      lead: Number(t.dataset.lead) || 0,
+      start: Number(t.start || t.dataset.start) || 0,
+      len: Number(t.len || t.dataset.len) || 0,
+    });
+    const allSceneItems = () => [...grid.querySelectorAll(".shot-tile")].map(tilePick);
     const selected = () => [...grid.querySelectorAll(".shot-tile")]
       .filter((t) => t.querySelector(".shot-check input").checked)
-      .map((t) => ({
-        src: t.dataset.src,
-        label: t.dataset.cap,
-        kind: t.dataset.kind || "",
-        clip: t.dataset.kind === "ref" ? (t.dataset.source || "") : (t.dataset.clip || ""),
-        lead: Number(t.dataset.lead) || 0,
-        start: Number(t.start || t.dataset.start) || 0,
-        len: Number(t.len || t.dataset.len) || 0,
-      }));
+      .map(tilePick);
     const updateCmp = () => {
       const picks = selected();
       const n = picks.length;
@@ -5238,7 +5264,7 @@
     });
     cmpBtn.addEventListener("click", () => {
       const items = selected();
-      if (items.length) openGallery(items, allSceneItems());
+      if (items.length) openGallery(items, allSceneItems(), sceneNav);
     });
     if (abBtn) abBtn.addEventListener("click", () => {
       const picks = selected();
@@ -5247,19 +5273,16 @@
     grid.querySelectorAll(".shot-tile img").forEach((img) =>
       img.addEventListener("click", () => {
         const tile = img.closest(".shot-tile");
-        const clicked = { src: tile.dataset.src, label: tile.dataset.cap };
+        const clicked = tilePick(tile);
         const pool = allSceneItems();
         if (tile.dataset.kind !== "ref") {
           const refTile = grid.querySelector('.shot-tile[data-kind="ref"]');
           if (refTile && refTile.dataset.src && refTile.dataset.src !== clicked.src) {
-            openGallery([
-              { src: refTile.dataset.src, label: refTile.dataset.cap || "Original" },
-              clicked,
-            ], pool);
+            openGallery([tilePick(refTile), clicked], pool, sceneNav);
             return;
           }
         }
-        openGallery([clicked], pool);
+        openGallery([clicked], pool, sceneNav);
       }));
     grid.querySelectorAll(".shot-play").forEach((btn) =>
       btn.addEventListener("click", (e) => {
@@ -5278,7 +5301,7 @@
   }
 
   // Öffnet beliebig viele Bilder (mit interaktivem Wipe-/Umschalt-Vergleich + 1:1/2×/4× Pixel-Zoom).
-  function openGallery(items, allPool) {
+  function openGallery(items, allPool, sceneNav) {
     let box = $("lightbox");
     if (!box) {
       box = document.createElement("div");
@@ -5302,7 +5325,10 @@
     const bar = box.querySelector("#lightbox-toolbar");
     const stage = box.querySelector("#lightbox-stage");
     const gal = box.querySelector(".lightbox-grid");
-    const pool = (Array.isArray(allPool) && allPool.length >= items.length) ? allPool : items;
+    let pool = (Array.isArray(allPool) && allPool.length >= items.length) ? allPool : items;
+    const sceneList = (sceneNav && Array.isArray(sceneNav.scenes)) ? sceneNav.scenes : [];
+    let sceneId = sceneNav ? sceneNav.current : null;
+    const itemKey = (it) => (it && (it.key || (it.kind === "ref" ? "ref" : it.label))) || "";
     const canCompare = pool.length >= 2;
     let mode = items.length >= 2 ? "wipe" : (canCompare ? "wipe" : "grid");
     const findIdx = (it, fb) => {
@@ -5374,6 +5400,12 @@
           <button type="button" class="btn btn-sm ${mode === "flip" ? "btn-primary" : "btn-ghost"}" data-lb-mode="flip">${escapeHtml(tt("Hin & Her (A/B)"))}</button>
           <button type="button" class="btn btn-sm ${mode === "grid" ? "btn-primary" : "btn-ghost"}" data-lb-mode="grid">${escapeHtml(tt("Nebeneinander"))}</button>
         </div>
+        ${sceneList.length > 1 ? `
+        <label>${escapeHtml(tt("Szene"))}
+          <select id="lb-scene">
+            ${sceneList.map((s) => `<option value="${s.id}">${escapeHtml(s.label)}</option>`).join("")}
+          </select>
+        </label>` : ""}
         ${mode !== "grid" ? `
         <div class="lb-selectors">
           <label>A <select id="lb-sel-a">${optHtml}</select></label>
@@ -5399,6 +5431,32 @@
         }));
       const closeBtn = bar.querySelector("#lb-close");
       if (closeBtn) closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeLightbox(); });
+      const sceneSel = bar.querySelector("#lb-scene");
+      if (sceneSel) {
+        sceneSel.value = String(sceneId);
+        sceneSel.addEventListener("change", (e) => {
+          e.stopPropagation();
+          const nextId = Number(sceneSel.value);
+          const prevA = pool[idxA];
+          const prevB = pool[idxB];
+          const prevKeys = items.map(itemKey);
+          if (sceneNav && sceneNav.onScene) sceneNav.onScene(nextId);
+          const next = sceneNav && sceneNav.itemsFor ? sceneNav.itemsFor(nextId) : null;
+          if (!next || !next.length) return;
+          sceneId = nextId;
+          pool = next;
+          const findKey = (old, fb) => {
+            const hit = pool.findIndex((p) => itemKey(p) === itemKey(old));
+            return hit >= 0 ? hit : Math.min(fb, pool.length - 1);
+          };
+          idxA = findKey(prevA, 0);
+          idxB = findKey(prevB, idxA === 0 ? Math.min(1, pool.length - 1) : 0);
+          if (idxA === idxB && pool.length > 1) idxB = idxA === 0 ? 1 : 0;
+          const mapped = prevKeys.map((k) => pool.find((p) => itemKey(p) === k)).filter(Boolean);
+          if (mapped.length) items = mapped;
+          renderView();
+        });
+      }
 
       const selA = bar.querySelector("#lb-sel-a");
       const selB = bar.querySelector("#lb-sel-b");
@@ -13526,6 +13584,64 @@
     });
   }
 
+  function abBufferedCovers(video, localT) {
+    if (!video) return false;
+    if (localT <= 0.05) return video.readyState >= 1;
+    const ranges = video.buffered;
+    if (ranges && ranges.length) {
+      for (let i = 0; i < ranges.length; i += 1) {
+        if (ranges.start(i) - 0.08 <= localT && ranges.end(i) + 0.02 >= localT) return true;
+      }
+    }
+    // Der Anfang eines kurzen Clips ist spielbar, auch wenn die Range noch fehlt.
+    return video.readyState >= 3 && localT <= 8;
+  }
+
+  function abWaitCovered(video, localT, valid) {
+    return new Promise((resolve) => {
+      if (!video || !valid() || video.error) { resolve(false); return; }
+      if (abBufferedCovers(video, localT)) { resolve(true); return; }
+      const events = ["progress", "loadeddata", "loadedmetadata", "canplay"];
+      let timer;
+      const finish = (ok) => {
+        clearTimeout(timer);
+        events.forEach((name) => video.removeEventListener(name, check));
+        resolve(ok);
+      };
+      const check = () => {
+        if (!valid() || video.error) finish(false);
+        else if (abBufferedCovers(video, localT)) finish(true);
+      };
+      events.forEach((name) => video.addEventListener(name, check));
+      timer = setTimeout(() => finish(valid() && abBufferedCovers(video, localT)), 8000);
+    });
+  }
+
+  // Beide Clips laufen als Stream ab dem ersten Bild. Der Remux muss den
+  // Keyframe-Vorlauf überspringen. Ein Seek vor dem Puffer fällt auf 0 zurück
+  // und der Encode läuft dann um genau diesen Vorlauf voraus.
+  async function abPlaceSide(side, filmT, valid) {
+    const video = side && side.video;
+    if (!video || !valid()) return false;
+    const localT = Math.max(0, filmT - (side.offset || 0));
+    const close = () => Math.abs((video.currentTime || 0) - localT) < 0.02;
+    const deadline = Date.now() + 8000;
+    while (valid() && Date.now() < deadline) {
+      if (!abBufferedCovers(video, localT)) {
+        const covered = await abWaitCovered(video, localT, valid);
+        if (!covered || !valid()) return false;
+      }
+      if (!close() || video.seeking) abSetTime(side, filmT);
+      if (close() && !video.seeking) return true;
+      const landed = await abWaitMediaReady(
+        video, Math.max(200, deadline - Date.now()), 2, valid);
+      if (!valid()) return false;
+      if (landed && close() && !video.seeking) return true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return valid() && close() && !video.seeking;
+  }
+
   async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true) {
     if (ab.closing) return false;
     const sa = ab.sides.a, sb = ab.sides.b;
@@ -13542,8 +13658,9 @@
       const metadata = await Promise.all(sides.map((side) =>
         abWaitMediaReady(side.video, 8000, 1, current)));
       if (!current() || !metadata.every(Boolean)) return false;
-      sides.forEach((side) => abSetTime(side,
-        Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0))));
+      const placed = await Promise.all(sides.map((side) => abPlaceSide(
+        side, Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0)), current)));
+      if (!current() || !placed.every(Boolean)) return false;
       const ready = await Promise.all(sides.map((side) =>
         abWaitMediaReady(side.video, 8000, 3, current)));
       if (!current() || !ready.every(Boolean)) return false;

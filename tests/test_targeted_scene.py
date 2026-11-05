@@ -26,6 +26,13 @@ class TargetedSceneTests(unittest.TestCase):
     def test_six_point_rule_remains_unchanged(self):
         self.assertEqual(vmaf.VMAF_P1_GAP,6.0)
 
+    def test_source_lead_follows_the_file_clock(self):
+        self.assertEqual(vmaf._lead_from_origin(4699.2, 4700.889, 0.819), 1.689)
+        self.assertEqual(vmaf._lead_from_origin(0.0, 4700.889, 0.819), 0.819)
+        self.assertEqual(vmaf._lead_from_origin(None, 10.0, 0.5), 0.5)
+        self.assertTrue(vmaf.clip_uses_source_clock("source_s0.mkv"))
+        self.assertFalse(vmaf.clip_uses_source_clock("test_nvidia_av1_s0.mkv"))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -132,6 +132,7 @@ const window = { addEventListener() {}, devicePixelRatio: 1 };
 const localStorage = { getItem: () => null, setItem() {} };
 const state = { currentPage: "vmafnerd", abJob: "", vmafSession: "test", vmafSource: { path: "source.mkv" } };
 const tt = (text) => text;
+function libDvProfileName() { return ""; }
 const fmtClock = (value) => String(value);
 function navTo() {}
 function idsForPicks() { return []; }
@@ -384,6 +385,10 @@ class AbPlayerSyncTests(unittest.TestCase):
         """)
         self.assertIn("source_s0.mkv", self.value("a.clipUrl"))
         self.assertIn("source_s0.mkv", self.value("a.path"))
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 2.5)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 0)
+        self.assertAlmostEqual(self.value("abTime(a)"), 64)
+        self.assertAlmostEqual(self.value("abTime(b)"), 64)
         self.assertAlmostEqual(self.value("a.offset"), 61.5)
         self.assertAlmostEqual(self.value("b.offset"), 64)
         self.assertIn("second.mp4", self.value("b.clipUrl"))
@@ -393,7 +398,7 @@ class AbPlayerSyncTests(unittest.TestCase):
         """)
         self.assertEqual(self.value("a.path"), "source.mkv")
         self.assertEqual(self.value("a.clipUrl"), "")
-        self.assertEqual(self.value("a.offset"), 0)
+        self.assertNotIn("source_s0", self.value("a.clipUrl"))
 
     def test_nerd_choice_uses_the_source_remux(self):
         self.evaluate("""

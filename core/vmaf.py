@@ -641,6 +641,49 @@ def _keyframe_before(path: Path, start: float) -> float:
     return start if best is None else best
 
 
+def _first_video_pts(path: Path) -> Optional[float]:
+    """PTS des ersten Videopakets. None, wenn die Datei keine Zeit liefert."""
+    cmd = [
+        config.FFPROBE, "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time",
+        "-read_intervals", "%+#1",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=20, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    piece = ((proc.stdout or "").strip().splitlines() or [""])[0].split(",")[0].strip()
+    try:
+        pts = float(piece)
+    except ValueError:
+        return None
+    return pts if pts >= 0 else None
+
+
+def _lead_from_origin(first: Optional[float], start: float, fallback: float) -> float:
+    """Vorlauf bis zur Szene.
+
+    Eine Stream-Kopie behält die Filmzeit. Der Player legt das erste Paket
+    auf 0, deshalb ist der Vorlauf dann der Abstand zu dieser Filmzeit.
+    Liegt das erste Paket schon bei 0, gilt der vorher berechnete Vorlauf.
+    """
+    try:
+        origin = float(first) if first is not None else None
+        scene = float(start)
+        saved = max(0.0, float(fallback))
+    except (TypeError, ValueError):
+        return 0.0
+    if origin is None or origin < 1.0 or scene < origin:
+        return round(saved, 3)
+    return round(scene - origin, 3)
+
+
 def _extract_source_remux(
     info: VideoInfo, work: Path, start: float, clip_len: float, idx: int,
 ) -> tuple[str, float]:
@@ -671,6 +714,9 @@ def _extract_source_remux(
         except OSError:
             pass
         return "", 0.0
+    # FFmpeg schneidet an einem Keyframe, der vor dem gemessenen liegen kann.
+    # Die echte Distanz steht in der Datei, nicht in der vorherigen Suche.
+    lead = _lead_from_origin(_first_video_pts(dest), start, lead)
     return name, lead
 
 
@@ -1823,6 +1869,50 @@ def measured_kbps(size_bytes: int, seconds: float) -> int:
     return int(round(size * 8 / sec / 1000))
 
 
+def _scene_start(analysis: dict, raw: dict, scene: int) -> Optional[float]:
+    for sc in raw.get("scene_scores") or []:
+        if not isinstance(sc, dict):
+            continue
+        try:
+            if int(sc.get("scene")) != scene:
+                continue
+            return float(sc.get("start"))
+        except (TypeError, ValueError):
+            continue
+    starts = analysis.get("sample_starts") or []
+    if not isinstance(starts, list) or scene < 0 or scene >= len(starts):
+        return None
+    item = starts[scene]
+    try:
+        if isinstance(item, (list, tuple)) and item:
+            return float(item[0])
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _measured_source_lead(
+    analysis: dict, raw: dict, path: Path, scene: int,
+    cache: dict[int, float], fallbacks: dict[int, float],
+) -> float:
+    """Vorlauf aus der Datei, einmal je Szene."""
+    fallback = max(0.0, float(fallbacks.get(scene, 0.0) or 0.0))
+    if scene < 0:
+        return round(fallback, 3)
+    if scene in cache:
+        return cache[scene]
+    start = _scene_start(analysis, raw, scene)
+    lead = fallback if start is None else _lead_from_origin(
+        _first_video_pts(path), start, fallback)
+    cache[scene] = lead
+    return lead
+
+
+def clip_uses_source_clock(filename: str) -> bool:
+    """Quellausschnitt: die Pakete tragen noch die Filmzeit der Originaldatei."""
+    return bool(filename and _SOURCE_CLIP.match(filename))
+
+
 def annotate_clips(session: str, analysis: dict) -> None:
     """Hängt vorhandene Testclips an die Screenshots (Dateiname, kein URL).
 
@@ -1835,6 +1925,7 @@ def annotate_clips(session: str, analysis: dict) -> None:
     root = config.VMAF_SESSIONS_DIR / session
     seconds = float(analysis.get("clip_seconds") or 0)
     leads: dict[int, float] = {}
+    measured_leads: dict[int, float] = {}
     for item in analysis.get("source_clips") or []:
         if not isinstance(item, dict):
             continue
@@ -1865,7 +1956,12 @@ def annotate_clips(session: str, analysis: dict) -> None:
             source_path = root / source_name if source_name else None
             if source_path is not None and source_path.is_file():
                 shot["source_clip"] = source_name
-                shot["source_lead"] = round(float(leads.get(int(shot.get("scene") or 0), 0.0)), 3)
+                try:
+                    scene_no = int(shot.get("scene"))
+                except (TypeError, ValueError):
+                    scene_no = -1
+                shot["source_lead"] = _measured_source_lead(
+                    analysis, raw, source_path, scene_no, measured_leads, leads)
             else:
                 shot.pop("source_clip", None)
                 shot.pop("source_lead", None)

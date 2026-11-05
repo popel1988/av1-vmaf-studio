@@ -2096,7 +2096,9 @@ async def vmaf_clip(session: str, file: str):
     target = vmaf_mod.clip_path(session, file)
     if target is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
-    cmd = ms.build_play_cmd(target, audio_index=None)
+    cmd = ms.build_play_cmd(
+        target, audio_index=None, rebase_ts=vmaf_mod.clip_uses_source_clock(file),
+    )
     return StreamingResponse(
         ms.async_stream_bytes(cmd, owner="preview", label=file, source=str(target)),
         media_type="video/mp4",

@@ -44,6 +44,7 @@ def build_play_cmd(
     audio_index: Optional[int] = 0,
     start_sec: float = 0.0,
     audio_codec: str = "",
+    rebase_ts: bool = False,
 ) -> list[str]:
     """FFmpeg: Video copy, eine Tonspur → AAC (oder copy), fMP4 auf stdout.
 
@@ -66,6 +67,10 @@ def build_play_cmd(
         "-map", "0:v:0?",
         "-c:v", "copy",
     ]
+    if rebase_ts:
+        # Eine Kopie behält die Filmzeit (z. B. 4700 s). Der Clip-Player zählt
+        # ab 0. Beide Uhren auf das erste Paket legen, Abstände bleiben.
+        cmd += ["-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"]
     if audio_index is None or audio_index < 0:
         cmd += ["-an"]
     else:
