@@ -1282,7 +1282,7 @@ class QueueManager:
             item.vmaf = analysis.to_dict()
             sess_name = _session_name(item)
             item.vmaf["session"] = sess_name
-            vmaf_mod.annotate_clips(sess_name, item.vmaf)
+            vmaf_mod.annotate_clips(sess_name, item.vmaf, item.path)
             item.message = ""
 
             if item.id in self._cancel_ids:

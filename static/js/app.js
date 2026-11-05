@@ -5179,7 +5179,7 @@
             </label>
             <img src="${t.src}" alt="${escapeHtml(t.label)}" loading="lazy" />
             <span class="shot-badge">${escapeHtml(t.label)}<small>${escapeHtml(t.sub)}</small></span>
-            ${t.clip ? `<button type="button" class="shot-play" data-clip="${escapeHtml(t.clip)}">${escapeHtml(tt("Abspielen"))}</button>` : ""}
+            ${(t.ref ? t.sourceClip : t.clip) ? `<button type="button" class="shot-play" data-clip="${escapeHtml(t.ref ? t.sourceClip : t.clip)}" data-lead="${t.ref ? (Number(t.lead) || 0) : 0}">${escapeHtml(tt("Abspielen"))}</button>` : ""}
           </div>`;
         }).join("")}
       </div>`;
@@ -5294,8 +5294,12 @@
         const cap = (tile && tile.dataset.cap) || "Szene";
         const src = `/api/vmaf/clip?session=${encodeURIComponent(session)}`
           + `&file=${encodeURIComponent(file)}`;
+        const lead = Number(btn.dataset.lead) || 0;
         openModal(cap, `<video class="vmaf-clip-video" controls autoplay playsinline src="${src}"></video>`,
           { player: true });
+        const video = ($("app-modal-body") || {}).querySelector
+          ? $("app-modal-body").querySelector("video") : null;
+        if (video && lead > 0.02) playClipFromLead(video, lead, { keepPlaying: true });
       }));
     updateCmp();
   }
@@ -13617,13 +13621,75 @@
     });
   }
 
-  // Beide Clips laufen als Stream ab dem ersten Bild. Der Remux muss den
-  // Keyframe-Vorlauf überspringen. Ein Seek vor dem Puffer fällt auf 0 zurück
-  // und der Encode läuft dann um genau diesen Vorlauf voraus.
+  // Der Remux beginnt am Keyframe vor der Szene. Ein Seek dorthin zeigt genau
+  // diesen Keyframe, currentTime steht aber schon auf dem Ziel. Das Original
+  // hängt dann um den ganzen Vorlauf hinter dem Encode. Deshalb das Bild
+  // verstecken und bis zum Szenenbild laufen lassen.
+  function playClipFromLead(video, lead) {
+    const target = Math.max(0, Number(lead) || 0);
+    if (!video || target <= 0.02 || typeof video.requestVideoFrameCallback !== "function") {
+      return Promise.resolve(false);
+    }
+    const previous = video.style.visibility;
+    video.style.visibility = "hidden";
+    const restore = () => { video.style.visibility = previous; };
+    return new Promise((resolve) => {
+      let handle = 0;
+      let timer = 0;
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (handle && video.cancelVideoFrameCallback) {
+          try { video.cancelVideoFrameCallback(handle); } catch (e) { /* ignore */ }
+        }
+        video.removeEventListener("ended", onEnd);
+        restore();
+        resolve(!!ok);
+      };
+      const onEnd = () => finish(false);
+      const step = (_now, meta) => {
+        const t = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (video.currentTime || 0);
+        if (t >= target - 0.015) finish(true);
+        else handle = video.requestVideoFrameCallback(step);
+      };
+      const start = () => {
+        video.play().then(() => {
+          handle = video.requestVideoFrameCallback(step);
+        }).catch(() => finish(false));
+      };
+      video.addEventListener("ended", onEnd);
+      timer = setTimeout(() => finish((video.currentTime || 0) >= target - 0.015), 8000);
+      if (video.readyState >= 1) start();
+      else video.addEventListener("loadedmetadata", start, { once: true });
+    });
+  }
+
   async function abPlaceSide(side, filmT, valid) {
     const video = side && side.video;
     if (!video || !valid()) return false;
     const localT = Math.max(0, filmT - (side.offset || 0));
+    const now = video.currentTime || 0;
+    if (side.clipUrl && localT > 0.02 && now + 0.02 < localT
+        && typeof video.requestVideoFrameCallback === "function") {
+      if (side.alignedAt != null && Math.abs(now - localT) < 0.04
+          && Math.abs(side.alignedAt - localT) < 0.04) return true;
+      side.catchingUp = true;
+      let caught = false;
+      try {
+        caught = await playClipFromLead(video, localT);
+      } finally {
+        side.catchingUp = false;
+      }
+      if (!valid()) return false;
+      side.syncPauses = (side.syncPauses || 0) + 1;
+      try { video.pause(); } catch (e) { /* ignore */ }
+      if (caught) {
+        side.alignedAt = video.currentTime || localT;
+        return true;
+      }
+    }
     const close = () => Math.abs((video.currentTime || 0) - localT) < 0.02;
     const deadline = Date.now() + 8000;
     while (valid() && Date.now() < deadline) {
@@ -13868,6 +13934,8 @@
     const targetStart = Math.max(0, startSec || 0);
     side.lastTime = targetStart;
     side.starting = true;
+    side.catchingUp = false;
+    side.alignedAt = null;
     try {
       abDestroy(side);
       if (stale()) return false;
@@ -14324,6 +14392,7 @@
       const video = side.video;
       video.addEventListener("play", () => {
         if (video.paused) return; // Event eines inzwischen abgebrochenen Starts.
+        if (side.catchingUp) return;
         abApplyPlaybackRate();
         if (ab.closing || ab.seeking || ab.settling) { abPauseMedia(side); return; }
         abSetEncodePaused(side, false);
@@ -14335,6 +14404,7 @@
         abPlayTogether();
       });
       video.addEventListener("pause", () => {
+        if (side.catchingUp) return;
         if (side.syncPauses > 0) { side.syncPauses -= 1; return; }
         if (ab.closing) return;
         if (abSynced()) { abPauseBoth(); alignB(true); }

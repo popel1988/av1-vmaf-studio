@@ -666,6 +666,62 @@ def _first_video_pts(path: Path) -> Optional[float]:
     return pts if pts >= 0 else None
 
 
+_PTS_TIME = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
+_DEMUX_ORIGIN: dict[tuple[str, str], Optional[float]] = {}
+
+
+def _demux_origin(path: Path, ss: float) -> Optional[float]:
+    """Keyframe, an dem FFmpeg eine Kopie vor dieser Zeit wirklich einsetzt.
+
+    Die Keyframe-Liste und der Demuxer liegen oft auseinander. Eine HEVC-Kopie
+    beginnt dann mehrere Sekunden früher, und das Original hängt im Vergleich
+    hinter dem Encode her.
+    """
+    try:
+        stamp = f"{max(0.0, float(ss)):.3f}"
+    except (TypeError, ValueError):
+        return None
+    key = (str(path), stamp)
+    if key in _DEMUX_ORIGIN:
+        return _DEMUX_ORIGIN[key]
+    cmd = [
+        config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
+        "-ss", stamp, "-i", str(path),
+        "-map", "0:v:0", "-an", "-sn",
+        "-frames:v", "1", "-vf", "showinfo",
+        "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=45, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        _DEMUX_ORIGIN[key] = None
+        return None
+    found = _PTS_TIME.findall(proc.stderr or "")
+    origin: Optional[float] = None
+    if found:
+        try:
+            origin = float(found[0])
+        except ValueError:
+            origin = None
+    _DEMUX_ORIGIN[key] = origin
+    return origin
+
+
+def _trusted_origin(origin: Optional[float], start: float) -> Optional[float]:
+    """Nur ein Keyframe kurz vor der Szene. Ein Fehlgriff darf keine Stunde schneiden."""
+    try:
+        point = float(origin) if origin is not None else None
+        scene = float(start)
+    except (TypeError, ValueError):
+        return None
+    if point is None or point < 0 or scene < point or scene - point > 30:
+        return None
+    return point
+
+
 def _lead_from_origin(first: Optional[float], start: float, fallback: float) -> float:
     """Vorlauf bis zur Szene.
 
@@ -696,12 +752,14 @@ def _extract_source_remux(
     if not name:
         return "", 0.0
     dest = work / name
-    key = _keyframe_before(Path(info.path), start)
-    lead = max(0.0, round(float(start) - key, 3))
+    origin = _trusted_origin(_demux_origin(Path(info.path), start), start)
+    if origin is None:
+        origin = _keyframe_before(Path(info.path), start)
+    lead = max(0.0, round(float(start) - origin, 3))
     span = round(max(0.1, float(clip_len) + lead), 3)
     cmd = [
         config.FFMPEG, "-y", "-hide_banner",
-        "-ss", f"{key:.3f}", "-i", str(info.path),
+        "-ss", f"{origin:.3f}", "-i", str(info.path),
         "-t", f"{span:.3f}",
         "-map", "0:v:0", "-c", "copy", "-an", "-sn",
         "-avoid_negative_ts", "make_zero",
@@ -1894,6 +1952,7 @@ def _scene_start(analysis: dict, raw: dict, scene: int) -> Optional[float]:
 def _measured_source_lead(
     analysis: dict, raw: dict, path: Path, scene: int,
     cache: dict[int, float], fallbacks: dict[int, float],
+    movie: str = "",
 ) -> float:
     """Vorlauf aus der Datei, einmal je Szene."""
     fallback = max(0.0, float(fallbacks.get(scene, 0.0) or 0.0))
@@ -1904,6 +1963,13 @@ def _measured_source_lead(
     start = _scene_start(analysis, raw, scene)
     lead = fallback if start is None else _lead_from_origin(
         _first_video_pts(path), start, fallback)
+    # Nullgestellte Ausschnitte verraten den echten Keyframe nicht mehr.
+    # Der steht in der Quelle, an der Stelle, an der die Kopie gesucht hat.
+    if movie and start is not None and abs(lead - fallback) < 0.001:
+        origin = _trusted_origin(
+            _demux_origin(Path(movie), max(0.0, float(start) - fallback)), start)
+        if origin is not None:
+            lead = _lead_from_origin(origin, start, lead)
     cache[scene] = lead
     return lead
 
@@ -1913,7 +1979,7 @@ def clip_uses_source_clock(filename: str) -> bool:
     return bool(filename and _SOURCE_CLIP.match(filename))
 
 
-def annotate_clips(session: str, analysis: dict) -> None:
+def annotate_clips(session: str, analysis: dict, movie_path: str = "") -> None:
     """Hängt vorhandene Testclips an die Screenshots (Dateiname, kein URL).
 
     Fehlende Bitraten kommen aus der Datei, sonst aus der gespeicherten
@@ -1961,7 +2027,8 @@ def annotate_clips(session: str, analysis: dict) -> None:
                 except (TypeError, ValueError):
                     scene_no = -1
                 shot["source_lead"] = _measured_source_lead(
-                    analysis, raw, source_path, scene_no, measured_leads, leads)
+                    analysis, raw, source_path, scene_no, measured_leads, leads,
+                    movie_path)
             else:
                 shot.pop("source_clip", None)
                 shot.pop("source_lead", None)
@@ -2654,7 +2721,8 @@ def load_session(name: str) -> Optional[dict]:
         return None
     analysis = data.get("analysis")
     if isinstance(analysis, dict):
-        annotate_clips(data.get("session") or name, analysis)
+        annotate_clips(
+            data.get("session") or name, analysis, data.get("source_path") or "")
         # Anzeige korrigieren, ohne die Datei umzuschreiben. Neu einordnen speichert.
         if apply_idle_scenes(analysis.get("results") or []):
             params = data.get("params") or {}

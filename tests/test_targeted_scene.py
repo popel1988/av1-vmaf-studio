@@ -27,11 +27,16 @@ class TargetedSceneTests(unittest.TestCase):
         self.assertEqual(vmaf.VMAF_P1_GAP,6.0)
 
     def test_source_lead_follows_the_file_clock(self):
+        self.assertEqual(vmaf._lead_from_origin(4698.5, 4700.889, 0.819), 2.389)
         self.assertEqual(vmaf._lead_from_origin(4699.2, 4700.889, 0.819), 1.689)
         self.assertEqual(vmaf._lead_from_origin(0.0, 4700.889, 0.819), 0.819)
         self.assertEqual(vmaf._lead_from_origin(None, 10.0, 0.5), 0.5)
         self.assertTrue(vmaf.clip_uses_source_clock("source_s0.mkv"))
         self.assertFalse(vmaf.clip_uses_source_clock("test_nvidia_av1_s0.mkv"))
+        self.assertEqual(vmaf._trusted_origin(4698.5, 4700.889), 4698.5)
+        self.assertIsNone(vmaf._trusted_origin(10.0, 4700.889))
+        line = "n:   0 pts: 423864 pts_time:4698.5 pos: 1234 fmt:yuv420p"
+        self.assertEqual(vmaf._PTS_TIME.findall(line), ["4698.5"])
 
 
 if __name__ == '__main__':
