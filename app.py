@@ -2099,7 +2099,7 @@ async def vmaf_clip(session: str, file: str):
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     source = vmaf_mod.clip_uses_source_clock(file)
     info = await asyncio.to_thread(ff.ffprobe, target) if source else None
-    vcodec = (info.video_codec if info else "") if source else ""
+    vcodec = (getattr(info, "codec", "") if info else "") if source else ""
     first_pts = await asyncio.to_thread(vmaf_mod._first_video_pts, target) if source else 0.0
     rebase = bool(source and first_pts is not None and first_pts >= 1.0)
     cmd = ms.build_play_cmd(
