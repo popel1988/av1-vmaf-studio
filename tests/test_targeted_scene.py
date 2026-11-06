@@ -39,13 +39,10 @@ class TargetedSceneTests(unittest.TestCase):
         line = "n:   0 pts: 423864 pts_time:4698.5 pos: 1234 fmt:yuv420p"
         self.assertEqual(vmaf._PTS_TIME.findall(line), ["4698.5"])
         cmd = media_stream.build_play_cmd(
-            Path("source_s0.mkv"), audio_index=None, start_sec=1.689,
-            rebase_ts=True, duration_sec=15.0)
-        i_pos = cmd.index("-i")
-        ss_pos = cmd.index("-ss")
-        self.assertGreater(ss_pos, i_pos)
-        self.assertEqual(cmd[ss_pos + 1], "1.689")
-        self.assertIn("15.000", cmd)
+            Path("source_s0.mkv"), audio_index=None, rebase_ts=False,
+            video_codec="hevc")
+        self.assertIn("hvc1", cmd)
+        self.assertIn("-map_chapters", cmd)
 
 
 if __name__ == '__main__':

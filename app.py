@@ -2088,20 +2088,22 @@ async def vmaf_repick(req: VmafRepickRequest):
 
 
 @app.get("/api/vmaf/clip")
-async def vmaf_clip(session: str, file: str, lead: float = 0.0, length: float = 0.0):
+async def vmaf_clip(session: str, file: str):
     """Encodierten Szenenclip als fragmentiertes MP4 abspielen (Video-Kopie)."""
     from fastapi.responses import StreamingResponse
+    from core import ffmpeg_utils as ff
     from core import media_stream as ms
     from core import vmaf as vmaf_mod
     target = vmaf_mod.clip_path(session, file)
     if target is None:
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     source = vmaf_mod.clip_uses_source_clock(file)
-    skip = min(30.0, max(0.0, float(lead or 0.0))) if source else 0.0
-    span = min(180.0, max(0.0, float(length or 0.0))) if source else 0.0
+    info = await asyncio.to_thread(ff.ffprobe, target) if source else None
+    vcodec = (info.video_codec if info else "") if source else ""
+    first_pts = await asyncio.to_thread(vmaf_mod._first_video_pts, target) if source else 0.0
+    rebase = bool(source and first_pts is not None and first_pts >= 1.0)
     cmd = ms.build_play_cmd(
-        target, audio_index=None, start_sec=skip, rebase_ts=source,
-        duration_sec=span,
+        target, audio_index=None, rebase_ts=rebase, video_codec=vcodec,
     )
     return StreamingResponse(
         ms.async_stream_bytes(cmd, owner="preview", label=file, source=str(target)),

@@ -45,14 +45,11 @@ def build_play_cmd(
     start_sec: float = 0.0,
     audio_codec: str = "",
     rebase_ts: bool = False,
-    duration_sec: float = 0.0,
+    video_codec: str = "",
 ) -> list[str]:
     """FFmpeg: Video copy, eine Tonspur → AAC (oder copy), fMP4 auf stdout.
 
     ``start_sec``: Sprung vor dem Demux (Keyframe-Seek) für Player-Suche.
-    Bei ``rebase_ts`` liegt der Keyframe-Vorlauf schon in der Datei; der Sprung
-    steht dann nach ``-i``, damit der Browser nicht am Keyframe vor dem
-    Vorlauf hängen bleibt.
 
     Sync-Hinweise: Bei Video-copy + Audio-Encode und ``frag_keyframe`` puffert
     der Muxer oft bis zum nächsten Keyframe – Ton läuft im Browser voraus.
@@ -63,20 +60,21 @@ def build_play_cmd(
         # Fehlende/kaputte Timestamps regenerieren (DTS/TrueHD → AAC).
         "-fflags", "+genpts",
     ]
-    if start_sec and start_sec > 0 and not rebase_ts:
+    if start_sec and start_sec > 0:
         # Input-Seek: schnell. Fein-Sync über genpts / avoid_negative_ts.
         cmd += ["-ss", f"{float(start_sec):.3f}"]
     cmd += [
         "-i", str(path),
-    ]
-    if start_sec and start_sec > 0 and rebase_ts:
-        cmd += ["-ss", f"{float(start_sec):.3f}"]
-    if duration_sec and duration_sec > 0:
-        cmd += ["-t", f"{float(duration_sec):.3f}"]
-    cmd += [
+        "-map_metadata", "-1",
+        "-map_chapters", "-1",
         "-map", "0:v:0?",
         "-c:v", "copy",
     ]
+    vc = (video_codec or "").lower().strip()
+    if vc in ("hevc", "h265"):
+        cmd += ["-tag:v", "hvc1"]
+    elif vc == "av1":
+        cmd += ["-tag:v", "av01"]
     if rebase_ts:
         # Eine Kopie behält die Filmzeit (z. B. 4700 s). Der Clip-Player zählt
         # ab 0. Beide Uhren auf das erste Paket legen, Abstände bleiben.

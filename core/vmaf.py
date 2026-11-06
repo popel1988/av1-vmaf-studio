@@ -686,6 +686,7 @@ def _demux_origin(path: Path, ss: float) -> Optional[float]:
         return _DEMUX_ORIGIN[key]
     cmd = [
         config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
+        "-copyts", "-noaccurate_seek",
         "-ss", stamp, "-i", str(path),
         "-map", "0:v:0", "-an", "-sn",
         "-frames:v", "1", "-vf", "showinfo",
@@ -1970,6 +1971,14 @@ def _measured_source_lead(
             _demux_origin(Path(movie), max(0.0, float(start) - fallback)), start)
         if origin is not None:
             lead = _lead_from_origin(origin, start, lead)
+    else:
+        dur = float(analysis.get("clip_seconds") or 0)
+        if dur > 0:
+            info = ff.ffprobe(path)
+            clip_dur = float(info.duration or 0) if info else 0.0
+            span_lead = round(clip_dur - dur, 3)
+            if fallback + 0.25 < span_lead <= 30.0:
+                lead = span_lead
     cache[scene] = lead
     return lead
 
