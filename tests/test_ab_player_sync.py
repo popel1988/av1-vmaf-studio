@@ -384,12 +384,14 @@ class AbPlayerSyncTests(unittest.TestCase):
                       {kind:'enc', clip:'second.mp4', start:64, len:15}], {stay:true});
         """)
         self.assertIn("source_s0.mkv", self.value("a.clipUrl"))
+        self.assertIn("lead=2.500", self.value("a.clipUrl"))
+        self.assertIn("length=15.000", self.value("a.clipUrl"))
         self.assertIn("source_s0.mkv", self.value("a.path"))
-        self.assertAlmostEqual(self.value("a.video.currentTime"), 2.5)
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 0)
         self.assertAlmostEqual(self.value("b.video.currentTime"), 0)
         self.assertAlmostEqual(self.value("abTime(a)"), 64)
         self.assertAlmostEqual(self.value("abTime(b)"), 64)
-        self.assertAlmostEqual(self.value("a.offset"), 61.5)
+        self.assertAlmostEqual(self.value("a.offset"), 64)
         self.assertAlmostEqual(self.value("b.offset"), 64)
         self.assertIn("second.mp4", self.value("b.clipUrl"))
         self.evaluate("""
@@ -412,7 +414,9 @@ class AbPlayerSyncTests(unittest.TestCase):
           openClipAb(picks, { stay: true });
         """)
         self.assertIn("source_s0.mkv", self.value("a.clipUrl"))
-        self.assertAlmostEqual(self.value("a.offset"), 4700.889 - 0.819)
+        self.assertIn("lead=0.819", self.value("a.clipUrl"))
+        self.assertIn("length=15.000", self.value("a.clipUrl"))
+        self.assertAlmostEqual(self.value("a.offset"), 4700.889)
         self.assertIn("test_s0.mkv", self.value("b.clipUrl"))
 
     def test_hidden_standard_load_cannot_replace_nerd_clips(self):

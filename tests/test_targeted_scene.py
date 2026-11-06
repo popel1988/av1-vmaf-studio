@@ -3,8 +3,9 @@ import math
 from dataclasses import asdict
 import unittest
 
+from pathlib import Path
 from core.queue_manager import JobSettings, build_job_settings, _validate_sample_ranges
-from core import vmaf
+from core import media_stream, vmaf
 
 
 class TargetedSceneTests(unittest.TestCase):
@@ -37,6 +38,14 @@ class TargetedSceneTests(unittest.TestCase):
         self.assertIsNone(vmaf._trusted_origin(10.0, 4700.889))
         line = "n:   0 pts: 423864 pts_time:4698.5 pos: 1234 fmt:yuv420p"
         self.assertEqual(vmaf._PTS_TIME.findall(line), ["4698.5"])
+        cmd = media_stream.build_play_cmd(
+            Path("source_s0.mkv"), audio_index=None, start_sec=1.689,
+            rebase_ts=True, duration_sec=15.0)
+        i_pos = cmd.index("-i")
+        ss_pos = cmd.index("-ss")
+        self.assertGreater(ss_pos, i_pos)
+        self.assertEqual(cmd[ss_pos + 1], "1.689")
+        self.assertIn("15.000", cmd)
 
 
 if __name__ == '__main__':
