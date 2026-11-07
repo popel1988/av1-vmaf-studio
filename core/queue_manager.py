@@ -620,6 +620,9 @@ class QueueManager:
                     report=(d.get("output_report", d.get("report"))
                             if isinstance(d.get("output_report", d.get("report")), dict) else None),
                 )
+                if isinstance(item.vmaf, dict):
+                    sess_name = str(item.vmaf.get("session") or _session_name(item))
+                    vmaf_mod.annotate_clips(sess_name, item.vmaf, item.path)
                 self._items.append(item)
                 restored += 1
         if skipped_missing:
