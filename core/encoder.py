@@ -822,16 +822,20 @@ def build_encode_cmd(
         else:
             cmd += ["-hwaccel", "cuda"]
     elif platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
-        # VAAPI-Device als Upload-Ziel für den Software-Filterpfad (AMD sowie
-        # Intel im VAAPI-Modus).
-        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
-                "-filter_hw_device", "va"]
+        if os.name != "nt":
+            # VAAPI-Device als Upload-Ziel für den Software-Filterpfad (AMD sowie
+            # Intel im VAAPI-Modus).
+            cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                    "-filter_hw_device", "va"]
     elif platform == "intel":
-        # QSV (oneVPL) wird unter Linux aus einem VAAPI-Device abgeleitet
-        # (dokumentierter Weg: qsv=qs@va).
-        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
-                "-init_hw_device", "qsv=qs@va",
-                "-filter_hw_device", "qs"]
+        if os.name == "nt":
+            cmd += ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"]
+        else:
+            # QSV (oneVPL) wird unter Linux aus einem VAAPI-Device abgeleitet
+            # (dokumentierter Weg: qsv=qs@va).
+            cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                    "-init_hw_device", "qsv=qs@va",
+                    "-filter_hw_device", "qs"]
 
     if engine == "libplacebo" and info.is_hdr and (do_tone or mobile_tone):
         cmd += ["-init_hw_device", "vulkan"]

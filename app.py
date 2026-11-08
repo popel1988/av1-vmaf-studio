@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.requests import Request
+import sys
 
 from core import ffmpeg_utils as ff
 from core.data_browser import (
@@ -40,7 +41,16 @@ from core.data_browser import (
 from core.hardware import HardwareMonitor
 from core.queue_manager import JobSettings, QueueManager
 
-BASE_DIR = Path(__file__).parent
+
+def _bundle_dir() -> Path:
+    """Ordner mit templates/ und static/ (in PyInstaller-EXE unter sys._MEIPASS)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and (Path(meipass) / "templates").is_dir():
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = _bundle_dir()
 app = FastAPI(title="AV1/VMAF Compression Studio")
 
 

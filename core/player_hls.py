@@ -1848,6 +1848,30 @@ def _signal_tree(pid: int, sig: int) -> bool:
         return False
 
 
+def _suspend_or_resume_tree(pid: int, suspend: bool) -> bool:
+    """Pausiert oder weckt FFmpeg inkl. Unterprozessen (POSIX: SIGSTOP/SIGCONT, Windows: psutil)."""
+    if not pid or pid <= 0:
+        return False
+    if os.name == "posix":
+        sig = getattr(signal, "SIGSTOP" if suspend else "SIGCONT", None)
+        return _signal_tree(pid, sig) if sig is not None else False
+    try:
+        import psutil
+        parent = psutil.Process(pid)
+        procs = [parent] + parent.children(recursive=True)
+        for p in procs:
+            try:
+                if suspend:
+                    p.suspend()
+                else:
+                    p.resume()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return True
+    except Exception:
+        return False
+
+
 def _pid_alive(pid: int) -> bool:
     if not pid or pid <= 0:
         return False
@@ -2026,15 +2050,14 @@ def pause_encode(sid: str) -> dict:
             return {"ok": True, "encode_paused": False, "running": False}
         if sess.encode_paused:
             return {"ok": True, "encode_paused": True}
-        sig = getattr(signal, "SIGSTOP", None)
-        if sig is None or not _signal_tree(int(sess.proc.pid), sig):
+        if not _suspend_or_resume_tree(int(sess.proc.pid), True):
             return {"ok": False, "encode_paused": False, "error": "Prozess konnte nicht pausiert werden"}
         sess.encode_paused = True
         return {"ok": True, "encode_paused": True}
 
 
 def resume_encode(sid: str) -> dict:
-    """FFmpeg nach Pause fortsetzen (SIGCONT)."""
+    """FFmpeg nach Pause fortsetzen (SIGCONT / psutil.resume)."""
     sess = get_session(sid)
     if not sess:
         return {"ok": False, "error": "Session nicht gefunden"}
@@ -2045,8 +2068,7 @@ def resume_encode(sid: str) -> dict:
             return {"ok": True, "encode_paused": False, "running": False}
         if not sess.encode_paused:
             return {"ok": True, "encode_paused": False}
-        sig = getattr(signal, "SIGCONT", None)
-        if sig is None or not _signal_tree(int(sess.proc.pid), sig):
+        if not _suspend_or_resume_tree(int(sess.proc.pid), False):
             return {"ok": False, "encode_paused": True, "error": "Prozess konnte nicht fortgesetzt werden"}
         sess.encode_paused = False
         return {"ok": True, "encode_paused": False}
@@ -2061,10 +2083,19 @@ def _kill(sess: PlayerSession) -> None:
         return
     pid = int(proc.pid or 0)
     if pid and runtime.process_running(proc):
-        if hasattr(signal, "SIGCONT"):
-            _signal_tree(pid, signal.SIGCONT)
+        _suspend_or_resume_tree(pid, False)
         if hasattr(signal, "SIGKILL"):
             _signal_tree(pid, signal.SIGKILL)
+        elif os.name == "nt":
+            try:
+                import psutil
+                for ch in psutil.Process(pid).children(recursive=True):
+                    try:
+                        ch.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         try:
             proc.kill()
         except OSError:

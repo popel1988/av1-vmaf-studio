@@ -7,3 +7,10 @@ env/
 .vscode/
 *.log
 .DS_Store
+/bin/
+/build/
+/dist/
+/build_temp/
+/data/
+*.spec
+

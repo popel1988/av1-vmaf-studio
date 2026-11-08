@@ -918,6 +918,8 @@ DECODERS = {
 
 def intel_uses_vaapi() -> bool:
     """True, wenn die Intel-Plattform über VAAPI (statt QSV) encodieren soll."""
+    if os.name == "nt":
+        return False
     from . import config
     return getattr(config, "INTEL_ENCODER", "vaapi") != "qsv"
 
@@ -925,6 +927,8 @@ def intel_uses_vaapi() -> bool:
 def _encoder_map(platform: str) -> dict:
     if platform == "intel" and intel_uses_vaapi():
         return ENCODERS["intel_vaapi"]
+    if platform == "amd" and os.name == "nt":
+        return {"av1": "av1_amf", "hevc": "hevc_amf", "h264": "h264_amf"}
     return ENCODERS.get(platform, ENCODERS["cpu"])
 
 
@@ -951,11 +955,11 @@ def decoder_name(platform: str, codec: str) -> str:
 
 
 def encoder_backend(platform: str) -> str:
-    """Konkretes HW-Backend: 'nvenc' | 'qsv' | 'vaapi' | 'cpu'."""
+    """Konkretes HW-Backend: 'nvenc' | 'qsv' | 'vaapi' | 'amf' | 'cpu'."""
     if platform == "nvidia":
         return "nvenc"
     if platform == "amd":
-        return "vaapi"
+        return "amf" if os.name == "nt" else "vaapi"
     if platform == "intel":
         return "vaapi" if intel_uses_vaapi() else "qsv"
     return "cpu"
@@ -1749,6 +1753,10 @@ def subtitle_track_args(tracks: list, info=None, container: str = "mkv") -> list
 
 @functools.lru_cache(maxsize=1)
 def _mkvpropedit() -> str:
+    from . import config
+    resolved = config._resolve_binary("mkvpropedit")
+    if Path(resolved).is_file():
+        return resolved
     return shutil.which("mkvpropedit") or ""
 
 

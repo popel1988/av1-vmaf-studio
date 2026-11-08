@@ -3,22 +3,47 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 
-def _resolve_binary(name: str) -> str:
-    """Bevorzugt unseren eigenen FFmpeg-Build in /usr/local/bin.
+def _app_base_dir() -> Path:
+    """Basisordner der Anwendung (PyInstaller-EXE-Ordner oder Projekt-Root)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
-    Wichtig auf QNAP: Der Nvidia-Treiber bringt eigene (teils kaputte)
-    ffmpeg/ffprobe-Binaries mit und steht oft vorne im PATH. Wir nutzen
-    daher den absoluten Pfad zu unserem Build, statt uns auf PATH zu verlassen.
+
+APP_BASE_DIR = _app_base_dir()
+
+
+def _local_bin_candidates(name: str) -> list[Path]:
+    """Suchorte für gebündelte externe Tools (Docker: /usr/local/bin, EXE: ./bin)."""
+    exe = f"{name}.exe" if os.name == "nt" and not name.lower().endswith(".exe") else name
+    out = [
+        APP_BASE_DIR / "bin" / exe,
+        APP_BASE_DIR / "bin" / name,
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = Path(meipass)
+        out.extend([mp / "bin" / exe, mp / "bin" / name])
+    out.append(Path("/usr/local/bin") / name)
+    return out
+
+
+def _resolve_binary(name: str) -> str:
+    """Bevorzugt unseren eigenen Build in ./bin (Windows-EXE) bzw. /usr/local/bin (Docker).
+
+    Wichtig auf QNAP/Windows: Externe PATH-Einträge bringen teils veraltete oder
+    abgespeckte ffmpeg-Builds mit. Wir nutzen daher zuerst unser gebündeltes Binary.
     """
     env_override = os.getenv(name.upper() + "_BIN")
     if env_override:
         return env_override
-    local = Path("/usr/local/bin") / name
-    if local.exists():
-        return str(local)
+    for cand in _local_bin_candidates(name):
+        if cand.is_file():
+            return str(cand)
     return shutil.which(name) or name
 
 
@@ -41,9 +66,13 @@ def _resolve_named(env_key: str, filename: str) -> str:
     env_override = os.getenv(env_key)
     if env_override:
         return env_override
-    local = Path("/usr/local/bin") / filename
-    if local.exists():
-        return str(local)
+    for cand in _local_bin_candidates(filename):
+        if cand.is_file():
+            return str(cand)
+    if filename == "ffmpeg-jellyfin":
+        for fb in _local_bin_candidates("ffmpeg"):
+            if fb.is_file():
+                return str(fb)
     return shutil.which(filename) or filename
 
 
@@ -79,7 +108,18 @@ def auth_token() -> str:
 # gesetzt (Default: "output" → /media/output) – kein separates Output-Volume.
 from typing import Iterator, Optional  # noqa: E402
 
-MEDIA_DIR = Path(os.getenv("MEDIA_DIR", "/media"))
+
+def _default_media_dir() -> Path:
+    env = os.getenv("MEDIA_DIR")
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        videos = Path.home() / "Videos"
+        return videos if videos.exists() else APP_BASE_DIR / "media"
+    return Path("/media")
+
+
+MEDIA_DIR = _default_media_dir()
 
 
 def _slug(name: str) -> str:
@@ -325,7 +365,30 @@ def iter_input_files(root_rel: str, exts: set) -> "Iterator[Path]":
 #   vmaf/      – optional aufbewahrte VMAF-Sessions (Referenz, Testclips, Logs)
 #
 # In Docker: Host-Ordner nach /data mounten (siehe docker-compose.yml).
-DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+def _default_data_dir() -> Path:
+    env = os.getenv("DATA_DIR")
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        return APP_BASE_DIR / "data"
+    return Path("/data")
+
+
+def _default_vmaf_model_dir() -> Path:
+    env = os.getenv("VMAF_MODEL_DIR")
+    if env:
+        return Path(env)
+    for cand in (
+        APP_BASE_DIR / "bin" / "model",
+        Path(getattr(sys, "_MEIPASS", APP_BASE_DIR)) / "bin" / "model",
+        Path("/usr/local/share/model"),
+    ):
+        if cand.is_dir():
+            return cand
+    return APP_BASE_DIR / "bin" / "model" if os.name == "nt" else Path("/usr/local/share/model")
+
+
+DATA_DIR = _default_data_dir()
 WORK_DIR = Path(os.getenv("WORK_DIR", str(DATA_DIR / "work")))
 PREVIEW_DIR = Path(os.getenv("PREVIEW_DIR", str(DATA_DIR / "previews")))
 # Vom Nutzer hochgeladene externe Spuren (persistent, bis der Job gelaufen ist).
@@ -335,12 +398,12 @@ VMAF_SESSIONS_DIR = Path(os.getenv("VMAF_SESSIONS_DIR", str(DATA_DIR / "vmaf")))
 # VMAF-Artefakte nach Analyse behalten (statt work-Ordner zu löschen)
 RETAIN_VMAF_SESSIONS = _env_bool("RETAIN_VMAF_SESSIONS", True)
 
-# VMAF-Modelle (im Docker-Image unter /usr/local/share/model/).
+# VMAF-Modelle (im Docker-Image unter /usr/local/share/model/, bei EXE unter ./bin/model/).
 # Das Image setzt die Dateinamen per ENV. Ohne ENV gelten die v0.6.1-Namen,
 # damit ein lokaler Lauf ohne die v1-Dateien nicht ins Leere zeigt.
 # IMAGE_CHANNEL=legacy schaltet hierarchische AV1-B-Frames ab.
 IMAGE_CHANNEL = os.getenv("IMAGE_CHANNEL", "latest")
-VMAF_MODEL_DIR = Path(os.getenv("VMAF_MODEL_DIR", "/usr/local/share/model"))
+VMAF_MODEL_DIR = _default_vmaf_model_dir()
 VMAF_MODEL_1080P = os.getenv("VMAF_MODEL_1080P", "vmaf_v0.6.1.json")
 VMAF_MODEL_4K = os.getenv("VMAF_MODEL_4K", "vmaf_4k_v0.6.1.json")
 # NEG-Varianten ("no enhancement gain") – strafen Schärfungs-/Kontrast-Tricks
@@ -407,7 +470,7 @@ VAAPI_DEVICE = os.getenv("VAAPI_DEVICE", "/dev/dri/renderD128")
 # daher funktionieren beide Backends auf derselben Intel-Hardware. VAAPI ist als
 # robuster Standard gesetzt; QSV/oneVPL bietet zusätzliche Feinheiten (Look-ahead
 # etc.) – bei Bedarf einfach auf "qsv" umstellen.
-INTEL_ENCODER = os.getenv("INTEL_ENCODER", "vaapi").strip().lower()
+INTEL_ENCODER = os.getenv("INTEL_ENCODER", "qsv" if os.name == "nt" else "vaapi").strip().lower()
 
 # NVENC-Dekodierpfad: Standardmäßig wird per CUDA dekodiert, die Frames aber in
 # den System-RAM heruntergeladen (robust). Die reine GPU-Pipeline

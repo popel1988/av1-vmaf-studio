@@ -859,6 +859,11 @@ def _parse_xpsnr(stats: Path) -> Optional[dict]:
     return {"xpsnr": sum(ws) / len(ws), "xpsnr_y": sum(ys) / len(ys), "xpsnr_min": min(ys)}
 
 
+def _esc_filter_path(path: Path) -> str:
+    """Pfad für FFmpeg-Filter (libvmaf model=path=..., xpsnr=stats_file=...) escapen."""
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", r"\'")
+
+
 def _run_libvmaf(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool, dims: Optional[tuple[int, int]], features: str,
@@ -876,17 +881,19 @@ def _run_libvmaf(
     scale = f"scale={w}:{h}:flags=bicubic"
     dist_dur = ff._probe_duration(distorted) or float(clip_len or 0)
     ref_dur = ff._probe_duration(reference) or float(clip_len or 0)
+    mpath = _esc_filter_path(model_path)
+    lpath = _esc_filter_path(log)
     vmaf_filter = (
-        f"libvmaf=model=path={model_path}:"
-        f"{features}log_fmt=json:log_path={log}:shortest=1:n_threads={_vmaf_threads()}"
+        f"libvmaf=model='path={mpath}':"
+        f"{features}log_fmt=json:log_path='{lpath}':shortest=1:n_threads={_vmaf_threads()}"
     )
     if with_xpsnr:
-        xpath = str(xlog).replace("\\", "/").replace(":", "\\:")
+        xpath = _esc_filter_path(xlog)
         fc = (
             f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
             f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
             f"[d1][r1]{vmaf_filter};"
-            f"[d2][r2]xpsnr=stats_file={xpath}:shortest=1"
+            f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
         )
     else:
         fc = (
