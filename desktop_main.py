@@ -61,6 +61,39 @@ def _setup_environment() -> Path:
     return root
 
 
+class _NullStream:
+    """Ersatz für fehlendes stdout/stderr, falls die Logdatei nicht schreibbar ist."""
+
+    def write(self, data: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _ensure_stdio(log_dir: Path) -> None:
+    """PyInstaller --windowed setzt stdout/stderr auf None.
+
+    Uvicorn ruft beim Logging-Setup ``stdout.isatty()`` auf und bricht sonst mit
+    ``AttributeError: 'NoneType' object has no attribute 'isatty'`` ab.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    stream: object
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stream = open(log_dir / "studio.log", "a", encoding="utf-8", buffering=1)
+    except OSError:
+        stream = _NullStream()
+    if sys.stdout is None:
+        sys.stdout = stream  # type: ignore[assignment]
+    if sys.stderr is None:
+        sys.stderr = stream  # type: ignore[assignment]
+
+
 def _find_free_port(preferred: int = 8080) -> int:
     for port in (preferred, 8081, 8082, 8765, 0):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -101,6 +134,7 @@ def _find_app_browser() -> str | None:
 
 def main() -> None:
     root = _setup_environment()
+    _ensure_stdio(root / "data")
     port = int(os.environ.get("PORT", "0")) or _find_free_port(8080)
     url = f"http://127.0.0.1:{port}"
 
