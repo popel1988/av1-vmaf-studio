@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import desktop_main
 
@@ -43,6 +44,50 @@ class DesktopStdioTests(unittest.TestCase):
         finally:
             sys.stdout = saved_out
             sys.stderr = saved_err
+
+
+class DesktopWindowTests(unittest.TestCase):
+    def test_frozen_windows_skips_pythonnet_webview(self):
+        had_frozen = hasattr(sys, "frozen")
+        previous = getattr(sys, "frozen", None)
+        sys.frozen = True
+        try:
+            self.assertFalse(desktop_main._embedded_webview_ok())
+        finally:
+            if had_frozen:
+                sys.frozen = previous
+            else:
+                del sys.frozen
+
+    def test_frozen_windows_opens_edge_without_importing_webview(self):
+        had_frozen = hasattr(sys, "frozen")
+        previous = getattr(sys, "frozen", None)
+        sys.frozen = True
+        calls = []
+
+        def fake_popen(cmd, *args, **kwargs):
+            calls.append(cmd)
+            class Proc:
+                def wait(self):
+                    return 0
+            return Proc()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(desktop_main, "_find_app_browser", return_value=r"C:\Edge\msedge.exe"), \
+                     patch.object(desktop_main.subprocess, "Popen", side_effect=fake_popen), \
+                     patch.object(desktop_main.webbrowser, "open") as browser:
+                    mode = desktop_main._open_desktop_window("http://127.0.0.1:8080", root)
+                self.assertEqual(mode, "browser")
+                self.assertEqual(calls[0][0], r"C:\Edge\msedge.exe")
+                self.assertIn("--app=http://127.0.0.1:8080", calls[0])
+                browser.assert_not_called()
+        finally:
+            if had_frozen:
+                sys.frozen = previous
+            else:
+                del sys.frozen
 
 
 if __name__ == "__main__":

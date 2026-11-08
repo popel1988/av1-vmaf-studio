@@ -132,6 +132,59 @@ def _find_app_browser() -> str | None:
     return None
 
 
+def _embedded_webview_ok() -> bool:
+    """pywebview zieht pythonnet. Im PyInstaller-Build findet der Loader
+    ``Python.Runtime.Loader.Initialize`` in der mitgelieferten DLL nicht.
+    """
+    return not (getattr(sys, "frozen", False) and os.name == "nt")
+
+
+def _open_desktop_window(url: str, root: Path) -> str:
+    """Öffnet die Oberfläche und blockiert, bis das Fenster zu ist.
+
+    Rückgabe ``external``, wenn nur der Standardbrowser geöffnet wurde und der
+    Prozess selbst weiterlaufen muss.
+    """
+    if _embedded_webview_ok():
+        try:
+            import webview  # type: ignore
+            webview.create_window(
+                "AV1 / VMAF Compression Studio",
+                url,
+                width=1480,
+                height=920,
+                min_size=(1024, 680),
+                text_select=True,
+            )
+            webview.start()
+            return "webview"
+        except Exception as exc:
+            print(f"pywebview nicht nutzbar ({exc}); öffne Edge oder Chrome.", flush=True)
+
+    browser_exe = _find_app_browser() if os.name == "nt" else None
+    if browser_exe:
+        profile_dir = root / "data" / "window_profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Öffne App-Fenster mit {browser_exe}", flush=True)
+        proc = subprocess.Popen([
+            browser_exe,
+            f"--app={url}",
+            f"--user-data-dir={profile_dir}",
+            "--window-size=1480,920",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ])
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            pass
+        return "browser"
+
+    print("Kein Edge/Chrome gefunden; öffne den Standardbrowser.", flush=True)
+    webbrowser.open(url)
+    return "external"
+
+
 def main() -> None:
     root = _setup_environment()
     _ensure_stdio(root / "data")
@@ -154,50 +207,14 @@ def main() -> None:
 
     _wait_for_server(f"{url}/api/config/paths", timeout=25.0)
 
-    # 1. Bevorzugt: Natives Desktop-Fenster über pywebview (Edge WebView2)
-    try:
-        import webview  # type: ignore
-        webview.create_window(
-            "AV1 / VMAF Compression Studio",
-            url,
-            width=1480,
-            height=920,
-            min_size=(1024, 680),
-            text_select=True,
-        )
-        webview.start()
-        server.should_exit = True
-        return
-    except ImportError:
-        pass
-
-    # 2. Fallback: Edge / Chrome im nativen App-Fenster-Modus (--app=...) ohne Adressleiste
-    browser_exe = _find_app_browser()
-    if browser_exe and os.name == "nt":
-        profile_dir = root / "data" / "window_profile"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.Popen([
-            browser_exe,
-            f"--app={url}",
-            f"--user-data-dir={profile_dir}",
-            "--window-size=1480,920",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ])
+    mode = _open_desktop_window(url, root)
+    if mode == "external":
         try:
-            proc.wait()
+            while srv_thread.is_alive():
+                time.sleep(0.5)
         except KeyboardInterrupt:
             pass
-        server.should_exit = True
-        return
-
-    # 3. Letzter Fallback: Standardbrowser öffnen und Prozess am Leben halten
-    webbrowser.open(url)
-    try:
-        while srv_thread.is_alive():
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        server.should_exit = True
+    server.should_exit = True
 
 
 if __name__ == "__main__":
