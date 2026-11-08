@@ -95,10 +95,17 @@ if (-not (Test-Path (Join-Path $BinDir "hdr10plus_tool.exe"))) {
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 
 Write-Host "=== 2. Prüfe Python-Pakete (pyinstaller, pywebview) ===" -ForegroundColor Cyan
-py -3 -m pip install --upgrade -r requirements.txt pyinstaller pywebview
+$PyCmd = if (Get-Command "python" -ErrorAction SilentlyContinue) { "python" } else { "py" }
+& $PyCmd -m pip install --upgrade pip
+& $PyCmd -m pip install --upgrade -r requirements.txt pyinstaller
+try {
+    & $PyCmd -m pip install --upgrade pywebview
+} catch {
+    Write-Warning "pywebview konnte nicht installiert werden – Edge/Chrome App-Modus wird genutzt."
+}
 
 Write-Host "=== 3. Baue AV1-VMAF-Studio.exe mit PyInstaller ===" -ForegroundColor Cyan
-py -3 -m PyInstaller `
+& $PyCmd -m PyInstaller `
     --noconfirm `
     --clean `
     --onedir `
@@ -109,6 +116,9 @@ py -3 -m PyInstaller `
     --collect-submodules "core" `
     --collect-submodules "uvicorn" `
     desktop_main.py
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller ist mit Exit-Code $LASTEXITCODE fehlgeschlagen."
+}
 
 $DistAppDir = Join-Path $Root "dist\AV1-VMAF-Studio"
 $DistBinDir = Join-Path $DistAppDir "bin"
