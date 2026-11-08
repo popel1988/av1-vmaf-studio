@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import os
 from pathlib import Path
@@ -948,6 +949,12 @@ class EditorEnqueueRequest(BaseModel):
     segments: list[dict] = []
     overlays: list[dict] = []        # V2 B-Roll / PiP Overlays
     mode: str = "remux"              # remux | smart | encode
+    export_split: bool = False       # True = jeden Clip als eigene Datei einreihen
+    bgm_path: str = ""               # Optionale Hintergrundmusik (A2)
+    bgm_volume_db: float = -12.0
+    bgm_ducking: bool = True         # Automatische Sprach-Absenkung (sidechaincompress)
+    pad_mode: str = "black"          # black | blur
+    aspect_mode: str = "source"      # source | 16:9 | 9:16 | 1:1
     container: str = "mkv"
     suffix: str = "_edit"
     name_mode: str = "suffix"        # suffix | custom
@@ -1138,6 +1145,23 @@ async def editor_autocrop(path: str):
     return data
 
 
+@app.get("/api/editor/snapshot")
+async def editor_snapshot(path: str, t: float = 0.0):
+    """Einzelbild (PNG) aus der Quelle an Position t als Direkt-Download."""
+    from starlette.background import BackgroundTask
+    from core import editor
+    out_file, dl_name, err = await asyncio.to_thread(editor.extract_snapshot, path, t)
+    if err or out_file is None:
+        return JSONResponse({"error": err or "Snapshot fehlgeschlagen"}, status_code=400)
+    return FileResponse(
+        out_file,
+        filename=dl_name,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(lambda: out_file.unlink(missing_ok=True)),
+    )
+
+
 @app.post("/api/editor/detect")
 async def editor_detect(req: EditorDetectRequest):
     """Schwarzbilder, Stille oder Szenenwechsel in der Quelle erkennen."""
@@ -1197,7 +1221,10 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     clean_segs = [editor.segment_to_spec(s) for s in segs]
     clean_ovs = [editor.overlay_to_spec(o) for o in ovs]
     xf = float(req.crossfade or 0)
-    if editor.any_needs_encode(segs, xf, ovs):
+    bgm_path = str(req.bgm_path or "").strip()
+    pad_mode = str(req.pad_mode or "black").strip().lower()
+    aspect_mode = str(req.aspect_mode or "source").strip().lower()
+    if editor.any_needs_encode(segs, xf, ovs, bgm_path=bgm_path, pad_mode=pad_mode, aspect_mode=aspect_mode):
         mode = "encode"
 
     rate_mode = (req.rate_mode or "cq").lower()
@@ -1263,6 +1290,11 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
             "crossfade": float(req.crossfade or 0),
             "transition": req.transition or "fade",
+            "bgm_path": bgm_path,
+            "bgm_volume_db": float(req.bgm_volume_db if req.bgm_volume_db is not None else -12.0),
+            "bgm_ducking": bool(req.bgm_ducking),
+            "pad_mode": pad_mode,
+            "aspect_mode": aspect_mode,
             "tonemap": bool(req.tonemap),
             "preserve_hdr": bool(req.preserve_hdr),
             "encoder_speed": req.encoder_speed or "balanced",
@@ -1275,6 +1307,28 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "out_subdir": req.out_subdir,
         "encoder_speed": req.encoder_speed or "balanced",
     }
+    if req.export_split and len(segs) > 1:
+        added_ids = []
+        for idx, (s_norm, s_spec) in enumerate(zip(segs, clean_segs), start=1):
+            src_abs = s_norm.get("abs") or first
+            safe_title = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (s_norm.get("title") or f"clip{idx}"))[:40]
+            part_sfx = f"{req.suffix or '_edit'}_{idx:02d}_{safe_title}"
+            d_part = copy.deepcopy(d)
+            d_part["suffix"] = part_sfx
+            d_part["name_pattern"] = "{stem}{suffix}" if (req.name_mode or "suffix").lower() != "custom" or not custom_name else f"{custom_name}_{idx:02d}_{safe_title}"
+            d_part["edit_spec"]["segments"] = [s_spec]
+            d_part["edit_spec"]["overlays"] = []
+            d_part["edit_spec"]["crossfade"] = 0.0
+            part_mode = (req.mode or "remux").lower()
+            if editor.segment_needs_encode(s_norm) or bgm_path:
+                part_mode = "encode"
+            d_part["edit_spec"]["mode"] = part_mode
+            it = queue.add_file(str(src_abs), build_job_settings(d_part))
+            if it is not None:
+                added_ids.append(it.id)
+        if not added_ids:
+            return JSONResponse({"error": "Keine Einzel-Clips eingereiht"}, status_code=400)
+        return {"added": len(added_ids), "id": added_ids[0], "ids": added_ids, "duration": editor.total_duration(segs, 0.0)}
     item = queue.add_file(str(first), build_job_settings(d))
     if item is None:
         return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)

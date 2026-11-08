@@ -550,12 +550,45 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 /* Video-Editor */
 .ed-layout {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
   align-items: start;
 }
-@media (max-width: 980px) {
+@media (max-width: 1120px) {
   .ed-layout { grid-template-columns: 1fr; }
+}
+.ed-monitor-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+.ed-monitor-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap; margin-bottom: 4px;
+}
+.ed-monitor-head strong { font-size: 13.5px; }
+.ed-monitor-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.ed-src-info-inline {
+  font-size: 12px; margin: 0 0 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ed-oneclick-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; padding: 6px 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-prog-clips-wrap {
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-prog-clips-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
 }
 .ed-stage {
   position: relative;
@@ -564,7 +597,8 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   overflow: hidden;
   aspect-ratio: 16 / 9;
 }
-.ed-stage video { width: 100%; height: 100%; display: block; object-fit: contain; }
+.ed-stage > #ed-video,
+.ed-stage > #ed-prog-video { width: 100%; height: 100%; display: block; object-fit: contain; }
 .ed-video-v2 {
   position: absolute;
   width: 30%;
@@ -578,6 +612,49 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
   box-shadow: 0 8px 24px rgba(0,0,0,.65);
   background: #000;
   pointer-events: none;
+  object-fit: contain;
+}
+.ed-video-v2[hidden],
+.ed-crop-overlay[hidden],
+.ed-crop-bar[hidden],
+.ed-kf-bar[hidden],
+.ed-chap-bar[hidden],
+.ed-wave[hidden] {
+  display: none !important;
+}
+.ed-source-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px; padding: 8px 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-source-bar .ed-src-info-inline {
+  flex: 1; min-width: 180px; font-size: 12.5px; margin: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ed-cut-bar {
+  display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; padding: 8px 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-cut-bar .field { margin: 0; min-width: 115px; }
+.ed-cut-bar .ed-cut-btns {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.ed-tracks-details {
+  margin-top: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ed-tracks-details > summary {
+  cursor: pointer; padding: 8px 12px; font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  user-select: none;
+}
+.ed-tracks-details > .ed-tracks {
+  margin-top: 0; border: 0; border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 .ed-crop-overlay {
   position: absolute; inset: 0; z-index: 6;
@@ -946,15 +1023,20 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .ed-cut-actions .btn { min-width: 0; }
 .ed-inspector {
-  margin-top: 10px; padding: 10px;
+  margin-top: 12px; padding: 10px 12px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; font-size: 12px;
 }
 .ed-insp-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 12px;
   margin-top: 8px;
 }
-.ed-insp-grid .full { grid-column: 1 / -1; }
+.ed-insp-grid .full { grid-column: span 2; }
+@media (max-width: 680px) {
+  .ed-insp-grid .full { grid-column: 1 / -1; }
+}
 .ed-insp-grid label {
   display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 2px;
 }

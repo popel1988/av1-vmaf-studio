@@ -9859,6 +9859,7 @@
           <button class="lib-act" data-act="play" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Abspielen">▶</button>
           <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
           <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
+          <button class="lib-act" data-act="editor" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im Video-Editor öffnen">🎬</button>
         </td>
       </tr>
       ${open ? libDetailRowHtml(m) : ""}`;
@@ -10428,6 +10429,11 @@
     const name = btn.dataset.name;
     const act = btn.dataset.act;
     if (act === "play") { playMedia("media", path, name); return; }
+    if (act === "editor") {
+      navTo("editor");
+      if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
+      return;
+    }
     const row = (state.libRows || []).find((m) => m.path === path);
     libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
       return;
@@ -10860,6 +10866,7 @@
           <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
           <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
           <button class="lib-act" data-act="remux" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Remux übernehmen">→R</button>
+          <button class="lib-act" data-act="editor" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im Video-Editor öffnen">🎬</button>
         </td>
       </tr>`; }).join("") :
       '<tr class="empty-row"><td colspan="11">Keine Treffer.</td></tr>';
@@ -10917,6 +10924,11 @@
     const name = btn.dataset.name;
     const act = btn.dataset.act;
     if (act === "play") { playMedia("media", path, name); return; }
+    if (act === "editor") {
+      navTo("editor");
+      if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
+      return;
+    }
     if (act === "remux" || (act === "encode" && $("st-remux-only") && $("st-remux-only").checked)) {
       navTo("remux");
       await remuxSelectFile({ rel: path, name });
@@ -15008,6 +15020,7 @@
               <button class="btn btn-ghost btn-sm gs-act" data-act="encode" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→E</button>
               <button class="btn btn-ghost btn-sm gs-act" data-act="remux" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→R</button>
               <button class="btn btn-ghost btn-sm gs-act" data-act="vmaf" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→V</button>
+              <button class="btn btn-ghost btn-sm gs-act" data-act="editor" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">🎬</button>
             </td></tr>`;
         }).join("") + `</tbody></table>` +
         (d.truncated ? `<p class="muted" style="margin-top:6px">${tt("Ergebnisse gekürzt.")}</p>` : "");
@@ -15016,6 +15029,11 @@
           const act = b.dataset.act, path = b.dataset.path, name = b.dataset.name;
           closeModal();
           if (act === "play") { playMedia("media", path, name); return; }
+          if (act === "editor") {
+            navTo("editor");
+            if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
+            return;
+          }
           if (act === "remux") {
             navTo("remux");
             await remuxSelectFile({ rel: path, name });
@@ -15057,6 +15075,23 @@
     initVmafP1Gap();
     initEncoderSpeed();
     initEncoderBench();
+    const fpEd = $("fp-to-editor");
+    if (fpEd) fpEd.addEventListener("click", () => {
+      const p = ($("fp-path") && $("fp-path").value || "").trim();
+      if (!p) return;
+      navTo("editor");
+      if (typeof window.editorOpenSource === "function") {
+        window.editorOpenSource(p, p.split("/").pop());
+      }
+    });
+    const rmxEd = $("btn-remux-to-editor");
+    if (rmxEd) rmxEd.addEventListener("click", () => {
+      if (!state.remuxSel || !state.remuxSel.path) return;
+      navTo("editor");
+      if (typeof window.editorOpenSource === "function") {
+        window.editorOpenSource(state.remuxSel.path, state.remuxSel.name || state.remuxSel.path);
+      }
+    });
     initTonemap();
     initGlobalSearch();
     const sizeT = $("opt-size-target");

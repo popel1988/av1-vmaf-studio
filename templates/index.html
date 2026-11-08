@@ -2306,6 +2306,7 @@
 
               <div class="lib-actions">
                 <button class="btn btn-primary" id="btn-remux-start" disabled>In Warteschlange (Remux)</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-to-editor" type="button" title="Aktuelle Remux-Datei im Video-Editor öffnen">🎬 Im Editor öffnen</button>
                 <span id="remux-start-info" class="muted"></span>
               </div>
             </div>
@@ -2465,11 +2466,28 @@
               ein zweites Video als Bild-im-Bild (PiP) oder Vollbild-Schnittbild auf Spur V2. Danach Bereiche
               behalten oder entfernen, Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux, Smart Cut oder Encode.</p>
 
-            <div class="ed-layout">
-              <div class="ed-preview">
+            <div class="ed-layout" id="ed-layout">
+              <!-- LINKS: Quell-Monitor (Sichten & Auswählen) -->
+              <div class="ed-preview ed-monitor-card">
+                <div class="ed-monitor-head">
+                  <strong>🎬 Quell-Monitor (Rohmaterial)</strong>
+                  <span class="ed-monitor-actions">
+                    <button type="button" class="btn btn-primary btn-sm" id="ed-browse"
+                            title="Datei in den Quell-Monitor laden">📂 Quelle laden</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source"
+                            title="Mehrere Dateien anhaken und direkt an die Timeline anhängen">+ Quellen</button>
+                    <label class="btn btn-ghost btn-sm ed-upload-btn"
+                           title="Lokale Datei hochladen und in die Vorschau laden">⬆ Upload
+                      <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
+                    </label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-unload" disabled
+                            title="Quelle aus dem Monitor nehmen – die Clips auf der Timeline bleiben">⏏</button>
+                  </span>
+                </div>
+                <p class="muted ed-src-info-inline" id="ed-src-info">Keine Quelle geladen.</p>
+
                 <div class="ed-stage" id="ed-stage">
                   <video id="ed-video" playsinline></video>
-                  <video id="ed-video-v2" class="ed-video-v2" playsinline muted hidden></video>
                   <div class="ed-crop-overlay" id="ed-crop-overlay" hidden>
                     <div class="ed-crop-box" id="ed-crop-box">
                       <span class="ed-crop-handle nw" data-h="nw"></span>
@@ -2481,17 +2499,19 @@
                   </div>
                 </div>
                 <div class="ed-crop-bar" id="ed-crop-bar" hidden>
-                  <strong>Visueller Zuschnitt:</strong>
+                  <strong>Visueller Rahmen:</strong>
                   <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="free">Frei</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="16:9">16:9</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="21:9">21:9</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="4:3">4:3</button>
                   <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="1:1">1:1</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-auto">Auto-Crop (Balken)</button>
-                  <button type="button" class="btn btn-primary btn-sm" id="ed-crop-apply">Übernehmen</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-crop-apply">Als Crop übernehmen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-blur-apply" title="Markierten Bereich weichzeichnen / unkenntlich machen (delogo)">💨 Bereich unkenntlich (Blur)</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-reset">Zurücksetzen</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-close">Schließen</button>
                 </div>
+
                 <div class="ed-src-ruler" id="ed-src-ruler" title="Quellen-Timeline – Ziehen = Scrubben, Ränder der Auswahl = In/Out">
                   <div class="ed-src-ruler-bg"></div>
                   <div class="ed-src-strip" id="ed-src-strip"></div>
@@ -2511,98 +2531,162 @@
                   </div>
                   <div class="ed-chap-chips" id="ed-chap-chips"></div>
                 </div>
+
                 <div class="ed-transport">
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause (K)">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause Quelle (K)">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-kf-prev" title="Vorheriger Keyframe">⏮ KF</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-jump-back" title="0,2 s zurück">«0,2s</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-back" title="Ein Frame zurück (←)">‹</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-frame-fwd" title="Ein Frame vor (→)">›</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-jump-fwd" title="0,2 s vor">0,2s»</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-kf-next" title="Nächster Keyframe">KF ⏭</button>
                   <input type="range" id="ed-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt (I)">In</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt (O)">Out</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-split" title="Am Playhead teilen (S)">Teilen</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-toggle" title="Visuellen Crop-Rahmen im Bild einblenden">✂ Crop</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-loop-toggle" title="In/Out-Bereich in Endlosschleife abspielen">🔁 Loop</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-snapshot" title="Aktuelles Bild als PNG speichern">📸 Foto</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-toggle" title="Visuellen Rahmen für Crop oder Blur/Delogo im Bild einblenden">✂ Crop / Blur</button>
                 </div>
-                <div class="field-row field-row-inline" style="margin-top:8px">
+
+                <div class="ed-cut-bar">
                   <div class="field">
-                    <label>In (Zeit / s) <span class="muted" id="ed-in-fmt"></span></label>
-                    <input type="text" id="ed-in" value="0" placeholder="0:00.00" />
+                    <label>In <span class="muted" id="ed-in-fmt"></span></label>
+                    <div style="display:flex;gap:4px">
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt auf Playhead setzen (I)">[ In</button>
+                      <input type="text" id="ed-in" value="0" placeholder="0:00.00" style="width:86px" />
+                    </div>
                   </div>
                   <div class="field">
-                    <label>Out (Zeit / s) <span class="muted" id="ed-out-fmt"></span></label>
-                    <input type="text" id="ed-out" value="0" placeholder="0:00.00" />
+                    <label>Out <span class="muted" id="ed-out-fmt"></span></label>
+                    <div style="display:flex;gap:4px">
+                      <input type="text" id="ed-out" value="0" placeholder="0:00.00" style="width:86px" />
+                      <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt auf Playhead setzen (O)">Out ]</button>
+                    </div>
                   </div>
-                  <div class="field">
-                    <label>Vorschau-Ton</label>
-                    <select id="ed-preview-audio"><option value="0">#0</option></select>
+                  <div class="ed-cut-btns">
+                    <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range"
+                            title="Markierten Bereich der Quelle als Clip anhängen (mehrfach möglich)">+ Bereich → Timeline</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range"
+                            title="Markierten Bereich entfernen – der Rest der Quelle bleibt">− Bereich entfernen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all"
+                            title="Gesamte Quelle als einen Clip">Ganze Datei</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-add-v2"
+                            title="Aktuellen Bereich oder Datei als B-Roll / Picture-in-Picture auf Spur V2 am Playhead einfügen">+ Als B-Roll (V2)</button>
                   </div>
-                  <label class="check fp-tracks-check">
-                    <input type="checkbox" id="ed-burn" />
-                    <span data-tip="Erste angehakte Untertitelspur ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
-                  </label>
                 </div>
+
+                <!-- 1-Klick-Schnelltrimmen an der aktuellen Abspielposition -->
+                <div class="ed-oneclick-bar">
+                  <span class="muted" style="font-size:11.5px;font-weight:600">⚡ 1-Klick am Playhead:</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-before"
+                          title="Alles vor der aktuellen Position wegschneiden (Intro überspringen)">⏮ Bis hierher wegschneiden</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-after"
+                          title="Alles ab der aktuellen Position wegschneiden (Abspann abschneiden)">Ab hier wegschneiden ⏭</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-split"
+                          title="Aktiven Clip genau hier in zwei Teile schneiden (S)">✂ Hier teilen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-freeze-insert"
+                          title="Aktuelles Bild am Playhead für 3 Sekunden als Standbild einfrieren">⏸ Standbild 3 s</button>
+                </div>
+
                 <div class="ed-kf-bar" id="ed-kf-bar" hidden>
                   <span class="muted" id="ed-kf-delta"></span>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-kf-round" title="In/Out des aktiven Clips auf die nächsten Keyframes legen">Auf Keyframes runden</button>
                 </div>
-                <div class="ed-tracks">
-                  <div class="ed-tracks-head">
-                    <strong>Tonspuren übernehmen</strong>
-                    <span class="muted" id="ed-tracks-info"></span>
-                    <span class="ed-tracks-btns">
-                      <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-all">Alle</button>
-                      <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-none">Keine</button>
-                    </span>
-                  </div>
-                  <div class="ed-tracks-list" id="ed-tracks-list"></div>
-                  <div class="ed-tracks-head" style="margin-top:10px">
-                    <strong>Untertitel übernehmen</strong>
-                    <span class="muted" id="ed-subs-info"></span>
-                    <span class="ed-tracks-btns">
-                      <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-all">Alle</button>
-                      <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-none">Keine</button>
-                    </span>
-                  </div>
-                  <div class="ed-tracks-list" id="ed-subs-list"></div>
-                  <p class="hint" style="font-size:12px;margin:6px 0 0">
-                    Gilt für alle Clips dieser Quelle. Keine Tonspur = stumm.
-                    Angehakte Untertitel landen als eigene Spuren in der Datei.
-                  </p>
-                </div>
+
                 <div class="field-row field-row-inline" style="margin-top:8px">
                   <label class="check"><input type="checkbox" id="ed-snap-ch" checked /><span>An Kapitel einrasten</span></label>
                   <label class="check"><input type="checkbox" id="ed-snap-kf" /><span>An Keyframes einrasten</span></label>
-                  <label class="check">
-                    <input type="checkbox" id="ed-follow" checked />
-                    <span data-tip="Beim Abspielen am Clipende zum nächsten Clip springen – geschnittene Stellen werden übersprungen.">Timeline folgen</span>
-                  </label>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-undo" title="Rückgängig (Strg+Z)">↩</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-redo" title="Wiederholen (Strg+Y)">↪</button>
+                  <div class="field" style="margin:0;margin-left:auto;display:flex;align-items:center;gap:6px">
+                    <label style="margin:0;font-size:12px">Vorschau-Ton:</label>
+                    <select id="ed-preview-audio" style="width:auto;min-width:90px"><option value="0">#0</option></select>
+                  </div>
                 </div>
-                <div class="ed-src-line">
-                  <p class="muted" id="ed-src-info">Keine Quelle geladen.</p>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ed-unload" disabled
-                          title="Quelle aus der Vorschau nehmen – die Clips auf der Timeline bleiben">⏏ Entladen</button>
-                </div>
-                <p class="hint" style="margin-top:6px;font-size:12px">
-                  <strong>I/O</strong> In/Out · <strong>J/K/L</strong> −5s / Pause / Play ·
-                  <strong>←→</strong> Frame · <strong>↑↓</strong> Clip wechseln ·
-                  <strong>S</strong> Teilen · <strong>Entf</strong> Clip löschen · <strong>Strg+Z</strong> Undo.
-                  Ziehe direkt im Quellen-Balken oder an den blauen Kanten der Auswahl.
-                </p>
+
+                <details class="ed-tracks-details">
+                  <summary>
+                    <span>🔊 Tonspuren &amp; 💬 Untertitel der Quelle</span>
+                    <span class="muted" style="font-size:12px;font-weight:400"><span id="ed-tracks-info"></span> · <span id="ed-subs-info"></span></span>
+                  </summary>
+                  <div class="ed-tracks">
+                    <div class="ed-tracks-head">
+                      <strong>Tonspuren übernehmen</strong>
+                      <span class="ed-tracks-btns">
+                        <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-all">Alle</button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="ed-tracks-none">Keine</button>
+                      </span>
+                    </div>
+                    <div class="ed-tracks-list" id="ed-tracks-list"></div>
+                    <div class="ed-tracks-head" style="margin-top:10px">
+                      <strong>Untertitel übernehmen</strong>
+                      <label class="check" style="margin:0 0 0 8px;font-size:12px">
+                        <input type="checkbox" id="ed-burn" />
+                        <span data-tip="Erste angehakte Untertitelspur ins Bild brennen – erzwingt Encode.">1. UT ins Bild einbrennen</span>
+                      </label>
+                      <span class="ed-tracks-btns">
+                        <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-all">Alle</button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="ed-subs-none">Keine</button>
+                      </span>
+                    </div>
+                    <div class="ed-tracks-list" id="ed-subs-list"></div>
+                  </div>
+                </details>
               </div>
 
-              <div class="ed-side">
-                <div class="ed-side-head">
-                  <strong>Clips (V1) &amp; Inspektor</strong>
-                  <span>
-                    <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Alle löschen</button>
+              <!-- RECHTS: Programm-Monitor (Timeline-Ergebnis & Live-Schnitt) -->
+              <div class="ed-program ed-monitor-card">
+                <div class="ed-monitor-head">
+                  <strong>📺 Programm-Monitor (Timeline-Vorschau)</strong>
+                  <span class="ed-monitor-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-undo" title="Rückgängig (Strg+Z)">↩ Undo</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-redo" title="Wiederholen (Strg+Y)">↪ Redo</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled title="Alle Clips von der Timeline entfernen">Leeren</button>
                   </span>
                 </div>
-                <ul class="ed-seg-list" id="ed-seg-list"></ul>
-                <div class="ed-inspector" id="ed-inspector">
-                  <div class="muted" style="font-size:12px">Klicke auf einen Clip (V1) oder ein B-Roll-Overlay (V2), um alle Details zu bearbeiten.</div>
+                <p class="muted ed-src-info-inline" id="ed-prog-info">Noch keine Clips auf der Timeline.</p>
+
+                <div class="ed-stage ed-prog-stage" id="ed-prog-stage">
+                  <video id="ed-prog-video" playsinline></video>
+                  <video id="ed-video-v2" class="ed-video-v2" playsinline muted hidden></video>
+                </div>
+
+                <div class="ed-transport">
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-play-tl" disabled
+                          title="Gesamte Timeline abspielen – Schnitte werden übersprungen">▶ Timeline abspielen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-prog-prev-clip" title="Vorheriger Clip (↑)">⏮ Clip</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-prog-next-clip" title="Nächster Clip (↓)">Clip ⏭</button>
+                  <span class="muted ed-time" id="ed-tl-time" style="margin-left:auto">0:00 / 0:00</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-preview-cut" disabled
+                          title="5-Sekunden-Übergang am aktuellen Schnitt rendern und hier abspielen">🎞 Übergang testen</button>
+                </div>
+
+                <!-- 1-Klick-Schnellaktionen für die gesamte Timeline -->
+                <div class="ed-oneclick-bar" style="margin-top:10px">
+                  <span class="muted" style="font-size:11.5px;font-weight:600">✨ 1-Klick für alle Clips:</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-fades"
+                          title="Allen Clips 1 Sekunde Ein- und Ausblendung geben">⌁ 1s Fade alle</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-xfade"
+                          title="Weiche 1-Sekunden-Überblendung zwischen allen Clips aktivieren">🌊 1s Überblendung</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-loudnorm"
+                          title="Lautstärke aller Clips automatisch nach EBU R128 angleichen">🔊 Loudnorm alle</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-voice"
+                          title="Sprache hervorheben &amp; Hintergrundrauschen dämpfen für alle Clips">🎙 Dialog klarer</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-highlight"
+                          title="Jeden Clip auf die mittleren 4 Sekunden kürzen (Trailer / Highlight-Reel)">⚡ Highlight-Reel (4s)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-kf"
+                          title="Alle Clips für verlustfreien Remux auf die nächsten Keyframes runden">🔑 Keyframes runden</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-1c-reverse"
+                          title="Reihenfolge der Clips auf der Timeline umkehren">⇄ Reihenfolge drehen</button>
+                </div>
+
+                <!-- Kompakte Clip-Chips zum schnellen Springen & Umsortieren -->
+                <div class="ed-prog-clips-wrap">
+                  <div class="ed-prog-clips-head">
+                    <span class="muted" style="font-size:11.5px">Aktive Clips auf der Timeline (Klick = Fokus, Ziehen = Reihenfolge):</span>
+                    <label class="check" style="margin:0;font-size:11.5px">
+                      <input type="checkbox" id="ed-follow" checked />
+                      <span>Schnitte überspringen</span>
+                    </label>
+                  </div>
+                  <ul class="ed-seg-list" id="ed-seg-list"></ul>
                 </div>
               </div>
             </div>
@@ -2612,7 +2696,6 @@
               <div class="ed-tl-head">
                 <strong>Timeline</strong>
                 <span class="muted" id="ed-tl-sel">Kein Clip gewählt</span>
-                <span class="muted ed-time" id="ed-tl-time">0:00 / 0:00</span>
                 <div class="ed-tl-zoom-bar">
                   <label class="muted" style="font-size:11.5px">Zoom</label>
                   <input type="range" id="ed-tl-zoom" min="1" max="16" step="0.5" value="1" style="width:90px" title="Timeline-Zoom (Strg + Mausrad)" />
@@ -2622,26 +2705,6 @@
                 <span class="muted" id="ed-total">0 Clips · 0:00</span>
               </div>
               <div class="ed-tl-tools">
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-browse"
-                        title="Datei in die Vorschau laden, um Bereiche auszuwählen">📂 Quelle laden</button>
-                <label class="btn btn-ghost btn-sm ed-upload-btn"
-                       title="Datei hochladen und in die Vorschau laden">⬆ Upload
-                  <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
-                </label>
-                <span class="ed-tl-sep"></span>
-                <button type="button" class="btn btn-primary btn-sm" id="ed-keep-range"
-                        title="Markierten Bereich der Quelle als Clip anhängen (mehrfach möglich)">+ Bereich</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-cut-range"
-                        title="Markierten Bereich entfernen – der Rest der Quelle bleibt">− Bereich</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-keep-all"
-                        title="Gesamte Quelle als einen Clip">Ganze Datei</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source"
-                        title="Mehrere Dateien anhaken und in dieser Reihenfolge anhängen">+ Quellen</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-add-v2"
-                        title="Aktuellen Bereich oder Datei als B-Roll / Picture-in-Picture auf Spur V2 am Playhead einfügen">+ B-Roll (V2)</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-black"
-                        title="Schwarzclip als Pause einfügen (erzwingt Encode)">Schwarz 3 s</button>
-                <span class="ed-tl-sep"></span>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-split" disabled
                         title="Aktiven Clip am Playhead in zwei Teile schneiden (S)">✂ Teilen</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-in" disabled
@@ -2654,15 +2717,13 @@
                         title="Clip nach rechts schieben">▶</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-dup" disabled
                         title="Clip verdoppeln">⧉ Duplizieren</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-black"
+                        title="Schwarzclip als Pause einfügen (erzwingt Encode)">+ Schwarz 3 s</button>
                 <button type="button" class="btn btn-ghost btn-sm bad-btn" id="ed-tl-del" disabled
                         title="Aktiven Clip aus der Timeline löschen (Entf)">🗑 Clip löschen</button>
                 <span class="ed-tl-sep"></span>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled
-                        title="Alle Clips der Reihe nach abspielen">▶ Vorschau</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-preview-cut" disabled
-                        title="5-Sekunden-Übergang am aktuellen Schnitt rendern und im Player prüfen">🎞 Übergang testen</button>
                 <details class="ed-tl-more">
-                  <summary class="btn btn-ghost btn-sm"> Auto-Schnitt</summary>
+                  <summary class="btn btn-ghost btn-sm">🪄 Auto-Schnitt</summary>
                   <div class="ed-tl-more-panel">
                     <div class="ed-more-label">Automatische Erkennung (aktuelle Quelle)</div>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-det-black">⬛ Schwarzbilder herausschneiden</button>
@@ -2684,6 +2745,14 @@
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-save-proj">Projekt speichern</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-load-proj">Projekt laden</button>
                     <input type="file" id="ed-proj-file" accept="application/json,.json" hidden />
+                    <div class="ed-more-sep"></div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-copy-yt"
+                            title="YouTube-/Kapitel-Zeitstempel (00:00 Titel) in die Zwischenablage kopieren">📋 YouTube-Kapitel kopieren</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-export-csv"
+                            title="Schnittliste als LosslessCut-kompatible CSV-Datei speichern">📄 Schnittliste (.csv) exportieren</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-import-csv"
+                            title="LosslessCut-CSV-Schnittliste für die geladene Quelle importieren">📥 Schnittliste (.csv) importieren</button>
+                    <input type="file" id="ed-csv-file" accept=".csv,text/csv" hidden />
                     <div class="ed-more-sep"></div>
                     <label class="ed-more-label">Upload-Zielordner</label>
                     <div class="ed-more-row">
@@ -2716,11 +2785,11 @@
                   <div class="ed-tl-playhead" id="ed-tl-playhead" hidden></div>
                 </div>
               </div>
-              <p class="hint" style="font-size:12px;margin-top:8px">
-                <strong>V1</strong> ist die Hauptspur, <strong>V2</strong> legt B-Roll / Picture-in-Picture frei positionierbar darüber.
-                Ziehen in der Timeline schiebt den Playhead, <strong>Strg + Mausrad</strong> zoomt.
-                Clip-Mitte ziehen sortiert um, <strong>Ränder ziehen</strong> trimmt, <strong>Ecken oben</strong> ziehen Fades auf.
-              </p>
+
+              <!-- Kompakte Inspektor-Leiste direkt unter der Timeline -->
+              <div class="ed-inspector" id="ed-inspector">
+                <div class="muted" style="font-size:12px">Klicke auf einen Clip (V1) oder ein B-Roll-Overlay (V2), um Titel, Feinschnitt, Fades, Tempo, Lautstärke, Drehung oder PiP-Position einzustellen.</div>
+              </div>
             </div>
 
             <div class="divider" style="margin:16px 0"></div>
@@ -2732,6 +2801,13 @@
                   <option value="remux">Remux (Copy, Keyframe)</option>
                   <option value="smart">Smart Cut (Framegenau, nur Schnittränder encodieren)</option>
                   <option value="encode">Encode (Komplett neu encodieren + Effekte)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Export-Art</label>
+                <select id="ed-export-split">
+                  <option value="merge">Alle Clips zusammenfügen (1 Datei)</option>
+                  <option value="split">Jeden Clip einzeln speichern (N Dateien)</option>
                 </select>
               </div>
               <div class="field">
@@ -2871,6 +2947,33 @@
                     <option value="tonemap">HDR → SDR Tonemapping (Hable)</option>
                   </select>
                 </div>
+                <div class="field">
+                  <label>Zielformat</label>
+                  <select id="ed-aspect-mode">
+                    <option value="source">Wie Quelle</option>
+                    <option value="16:9">16:9 Breitbild</option>
+                    <option value="9:16">9:16 Hochkant (Shorts/Reels)</option>
+                    <option value="1:1">1:1 Quadratisch</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Ränder auffüllen</label>
+                  <select id="ed-pad-mode">
+                    <option value="black">Schwarze Balken</option>
+                    <option value="blur">Weichgezeichnetes Bild (Blur-Fill)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>1-Klick Zielgröße</label>
+                  <select id="ed-size-preset" title="Berechnet die Videobitrate automatisch passend zur Timeline-Länge">
+                    <option value="0">Manuell / Frei</option>
+                    <option value="10">Max. 10 MB (Discord)</option>
+                    <option value="25">Max. 25 MB (E-Mail / Messenger)</option>
+                    <option value="50">Max. 50 MB</option>
+                    <option value="100">Max. 100 MB</option>
+                    <option value="500">Max. 500 MB</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -2898,6 +3001,24 @@
                   <option value="1">Mono</option>
                 </select>
               </div>
+              <div class="field" style="min-width:220px">
+                <label>Hintergrundmusik (A2)</label>
+                <div style="display:flex;gap:4px">
+                  <input type="text" id="ed-bgm-path" placeholder="Keine (optional .mp3/.flac)" readonly style="flex:1" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-bgm-browse" title="Audiodatei für Hintergrundmusik wählen">🎵</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-bgm-clear" title="Hintergrundmusik entfernen">×</button>
+                </div>
+              </div>
+              <div class="field" id="ed-bgm-opts" style="display:none">
+                <label>Musik-Pegel (dB)</label>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <input type="number" id="ed-bgm-vol" value="-12" min="-36" max="6" step="1" style="width:74px" />
+                  <label class="check" style="margin:0;white-space:nowrap" title="Senkt die Musik automatisch ab, sobald im Hauptvideo gesprochen wird">
+                    <input type="checkbox" id="ed-bgm-duck" checked />
+                    <span>Auto-Ducking</span>
+                  </label>
+                </div>
+              </div>
             </div>
             <p class="hint" id="ed-audio-hint" style="margin-top:6px"></p>
 
@@ -2907,6 +3028,9 @@
                 <input type="checkbox" id="ed-force" /><span>Remux trotz Warnung erzwingen</span>
               </label>
               <button type="button" class="btn btn-primary" id="ed-enqueue" disabled>In Warteschlange</button>
+              <button type="button" class="btn btn-ghost" id="ed-direct-dl" disabled title="Aktuellen Clip / Bereich verlustfrei schneiden und direkt im Browser herunterladen">⬇ Direkt-Download (1 Clip)</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="ed-restore-autosave" style="display:none" title="Zuletzt im Browser bearbeitete Timeline wiederherstellen">↺ Letzte Sitzung wiederherstellen</button>
+              <span class="muted" id="ed-size-est" style="font-size:12px;font-weight:600"></span>
               <span class="muted" id="ed-status" style="font-size:12px"></span>
             </div>
             <p class="hint" id="ed-mode-hint" style="margin-top:8px">Remux kopiert Streams ohne Neucodierung.
@@ -2929,6 +3053,7 @@
                   <input type="text" id="fp-path" placeholder="Medienpfad, z. B. Filme/film.mkv" />
                   <button class="btn btn-ghost btn-sm" id="fp-browse" type="button">Durchsuchen …</button>
                   <button class="btn btn-primary btn-sm" id="fp-load" type="button">Laden</button>
+                  <button class="btn btn-ghost btn-sm" id="fp-to-editor" type="button" title="Geladene Datei im Video-Editor schneiden">🎬 Im Editor</button>
                   <button class="btn btn-ghost btn-sm" id="fp-unload" type="button" title="Video und Session entladen">Entladen</button>
                 </div>
               </div>

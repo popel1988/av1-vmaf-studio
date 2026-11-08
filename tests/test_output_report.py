@@ -186,8 +186,20 @@ class OutputReportTests(unittest.TestCase):
             "audio_index": 0, "audio_indexes": [0], "mute": False,
             "sub_index": -1, "sub_indexes": [], "burn_subs": False,
             "fade_in": 1.0, "fade_out": 0.0, "speed": 1.0,
-            "crop": "3840:1600:0:280", "scale": 0, "rotate": 90,
+            "crop": "3840:1600:0:280", "delogo": "200:80:40:40",
+            "text_overlay": "Kapitel 1", "text_pos": "bottom",
+            "look_preset": "night", "voice_enhance": True, "reverse": True,
+            "scale": 0, "rotate": 90,
             "hflip": True, "vflip": False, "volume_db": 3.5, "loudnorm": True,
+        }, {
+            "path": "source.mkv", "abs": Path("source.mkv"), "kind": "freeze",
+            "start": 25.0, "end": 28.0, "title": "Standbild",
+            "audio_index": -1, "audio_indexes": [], "mute": True,
+            "sub_index": -1, "sub_indexes": [], "burn_subs": False,
+            "fade_in": 0.0, "fade_out": 0.5, "speed": 1.0,
+            "crop": "", "delogo": "", "text_overlay": "", "text_pos": "bottom",
+            "reverse": False, "scale": 0, "rotate": 0,
+            "hflip": False, "vflip": False, "volume_db": 0.0, "loudnorm": False,
         }]
         ovs = [{
             "path": "broll.mkv", "abs": Path("broll.mkv"), "title": "PiP",
@@ -200,13 +212,20 @@ class OutputReportTests(unittest.TestCase):
             cmd, err = editor.build_editor_encode_cmd(
                 segs, Path("out.mkv"), platform="cpu", codec="av1",
                 crossfade=0.0, transition="wipeleft", preserve_hdr=True,
-                overlays=ovs, add_chapters=False,
+                overlays=ovs, pad_mode="blur", aspect_mode="9:16", add_chapters=False,
             )
             self.assertEqual(err, "")
             joined = " ".join(cmd)
             self.assertIn("yuv420p10le", joined)
             self.assertIn("transpose=1", joined)
             self.assertIn("hflip", joined)
+            self.assertIn("delogo=x=40:y=40:w=200:h=80", joined)
+            self.assertIn("drawtext=text='Kapitel 1'", joined)
+            self.assertIn("gamma=1.35", joined)
+            self.assertIn("afftdn=nf=-25", joined)
+            self.assertIn("boxblur=20:2", joined)
+            self.assertIn("reverse", joined)
+            self.assertIn("tpad=stop_mode=clone", joined)
             self.assertIn("loudnorm=", joined)
             self.assertIn("volume=3.50dB", joined)
             self.assertIn("overlay=", joined)

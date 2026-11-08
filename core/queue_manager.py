@@ -1785,7 +1785,11 @@ class QueueManager:
             return
         out_path = _output_path(item)
         mode = (spec.get("mode") or "remux").lower()
-        if editor.any_needs_encode(segs, float(spec.get("crossfade") or 0), ovs):
+        bgm_path = str(spec.get("bgm_path") or "").strip()
+        pad_mode = str(spec.get("pad_mode") or "black").strip().lower()
+        aspect_mode = str(spec.get("aspect_mode") or "source").strip().lower()
+        if editor.any_needs_encode(segs, float(spec.get("crossfade") or 0), ovs,
+                                   bgm_path=bgm_path, pad_mode=pad_mode, aspect_mode=aspect_mode):
             mode = "encode"
         info.duration = editor.total_duration(segs, float(spec.get("crossfade") or 0)) or getattr(info, "duration", 0.0)
 
@@ -1860,6 +1864,11 @@ class QueueManager:
                 tonemap=bool(spec.get("tonemap", getattr(s, "tonemap", False))),
                 preserve_hdr=bool(spec.get("preserve_hdr", getattr(s, "preserve_hdr", True))),
                 overlays=ovs,
+                bgm_path=bgm_path,
+                bgm_volume_db=float(spec.get("bgm_volume_db", -12.0)),
+                bgm_ducking=bool(spec.get("bgm_ducking", True)),
+                pad_mode=pad_mode,
+                aspect_mode=aspect_mode,
                 add_chapters=bool(spec.get("chapters_from_cuts", True)),
             )
             label = "Editor-Export (Re-Encode)"

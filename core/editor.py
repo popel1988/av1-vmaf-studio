@@ -90,7 +90,9 @@ def _audio_tracks(path: Optional[Path]) -> list[dict]:
 
 
 def _clip_out_dur(s: dict) -> float:
-    """Dauer auf der Ausgabe-Timeline (nach Tempo)."""
+    """Dauer auf der Ausgabe-Timeline (nach Tempo, bei freeze = Standbild-Dauer)."""
+    if str(s.get("kind") or "").lower() == "freeze":
+        return max(0.2, min(60.0, _f(s.get("end"), 3.0) - _f(s.get("start"), 0.0)))
     raw = max(0.0, float(s["end"]) - float(s["start"]))
     speed = max(0.25, min(4.0, _f(s.get("speed"), 1.0) or 1.0))
     return raw / speed if speed else raw
@@ -105,7 +107,7 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
         if not isinstance(s, dict):
             return [], f"Segment {i + 1}: ungültig."
         kind = str(s.get("kind") or "media").lower().strip()
-        if kind not in ("media", "black", "silence"):
+        if kind not in ("media", "black", "silence", "freeze"):
             kind = "media"
         path = str(s.get("path") or "").strip()
         target: Optional[Path] = None
@@ -122,17 +124,21 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             target = resolve_path(path)
             if target is None or not target.is_file():
                 return [], f"Segment {i + 1}: Datei nicht gefunden ({path})."
-            if end <= 0:
-                end = remux.probe_duration(target)
-            if end <= start:
-                return [], f"Segment {i + 1}: Ende muss nach dem Start liegen."
+            if kind == "freeze":
+                if end <= start:
+                    end = start + 3.0
+            else:
+                if end <= 0:
+                    end = remux.probe_duration(target)
+                if end <= start:
+                    return [], f"Segment {i + 1}: Ende muss nach dem Start liegen."
         aidx = s.get("audio_index", 0)
         try:
             aidx = int(aidx)
         except (TypeError, ValueError):
             aidx = 0
         alist = _audio_list(s.get("audio_indexes"), aidx)
-        mute = bool(s.get("mute")) or kind in _GEN_KINDS
+        mute = bool(s.get("mute")) or kind in _GEN_KINDS or kind == "freeze"
         if mute:
             alist = []
         elif not alist:
@@ -142,9 +148,17 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             sidx = int(sidx)
         except (TypeError, ValueError):
             sidx = -1
-        slist = [] if kind in _GEN_KINDS else _audio_list(s.get("sub_indexes"), sidx)
+        slist = [] if (kind in _GEN_KINDS or kind == "freeze") else _audio_list(s.get("sub_indexes"), sidx)
         title = str(s.get("title") or "").strip() or f"Clip {i + 1}"
         crop = str(s.get("crop") or "").strip()
+        delogo = str(s.get("delogo") or "").strip()
+        text_ov = str(s.get("text_overlay") or "").strip()[:140]
+        text_pos = str(s.get("text_pos") or "bottom").lower().strip()
+        if text_pos not in ("bottom", "top", "center", "tl", "tr", "bl", "br"):
+            text_pos = "bottom"
+        look_preset = str(s.get("look_preset") or "none").lower().strip()
+        if look_preset not in ("none", "night", "vivid", "clean", "bw", "cinema"):
+            look_preset = "none"
         try:
             scale = int(s.get("scale") or 0)
         except (TypeError, ValueError):
@@ -172,6 +186,12 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             "fade_out": max(0.0, min(30.0, _f(s.get("fade_out")))),
             "speed": max(0.25, min(4.0, _f(s.get("speed"), 1.0) or 1.0)),
             "crop": crop,
+            "delogo": delogo,
+            "text_overlay": text_ov,
+            "text_pos": text_pos,
+            "look_preset": look_preset,
+            "voice_enhance": bool(s.get("voice_enhance")),
+            "reverse": bool(s.get("reverse")),
             "scale": max(0, min(4320, scale)),
             "rotate": rotate,
             "hflip": bool(s.get("hflip")),
@@ -211,13 +231,15 @@ def chapters_from_segments(segments: list[dict], crossfade: float = 0.0) -> list
 
 
 def segment_needs_encode(s: dict) -> bool:
-    if (s.get("kind") or "media") in _GEN_KINDS:
+    if (s.get("kind") or "media") in _GEN_KINDS or s.get("kind") == "freeze":
         return True
     if _f(s.get("fade_in")) > 0 or _f(s.get("fade_out")) > 0:
         return True
     if abs(_f(s.get("speed"), 1.0) - 1.0) > 0.001:
         return True
-    if s.get("crop") or int(s.get("scale") or 0) > 0:
+    if s.get("crop") or s.get("delogo") or s.get("text_overlay") or s.get("reverse") or int(s.get("scale") or 0) > 0:
+        return True
+    if (s.get("look_preset") or "none") != "none" or s.get("voice_enhance"):
         return True
     if int(s.get("rotate") or 0) in (90, 180, 270) or s.get("hflip") or s.get("vflip"):
         return True
@@ -229,10 +251,14 @@ def segment_needs_encode(s: dict) -> bool:
 
 
 def any_needs_encode(segments: list[dict], crossfade: float = 0.0,
-                     overlays: Optional[list[dict]] = None) -> bool:
+                     overlays: Optional[list[dict]] = None,
+                     bgm_path: str = "", pad_mode: str = "black",
+                     aspect_mode: str = "source") -> bool:
     if float(crossfade or 0) > 0.01:
         return True
-    if overlays:
+    if overlays or bgm_path:
+        return True
+    if (pad_mode or "black") != "black" or (aspect_mode or "source") != "source":
         return True
     return any(segment_needs_encode(s) for s in segments)
 
@@ -295,6 +321,12 @@ def segment_to_spec(s: dict) -> dict:
         "fade_out": _f(s.get("fade_out")),
         "speed": _f(s.get("speed"), 1.0) or 1.0,
         "crop": s.get("crop") or "",
+        "delogo": s.get("delogo") or "",
+        "text_overlay": s.get("text_overlay") or "",
+        "text_pos": s.get("text_pos") or "bottom",
+        "look_preset": s.get("look_preset") or "none",
+        "voice_enhance": bool(s.get("voice_enhance")),
+        "reverse": bool(s.get("reverse")),
         "scale": int(s.get("scale") or 0),
         "rotate": int(s.get("rotate") or 0),
         "hflip": bool(s.get("hflip")),
@@ -388,8 +420,10 @@ def _sub_tracks(path: Optional[Path]) -> list[dict]:
 
 
 def _copy_audio_ok(segments: list[dict], crossfade: float = 0.0,
-                   audio_channels: int = 0) -> bool:
+                   audio_channels: int = 0, bgm_path: str = "") -> bool:
     """Ton per Concat-Copy möglich: gleiche Spuren, keine Audio-Filter."""
+    if bgm_path:
+        return False
     if int(audio_channels or 0) in (1, 2):
         return False
     if float(crossfade or 0) > 0.01:
@@ -398,13 +432,15 @@ def _copy_audio_ok(segments: list[dict], crossfade: float = 0.0,
     if len(sels) > 1:
         return False
     for s in segments:
-        if (s.get("kind") or "media") in _GEN_KINDS:
+        if (s.get("kind") or "media") in _GEN_KINDS or s.get("kind") == "freeze":
+            return False
+        if s.get("reverse"):
             return False
         if _f(s.get("fade_in")) > 0 or _f(s.get("fade_out")) > 0:
             return False
         if abs(_f(s.get("speed"), 1.0) - 1.0) > 0.001:
             return False
-        if abs(_f(s.get("volume_db"), 0.0)) > 0.05 or s.get("loudnorm"):
+        if abs(_f(s.get("volume_db"), 0.0)) > 0.05 or s.get("loudnorm") or s.get("voice_enhance"):
             return False
     return True
 
@@ -490,6 +526,62 @@ def build_editor_remux_cmd(segments: list[dict], output: Path,
 
 def _esc_sub_path(path: Path) -> str:
     return str(path).replace("\\", "/").replace(":", "\\:").replace("'", r"\'")
+
+
+def _esc_drawtext(text: str) -> str:
+    return (
+        str(text or "")
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "")
+        .replace("%", "\\%")
+    )
+
+
+def _delogo_filter(spec: str) -> str:
+    parts = [p.strip() for p in str(spec or "").split(":")]
+    if len(parts) != 4:
+        return ""
+    try:
+        w, h, x, y = (int(float(p)) for p in parts)
+    except ValueError:
+        return ""
+    if w < 4 or h < 4 or x < 0 or y < 0:
+        return ""
+    return f"delogo=x={x}:y={y}:w={w}:h={h}:show=0"
+
+
+def _drawtext_filter(text: str, pos: str, th: int) -> str:
+    clean = _esc_drawtext(text)
+    if not clean:
+        return ""
+    fs = max(18, int(round(th * 0.042)))
+    coords = {
+        "bottom": "x=(w-text_w)/2:y=h-text_h-40",
+        "top": "x=(w-text_w)/2:y=40",
+        "center": "x=(w-text_w)/2:y=(h-text_h)/2",
+        "tl": "x=40:y=40",
+        "tr": "x=w-text_w-40:y=40",
+        "bl": "x=40:y=h-text_h-40",
+        "br": "x=w-text_w-40:y=h-text_h-40",
+    }.get(pos or "bottom", "x=(w-text_w)/2:y=h-text_h-40")
+    return (
+        f"drawtext=text='{clean}':{coords}:fontsize={fs}:fontcolor=white"
+        f":box=1:boxcolor=black@0.55:boxborderw=10"
+    )
+
+
+_LOOK_FILTERS = {
+    "night": "eq=brightness=0.07:contrast=1.12:gamma=1.35:saturation=1.08",
+    "vivid": "eq=contrast=1.08:saturation=1.28",
+    "clean": "hqdn3d=3:2:6:6,unsharp=5:5:0.75:5:5:0.0",
+    "bw": "hue=s=0,eq=contrast=1.14",
+    "cinema": "eq=contrast=1.10:saturation=0.92:gamma=0.95,unsharp=5:5:0.4:5:5:0.0",
+}
+
+
+def _look_filter(preset: str) -> str:
+    return _LOOK_FILTERS.get(str(preset or "none").lower().strip(), "")
 
 
 def _atempo_chain(speed: float) -> str:
@@ -590,9 +682,14 @@ def build_editor_encode_cmd(
     tonemap: bool = False,
     preserve_hdr: bool = True,
     overlays: Optional[list[dict]] = None,
+    bgm_path: str = "",
+    bgm_volume_db: float = -12.0,
+    bgm_ducking: bool = True,
+    pad_mode: str = "black",
+    aspect_mode: str = "source",
     add_chapters: bool = True,
 ) -> tuple[list, str]:
-    """Re-Encode-Export: trim/atrim je Segment, optional xfade + V2-Overlays, dann concat."""
+    """Re-Encode-Export: trim/atrim je Segment, optional xfade + V2-Overlays + BGM, dann concat."""
     if not segments:
         return [], "Keine Segmente."
     from . import encoder as enc_mod
@@ -606,6 +703,17 @@ def build_editor_encode_cmd(
     if trans not in _TRANSITIONS:
         trans = "fade"
     tw, th, tfps, ref_info = _ref_geometry(segments)
+    asp = str(aspect_mode or "source").lower().strip()
+    if asp == "9:16":
+        base_h = max(720, min(1920, max(tw, th)))
+        th = max(2, int(round(base_h / 2.0)) * 2)
+        tw = max(2, int(round(th * 9.0 / 16.0 / 2.0)) * 2)
+    elif asp == "1:1":
+        side = max(480, min(1440, min(tw, th)))
+        tw = th = max(2, int(round(side / 2.0)) * 2)
+    elif asp == "16:9" and tw < th:
+        tw, th = th, tw
+    use_blur_pad = str(pad_mode or "black").lower().strip() == "blur"
     is_hdr = bool(ref_info and getattr(ref_info, "is_hdr", False))
     do_tonemap = bool(tonemap and is_hdr)
     keep_hdr = bool(preserve_hdr and is_hdr and not do_tonemap)
@@ -615,6 +723,9 @@ def build_editor_encode_cmd(
     )
     pix_fmt = "yuv420p10le" if ten_bit else "yuv420p"
     ov_list = list(overlays or [])
+    bgm_abs = resolve_path(bgm_path) if bgm_path else None
+    if bgm_abs is not None and not bgm_abs.is_file():
+        bgm_abs = None
 
     path_to_idx: dict[str, int] = {}
     file_inputs: list[Path] = []
@@ -647,7 +758,7 @@ def build_editor_encode_cmd(
     durs: list[float] = []
     want_copy_a = (audio_codec or "").lower() == "copy"
     copy_audio = want_copy_a and _copy_audio_ok(
-        segments, xf, int(audio_channels or 0))
+        segments, xf, int(audio_channels or 0), bgm_path=str(bgm_abs or ""))
     copy_subs = _copy_subs_ok(segments) and any(
         s.get("sub_indexes") for s in segments)
     # Alle Clips müssen gleich viele Tonspuren liefern – fehlende werden still.
@@ -673,9 +784,54 @@ def build_editor_encode_cmd(
             parts.append(
                 f"[{li}:v]format={pix_fmt},setsar=1,fps={tfps:.3f}[{vlabel}]")
             mute = True
+        elif kind == "freeze":
+            ii = file_idx(s["abs"])
+            f_chain = [
+                f"trim=start={start:.3f}:end={start + 0.08:.3f}",
+                "setpts=PTS-STARTPTS",
+                f"tpad=stop_mode=clone:stop_duration={out_d:.3f}",
+                f"trim=duration={out_d:.3f}",
+            ]
+            if do_tonemap:
+                f_chain.append(enc_mod.tonemap_chain("hable", 0.0, 0.0))
+            crop = str(s.get("crop") or "").strip()
+            if crop and ":" in crop:
+                f_chain.append(f"crop={crop}")
+            dl = _delogo_filter(s.get("delogo") or "")
+            if dl:
+                f_chain.append(dl)
+            lf = _look_filter(s.get("look_preset") or "none")
+            if lf:
+                f_chain.append(lf)
+            rot = int(s.get("rotate") or 0)
+            if rot in _ROTATE_FILTERS:
+                f_chain.append(_ROTATE_FILTERS[rot])
+            if s.get("hflip"):
+                f_chain.append("hflip")
+            if s.get("vflip"):
+                f_chain.append("vflip")
+            sc = int(s.get("scale") or 0)
+            if sc > 0:
+                f_chain.append(f"scale=-2:{sc}")
+            f_chain.append(f"scale={tw}:{th}:force_original_aspect_ratio=decrease")
+            f_chain.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2")
+            dt = _drawtext_filter(s.get("text_overlay") or "", s.get("text_pos") or "bottom", th)
+            if dt:
+                f_chain.append(dt)
+            f_chain.append(f"format={pix_fmt}")
+            f_chain.append(f"fps={tfps:.3f}")
+            f_chain.append("setsar=1")
+            if fi > 0.02:
+                f_chain.append(f"fade=t=in:st=0:d={fi:.3f}")
+            if fo > 0.02:
+                f_chain.append(f"fade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
+            parts.append(f"[{ii}:v:0]" + ",".join(f_chain) + f"[{vlabel}]")
+            mute = True
         else:
             ii = file_idx(s["abs"])
             chain = [f"trim=start={start:.3f}:end={end:.3f}", "setpts=PTS-STARTPTS"]
+            if s.get("reverse") and dur <= 60.0:
+                chain.append("reverse")
             if s.get("burn_subs") or (burn_subs and int(s.get("sub_index", sub_index)) >= 0
                                       and i == 0):
                 si = int(s.get("sub_index", sub_index) if s.get("sub_index", -1) >= 0
@@ -690,6 +846,12 @@ def build_editor_encode_cmd(
             crop = str(s.get("crop") or "").strip()
             if crop and ":" in crop:
                 chain.append(f"crop={crop}")
+            dl = _delogo_filter(s.get("delogo") or "")
+            if dl:
+                chain.append(dl)
+            lf = _look_filter(s.get("look_preset") or "none")
+            if lf:
+                chain.append(lf)
             rot = int(s.get("rotate") or 0)
             if rot in _ROTATE_FILTERS:
                 chain.append(_ROTATE_FILTERS[rot])
@@ -702,16 +864,47 @@ def build_editor_encode_cmd(
                 chain.append(f"scale=-2:{sc}")
             if abs(speed - 1.0) > 0.001:
                 chain.append(f"setpts=PTS/{speed:.4f}")
-            chain.append(f"scale={tw}:{th}:force_original_aspect_ratio=decrease")
-            chain.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2")
-            chain.append(f"format={pix_fmt}")
-            chain.append(f"fps={tfps:.3f}")
-            chain.append("setsar=1")
-            if fi > 0.02:
-                chain.append(f"fade=t=in:st=0:d={fi:.3f}")
-            if fo > 0.02:
-                chain.append(f"fade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
-            parts.append(f"[{ii}:v:0]" + ",".join(chain) + f"[{vlabel}]")
+            dt = _drawtext_filter(s.get("text_overlay") or "", s.get("text_pos") or "bottom", th)
+            if use_blur_pad:
+                pre_lbl = f"vpre{i}"
+                bg_lbl = f"vbg{i}"
+                fg_lbl = f"vfg{i}"
+                ov_lbl = f"vovpad{i}"
+                parts.append(f"[{ii}:v:0]" + ",".join(chain) + f",split=2[{bg_lbl}][{fg_lbl}]")
+                parts.append(
+                    f"[{bg_lbl}]scale={tw}:{th}:force_original_aspect_ratio=increase,"
+                    f"crop={tw}:{th},boxblur=20:2,eq=brightness=-0.08[{pre_lbl}_bg]"
+                )
+                parts.append(
+                    f"[{fg_lbl}]scale={tw}:{th}:force_original_aspect_ratio=decrease[{pre_lbl}_fg]"
+                )
+                tail = []
+                if dt:
+                    tail.append(dt)
+                tail.append(f"format={pix_fmt}")
+                tail.append(f"fps={tfps:.3f}")
+                tail.append("setsar=1")
+                if fi > 0.02:
+                    tail.append(f"fade=t=in:st=0:d={fi:.3f}")
+                if fo > 0.02:
+                    tail.append(f"fade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
+                parts.append(
+                    f"[{pre_lbl}_bg][{pre_lbl}_fg]overlay=(W-w)/2:(H-h)/2,"
+                    + ",".join(tail) + f"[{vlabel}]"
+                )
+            else:
+                chain.append(f"scale={tw}:{th}:force_original_aspect_ratio=decrease")
+                chain.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2")
+                if dt:
+                    chain.append(dt)
+                chain.append(f"format={pix_fmt}")
+                chain.append(f"fps={tfps:.3f}")
+                chain.append("setsar=1")
+                if fi > 0.02:
+                    chain.append(f"fade=t=in:st=0:d={fi:.3f}")
+                if fo > 0.02:
+                    chain.append(f"fade=t=out:st={max(0.0, out_d - fo):.3f}:d={fo:.3f}")
+                parts.append(f"[{ii}:v:0]" + ",".join(chain) + f"[{vlabel}]")
             mute = bool(s.get("mute"))
 
         v_pads.append(vlabel)
@@ -737,12 +930,18 @@ def build_editor_encode_cmd(
                 achain = [
                     f"atrim=start={start:.3f}:end={end:.3f}",
                     "asetpts=PTS-STARTPTS",
+                ]
+                if s.get("reverse") and dur <= 60.0:
+                    achain.append("areverse")
+                achain += [
                     f"aformat=sample_fmts=fltp:channel_layouts={lay}",
                     "aresample=48000",
                 ]
                 at = _atempo_chain(speed)
                 if at:
                     achain.append(at)
+                if s.get("voice_enhance"):
+                    achain.append("highpass=f=85,lowpass=f=12000,afftdn=nf=-25")
                 if do_ln:
                     achain.append("loudnorm=I=-16:TP=-1.5:LRA=11")
                 if abs(vol_db) > 0.05:
@@ -778,6 +977,11 @@ def build_editor_encode_cmd(
         if meta_path:
             meta_idx = n_files + len(lavfi) + (1 if concat_idx >= 0 else 0)
             cmd += ["-i", str(meta_path)]
+
+    bgm_idx = -1
+    if bgm_abs is not None and not copy_audio:
+        bgm_idx = n_files + len(lavfi) + (1 if concat_idx >= 0 else 0) + (1 if meta_idx >= 0 else 0)
+        cmd += ["-stream_loop", "-1", "-i", str(bgm_abs)]
 
     if xf > 0.02 and n >= 2:
         cur_v = v_pads[0]
@@ -861,6 +1065,32 @@ def build_editor_encode_cmd(
             f",format={pix_fmt}[{next_v}]"
         )
         v_out = next_v
+
+    # Hintergrundmusik (A2) mit optionalem Auto-Ducking (sidechaincompress)
+    if bgm_idx >= 0 and a_outs:
+        tot_d = max(0.2, total_duration(segments, xf))
+        lay0 = layouts[0] if layouts else "stereo"
+        b_vol = max(-36.0, min(12.0, float(bgm_volume_db if bgm_volume_db is not None else -12.0)))
+        parts.append(
+            f"[{bgm_idx}:a:0]atrim=0:{tot_d:.3f},asetpts=PTS-STARTPTS,"
+            f"aformat=sample_fmts=fltp:channel_layouts={lay0},aresample=48000,"
+            f"volume={b_vol:.2f}dB[bgm_raw]"
+        )
+        main_a = a_outs[0]
+        if bgm_ducking:
+            parts.append(f"[{main_a}]asplit=2[main_keep][main_sc]")
+            parts.append(
+                "[bgm_raw][main_sc]sidechaincompress="
+                "threshold=0.03:ratio=6:attack=35:release=350[bgm_duck]"
+            )
+            parts.append(
+                "[main_keep][bgm_duck]amix=inputs=2:duration=first:dropout_transition=0[a_bgm_out]"
+            )
+        else:
+            parts.append(
+                f"[{main_a}][bgm_raw]amix=inputs=2:duration=first:dropout_transition=0[a_bgm_out]"
+            )
+        a_outs[0] = "a_bgm_out"
 
     filt = ";".join(parts)
     if backend == "vaapi":
@@ -1513,6 +1743,34 @@ def render_transition_preview(
         out_file.unlink(missing_ok=True)
         return None, (proc.stderr or "")[-400:] or "Vorschau-Render fehlgeschlagen"
     return out_file, ""
+
+
+def extract_snapshot(rel: str, t: float = 0.0) -> tuple[Optional[Path], str, str]:
+    """Einzelbild (PNG) an Sekunde t extrahieren. Liefert (path, download_name, err)."""
+    target = resolve_path(rel)
+    if target is None or not target.is_file():
+        return None, "", "Datei nicht gefunden"
+    sec = max(0.0, float(t or 0.0))
+    out_dir = _cache_dir() / "snapshots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"snap_{uuid.uuid4().hex[:10]}.png"
+    cmd = [
+        config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", f"{sec:.3f}", "-i", str(target),
+        "-frames:v", "1", "-fps_mode", "passthrough",
+        str(out_file),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out_file.unlink(missing_ok=True)
+        return None, "", str(e)
+    if proc.returncode != 0 or not out_file.is_file() or out_file.stat().st_size <= 0:
+        out_file.unlink(missing_ok=True)
+        return None, "", (proc.stderr or "")[-300:] or "Snapshot fehlgeschlagen"
+    stamp = f"{int(sec // 60):02d}m{sec % 60:05.2f}s".replace(".", "_")
+    dl_name = f"{target.stem}_{stamp}.png"
+    return out_file, dl_name, ""
 
 
 def resolve_asset(key: str, name: str) -> Optional[Path]:
