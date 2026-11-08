@@ -172,6 +172,46 @@ class OutputReportTests(unittest.TestCase):
         self.assertEqual(by_key["output.size_target"]["status"], "warn")
         self.assertEqual(result["size"]["deviation_pct"], 30)
 
+    def test_editor_encode_preserves_10bit_hdr_overlays_and_smart_cut_plan(self):
+        from core import editor, ffmpeg_utils as ff
+        fake_info = ff.VideoInfo(
+            path="source.mkv", width=3840, height=2160, duration=120.0,
+            codec="hevc", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+            color_primaries="bt2020", color_space="bt2020nc", bit_rate=20000000,
+            size_bytes=100000, fps=24.0, bit_depth=10, hdr_type="HDR10",
+        )
+        segs = [{
+            "path": "source.mkv", "abs": Path("source.mkv"), "kind": "media",
+            "start": 10.0, "end": 25.0, "title": "Szene 1",
+            "audio_index": 0, "audio_indexes": [0], "mute": False,
+            "sub_index": -1, "sub_indexes": [], "burn_subs": False,
+            "fade_in": 1.0, "fade_out": 0.0, "speed": 1.0,
+            "crop": "3840:1600:0:280", "scale": 0, "rotate": 90,
+            "hflip": True, "vflip": False, "volume_db": 3.5, "loudnorm": True,
+        }]
+        ovs = [{
+            "path": "broll.mkv", "abs": Path("broll.mkv"), "title": "PiP",
+            "start": 0.0, "end": 5.0, "tl_start": 2.0,
+            "position": "pip_br", "size_pct": 30, "opacity": 0.85, "fade": 0.5,
+        }]
+        with patch.object(ff, "probe_with_error", return_value=(fake_info, None)), \
+             patch.object(editor, "_audio_tracks", return_value=[{"channels": 6}]), \
+             patch.object(editor.remux, "write_chapter_meta", return_value=None):
+            cmd, err = editor.build_editor_encode_cmd(
+                segs, Path("out.mkv"), platform="cpu", codec="av1",
+                crossfade=0.0, transition="wipeleft", preserve_hdr=True,
+                overlays=ovs, add_chapters=False,
+            )
+            self.assertEqual(err, "")
+            joined = " ".join(cmd)
+            self.assertIn("yuv420p10le", joined)
+            self.assertIn("transpose=1", joined)
+            self.assertIn("hflip", joined)
+            self.assertIn("loudnorm=", joined)
+            self.assertIn("volume=3.50dB", joined)
+            self.assertIn("overlay=", joined)
+            self.assertIn("bt2020", joined)
+
 
 if __name__ == "__main__":
     unittest.main()

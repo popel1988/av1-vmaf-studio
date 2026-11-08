@@ -27,6 +27,12 @@
     rateIdx: 0,
     dragId: null,
     activeId: null,
+    overlays: [],      // V2 B-Roll / PiP Overlays ({id, path, name, title, start, end, tl_start, position, size_pct, opacity, fade})
+    activeV2Id: null,
+    tlZoom: 1,
+    cropBox: null,     // {x, y, w, h} in Quellpixeln für den visuellen Crop-Rahmen
+    cropRatio: "free",
+    v2Url: "",
     assets: {},        // Pfad → { strip, duration } für Timeline-Vorschaubilder
     trackSel: {},      // Pfad → gewählte Tonspur-Indizes (für neue Clips)
     subSel: {},        // Pfad → gewählte Untertitel-Indizes
@@ -52,6 +58,35 @@
 
   function round2(n) {
     return Math.round(Number(n) * 100) / 100;
+  }
+
+  /** Akzeptiert Sekunden ("90.5") oder Zeitformat ("1:30.5" / "01:02:03.40"). */
+  function parseTimeStr(val, fallback) {
+    if (val == null) return fallback || 0;
+    const raw = String(val).trim().replace(",", ".");
+    if (!raw) return fallback || 0;
+    if (/^\d+(\.\d+)?$/.test(raw)) return Math.max(0, Number(raw));
+    const parts = raw.split(":").map((p) => Number(p.trim()));
+    if (parts.some((n) => !Number.isFinite(n) || n < 0)) return fallback || 0;
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    return fallback || 0;
+  }
+
+  function syncMarkLabels() {
+    const inEl = $("ed-in");
+    const outEl = $("ed-out");
+    const inFmt = $("ed-in-fmt");
+    const outFmt = $("ed-out-fmt");
+    if (inEl && inFmt) {
+      const s = parseTimeStr(inEl.value, ed.inSec);
+      inFmt.textContent = `(${fmt(s)})`;
+    }
+    if (outEl && outFmt) {
+      const s = parseTimeStr(outEl.value, ed.outSec);
+      outFmt.textContent = `(${fmt(s)})`;
+    }
+    updateKfDeltaBar();
   }
 
   function clipDur(s) {
@@ -126,10 +161,12 @@
   function syncBadge() {
     const b = $("ed-badge");
     const n = ed.segments.length;
-    if (b) b.textContent = n ? `${n} Clip(s) · ${fmt(totalDur())}` : tt("Keine Clips");
+    const nv2 = ed.overlays.length;
+    const v2Txt = nv2 ? ` + ${nv2} V2` : "";
+    if (b) b.textContent = n ? `${n} Clip(s)${v2Txt} · ${fmt(totalDur())}` : tt("Keine Clips");
     const tot = $("ed-total");
-    if (tot) tot.textContent = `${n} Clips · ${fmt(totalDur())}`;
-    ["ed-enqueue", "ed-play-tl", "ed-clear"].forEach((id) => {
+    if (tot) tot.textContent = `${n} Clips${v2Txt} · ${fmt(totalDur())}`;
+    ["ed-enqueue", "ed-play-tl", "ed-clear", "ed-preview-cut"].forEach((id) => {
       const el = $(id);
       if (el) el.disabled = n === 0;
     });
@@ -140,7 +177,10 @@
   }
 
   function snapshot() {
-    return JSON.parse(JSON.stringify(ed.segments));
+    return JSON.parse(JSON.stringify({
+      segments: ed.segments,
+      overlays: ed.overlays,
+    }));
   }
 
   function pushHist() {
@@ -154,7 +194,14 @@
   function applyHist(i) {
     if (i < 0 || i >= ed.hist.length) return;
     ed.histPos = i;
-    ed.segments = JSON.parse(JSON.stringify(ed.hist[i]));
+    const snap = JSON.parse(JSON.stringify(ed.hist[i]));
+    if (Array.isArray(snap)) {
+      ed.segments = snap;
+      ed.overlays = [];
+    } else {
+      ed.segments = snap.segments || [];
+      ed.overlays = snap.overlays || [];
+    }
     renderSegList();
   }
 
@@ -174,8 +221,8 @@
     const inEl = $("ed-in");
     const outEl = $("ed-out");
     return {
-      start: inEl ? Number(inEl.value) : ed.inSec,
-      end: outEl ? Number(outEl.value) : ed.outSec,
+      start: inEl ? parseTimeStr(inEl.value, ed.inSec) : ed.inSec,
+      end: outEl ? parseTimeStr(outEl.value, ed.outSec) : ed.outSec,
     };
   }
 
@@ -399,6 +446,11 @@
       speed: 1,
       crop: "",
       scale: 0,
+      rotate: 0,
+      hflip: false,
+      vflip: false,
+      volume_db: 0,
+      loudnorm: false,
     }, extra || {});
     // Projekte/Vorlagen von früher kennen nur eine einzelne Tonspur.
     if (!Array.isArray(clip.audio_indexes)) {
@@ -411,6 +463,22 @@
     }
     if (!clip.audio_indexes.length && clip.kind === "media") clip.mute = true;
     return clip;
+  }
+
+  function defaultOverlay(extra) {
+    return Object.assign({
+      id: uid(),
+      path: "",
+      name: "",
+      title: "B-Roll",
+      start: 0,
+      end: 5,
+      tl_start: 0,
+      position: "pip_br",
+      size_pct: 30,
+      opacity: 1,
+      fade: 0.3,
+    }, extra || {});
   }
 
   function snapTime(t) {
@@ -490,6 +558,7 @@
   function clipsNeedEncode() {
     const xf = Number(($("ed-crossfade") || {}).value) || 0;
     if (xf > 0.01) return true;
+    if (ed.overlays && ed.overlays.length > 0) return true;
     // Copy kann nur eine Streamstruktur durchreichen.
     const sels = new Set(ed.segments.filter((s) => s.kind === "media")
       .map((s) => (s.audio_indexes || []).join(",")));
@@ -502,6 +571,8 @@
       || Number(s.fade_in) > 0 || Number(s.fade_out) > 0
       || Math.abs((Number(s.speed) || 1) - 1) > 0.001
       || s.crop || Number(s.scale) > 0 || s.burn_subs
+      || Number(s.rotate) > 0 || s.hflip || s.vflip
+      || Math.abs(Number(s.volume_db) || 0) > 0.05 || s.loudnorm
     ));
   }
 
@@ -568,21 +639,16 @@
       if (s.kind === "black") extras.push(tt("Schwarz"));
       if (Number(s.speed) && Number(s.speed) !== 1) extras.push(`${s.speed}×`);
       if (Number(s.fade_in) || Number(s.fade_out)) extras.push("Fade");
+      if (s.crop) extras.push("Crop");
+      if (Number(s.rotate)) extras.push(`${s.rotate}°`);
+      if (s.hflip || s.vflip) extras.push("Flip");
+      if (Math.abs(Number(s.volume_db) || 0) > 0.05) extras.push(`${s.volume_db > 0 ? "+" : ""}${s.volume_db} dB`);
+      if (s.loudnorm) extras.push("Loudnorm");
       li.innerHTML = `
         <div class="ed-seg-main">
           <strong>${i + 1}. ${escapeHtml(s.title || s.name)}</strong>
           <span class="muted">${escapeHtml(s.name || s.kind)} · ${fmt(s.start)} → ${fmt(s.end)} (${fmt(dur)})${extras.length ? " · " + extras.join(" · ") : ""}</span>
           ${rates ? `<span class="muted ed-seg-rates">${escapeHtml(rates)}</span>` : ""}
-          <div class="ed-seg-edit">
-            <input class="ed-seg-title" data-f="title" value="${escapeHtml(s.title || "")}" placeholder="${tt("Titel")}" />
-            <input type="number" step="0.01" data-f="start" value="${s.start}" title="In" />
-            <input type="number" step="0.01" data-f="end" value="${s.end}" title="Out" />
-            <input type="number" step="0.1" min="0" max="8" data-f="fade_in" value="${s.fade_in || 0}" title="Fade-In s" />
-            <input type="number" step="0.1" min="0" max="8" data-f="fade_out" value="${s.fade_out || 0}" title="Fade-Out s" />
-            <input type="number" step="0.05" min="0.25" max="4" data-f="speed" value="${s.speed || 1}" title="${tt("Tempo")}" />
-            <input type="number" step="2" min="0" max="2160" data-f="scale" value="${s.scale || 0}" title="${tt("Höhe")} (0 = Original)" />
-            <input data-f="crop" value="${escapeHtml(s.crop || "")}" placeholder="crop w:h:x:y" title="Crop" />
-          </div>
         </div>
         <div class="ed-seg-actions">
           <button type="button" class="btn btn-ghost btn-sm" data-act="up" title="Hoch">↑</button>
@@ -593,21 +659,9 @@
       li.querySelectorAll("button").forEach((btn) => {
         btn.addEventListener("click", () => onSegAction(s.id, btn.dataset.act));
       });
-      li.querySelectorAll("[data-f]").forEach((inp) => {
-        inp.addEventListener("change", () => {
-          pushHist();
-          const f = inp.dataset.f;
-          const rec = ed.segments.find((x) => x.id === s.id);
-          if (!rec) return;
-          if (f === "title" || f === "crop") rec[f] = String(inp.value);
-          else rec[f] = Number(inp.value);
-          if (f === "start" || f === "end") renderSourceRuler();
-          renderTimeline();
-          syncBadge();
-        });
-      });
       li.addEventListener("click", (ev) => {
         if (ev.target.closest("button, input, select")) return;
+        ed.activeV2Id = null;
         setActive(s.id);
       });
       li.addEventListener("dragstart", (ev) => {
@@ -626,11 +680,214 @@
       ul.appendChild(li);
     });
     if (ed.activeId && !ed.segments.some((s) => s.id === ed.activeId)) ed.activeId = null;
+    if (ed.activeV2Id && !ed.overlays.some((o) => o.id === ed.activeV2Id)) ed.activeV2Id = null;
+    renderInspector();
     renderTimeline();
     renderSourceRuler();
     renderTracks();
     syncBadge();
     syncModeUI();
+  }
+
+  function renderInspector() {
+    const box = $("ed-inspector");
+    if (!box) return;
+    const v2 = ed.overlays.find((o) => o.id === ed.activeV2Id) || null;
+    if (v2) {
+      const idx = ed.overlays.indexOf(v2);
+      const dur = Math.max(0.05, Number(v2.end) - Number(v2.start));
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <strong>V2 Overlay #${idx + 1}: ${escapeHtml(v2.title || v2.name)}</strong>
+          <button type="button" class="btn btn-ghost btn-sm bad-btn" id="ed-insp-v2-del">Löschen</button>
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:2px">${escapeHtml(v2.name || v2.path)} · Dauer ${fmt(dur)}</div>
+        <div class="ed-insp-grid">
+          <div class="full">
+            <label>Titel</label>
+            <input data-v2f="title" value="${escapeHtml(v2.title || "")}" />
+          </div>
+          <div>
+            <label>Timeline-Start (V1)</label>
+            <input data-v2f="tl_start" value="${fmt(v2.tl_start)}" title="Position auf der Haupt-Timeline" />
+          </div>
+          <div>
+            <label>Layout / Position</label>
+            <select data-v2f="position">
+              <option value="pip_br"${v2.position === "pip_br" ? " selected" : ""}>PiP unten rechts</option>
+              <option value="pip_tr"${v2.position === "pip_tr" ? " selected" : ""}>PiP oben rechts</option>
+              <option value="pip_bl"${v2.position === "pip_bl" ? " selected" : ""}>PiP unten links</option>
+              <option value="pip_tl"${v2.position === "pip_tl" ? " selected" : ""}>PiP oben links</option>
+              <option value="side"${v2.position === "side" ? " selected" : ""}>Rechts mittig</option>
+              <option value="full"${v2.position === "full" ? " selected" : ""}>Vollbild (B-Roll)</option>
+            </select>
+          </div>
+          <div>
+            <label>Quelle In</label>
+            <input data-v2f="start" value="${fmt(v2.start)}" />
+          </div>
+          <div>
+            <label>Quelle Out</label>
+            <input data-v2f="end" value="${fmt(v2.end)}" />
+          </div>
+          <div>
+            <label>Größe (% Breite)</label>
+            <input type="number" min="15" max="100" step="5" data-v2f="size_pct" value="${v2.size_pct || 30}" />
+          </div>
+          <div>
+            <label>Deckkraft (0.1–1.0)</label>
+            <input type="number" min="0.1" max="1" step="0.05" data-v2f="opacity" value="${v2.opacity != null ? v2.opacity : 1}" />
+          </div>
+          <div>
+            <label>Ein-/Ausblenden (s)</label>
+            <input type="number" min="0" max="5" step="0.1" data-v2f="fade" value="${v2.fade || 0}" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button type="button" class="btn btn-ghost btn-sm" id="ed-insp-v2-load">Quelle in Vorschau</button>
+          </div>
+        </div>`;
+      const delBtn = $("ed-insp-v2-del");
+      if (delBtn) delBtn.addEventListener("click", () => {
+        pushHist();
+        ed.overlays = ed.overlays.filter((x) => x.id !== v2.id);
+        ed.activeV2Id = null;
+        renderSegList();
+      });
+      const loadBtn = $("ed-insp-v2-load");
+      if (loadBtn) loadBtn.addEventListener("click", () => {
+        loadSource(v2.path, v2.name, { inSec: v2.start, outSec: v2.end, seek: v2.start });
+      });
+      box.querySelectorAll("[data-v2f]").forEach((inp) => {
+        inp.addEventListener("change", () => {
+          pushHist();
+          const f = inp.dataset.v2f;
+          if (f === "title" || f === "position") v2[f] = String(inp.value);
+          else if (f === "tl_start" || f === "start" || f === "end") v2[f] = round2(parseTimeStr(inp.value, v2[f]));
+          else v2[f] = Number(inp.value);
+          if (v2.end <= v2.start) v2.end = round2(v2.start + 0.5);
+          renderSegList();
+          syncV2Preview();
+        });
+      });
+      return;
+    }
+
+    const s = activeClip();
+    if (!s) {
+      box.innerHTML = `<div class="muted" style="font-size:12px">Klicke auf einen Clip (V1) oder ein B-Roll-Overlay (V2), um alle Details zu bearbeiten.</div>`;
+      return;
+    }
+    const idx = ed.segments.indexOf(s);
+    const isMedia = s.kind === "media";
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <strong>Clip #${idx + 1}: ${escapeHtml(clipLabel(s))} (${fmt(clipDur(s))})</strong>
+        <button type="button" class="btn btn-ghost btn-sm" id="ed-insp-apply-all" title="Filter/Tempo/Skalierung/Lautstärke auf alle Clips anwenden">Auf alle Clips</button>
+      </div>
+      <div class="ed-insp-grid">
+        <div class="full">
+          <label>Titel (Kapitelname)</label>
+          <input data-f="title" value="${escapeHtml(s.title || "")}" placeholder="${tt("Titel")}" />
+        </div>
+        <div>
+          <label>In (Zeit / s)</label>
+          <input data-f="start" value="${fmt(s.start)}" />
+        </div>
+        <div>
+          <label>Out (Zeit / s)</label>
+          <input data-f="end" value="${fmt(s.end)}" />
+        </div>
+        <div>
+          <label>Fade-In (s)</label>
+          <input type="number" step="0.1" min="0" max="15" data-f="fade_in" value="${s.fade_in || 0}" />
+        </div>
+        <div>
+          <label>Fade-Out (s)</label>
+          <input type="number" step="0.1" min="0" max="15" data-f="fade_out" value="${s.fade_out || 0}" />
+        </div>
+        <div>
+          <label>Tempo (0.25–4×)</label>
+          <input type="number" step="0.05" min="0.25" max="4" data-f="speed" value="${s.speed || 1}" />
+        </div>
+        <div>
+          <label>Zielhöhe px (0 = Orig.)</label>
+          <input type="number" step="2" min="0" max="2160" data-f="scale" value="${s.scale || 0}" />
+        </div>
+        ${isMedia ? `
+        <div>
+          <label>Drehen</label>
+          <select data-f="rotate">
+            <option value="0"${!s.rotate ? " selected" : ""}>0° (Original)</option>
+            <option value="90"${Number(s.rotate) === 90 ? " selected" : ""}>90° rechts</option>
+            <option value="180"${Number(s.rotate) === 180 ? " selected" : ""}>180°</option>
+            <option value="270"${Number(s.rotate) === 270 ? " selected" : ""}>90° links (270°)</option>
+          </select>
+        </div>
+        <div>
+          <label>Spiegeln</label>
+          <div style="display:flex;gap:8px;padding-top:4px">
+            <label class="check" style="margin:0"><input type="checkbox" data-f="hflip"${s.hflip ? " checked" : ""} /><span>Horizontal</span></label>
+            <label class="check" style="margin:0"><input type="checkbox" data-f="vflip"${s.vflip ? " checked" : ""} /><span>Vertikal</span></label>
+          </div>
+        </div>
+        <div>
+          <label>Lautstärke (dB)</label>
+          <input type="number" step="0.5" min="-30" max="24" data-f="volume_db" value="${s.volume_db || 0}" />
+        </div>
+        <div style="display:flex;align-items:flex-end;padding-bottom:4px">
+          <label class="check" style="margin:0"><input type="checkbox" data-f="loudnorm"${s.loudnorm ? " checked" : ""} /><span>Loudnorm (EBU R128)</span></label>
+        </div>
+        <div class="full">
+          <label>Crop (w:h:x:y)</label>
+          <div style="display:flex;gap:6px">
+            <input data-f="crop" value="${escapeHtml(s.crop || "")}" placeholder="z. B. 3840:1600:0:280" style="flex:1" />
+            <button type="button" class="btn btn-ghost btn-sm" id="ed-insp-crop-vis">✂ Im Bild</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="ed-insp-crop-auto">Auto</button>
+          </div>
+        </div>` : ""}
+      </div>`;
+
+    const applyAll = $("ed-insp-apply-all");
+    if (applyAll) applyAll.addEventListener("click", () => {
+      pushHist();
+      ed.segments.forEach((other) => {
+        if (other.id === s.id || other.kind !== "media") return;
+        other.speed = s.speed;
+        other.scale = s.scale;
+        other.crop = s.crop;
+        other.rotate = s.rotate;
+        other.hflip = s.hflip;
+        other.vflip = s.vflip;
+        other.volume_db = s.volume_db;
+        other.loudnorm = s.loudnorm;
+      });
+      renderSegList();
+      setStatus(tt("Effekte auf alle Clips übertragen."));
+    });
+    const visBtn = $("ed-insp-crop-vis");
+    if (visBtn) visBtn.addEventListener("click", toggleCropOverlay);
+    const autoBtn = $("ed-insp-crop-auto");
+    if (autoBtn) autoBtn.addEventListener("click", runAutoCrop);
+
+    box.querySelectorAll("[data-f]").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        pushHist();
+        const f = inp.dataset.f;
+        const rec = ed.segments.find((x) => x.id === s.id);
+        if (!rec) return;
+        if (inp.type === "checkbox") rec[f] = !!inp.checked;
+        else if (f === "title" || f === "crop") rec[f] = String(inp.value).trim();
+        else if (f === "start" || f === "end") rec[f] = round2(parseTimeStr(inp.value, rec[f]));
+        else rec[f] = Number(inp.value);
+        if (rec.end <= rec.start) rec.end = round2(rec.start + 0.1);
+        if ((f === "start" || f === "end") && ed.src && ed.src.path === rec.path) {
+          if ($("ed-in")) $("ed-in").value = fmt(rec.start);
+          if ($("ed-out")) $("ed-out").value = fmt(rec.end);
+          syncMarkLabels();
+        }
+        renderSegList();
+      });
+    });
   }
 
   /** Timeline-Länge ohne Überblendung – Basis für Blockbreiten und Playhead. */
@@ -653,11 +910,24 @@
     return s.title || s.name || (s.kind === "black" ? tt("Schwarz") : "Clip");
   }
 
+  function applyTimelineZoom() {
+    const canvas = $("ed-tl-canvas");
+    const zEl = $("ed-tl-zoom");
+    const zVal = $("ed-tl-zoom-val");
+    const z = Math.max(1, Math.min(16, Number(ed.tlZoom) || 1));
+    ed.tlZoom = z;
+    if (zEl && Number(zEl.value) !== z) zEl.value = String(z);
+    if (zVal) zVal.textContent = `${z}×`;
+    if (canvas) canvas.style.width = `${z * 100}%`;
+  }
+
   function renderTimeline() {
+    applyTimelineZoom();
     const track = $("ed-timeline-track");
     if (!track) return;
     track.innerHTML = "";
     const tot = rawTotal();
+    renderV2Track(tot);
     if (!ed.segments.length || tot <= 0) {
       const empty = document.createElement("div");
       empty.className = "ed-tl-empty";
@@ -673,7 +943,7 @@
       block.className = "ed-tl-block";
       block.dataset.id = s.id;
       block.draggable = true;
-      block.style.width = `${Math.max(1.2, (dur / tot) * 100)}%`;
+      block.style.width = `${Math.max(1.2 / (ed.tlZoom || 1), (dur / tot) * 100)}%`;
       block.style.setProperty("--tl-color", TL_COLORS[i % TL_COLORS.length]);
       if (s.kind !== "media") block.style.background = "#111827";
       applyStripBackground(block, s);
@@ -681,6 +951,7 @@
       if (Number(s.speed) && Number(s.speed) !== 1) extras.push(`${s.speed}×`);
       if (Number(s.fade_in) || Number(s.fade_out)) extras.push("Fade");
       if (s.mute) extras.push(tt("stumm"));
+      if (s.crop) extras.push("Crop");
       const rates = assetRates(s.path, s);
       block.innerHTML = `
         <span class="ed-tl-idx">${i + 1}</span>
@@ -693,17 +964,108 @@
       wireBlockDrag(block, s);
       block.addEventListener("contextmenu", (ev) => {
         ev.preventDefault();
+        ed.activeV2Id = null;
         ed.activeId = s.id;
         markActive();
+        renderInspector();
         openClipMenu(ev.clientX, ev.clientY, s.id);
       });
-      if ((dur / tot) * 100 < 7) block.classList.add("narrow");
+      if ((dur / tot) * 100 * (ed.tlZoom || 1) < 7) block.classList.add("narrow");
       track.appendChild(block);
     });
     renderTlRuler();
     markActive();
     renderTlPlayhead();
     loadStripsForClips();
+  }
+
+  function renderV2Track(tot) {
+    const v2El = $("ed-timeline-v2");
+    if (!v2El) return;
+    v2El.innerHTML = "";
+    if (!ed.overlays.length || tot <= 0) {
+      v2El.title = tt("Spur V2 leer – mit '+ B-Roll (V2)' ein Bild-im-Bild oder Schnittbild auflegen");
+      return;
+    }
+    ed.overlays.forEach((ov, idx) => {
+      const dur = Math.max(0.1, Number(ov.end) - Number(ov.start));
+      const leftPct = Math.max(0, Math.min(99, ((Number(ov.tl_start) || 0) / tot) * 100));
+      const widthPct = Math.max(1.2, Math.min(100 - leftPct, (dur / tot) * 100));
+      const b = document.createElement("div");
+      b.className = "ed-v2-block" + (ov.id === ed.activeV2Id ? " active" : "");
+      b.dataset.v2id = ov.id;
+      b.style.left = `${leftPct}%`;
+      b.style.width = `${widthPct}%`;
+      b.innerHTML = `<strong>V2.${idx + 1}</strong> <span>${escapeHtml(ov.title || ov.name)} (${fmt(dur)})</span>`;
+      b.title = `V2: ${ov.title || ov.name}\nStart @ ${fmt(ov.tl_start)} · Dauer ${fmt(dur)}\nZiehen = verschieben, Ränder = Länge ändern`;
+      ["left", "right"].forEach((side) => {
+        const edge = document.createElement("div");
+        edge.className = `ed-v2-edge ${side}`;
+        edge.addEventListener("mousedown", (ev) => beginV2Drag(ev, b, ov, side === "left" ? "trim-in" : "trim-out"));
+        b.appendChild(edge);
+      });
+      b.addEventListener("mousedown", (ev) => {
+        if (ev.target.closest(".ed-v2-edge")) return;
+        beginV2Drag(ev, b, ov, "move");
+      });
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        ed.activeV2Id = ov.id;
+        markActive();
+        renderInspector();
+      });
+      v2El.appendChild(b);
+    });
+  }
+
+  function beginV2Drag(ev, block, ov, mode) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const v2El = $("ed-timeline-v2");
+    const tot = rawTotal();
+    if (!v2El || !(tot > 0)) return;
+    const rect = v2El.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const secPerPx = tot / rect.width;
+    const startX = ev.clientX;
+    const orig = { tl_start: Number(ov.tl_start) || 0, start: Number(ov.start) || 0, end: Number(ov.end) || 0 };
+    const maxDur = srcDuration(ov.path) || 3600;
+    let moved = false;
+    ed.activeV2Id = ov.id;
+    markActive();
+
+    const onMove = (e) => {
+      const dt = (e.clientX - startX) * secPerPx;
+      if (!moved && Math.abs(e.clientX - startX) < 2) return;
+      if (!moved) { moved = true; pushHist(); }
+      if (mode === "move") {
+        ov.tl_start = round2(Math.max(0, Math.min(tot - 0.1, orig.tl_start + dt)));
+      } else if (mode === "trim-in") {
+        const nextStart = round2(Math.max(0, Math.min(orig.end - 0.1, orig.start + dt)));
+        const delta = nextStart - orig.start;
+        ov.start = nextStart;
+        ov.tl_start = round2(Math.max(0, orig.tl_start + delta));
+      } else if (mode === "trim-out") {
+        ov.end = round2(Math.max(orig.start + 0.1, Math.min(maxDur, orig.end + dt)));
+      }
+      const dur = Math.max(0.1, ov.end - ov.start);
+      block.style.left = `${Math.max(0, Math.min(99, (ov.tl_start / tot) * 100))}%`;
+      block.style.width = `${Math.max(1.2, (dur / tot) * 100)}%`;
+      setStatus(`V2 ${ov.title || ov.name}: @ ${fmt(ov.tl_start)} (${fmt(dur)})`);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      if (moved) {
+        renderSegList();
+        syncV2Preview();
+      } else {
+        renderInspector();
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   }
 
   /** Passenden Ausschnitt des Filmstreifens als Blockhintergrund setzen. */
@@ -1036,8 +1398,9 @@
     el.innerHTML = "";
     const tot = rawTotal();
     if (tot <= 0) return;
-    const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-    const step = steps.find((s) => tot / s <= 12) || 3600;
+    const maxTicks = Math.round(12 * (ed.tlZoom || 1));
+    const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+    const step = steps.find((s) => tot / s <= maxTicks) || 3600;
     for (let t = 0; t <= tot + 0.001; t += step) {
       const tick = document.createElement("span");
       tick.className = "ed-tl-tick";
@@ -1047,39 +1410,94 @@
     }
   }
 
-  /** Playhead auf der Gesamt-Timeline, solange die Vorschau im aktiven Clip liegt. */
-  function renderTlPlayhead() {
-    const head = $("ed-tl-playhead");
-    const lab = $("ed-tl-time");
+  function currentTimelineTime() {
     const tot = rawTotal();
     const s = activeClip();
-    let t = -1;
     if (s && s.kind === "media" && ed.src && ed.src.path === s.path && tot > 0) {
       const cur = ed.playhead;
       if (cur >= s.start - 0.25 && cur <= s.end + 0.25) {
         const sp = Number(s.speed) > 0 ? Number(s.speed) : 1;
         const idx = ed.segments.indexOf(s);
-        t = tlOffset(idx) + Math.max(0, Math.min(clipDur(s), (cur - s.start) / sp));
+        return tlOffset(idx) + Math.max(0, Math.min(clipDur(s), (cur - s.start) / sp));
       }
     }
+    return -1;
+  }
+
+  /** Playhead auf der Gesamt-Timeline, solange die Vorschau im aktiven Clip liegt. */
+  function renderTlPlayhead() {
+    const head = $("ed-tl-playhead");
+    const lab = $("ed-tl-time");
+    const tot = rawTotal();
+    const t = currentTimelineTime();
     if (head) {
       head.hidden = t < 0;
-      if (t >= 0) head.style.left = `${(t / tot) * 100}%`;
+      if (t >= 0 && tot > 0) head.style.left = `calc(32px + (100% - 32px) * ${(t / tot).toFixed(5)})`;
     }
     if (lab) lab.textContent = `${t >= 0 ? fmt(t) : "–"} / ${fmt(totalDur())}`;
+    syncV2Preview(t);
+  }
+
+  function syncV2Preview(tlTime) {
+    const v2 = $("ed-video-v2");
+    if (!v2) return;
+    const t = tlTime != null ? tlTime : currentTimelineTime();
+    if (t < 0 || !ed.overlays.length) {
+      v2.hidden = true;
+      if (!v2.paused) v2.pause();
+      return;
+    }
+    const activeOv = ed.overlays.find((o) => {
+      const dur = Math.max(0.05, Number(o.end) - Number(o.start));
+      return t >= Number(o.tl_start) && t <= Number(o.tl_start) + dur;
+    });
+    if (!activeOv) {
+      v2.hidden = true;
+      if (!v2.paused) v2.pause();
+      return;
+    }
+    const pos = activeOv.position || "pip_br";
+    const pct = Math.max(15, Math.min(100, Number(activeOv.size_pct) || 30));
+    v2.style.width = pos === "full" ? "100%" : `${pct}%`;
+    v2.style.height = pos === "full" ? "100%" : "auto";
+    v2.style.opacity = String(activeOv.opacity != null ? activeOv.opacity : 1);
+    v2.style.top = (pos === "pip_tr" || pos === "pip_tl") ? "3.5%" : (pos === "full" ? "0" : (pos === "side" ? "50%" : "auto"));
+    v2.style.bottom = (pos === "pip_br" || pos === "pip_bl") ? "3.5%" : "auto";
+    v2.style.left = (pos === "pip_bl" || pos === "pip_tl") ? "2.5%" : (pos === "full" ? "0" : "auto");
+    v2.style.right = (pos === "pip_br" || pos === "pip_tr" || pos === "side") ? "2.5%" : "auto";
+    v2.style.transform = pos === "side" ? "translateY(-50%)" : "none";
+    const url = fileUrl(activeOv.path);
+    if (ed.v2Url !== url) {
+      ed.v2Url = url;
+      v2.src = url;
+    }
+    const target = Number(activeOv.start) + (t - Number(activeOv.tl_start));
+    if (Math.abs((v2.currentTime || 0) - target) > 0.35 && v2.readyState >= 1) {
+      try { v2.currentTime = target; } catch (e) { /* ignore */ }
+    }
+    v2.hidden = false;
+    const v1 = $("ed-video");
+    if (v1 && !v1.paused && v2.paused) v2.play().catch(() => {});
+    else if (v1 && v1.paused && !v2.paused) v2.pause();
   }
 
   function markActive() {
     const track = $("ed-timeline-track");
     if (track) {
       track.querySelectorAll(".ed-tl-block").forEach((b) => {
-        b.classList.toggle("active", b.dataset.id === ed.activeId);
+        b.classList.toggle("active", !ed.activeV2Id && b.dataset.id === ed.activeId);
+      });
+    }
+    const v2Track = $("ed-timeline-v2");
+    if (v2Track) {
+      v2Track.querySelectorAll(".ed-v2-block").forEach((b) => {
+        b.classList.toggle("active", b.dataset.v2id === ed.activeV2Id);
       });
     }
     const ul = $("ed-seg-list");
     if (ul) {
       ul.querySelectorAll(".ed-seg-item").forEach((li) => {
-        li.classList.toggle("active", li.dataset.id === ed.activeId);
+        li.classList.toggle("active", !ed.activeV2Id && li.dataset.id === ed.activeId);
       });
     }
     renderSourceRuler();
@@ -1129,13 +1547,15 @@
     if (!ed.src || ed.src.path !== s.path) {
       await loadSource(s.path, s.name, { inSec: s.start, outSec: s.end, seek: srcTime });
     } else {
-      if ($("ed-in")) $("ed-in").value = String(round2(s.start));
-      if ($("ed-out")) $("ed-out").value = String(round2(s.end));
+      if ($("ed-in")) $("ed-in").value = fmt(s.start);
+      if ($("ed-out")) $("ed-out").value = fmt(s.end);
+      syncMarkLabels();
       // Die Zielzeit ist berechnet – hier darf nichts einrasten.
       if (opts.seek !== false) seekSoft(srcTime, { snap: false });
       renderSourceRuler();
     }
     markActive();
+    renderInspector();
   }
 
   /** Klick in die Timeline: Clip wählen und an die passende Quellzeit springen. */
@@ -1482,8 +1902,10 @@
     ed.inSec = opts.inSec != null ? opts.inSec : 0;
     ed.outSec = opts.outSec != null ? opts.outSec : ed.src.duration;
     ed.playhead = opts.seek != null ? opts.seek : ed.inSec;
-    if ($("ed-in")) $("ed-in").value = String(round2(ed.inSec));
-    if ($("ed-out")) $("ed-out").value = String(round2(ed.outSec));
+    if ($("ed-in")) $("ed-in").value = fmt(ed.inSec);
+    if ($("ed-out")) $("ed-out").value = fmt(ed.outSec);
+    syncMarkLabels();
+    renderChapterChips();
     const info = $("ed-src-info");
     if (info) {
       info.textContent = `${ed.src.name} · ${fmt(ed.src.duration)}`
@@ -1500,7 +1922,7 @@
     renderSourceRuler();
     setStatus("");
     loadPreviewAssets(path);
-    if ($("ed-snap-kf") && $("ed-snap-kf").checked) loadKeyframes(path);
+    loadKeyframes(path);
   }
 
   function afterSoftSeek(t) {
@@ -1545,6 +1967,8 @@
     const aSel = $("ed-preview-audio");
     if (aSel) aSel.innerHTML = `<option value="-1">${tt("Kein Ton")}</option>`;
     renderTracks();
+    renderChapterChips();
+    syncMarkLabels();
     renderSourceRuler();
     renderTlPlayhead();
     syncTools();
@@ -1552,11 +1976,13 @@
 
   /** Kompletter Neuanfang: Timeline leeren und Quelle entladen. */
   function resetAll() {
-    if (ed.segments.length
+    if ((ed.segments.length || ed.overlays.length)
         && !window.confirm(tt("Timeline leeren und Quelle entladen?"))) return;
     pushHist();
     ed.segments = [];
+    ed.overlays = [];
     ed.activeId = null;
+    ed.activeV2Id = null;
     ed.trackSel = {};
     ed.subSel = {};
     ed.assets = {};
@@ -1636,11 +2062,12 @@
     const t = snapTime(currentPreviewTime());
     if (which === "in") {
       ed.inSec = t;
-      if ($("ed-in")) $("ed-in").value = String(round2(t));
+      if ($("ed-in")) $("ed-in").value = fmt(t);
     } else {
       ed.outSec = t;
-      if ($("ed-out")) $("ed-out").value = String(round2(t));
+      if ($("ed-out")) $("ed-out").value = fmt(t);
     }
+    syncMarkLabels();
     renderSourceRuler();
   }
 
@@ -1921,7 +2348,10 @@
 
   function saveProject() {
     const blob = new Blob([JSON.stringify({
-      v: 1, segments: ed.segments, src: ed.src && { path: ed.src.path, name: ed.src.name },
+      v: 2,
+      segments: ed.segments,
+      overlays: ed.overlays,
+      src: ed.src && { path: ed.src.path, name: ed.src.name },
     }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1937,6 +2367,7 @@
       if (!data || !Array.isArray(data.segments)) throw new Error("Ungültiges Projekt");
       pushHist();
       ed.segments = data.segments.map((s) => defaultClip(s));
+      ed.overlays = Array.isArray(data.overlays) ? data.overlays.map((o) => defaultOverlay(o)) : [];
       renderSegList();
       if (data.src && data.src.path) await loadSource(data.src.path, data.src.name);
       setStatus(tt("Projekt geladen."));
@@ -2139,18 +2570,26 @@
   function syncModeUI() {
     const need = clipsNeedEncode();
     const modeEl = $("ed-mode");
-    if (need && modeEl && modeEl.value === "remux") {
+    if (need && modeEl && (modeEl.value === "remux" || modeEl.value === "smart")) {
       modeEl.value = "encode";
     }
     const mode = (modeEl && modeEl.value) || "remux";
     const enc = $("ed-encode-opts");
     if (enc) enc.style.display = mode === "encode" ? "" : "none";
+    const xf = Number(($("ed-crossfade") || {}).value) || 0;
+    const tf = $("ed-transition-field");
+    if (tf) tf.style.display = xf > 0.01 ? "" : "none";
     const hint = $("ed-mode-hint");
     if (hint) {
-      hint.textContent = mode === "encode"
-        ? tt("Encode schneidet framegenau und vereinheitlicht inkompatible Quellen.")
-        : tt("Remux kopiert Streams ohne Neucodierung. Schnitte liegen am nächsten Keyframe.");
+      if (mode === "encode") {
+        hint.textContent = tt("Encode schneidet framegenau, unterstützt Fades, B-Roll (V2) sowie Filter und behält 10-Bit/HDR bei.");
+      } else if (mode === "smart") {
+        hint.textContent = tt("Smart Cut encodiert nur wenige Sekunden an angeschnittenen GOP-Rändern und kopiert den Hauptteil verlustfrei.");
+      } else {
+        hint.textContent = tt("Remux kopiert Streams ohne Neucodierung. Schnitte liegen am nächsten Keyframe.");
+      }
     }
+    updateKfDeltaBar();
     syncRateUI();
     syncAudioUI(mode);
     syncNameUI();
@@ -2171,6 +2610,7 @@
       s.kind === "black" || s.kind === "silence"
       || Number(s.fade_in) > 0 || Number(s.fade_out) > 0
       || Math.abs((Number(s.speed) || 1) - 1) > 0.001
+      || Math.abs(Number(s.volume_db) || 0) > 0.05 || s.loudnorm
     ));
   }
 
@@ -2229,6 +2669,7 @@
   async function enqueue() {
     if (!ed.segments.length) return;
     const mode = ($("ed-mode") && $("ed-mode").value) || "remux";
+    const hdrMode = ($("ed-hdr-mode") && $("ed-hdr-mode").value) || "keep";
     const payload = {
       segments: ed.segments.map((s) => ({
         path: s.path, kind: s.kind || "media",
@@ -2241,6 +2682,22 @@
         burn_subs: !!s.burn_subs,
         fade_in: Number(s.fade_in) || 0, fade_out: Number(s.fade_out) || 0,
         speed: Number(s.speed) || 1, crop: s.crop || "", scale: Number(s.scale) || 0,
+        rotate: Number(s.rotate) || 0,
+        hflip: !!s.hflip,
+        vflip: !!s.vflip,
+        volume_db: Number(s.volume_db) || 0,
+        loudnorm: !!s.loudnorm,
+      })),
+      overlays: ed.overlays.map((o) => ({
+        path: o.path,
+        title: o.title || o.name || "B-Roll",
+        start: Number(o.start) || 0,
+        end: Number(o.end) || 5,
+        tl_start: Number(o.tl_start) || 0,
+        position: o.position || "pip_br",
+        size_pct: Number(o.size_pct) || 30,
+        opacity: o.opacity != null ? Number(o.opacity) : 1,
+        fade: Number(o.fade) || 0,
       })),
       mode,
       container: ($("ed-container") && $("ed-container").value) || "mkv",
@@ -2265,9 +2722,12 @@
       out_mode: ($("ed-out-mode") && $("ed-out-mode").value) || "default",
       out_subdir: ($("ed-out-subdir") && $("ed-out-subdir").value) || "",
       crossfade: Number(($("ed-crossfade") || {}).value) || 0,
+      transition: ($("ed-transition") && $("ed-transition").value) || "fade",
+      tonemap: hdrMode === "tonemap",
+      preserve_hdr: hdrMode !== "tonemap",
       post_processing: "keep",
     };
-    if (mode === "remux" && !payload.force_remux) {
+    if ((mode === "remux" || mode === "smart") && !payload.force_remux) {
       try {
         const chk = await (await fetch("/api/editor/check", {
           method: "POST",
@@ -2322,6 +2782,497 @@
   function jumpBy(sec) {
     if (!ed.src) return;
     seekSoft(currentPreviewTime() + Number(sec || 0), { snap: false });
+  }
+
+  function renderChapterChips() {
+    const bar = $("ed-chap-bar");
+    const chips = $("ed-chap-chips");
+    if (!bar || !chips) return;
+    const chaps = (ed.src && ed.src.chapters) || [];
+    if (!chaps.length) {
+      bar.hidden = true;
+      chips.innerHTML = "";
+      return;
+    }
+    bar.hidden = false;
+    chips.innerHTML = "";
+    chaps.forEach((c, idx) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ed-chap-chip";
+      const start = Number(c.start) || 0;
+      const end = Number(c.end) || (chaps[idx + 1] ? Number(chaps[idx + 1].start) : ed.src.duration) || start;
+      b.textContent = `${idx + 1}. ${c.title || tt("Kapitel")} (${fmt(start)})`;
+      b.title = `${fmt(start)} → ${fmt(end)} · Klick = Bereich setzen`;
+      b.addEventListener("click", () => {
+        ed.inSec = round2(start);
+        ed.outSec = round2(end);
+        if ($("ed-in")) $("ed-in").value = fmt(ed.inSec);
+        if ($("ed-out")) $("ed-out").value = fmt(ed.outSec);
+        syncMarkLabels();
+        seekSoft(ed.inSec, { snap: false });
+        renderSourceRuler();
+        setStatus(`${tt("Kapitel gewählt")}: ${c.title || idx + 1} (${fmt(ed.inSec)} → ${fmt(ed.outSec)})`);
+      });
+      chips.appendChild(b);
+    });
+  }
+
+  function chaptersToClips() {
+    if (!ed.src || !(ed.src.chapters || []).length) return;
+    const chaps = ed.src.chapters;
+    const opts = audioOpts();
+    pushHist();
+    const neu = chaps.map((c, idx) => {
+      const start = round2(Number(c.start) || 0);
+      const end = round2(Number(c.end) || (chaps[idx + 1] ? Number(chaps[idx + 1].start) : ed.src.duration) || start);
+      return defaultClip({
+        path: ed.src.path,
+        name: ed.src.name,
+        start,
+        end: Math.max(start + 0.1, end),
+        title: c.title || `Kapitel ${idx + 1}`,
+        audio_index: opts.audio_index,
+        audio_indexes: opts.audio_indexes.slice(),
+        mute: opts.mute,
+        sub_index: opts.sub_index,
+        sub_indexes: (opts.sub_indexes || []).slice(),
+        burn_subs: opts.burn_subs,
+      });
+    });
+    ed.segments = neu;
+    if (neu[0]) ed.activeId = neu[0].id;
+    renderSegList();
+    setStatus(`${neu.length} ${tt("Kapitel als Clips angelegt.")}`);
+  }
+
+  function beginSourceRulerDrag(ev) {
+    if (ev.button !== 0 || !ed.src || !(ed.src.duration > 0)) return;
+    const ruler = $("ed-src-ruler");
+    if (!ruler) return;
+    ev.preventDefault();
+    const grip = ev.target.closest("[data-sel-grip]");
+    const mode = grip ? grip.dataset.selGrip : "scrub";
+    const rect = ruler.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const timeAt = (clientX) => {
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      return snapTime(ratio * ed.src.duration);
+    };
+    const apply = (clientX, finalSeek) => {
+      const t = timeAt(clientX);
+      const cur = readMarks();
+      if (mode === "in") {
+        const nextIn = Math.min(t, Math.max(0, cur.end - 0.1));
+        ed.inSec = round2(nextIn);
+        if ($("ed-in")) $("ed-in").value = fmt(ed.inSec);
+        syncMarkLabels();
+        renderSourceRuler();
+        if (finalSeek) seekSoft(ed.inSec, { snap: false });
+      } else if (mode === "out") {
+        const nextOut = Math.max(t, cur.start + 0.1);
+        ed.outSec = round2(nextOut);
+        if ($("ed-out")) $("ed-out").value = fmt(ed.outSec);
+        syncMarkLabels();
+        renderSourceRuler();
+        if (finalSeek) seekSoft(ed.outSec, { snap: false });
+      } else {
+        updateTimeLabel(t, ed.src.duration);
+        renderSourceRuler();
+        if (finalSeek) seekPreview(t, { snap: false });
+        else if (ed.previewMode === "file") seekSoft(t, { snap: false });
+      }
+    };
+    apply(ev.clientX, false);
+    const onMove = (e) => apply(e.clientX, false);
+    const onUp = (e) => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      apply(e.clientX, true);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function nearestKf(t) {
+    if (!ed.keyframes || !ed.keyframes.length) return null;
+    let best = ed.keyframes[0];
+    let bestD = Math.abs(best - t);
+    for (let i = 1; i < ed.keyframes.length; i++) {
+      const d = Math.abs(ed.keyframes[i] - t);
+      if (d < bestD) { bestD = d; best = ed.keyframes[i]; }
+    }
+    return { snapped: best, delta: best - t };
+  }
+
+  function updateKfDeltaBar() {
+    const bar = $("ed-kf-bar");
+    const txt = $("ed-kf-delta");
+    if (!bar || !txt) return;
+    const mode = ($("ed-mode") && $("ed-mode").value) || "remux";
+    if (mode !== "remux" || !ed.src || !ed.keyframes || !ed.keyframes.length) {
+      bar.hidden = true;
+      return;
+    }
+    const { start, end } = readMarks();
+    const kIn = nearestKf(start);
+    const kOut = nearestKf(end);
+    if (!kIn || !kOut || (Math.abs(kIn.delta) < 0.04 && Math.abs(kOut.delta) < 0.04)) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const fmtD = (d) => `${d >= 0 ? "+" : ""}${d.toFixed(2)}s`;
+    txt.textContent = `Keyframe-Abstand im Remux: In ${fmt(kIn.snapped)} (${fmtD(kIn.delta)}) · Out ${fmt(kOut.snapped)} (${fmtD(kOut.delta)})`;
+  }
+
+  function roundToKeyframes() {
+    if (!ed.src || !ed.keyframes || !ed.keyframes.length) return;
+    const { start, end } = readMarks();
+    const kIn = nearestKf(start);
+    const kOut = nearestKf(end);
+    if (!kIn || !kOut) return;
+    ed.inSec = round2(kIn.snapped);
+    ed.outSec = round2(Math.max(ed.inSec + 0.1, kOut.snapped));
+    if ($("ed-in")) $("ed-in").value = fmt(ed.inSec);
+    if ($("ed-out")) $("ed-out").value = fmt(ed.outSec);
+    const act = activeClip();
+    if (act && act.kind === "media" && act.path === ed.src.path) {
+      pushHist();
+      act.start = ed.inSec;
+      act.end = ed.outSec;
+      renderSegList();
+    } else {
+      syncMarkLabels();
+      renderSourceRuler();
+    }
+    setStatus(`${tt("Auf Keyframes gerundet")}: ${fmt(ed.inSec)} → ${fmt(ed.outSec)}`);
+  }
+
+  function videoContentRect() {
+    const stage = $("ed-stage");
+    if (!stage) return null;
+    const sr = stage.getBoundingClientRect();
+    const vw = (ed.src && ed.src.width) || 1920;
+    const vh = (ed.src && ed.src.height) || 1080;
+    const scale = Math.min(sr.width / vw, sr.height / vh);
+    const dw = vw * scale;
+    const dh = vh * scale;
+    return {
+      left: (sr.width - dw) / 2,
+      top: (sr.height - dh) / 2,
+      width: dw,
+      height: dh,
+      vw,
+      vh,
+      scale,
+      stageRect: sr,
+    };
+  }
+
+  function parseCropSpec(str, vw, vh) {
+    const parts = String(str || "").split(":").map((x) => parseInt(x, 10));
+    if (parts.length === 4 && parts.every((n) => Number.isFinite(n) && n >= 0) && parts[0] > 0 && parts[1] > 0) {
+      return { w: Math.min(vw, parts[0]), h: Math.min(vh, parts[1]), x: Math.min(vw - 2, parts[2]), y: Math.min(vh - 2, parts[3]) };
+    }
+    return { x: Math.round(vw * 0.05), y: Math.round(vh * 0.05), w: Math.round(vw * 0.9), h: Math.round(vh * 0.9) };
+  }
+
+  function renderCropBox() {
+    const ov = $("ed-crop-overlay");
+    const box = $("ed-crop-box");
+    const lab = $("ed-crop-label");
+    if (!ov || !box || ov.hidden || !ed.cropBox) return;
+    const vr = videoContentRect();
+    if (!vr) return;
+    const c = ed.cropBox;
+    box.style.left = `${vr.left + c.x * vr.scale}px`;
+    box.style.top = `${vr.top + c.y * vr.scale}px`;
+    box.style.width = `${Math.max(16, c.w * vr.scale)}px`;
+    box.style.height = `${Math.max(16, c.h * vr.scale)}px`;
+    if (lab) lab.textContent = `${c.w}×${c.h} @ ${c.x},${c.y}`;
+  }
+
+  function toggleCropOverlay() {
+    const ov = $("ed-crop-overlay");
+    const bar = $("ed-crop-bar");
+    if (!ov || !bar) return;
+    if (!ed.src) {
+      setStatus(tt("Zuerst eine Quelle laden."), true);
+      return;
+    }
+    const show = ov.hidden;
+    ov.hidden = !show;
+    bar.hidden = !show;
+    if (show) {
+      const vw = ed.src.width || 1920;
+      const vh = ed.src.height || 1080;
+      const act = activeClip();
+      ed.cropBox = parseCropSpec(act && act.crop ? act.crop : "", vw, vh);
+      renderCropBox();
+    }
+  }
+
+  function applyCropRatio(ratioStr) {
+    ed.cropRatio = ratioStr || "free";
+    if (!ed.src || !ed.cropBox || ed.cropRatio === "free") return;
+    const vw = ed.src.width || 1920;
+    const vh = ed.src.height || 1080;
+    const [rw, rh] = ed.cropRatio.split(":").map(Number);
+    if (!(rw > 0 && rh > 0)) return;
+    const target = rw / rh;
+    let w = vw;
+    let h = Math.round(w / target / 2) * 2;
+    if (h > vh) {
+      h = vh;
+      w = Math.round(h * target / 2) * 2;
+    }
+    ed.cropBox = {
+      w,
+      h,
+      x: Math.round((vw - w) / 4) * 2,
+      y: Math.round((vh - h) / 4) * 2,
+    };
+    renderCropBox();
+  }
+
+  function applyVisualCrop() {
+    if (!ed.cropBox || !ed.src) return;
+    const c = ed.cropBox;
+    const spec = `${c.w}:${c.h}:${c.x}:${c.y}`;
+    let act = activeClip();
+    pushHist();
+    if (!act) {
+      addSegmentFromMarks();
+      act = activeClip();
+    }
+    if (act) {
+      act.crop = spec;
+      renderSegList();
+      setStatus(`${tt("Crop übernommen")}: ${spec}`);
+    }
+    const ov = $("ed-crop-overlay");
+    const bar = $("ed-crop-bar");
+    if (ov) ov.hidden = true;
+    if (bar) bar.hidden = true;
+  }
+
+  async function runAutoCrop() {
+    const path = (activeClip() && activeClip().path) || (ed.src && ed.src.path);
+    if (!path) {
+      setStatus(tt("Zuerst eine Quelle laden."), true);
+      return;
+    }
+    setStatus(tt("Erkenne schwarze Balken (cropdetect) …"));
+    try {
+      const r = await fetch(`/api/editor/autocrop?path=${encodeURIComponent(path)}`);
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || "Auto-Crop fehlgeschlagen");
+      if (!d.crop) {
+        setStatus(tt("Keine schwarzen Ränder erkannt."));
+        return;
+      }
+      if (ed.src) {
+        ed.cropBox = parseCropSpec(d.crop, d.width || ed.src.width || 1920, d.height || ed.src.height || 1080);
+        renderCropBox();
+      }
+      const act = activeClip();
+      if (act && act.kind === "media") {
+        pushHist();
+        act.crop = d.crop;
+        renderSegList();
+      }
+      setStatus(`${tt("Auto-Crop erkannt")}: ${d.crop}`);
+    } catch (e) {
+      setStatus(String(e.message || e), true);
+    }
+  }
+
+  function wireCropDrag() {
+    const box = $("ed-crop-box");
+    if (!box) return;
+    box.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0 || !ed.cropBox) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const vr = videoContentRect();
+      if (!vr || !(vr.scale > 0)) return;
+      const handle = ev.target.closest("[data-h]");
+      const mode = handle ? handle.dataset.h : "move";
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const orig = Object.assign({}, ed.cropBox);
+      const onMove = (e) => {
+        const dx = Math.round((e.clientX - startX) / vr.scale / 2) * 2;
+        const dy = Math.round((e.clientY - startY) / vr.scale / 2) * 2;
+        const c = Object.assign({}, orig);
+        if (mode === "move") {
+          c.x = Math.max(0, Math.min(vr.vw - c.w, orig.x + dx));
+          c.y = Math.max(0, Math.min(vr.vh - c.h, orig.y + dy));
+        } else {
+          if (mode.indexOf("w") >= 0) {
+            const nx = Math.max(0, Math.min(orig.x + orig.w - 32, orig.x + dx));
+            c.w = orig.w + (orig.x - nx);
+            c.x = nx;
+          }
+          if (mode.indexOf("e") >= 0) {
+            c.w = Math.max(32, Math.min(vr.vw - orig.x, orig.w + dx));
+          }
+          if (mode.indexOf("n") >= 0) {
+            const ny = Math.max(0, Math.min(orig.y + orig.h - 32, orig.y + dy));
+            c.h = orig.h + (orig.y - ny);
+            c.y = ny;
+          }
+          if (mode.indexOf("s") >= 0) {
+            c.h = Math.max(32, Math.min(vr.vh - orig.y, orig.h + dy));
+          }
+        }
+        ed.cropBox = c;
+        renderCropBox();
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  async function runAutoDetect(kind) {
+    if (!ed.src || !ed.src.path) {
+      setStatus(tt("Zuerst eine Quelle laden."), true);
+      return;
+    }
+    const { start, end } = readMarks();
+    const labelMap = { black: "Schwarzbilder", silence: "Sprechpausen/Stille", scene: "Szenenwechsel" };
+    setStatus(`${tt("Analysiere")} ${labelMap[kind] || kind} …`);
+    try {
+      const r = await fetch("/api/editor/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: ed.src.path,
+          kind,
+          start: start > 0 ? start : 0,
+          end: end > start ? end : ed.src.duration,
+          min_duration: kind === "scene" ? 1.5 : 0.5,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || "Erkennung fehlgeschlagen");
+      const keeps = d.keeps || [];
+      if (keeps.length <= 1 && !(d.gaps || []).length && !(d.scenes || []).length) {
+        setStatus(`Keine ${labelMap[kind] || "Schnitte"} im gewählten Bereich gefunden.`);
+        return;
+      }
+      pushHist();
+      const opts = audioOpts();
+      const neu = keeps.map((k, idx) => defaultClip({
+        path: ed.src.path,
+        name: ed.src.name,
+        start: round2(k.start),
+        end: round2(k.end),
+        title: k.title || `Clip ${idx + 1}`,
+        audio_index: opts.audio_index,
+        audio_indexes: opts.audio_indexes.slice(),
+        mute: opts.mute,
+        sub_index: opts.sub_index,
+        sub_indexes: (opts.sub_indexes || []).slice(),
+        burn_subs: opts.burn_subs,
+      }));
+      ed.segments = neu;
+      if (neu[0]) ed.activeId = neu[0].id;
+      renderSegList();
+      setStatus(`${neu.length} Clips aus ${labelMap[kind] || kind}-Erkennung angelegt.`);
+    } catch (e) {
+      setStatus(String(e.message || e), true);
+    }
+  }
+
+  function addBrollV2() {
+    const placeOverlay = (path, name, start, end) => {
+      pushHist();
+      const tlNow = Math.max(0, currentTimelineTime());
+      const ov = defaultOverlay({
+        path,
+        name,
+        title: name || "B-Roll",
+        start: round2(start),
+        end: round2(Math.max(start + 0.5, end)),
+        tl_start: round2(tlNow),
+        position: "pip_br",
+        size_pct: 30,
+        opacity: 1,
+        fade: 0.3,
+      });
+      ed.overlays.push(ov);
+      ed.activeV2Id = ov.id;
+      renderSegList();
+      syncV2Preview();
+      setStatus(`B-Roll '${ov.title}' auf Spur V2 bei ${fmt(ov.tl_start)} eingefügt.`);
+    };
+    if (ed.src && ed.src.path) {
+      const { start, end } = readMarks();
+      const dur = end > start ? Math.min(end - start, 15) : Math.min(ed.src.duration || 5, 8);
+      placeOverlay(ed.src.path, ed.src.name, start, start + dur);
+      return;
+    }
+    if (typeof window.openFilePickerModal === "function") {
+      window.openFilePickerModal({
+        title: tt("B-Roll / PiP Video für Spur V2 wählen"),
+        rememberKey: "edPickDir",
+        onPick: async (f) => {
+          try {
+            const r = await fetch(`/api/editor/probe?path=${encodeURIComponent(f.rel)}`);
+            const d = await r.json();
+            const dur = Math.min(Number(d.duration) || 8, 12);
+            placeOverlay(f.rel, f.name, 0, dur);
+          } catch (e) {
+            placeOverlay(f.rel, f.name, 0, 5);
+          }
+        },
+      });
+    }
+  }
+
+  async function previewTransitionCut() {
+    if (!ed.segments.length) return;
+    const act = activeClip();
+    let cutIdx = act ? ed.segments.indexOf(act) : 0;
+    if (cutIdx >= ed.segments.length - 1 && ed.segments.length >= 2) cutIdx = ed.segments.length - 2;
+    const xf = Number(($("ed-crossfade") || {}).value) || 0;
+    const trans = ($("ed-transition") && $("ed-transition").value) || "fade";
+    setStatus(tt("Rendere 5-Sekunden-Übergangsvorschau …"));
+    try {
+      const r = await fetch("/api/editor/preview-transition", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          segments: ed.segments,
+          overlays: ed.overlays,
+          cut_index: Math.max(0, cutIdx),
+          crossfade: xf,
+          transition: trans,
+        }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || "Übergangsvorschau fehlgeschlagen");
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const v = $("ed-video");
+      if (v) {
+        stopPreviewSession();
+        ed.previewMode = "none";
+        v.src = url;
+        v.play().catch(() => {});
+      }
+      setStatus(tt("Übergangsvorschau wird im Player abgespielt."));
+    } catch (e) {
+      setStatus(String(e.message || e), true);
+    }
   }
 
   function onKey(ev) {
@@ -2465,8 +3416,12 @@
     ["ed-in", "ed-out"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("change", () => {
-        if (id === "ed-in") el.value = String(snapTime(Number(el.value)));
-        else el.value = String(snapTime(Number(el.value)));
+        const cur = id === "ed-in" ? ed.inSec : ed.outSec;
+        const t = snapTime(parseTimeStr(el.value, cur));
+        if (id === "ed-in") ed.inSec = t;
+        else ed.outSec = t;
+        el.value = fmt(t);
+        syncMarkLabels();
         renderSourceRuler();
       });
     });
@@ -2474,8 +3429,56 @@
     if ($("ed-keep-range")) $("ed-keep-range").addEventListener("click", addSegmentFromMarks);
     if ($("ed-cut-range")) $("ed-cut-range").addEventListener("click", cutOutRange);
     if ($("ed-keep-all")) $("ed-keep-all").addEventListener("click", keepWholeFile);
+    if ($("ed-add-v2")) $("ed-add-v2").addEventListener("click", addBrollV2);
     if ($("ed-split")) $("ed-split").addEventListener("click", splitAtPlayhead);
     if ($("ed-black")) $("ed-black").addEventListener("click", () => addBlack(3));
+    if ($("ed-chaps-to-clips")) $("ed-chaps-to-clips").addEventListener("click", chaptersToClips);
+    if ($("ed-kf-round")) $("ed-kf-round").addEventListener("click", roundToKeyframes);
+    if ($("ed-crop-toggle")) $("ed-crop-toggle").addEventListener("click", toggleCropOverlay);
+    if ($("ed-crop-auto")) $("ed-crop-auto").addEventListener("click", runAutoCrop);
+    if ($("ed-crop-apply")) $("ed-crop-apply").addEventListener("click", applyVisualCrop);
+    if ($("ed-crop-reset")) $("ed-crop-reset").addEventListener("click", () => {
+      const act = activeClip();
+      if (act) { pushHist(); act.crop = ""; renderSegList(); }
+      const ov = $("ed-crop-overlay");
+      const bar = $("ed-crop-bar");
+      if (ov) ov.hidden = true;
+      if (bar) bar.hidden = true;
+      setStatus(tt("Crop zurückgesetzt."));
+    });
+    if ($("ed-crop-close")) $("ed-crop-close").addEventListener("click", () => {
+      const ov = $("ed-crop-overlay");
+      const bar = $("ed-crop-bar");
+      if (ov) ov.hidden = true;
+      if (bar) bar.hidden = true;
+    });
+    document.querySelectorAll("[data-crop-ratio]").forEach((btn) => {
+      btn.addEventListener("click", () => applyCropRatio(btn.dataset.cropRatio));
+    });
+    wireCropDrag();
+    if ($("ed-det-black")) $("ed-det-black").addEventListener("click", () => runAutoDetect("black"));
+    if ($("ed-det-silence")) $("ed-det-silence").addEventListener("click", () => runAutoDetect("silence"));
+    if ($("ed-det-scene")) $("ed-det-scene").addEventListener("click", () => runAutoDetect("scene"));
+    if ($("ed-det-autocrop")) $("ed-det-autocrop").addEventListener("click", runAutoCrop);
+    if ($("ed-preview-cut")) $("ed-preview-cut").addEventListener("click", previewTransitionCut);
+    if ($("ed-tl-zoom")) $("ed-tl-zoom").addEventListener("input", () => {
+      ed.tlZoom = Number($("ed-tl-zoom").value) || 1;
+      renderTimeline();
+    });
+    if ($("ed-tl-zoom-fit")) $("ed-tl-zoom-fit").addEventListener("click", () => {
+      ed.tlZoom = 1;
+      renderTimeline();
+    });
+    const tlScroll = $("ed-tl-scroll");
+    if (tlScroll) {
+      tlScroll.addEventListener("wheel", (ev) => {
+        if (!ev.ctrlKey) return;
+        ev.preventDefault();
+        const delta = ev.deltaY < 0 ? 0.5 : -0.5;
+        ed.tlZoom = Math.max(1, Math.min(16, (Number(ed.tlZoom) || 1) + delta));
+        renderTimeline();
+      }, { passive: false });
+    }
     if ($("ed-set-intro")) $("ed-set-intro").addEventListener("click", () => rememberTemplate("intro"));
     if ($("ed-ins-intro")) $("ed-ins-intro").addEventListener("click", () => insertTemplate("intro"));
     if ($("ed-set-outro")) $("ed-set-outro").addEventListener("click", () => rememberTemplate("outro"));
@@ -2540,15 +3543,14 @@
     if (tlRuler) tlRuler.addEventListener("mousedown", beginRulerScrub);
     window.addEventListener("resize", closeClipMenu);
 
-    const more = document.querySelector(".ed-tl-more");
-    if (more) {
+    document.querySelectorAll(".ed-tl-more").forEach((more) => {
       more.addEventListener("click", (ev) => {
         if (ev.target.closest(".ed-tl-more-panel button")) more.open = false;
       });
       document.addEventListener("click", (ev) => {
         if (more.open && !more.contains(ev.target)) more.open = false;
       });
-    }
+    });
     if ($("ed-crossfade")) $("ed-crossfade").addEventListener("input", () => { syncBadge(); syncModeUI(); });
 
     const play = $("ed-play");
@@ -2580,12 +3582,7 @@
 
     const ruler = $("ed-src-ruler");
     if (ruler) {
-      ruler.addEventListener("click", (ev) => {
-        if (!ed.src || !ed.src.duration) return;
-        const rect = ruler.getBoundingClientRect();
-        const ratio = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
-        seekPreview(ratio * ed.src.duration);
-      });
+      ruler.addEventListener("mousedown", beginSourceRulerDrag);
     }
 
     const v = $("ed-video");
@@ -2619,7 +3616,9 @@
     if ($("ed-clear")) $("ed-clear").addEventListener("click", () => {
       pushHist();
       ed.segments = [];
+      ed.overlays = [];
       ed.activeId = null;
+      ed.activeV2Id = null;
       stopTlPreview();
       renderSegList();
       setStatus("");

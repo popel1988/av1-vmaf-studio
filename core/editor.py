@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -21,6 +22,19 @@ from . import remux
 logger = logging.getLogger("vcompress.editor")
 
 _GEN_KINDS = ("black", "silence")
+_TRANSITIONS = (
+    "fade", "fadeblack", "fadewhite", "dissolve", "wipeleft", "wiperight",
+    "slideleft", "slideright", "smoothleft", "smoothright",
+)
+_ROTATE_FILTERS = {
+    90: "transpose=1",
+    180: "hflip,vflip",
+    270: "transpose=2",
+}
+_BLACK_RE = re.compile(r"black_start:([0-9.]+)\s+black_end:([0-9.]+)\s+black_duration:([0-9.]+)")
+_SILENCE_START_RE = re.compile(r"silence_start:\s*([0-9.]+)")
+_SILENCE_END_RE = re.compile(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)")
+_SCENE_PTS_RE = re.compile(r"pts_time:([0-9.]+)")
 _CACHE = None  # lazy: DATA_DIR/editor_cache
 
 
@@ -135,6 +149,12 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             scale = int(s.get("scale") or 0)
         except (TypeError, ValueError):
             scale = 0
+        try:
+            rotate = int(s.get("rotate") or 0)
+        except (TypeError, ValueError):
+            rotate = 0
+        if rotate not in (0, 90, 180, 270):
+            rotate = 0
         out.append({
             "path": path,
             "abs": target,
@@ -153,6 +173,11 @@ def normalize_segments(raw: list) -> tuple[list[dict], str]:
             "speed": max(0.25, min(4.0, _f(s.get("speed"), 1.0) or 1.0)),
             "crop": crop,
             "scale": max(0, min(4320, scale)),
+            "rotate": rotate,
+            "hflip": bool(s.get("hflip")),
+            "vflip": bool(s.get("vflip")),
+            "volume_db": max(-30.0, min(24.0, _f(s.get("volume_db"), 0.0))),
+            "loudnorm": bool(s.get("loudnorm")),
         })
     return out, ""
 
@@ -194,13 +219,20 @@ def segment_needs_encode(s: dict) -> bool:
         return True
     if s.get("crop") or int(s.get("scale") or 0) > 0:
         return True
+    if int(s.get("rotate") or 0) in (90, 180, 270) or s.get("hflip") or s.get("vflip"):
+        return True
+    if abs(_f(s.get("volume_db"), 0.0)) > 0.05 or s.get("loudnorm"):
+        return True
     if s.get("burn_subs"):
         return True
     return False
 
 
-def any_needs_encode(segments: list[dict], crossfade: float = 0.0) -> bool:
+def any_needs_encode(segments: list[dict], crossfade: float = 0.0,
+                     overlays: Optional[list[dict]] = None) -> bool:
     if float(crossfade or 0) > 0.01:
+        return True
+    if overlays:
         return True
     return any(segment_needs_encode(s) for s in segments)
 
@@ -264,6 +296,65 @@ def segment_to_spec(s: dict) -> dict:
         "speed": _f(s.get("speed"), 1.0) or 1.0,
         "crop": s.get("crop") or "",
         "scale": int(s.get("scale") or 0),
+        "rotate": int(s.get("rotate") or 0),
+        "hflip": bool(s.get("hflip")),
+        "vflip": bool(s.get("vflip")),
+        "volume_db": _f(s.get("volume_db"), 0.0),
+        "loudnorm": bool(s.get("loudnorm")),
+    }
+
+
+def normalize_overlays(raw: list) -> tuple[list[dict], str]:
+    """B-Roll / PiP-Spur (V2) prüfen und normalisieren."""
+    out: list[dict] = []
+    for i, ov in enumerate(raw or []):
+        if not isinstance(ov, dict):
+            continue
+        path = str(ov.get("path") or "").strip()
+        if not path:
+            continue
+        target = resolve_path(path)
+        if target is None or not target.is_file():
+            return [], f"Overlay {i + 1}: Datei nicht gefunden ({path})."
+        start = remux.parse_time(ov.get("start"))
+        end = remux.parse_time(ov.get("end"))
+        if end <= 0:
+            end = remux.probe_duration(target)
+        if end <= start:
+            return [], f"Overlay {i + 1}: Ende muss nach dem Start liegen."
+        tl_start = max(0.0, _f(ov.get("tl_start"), 0.0))
+        pos = str(ov.get("position") or "pip_br").lower().strip()
+        if pos not in ("pip_br", "pip_tr", "pip_bl", "pip_tl", "full", "side"):
+            pos = "pip_br"
+        size_pct = max(15, min(100, int(_f(ov.get("size_pct"), 30) or 30)))
+        opacity = max(0.1, min(1.0, _f(ov.get("opacity"), 1.0) or 1.0))
+        out.append({
+            "path": path,
+            "abs": target,
+            "title": str(ov.get("title") or target.name).strip(),
+            "start": float(start),
+            "end": float(end),
+            "tl_start": float(tl_start),
+            "position": pos,
+            "size_pct": size_pct,
+            "opacity": opacity,
+            "fade": max(0.0, min(5.0, _f(ov.get("fade"), 0.0))),
+        })
+    out.sort(key=lambda x: x["tl_start"])
+    return out, ""
+
+
+def overlay_to_spec(ov: dict) -> dict:
+    return {
+        "path": ov.get("path") or "",
+        "title": ov.get("title") or "",
+        "start": float(ov.get("start") or 0.0),
+        "end": float(ov.get("end") or 0.0),
+        "tl_start": float(ov.get("tl_start") or 0.0),
+        "position": ov.get("position") or "pip_br",
+        "size_pct": int(ov.get("size_pct") or 30),
+        "opacity": float(ov.get("opacity") or 1.0),
+        "fade": float(ov.get("fade") or 0.0),
     }
 
 
@@ -312,6 +403,8 @@ def _copy_audio_ok(segments: list[dict], crossfade: float = 0.0,
         if _f(s.get("fade_in")) > 0 or _f(s.get("fade_out")) > 0:
             return False
         if abs(_f(s.get("speed"), 1.0) - 1.0) > 0.001:
+            return False
+        if abs(_f(s.get("volume_db"), 0.0)) > 0.05 or s.get("loudnorm"):
             return False
     return True
 
@@ -416,8 +509,8 @@ def _atempo_chain(speed: float) -> str:
     return ",".join(parts)
 
 
-def _ref_geometry(segments: list[dict]) -> tuple[int, int, float]:
-    """Ziel-Auflösung/FPS für Concat (erste Mediendatei, sonst 1080p25)."""
+def _ref_geometry(segments: list[dict]) -> tuple[int, int, float, Optional[ff.VideoInfo]]:
+    """Ziel-Auflösung/FPS/Info für Concat (erste Mediendatei, sonst 1080p25)."""
     for s in segments:
         p = s.get("abs")
         if not p:
@@ -425,8 +518,19 @@ def _ref_geometry(segments: list[dict]) -> tuple[int, int, float]:
         info, _ = ff.probe_with_error(p)
         if info and getattr(info, "width", 0):
             fps = float(getattr(info, "fps", 0) or 0) or 25.0
-            return int(info.width), int(info.height), fps
-    return 1920, 1080, 25.0
+            w, h = int(info.width), int(info.height)
+            crop = str(s.get("crop") or "").strip()
+            dims = ff.crop_dims(crop) if crop else None
+            if dims:
+                w, h = dims
+            if int(s.get("rotate") or 0) in (90, 270):
+                w, h = h, w
+            sc = int(s.get("scale") or 0)
+            if sc > 0 and h > 0:
+                w = max(2, int(round(w * (sc / h) / 2.0)) * 2)
+                h = max(2, int(round(sc / 2.0)) * 2)
+            return w, h, fps, info
+    return 1920, 1080, 25.0, None
 
 
 _LAYOUTS = {1: "mono", 2: "stereo", 3: "2.1", 4: "quad", 5: "4.1",
@@ -472,6 +576,7 @@ def build_editor_encode_cmd(
     burn_subs: bool = False,
     sub_index: int = -1,
     crossfade: float = 0.0,
+    transition: str = "fade",
     rate_mode: str = "cq",
     v_bitrate: int = 0,
     audio_channels: int = 0,
@@ -482,17 +587,34 @@ def build_editor_encode_cmd(
     keyint_sec: int = 0,
     aq_strength: int = 8,
     nvenc_tune: str = "auto",
+    tonemap: bool = False,
+    preserve_hdr: bool = True,
+    overlays: Optional[list[dict]] = None,
+    add_chapters: bool = True,
 ) -> tuple[list, str]:
-    """Re-Encode-Export: trim/atrim je Segment, optional xfade, dann concat."""
+    """Re-Encode-Export: trim/atrim je Segment, optional xfade + V2-Overlays, dann concat."""
     if not segments:
         return [], "Keine Segmente."
+    from . import encoder as enc_mod
     enc = ff.encoder_name(platform, codec)
     backend = ff.encoder_backend(platform)
     n = len(segments)
     xf = max(0.0, float(crossfade or 0))
     if n < 2:
         xf = 0.0
-    tw, th, tfps = _ref_geometry(segments)
+    trans = str(transition or "fade").lower().strip()
+    if trans not in _TRANSITIONS:
+        trans = "fade"
+    tw, th, tfps, ref_info = _ref_geometry(segments)
+    is_hdr = bool(ref_info and getattr(ref_info, "is_hdr", False))
+    do_tonemap = bool(tonemap and is_hdr)
+    keep_hdr = bool(preserve_hdr and is_hdr and not do_tonemap)
+    ten_bit = bool(
+        (keep_hdr or (ref_info and getattr(ref_info, "bit_depth", 8) >= 10 and not do_tonemap))
+        and enc_mod._codec_supports_10bit(platform, codec)
+    )
+    pix_fmt = "yuv420p10le" if ten_bit else "yuv420p"
+    ov_list = list(overlays or [])
 
     path_to_idx: dict[str, int] = {}
     file_inputs: list[Path] = []
@@ -508,6 +630,9 @@ def build_editor_encode_cmd(
     for s in segments:
         if s.get("abs"):
             file_idx(s["abs"])
+    for ov in ov_list:
+        if ov.get("abs"):
+            file_idx(ov["abs"])
 
     cmd = [config.FFMPEG, "-y", "-hide_banner"]
     if backend == "vaapi":
@@ -546,7 +671,7 @@ def build_editor_encode_cmd(
             lavfi.append(
                 f"color=c=black:s={tw}x{th}:r={tfps:.3f}:d={out_d:.3f}")
             parts.append(
-                f"[{li}:v]format=yuv420p,setsar=1,fps={tfps:.3f}[{vlabel}]")
+                f"[{li}:v]format={pix_fmt},setsar=1,fps={tfps:.3f}[{vlabel}]")
             mute = True
         else:
             ii = file_idx(s["abs"])
@@ -560,9 +685,18 @@ def build_editor_encode_cmd(
                         0,
                         f"subtitles='{_esc_sub_path(s['abs'])}':si={si}",
                     )
+            if do_tonemap:
+                chain.append(enc_mod.tonemap_chain("hable", 0.0, 0.0))
             crop = str(s.get("crop") or "").strip()
             if crop and ":" in crop:
                 chain.append(f"crop={crop}")
+            rot = int(s.get("rotate") or 0)
+            if rot in _ROTATE_FILTERS:
+                chain.append(_ROTATE_FILTERS[rot])
+            if s.get("hflip"):
+                chain.append("hflip")
+            if s.get("vflip"):
+                chain.append("vflip")
             sc = int(s.get("scale") or 0)
             if sc > 0:
                 chain.append(f"scale=-2:{sc}")
@@ -570,7 +704,7 @@ def build_editor_encode_cmd(
                 chain.append(f"setpts=PTS/{speed:.4f}")
             chain.append(f"scale={tw}:{th}:force_original_aspect_ratio=decrease")
             chain.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2")
-            chain.append("format=yuv420p")
+            chain.append(f"format={pix_fmt}")
             chain.append(f"fps={tfps:.3f}")
             chain.append("setsar=1")
             if fi > 0.02:
@@ -586,6 +720,8 @@ def build_editor_encode_cmd(
 
         sel = [] if (mute or kind in _GEN_KINDS) else list(s.get("audio_indexes") or [])
         labels: list[str] = []
+        vol_db = _f(s.get("volume_db"), 0.0)
+        do_ln = bool(s.get("loudnorm"))
         for j in range(n_audio):
             alabel = f"a{i}_{j}"
             src_idx = sel[j] if j < len(sel) else None
@@ -607,6 +743,10 @@ def build_editor_encode_cmd(
                 at = _atempo_chain(speed)
                 if at:
                     achain.append(at)
+                if do_ln:
+                    achain.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+                if abs(vol_db) > 0.05:
+                    achain.append(f"volume={vol_db:.2f}dB")
                 if fi > 0.02:
                     achain.append(f"afade=t=in:st=0:d={fi:.3f}")
                 if fo > 0.02:
@@ -630,6 +770,15 @@ def build_editor_encode_cmd(
         concat_idx = n_files + len(lavfi)
         cmd += ["-f", "concat", "-safe", "0", "-i", str(listfile)]
 
+    meta_idx = -1
+    if add_chapters and len(segments) >= 1:
+        wd = work_dir or (_cache_dir() / "concat")
+        meta_path = remux.write_chapter_meta(
+            chapters_from_segments(segments, xf), wd)
+        if meta_path:
+            meta_idx = n_files + len(lavfi) + (1 if concat_idx >= 0 else 0)
+            cmd += ["-i", str(meta_path)]
+
     if xf > 0.02 and n >= 2:
         cur_v = v_pads[0]
         cur_a = list(a_pads[0]) if a_pads else []
@@ -639,7 +788,7 @@ def build_editor_encode_cmd(
             off = max(0.0, acc - d)
             nv = f"xfv{i}"
             parts.append(
-                f"[{cur_v}][{v_pads[i]}]xfade=transition=fade:duration={d:.3f}"
+                f"[{cur_v}][{v_pads[i]}]xfade=transition={trans}:duration={d:.3f}"
                 f":offset={off:.3f}[{nv}]")
             if not copy_audio:
                 for j in range(n_audio):
@@ -649,25 +798,74 @@ def build_editor_encode_cmd(
                     cur_a[j] = na
             cur_v = nv
             acc = acc + durs[i] - d
-        filt = ";".join(parts)
         v_out, a_outs = cur_v, (cur_a if not copy_audio else [])
     elif copy_audio:
         concat = "".join(f"[{v}]" for v in v_pads)
-        filt = ";".join(parts)
-        filt += ";" + concat + f"concat=n={n}:v=1:a=0[vc]"
+        parts.append(concat + f"concat=n={n}:v=1:a=0[vc]")
         v_out, a_outs = "vc", []
     else:
         concat = "".join(
             f"[{v}]" + "".join(f"[{a}]" for a in al)
             for v, al in zip(v_pads, a_pads))
-        filt = ";".join(parts)
         a_outs = [f"ac{j}" for j in range(n_audio)]
-        filt += (";" + concat + f"concat=n={n}:v=1:a={n_audio}[vc]"
-                 + "".join(f"[{a}]" for a in a_outs))
+        parts.append(concat + f"concat=n={n}:v=1:a={n_audio}[vc]"
+                     + "".join(f"[{a}]" for a in a_outs))
         v_out = "vc"
 
+    # Zweite Videospur (V2: B-Roll / Picture-in-Picture Overlays)
+    for k, ov in enumerate(ov_list):
+        if not ov.get("abs"):
+            continue
+        oii = file_idx(ov["abs"])
+        ostart = float(ov.get("start") or 0.0)
+        oend = float(ov.get("end") or 0.0)
+        odur = max(0.05, oend - ostart)
+        otl = max(0.0, float(ov.get("tl_start") or 0.0))
+        pos = str(ov.get("position") or "pip_br")
+        pct = max(15, min(100, int(ov.get("size_pct") or 30)))
+        opac = max(0.1, min(1.0, float(ov.get("opacity") or 1.0)))
+        ofade = min(float(ov.get("fade") or 0.0), odur * 0.45)
+        ow = max(2, int(round(tw * (pct / 100.0) / 2.0)) * 2) if pos != "full" else tw
+        oh = max(2, int(round(th * (pct / 100.0) / 2.0)) * 2) if pos != "full" else th
+        ochain = [
+            f"trim=start={ostart:.3f}:end={oend:.3f}",
+            f"setpts=PTS-STARTPTS+{otl:.3f}/TB",
+            f"scale={ow}:{oh}:force_original_aspect_ratio=decrease",
+            f"fps={tfps:.3f}",
+            "setsar=1",
+        ]
+        if opac < 0.99 or ofade > 0.02:
+            ochain.append("format=yuva420p")
+            if ofade > 0.02:
+                ochain.append(f"fade=t=in:st={otl:.3f}:d={ofade:.3f}:alpha=1")
+                ochain.append(f"fade=t=out:st={max(otl, otl + odur - ofade):.3f}:d={ofade:.3f}:alpha=1")
+            if opac < 0.99:
+                ochain.append(f"colorchannelmixer=aa={opac:.2f}")
+        else:
+            ochain.append(f"format={pix_fmt}")
+        olabel = f"ov{k}"
+        next_v = f"vov{k}"
+        parts.append(f"[{oii}:v:0]" + ",".join(ochain) + f"[{olabel}]")
+        margin = max(16, int(round(tw * 0.02)))
+        coords = {
+            "pip_br": f"x=W-w-{margin}:y=H-h-{margin}",
+            "pip_tr": f"x=W-w-{margin}:y={margin}",
+            "pip_bl": f"x={margin}:y=H-h-{margin}",
+            "pip_tl": f"x={margin}:y={margin}",
+            "full": "x=(W-w)/2:y=(H-h)/2",
+            "side": f"x=W-w-{margin}:y=(H-h)/2",
+        }.get(pos, f"x=W-w-{margin}:y=H-h-{margin}")
+        parts.append(
+            f"[{v_out}][{olabel}]overlay={coords}:eof_action=pass"
+            f":enable='between(t,{otl:.3f},{otl + odur:.3f})'"
+            f",format={pix_fmt}[{next_v}]"
+        )
+        v_out = next_v
+
+    filt = ";".join(parts)
     if backend == "vaapi":
-        filt += f";[{v_out}]format=nv12,hwupload[v]"
+        va_fmt = "p010le" if ten_bit else "nv12"
+        filt += f";[{v_out}]format={va_fmt},hwupload[v]"
         map_v = "[v]"
     else:
         map_v = f"[{v_out}]"
@@ -675,7 +873,17 @@ def build_editor_encode_cmd(
     cmd += ["-filter_complex", filt, "-map", map_v]
     for a in a_outs:
         cmd += ["-map", f"[{a}]"]
+    if meta_idx >= 0:
+        cmd += ["-map_chapters", str(meta_idx)]
     cmd += ["-c:v", enc]
+    if keep_hdr and ref_info is not None:
+        cmd += enc_mod._hdr_output_args(ref_info, codec, enc)
+    elif ten_bit:
+        cmd += enc_mod._ten_bit_output_args(codec, enc)
+        if ref_info is not None:
+            cmd += enc_mod.color_output_args(ref_info, tonemapped=do_tonemap, keep_hdr=False)
+    elif ref_info is not None:
+        cmd += enc_mod.color_output_args(ref_info, tonemapped=do_tonemap, keep_hdr=False)
     br = int(v_bitrate or 0)
     rm = str(rate_mode or "cq").lower()
     if rm in ("bitrate", "abr") and br > 0:
@@ -773,6 +981,9 @@ def probe_source(rel: str) -> tuple[Optional[dict], str]:
     data["video_bitrate_human"] = ff._bitrate_human(vbr) if vbr else ""
     data["overall_bitrate"] = total_br
     data["overall_bitrate_human"] = ff._bitrate_human(total_br) if total_br else ""
+    data["bit_depth"] = int(getattr(info, "bit_depth", 8) or 8) if info else 8
+    data["hdr_type"] = str(getattr(info, "hdr_type", "SDR") or "SDR") if info else "SDR"
+    data["is_hdr"] = bool(getattr(info, "is_hdr", False)) if info else False
     data["chapters"] = remux.probe_chapters(target)
     return data, ""
 
@@ -840,7 +1051,7 @@ def nearest_keyframe(rel: str, t: float) -> dict:
 
 
 def ensure_preview_assets(rel: str) -> dict:
-    """Filmstrip + Waveform erzeugen (Cache)."""
+    """Filmstrip + Waveform erzeugen (Cache). Bei langen Dateien schneller Multi-Input-Seek."""
     target = resolve_path(rel)
     if target is None or not target.is_file():
         return {"error": "Datei nicht gefunden"}
@@ -851,30 +1062,48 @@ def ensure_preview_assets(rel: str) -> dict:
     wave = folder / "wave.png"
     info, _ = ff.probe_with_error(target)
     duration = float(getattr(info, "duration", 0) or 0) if info else remux.probe_duration(target)
-    n = max(8, min(48, int(duration / 8) if duration else 24))
+    n = max(8, min(32, int(duration / 8) if duration else 20))
     if not strip.is_file() and duration > 0:
-        fps = max(0.02, n / duration)
-        cmd = [
-            config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(target),
-            "-vf", f"fps={fps:.5f},scale=80:45:force_original_aspect_ratio=decrease,"
-                   f"pad=80:45:(ow-iw)/2:(oh-ih)/2,tile={n}x1",
-            "-frames:v", "1", str(strip),
-        ]
+        if duration > 180:
+            # Schneller Keyframe-Seek je Kachel: dauert auch bei 60 GB < 3 s.
+            cmd = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
+            step = duration / n
+            for i in range(n):
+                t = max(0.0, min(duration - 0.1, (i + 0.5) * step))
+                cmd += ["-ss", f"{t:.2f}", "-i", str(target)]
+            pads = []
+            parts = []
+            for i in range(n):
+                parts.append(
+                    f"[{i}:v:0]trim=end_frame=1,scale=80:45:force_original_aspect_ratio=decrease,"
+                    f"pad=80:45:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+                )
+                pads.append(f"[v{i}]")
+            parts.append("".join(pads) + f"hstack=inputs={n}[out]")
+            cmd += ["-filter_complex", ";".join(parts), "-map", "[out]", "-frames:v", "1", str(strip)]
+        else:
+            fps = max(0.02, n / duration)
+            cmd = [
+                config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(target),
+                "-vf", f"fps={fps:.5f},scale=80:45:force_original_aspect_ratio=decrease,"
+                       f"pad=80:45:(ow-iw)/2:(oh-ih)/2,tile={n}x1",
+                "-frames:v", "1", str(strip),
+            ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=120, check=False)
+            subprocess.run(cmd, capture_output=True, timeout=60, check=False)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    if not wave.is_file():
+    if not wave.is_file() and 0 < duration <= 2400:
         cmd = [
             config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(target),
             "-filter_complex",
-            "aformat=channel_layouts=mono,compand,showwavespic=s=1280x48:colors=#22d3ee",
+            "aresample=8000,aformat=channel_layouts=mono,compand,showwavespic=s=1280x48:colors=#22d3ee",
             "-frames:v", "1", str(wave),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=90, check=False)
+            subprocess.run(cmd, capture_output=True, timeout=45, check=False)
         except (OSError, subprocess.TimeoutExpired):
             pass
     return {
@@ -884,6 +1113,406 @@ def ensure_preview_assets(rel: str) -> dict:
         "waveform": f"/api/editor/asset/{key}/wave.png" if wave.is_file() else "",
         "duration": duration,
     }
+
+
+def detect_source_crop(rel: str) -> dict:
+    """Schwarze Balken einer Quelle via cropdetect erkennen."""
+    target = resolve_path(rel)
+    if target is None or not target.is_file():
+        return {"error": "Datei nicht gefunden"}
+    info, err = ff.probe_with_error(target)
+    if not info:
+        return {"error": err or "Analyse fehlgeschlagen"}
+    crop = ff.detect_crop(info)
+    return {
+        "crop": crop or "",
+        "width": int(getattr(info, "width", 0) or 0),
+        "height": int(getattr(info, "height", 0) or 0),
+    }
+
+
+def detect_cuts(
+    rel: str,
+    kind: str = "black",
+    start_sec: float = 0.0,
+    end_sec: float = 0.0,
+    min_duration: float = 0.5,
+    threshold: float = 0.0,
+) -> dict:
+    """Schwarzbilder, Stille oder Szenenwechsel erkennen und Behalten-Bereiche liefern."""
+    target = resolve_path(rel)
+    if target is None or not target.is_file():
+        return {"error": "Datei nicht gefunden"}
+    info, _ = ff.probe_with_error(target)
+    dur = float(getattr(info, "duration", 0) or 0) if info else remux.probe_duration(target)
+    if dur <= 0:
+        return {"error": "Dauer unbekannt"}
+    s0 = max(0.0, float(start_sec or 0.0))
+    s1 = min(dur, float(end_sec)) if end_sec and float(end_sec) > s0 else dur
+    span = max(0.5, min(3600.0, s1 - s0))
+    mode = str(kind or "black").lower().strip()
+    min_d = max(0.1, min(30.0, float(min_duration or 0.5)))
+
+    cmd = [config.FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info"]
+    if s0 > 0:
+        cmd += ["-ss", f"{s0:.3f}"]
+    cmd += ["-i", str(target), "-t", f"{span:.3f}"]
+
+    if mode == "silence":
+        db = float(threshold) if threshold < 0 else -35.0
+        cmd += ["-vn", "-sn", "-af", f"silencedetect=noise={db:.1f}dB:d={min_d:.2f}", "-f", "null", "-"]
+    elif mode == "scene":
+        sc_th = max(0.08, min(0.8, float(threshold) if threshold > 0 else 0.32))
+        cmd += [
+            "-an", "-sn", "-vf",
+            f"fps=8,scale=320:-2,select='gt(scene,{sc_th:.2f})',showinfo",
+            "-f", "null", "-",
+        ]
+    else:
+        mode = "black"
+        pix_th = max(0.01, min(0.5, float(threshold) if threshold > 0 else 0.10))
+        cmd += [
+            "-an", "-sn", "-vf",
+            f"fps=12,scale=320:-2,blackdetect=d={min_d:.2f}:pix_th={pix_th:.2f}",
+            "-f", "null", "-",
+        ]
+
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=90, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"error": f"Analyse abgebrochen: {e}"}
+
+    stderr = proc.stderr or ""
+    gaps: list[dict] = []
+    scenes: list[float] = []
+
+    if mode == "black":
+        for m in _BLACK_RE.finditer(stderr):
+            try:
+                bs = s0 + float(m.group(1))
+                be = s0 + float(m.group(2))
+                bd = float(m.group(3))
+                if be > bs:
+                    gaps.append({"start": round(bs, 2), "end": round(be, 2), "duration": round(bd, 2)})
+            except ValueError:
+                continue
+    elif mode == "silence":
+        cur_start: Optional[float] = None
+        for line in stderr.splitlines():
+            ms = _SILENCE_START_RE.search(line)
+            if ms:
+                try:
+                    cur_start = s0 + float(ms.group(1))
+                except ValueError:
+                    cur_start = None
+                continue
+            me = _SILENCE_END_RE.search(line)
+            if me and cur_start is not None:
+                try:
+                    se = s0 + float(me.group(1))
+                    sd = float(me.group(2))
+                    if se > cur_start:
+                        gaps.append({"start": round(cur_start, 2), "end": round(se, 2), "duration": round(sd, 2)})
+                except ValueError:
+                    pass
+                cur_start = None
+    elif mode == "scene":
+        last_t = s0
+        for m in _SCENE_PTS_RE.finditer(stderr):
+            try:
+                t = round(s0 + float(m.group(1)), 2)
+                if t - last_t >= min_d and s0 < t < s1 - 0.1:
+                    scenes.append(t)
+                    last_t = t
+            except ValueError:
+                continue
+
+    keeps: list[dict] = []
+    if mode == "scene":
+        pts = [round(s0, 2)] + scenes + [round(s1, 2)]
+        for i in range(len(pts) - 1):
+            if pts[i + 1] - pts[i] >= 0.25:
+                keeps.append({"start": pts[i], "end": pts[i + 1], "title": f"Szene {i + 1}"})
+    else:
+        cursor = s0
+        idx = 1
+        for g in gaps:
+            if g["start"] - cursor >= 0.25:
+                keeps.append({"start": round(cursor, 2), "end": round(g["start"], 2), "title": f"Teil {idx}"})
+                idx += 1
+            cursor = max(cursor, g["end"])
+        if s1 - cursor >= 0.25:
+            keeps.append({"start": round(cursor, 2), "end": round(s1, 2), "title": f"Teil {idx}"})
+
+    return {
+        "kind": mode,
+        "gaps": gaps,
+        "scenes": scenes,
+        "keeps": keeps,
+        "duration": dur,
+    }
+
+
+def _keyframes_around(path: Path, start: float, end: float) -> list[float]:
+    """Keyframes einer Datei (gecacht über list_keyframes oder per kurzem Probe)."""
+    begin = max(0.0, float(start) - 25.0)
+    stop = max(begin + 1.0, float(end) + 25.0)
+    cmd = [
+        config.FFPROBE, "-v", "error", "-select_streams", "v:0",
+        "-skip_frame", "nokey",
+        "-read_intervals", f"{begin:.3f}%{stop:.3f}",
+        "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=40, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out: list[float] = []
+    for line in (proc.stdout or "").splitlines():
+        piece = line.strip().split(",")[0]
+        try:
+            pts = float(piece)
+        except ValueError:
+            continue
+        if pts >= 0:
+            out.append(pts)
+    return sorted(set(out))
+
+
+def _smart_match_video_args(info: Optional[ff.VideoInfo]) -> list[str]:
+    """Encoder-Argumente passend zum Quell-Codec/Profil für Smart-Cut-Ränder."""
+    codec = (getattr(info, "codec", "") or "h264").lower()
+    ten = int(getattr(info, "bit_depth", 8) or 8) >= 10
+    pix = "yuv420p10le" if ten else "yuv420p"
+    if codec in ("hevc", "h265"):
+        args = ["-c:v", "libx265", "-preset", "fast", "-crf", "16", "-pix_fmt", pix]
+        if getattr(info, "is_hdr", False):
+            prim = info.color_primaries or "bt2020"
+            trc = info.color_transfer or "smpte2084"
+            space = info.color_space or "bt2020nc"
+            args += [
+                "-colorspace", space, "-color_primaries", prim, "-color_trc", trc,
+                "-x265-params", f"colorprim={prim}:transfer={trc}:colormatrix={space}:hdr10=1:repeat-headers=1",
+            ]
+        else:
+            args += ["-x265-params", "repeat-headers=1"]
+        return args
+    if codec == "av1":
+        return ["-c:v", "libsvtav1", "-preset", "6", "-crf", "18", "-pix_fmt", pix]
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "15", "-pix_fmt", pix]
+
+
+def build_editor_smart_plan(
+    segments: list[dict],
+    output: Path,
+    work_dir: Path,
+    add_chapters: bool = True,
+) -> tuple[list[tuple[list[str], Path, str, float]], list[str], list[Path], str]:
+    """Smart Cut: Nur angeschnittene GOP-Anfänge re-encodieren, Hauptteil per Stream-Copy.
+
+    Liefert (part_jobs, final_concat_cmd, temp_files, error).
+    Jeder part_job ist (cmd, part_path, label, duration).
+    """
+    if not segments:
+        return [], [], [], "Keine Segmente."
+    if any_needs_encode(segments):
+        return [], [], [], "Smart Cut unterstützt keine Filter/Fades/Tempo – dafür Encode wählen."
+    compat = check_remux_compat(segments)
+    if not compat.get("compatible"):
+        return [], [], [], "; ".join(compat.get("warnings") or ["Quellen nicht kompatibel."])
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    tag = uuid.uuid4().hex[:8]
+    part_jobs: list[tuple[list[str], Path, str, float]] = []
+    part_files: list[Path] = []
+    temp_files: list[Path] = []
+    sel = list(next((s.get("audio_indexes") or [] for s in segments), []))
+    sub_sel = list(next((s.get("sub_indexes") or [] for s in segments), []))
+    first_abs = next((s.get("abs") for s in segments if s.get("abs")), None)
+    container = "mp4" if output.suffix.lower() == ".mp4" else "mkv"
+
+    for idx, s in enumerate(segments):
+        src: Optional[Path] = s.get("abs")
+        if not src:
+            return [], [], [], f"Clip {idx + 1}: Quelldatei fehlt."
+        start = float(s["start"])
+        end = float(s["end"])
+        dur = max(0.05, end - start)
+        info, _ = ff.probe_with_error(src)
+        kfs = _keyframes_around(src, start, end)
+        # Liegt start bereits nahe an einem Keyframe (<= 0.08s), reicht Stream-Copy.
+        near_kf = next((k for k in kfs if abs(k - start) <= 0.08), None)
+        next_kf = next((k for k in kfs if start + 0.15 < k < end - 0.25), None)
+
+        if near_kf is None and next_kf is not None and (next_kf - start) <= 18.0:
+            # Teil 1a: Kurzer Re-Encode von start bis zum nächsten Keyframe
+            head_dur = round(next_kf - start, 3)
+            head_path = work_dir / f"smart_{tag}_{idx}_head.mkv"
+            head_cmd = [
+                config.FFMPEG, "-y", "-hide_banner",
+                "-ss", f"{start:.3f}", "-i", str(src),
+                "-t", f"{head_dur:.3f}",
+                "-map", "0:v:0",
+            ]
+            head_cmd += _smart_match_video_args(info)
+            _map_copy_audio_subs(head_cmd, 0, sel, sub_sel, "mkv", src)
+            if sel:
+                head_cmd += ["-c:a", "copy"]
+            head_cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", str(head_path)]
+            part_jobs.append((head_cmd, head_path, f"Smart-Cut Rand Clip {idx + 1}", head_dur))
+            part_files.append(head_path)
+            temp_files.append(head_path)
+
+            # Teil 1b: Stream-Copy ab next_kf bis end
+            body_dur = round(end - next_kf, 3)
+            body_path = work_dir / f"smart_{tag}_{idx}_body.mkv"
+            body_cmd = [
+                config.FFMPEG, "-y", "-hide_banner",
+                "-ss", f"{next_kf:.3f}", "-i", str(src),
+                "-t", f"{body_dur:.3f}",
+                "-map", "0:v:0", "-c:v", "copy",
+            ]
+            _map_copy_audio_subs(body_cmd, 0, sel, sub_sel, "mkv", src)
+            if sel:
+                body_cmd += ["-c:a", "copy"]
+            body_cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", str(body_path)]
+            part_jobs.append((body_cmd, body_path, f"Smart-Cut Kopie Clip {idx + 1}", body_dur))
+            part_files.append(body_path)
+            temp_files.append(body_path)
+        else:
+            # Komplettes Segment kopieren (oder sehr kurzer Clip komplett passend encodieren)
+            part_path = work_dir / f"smart_{tag}_{idx}_full.mkv"
+            if near_kf is None and dur <= 12.0:
+                p_cmd = [
+                    config.FFMPEG, "-y", "-hide_banner",
+                    "-ss", f"{start:.3f}", "-i", str(src),
+                    "-t", f"{dur:.3f}",
+                    "-map", "0:v:0",
+                ]
+                p_cmd += _smart_match_video_args(info)
+                lbl = f"Smart-Cut Kurzclip {idx + 1}"
+            else:
+                cut_from = near_kf if near_kf is not None else start
+                p_cmd = [
+                    config.FFMPEG, "-y", "-hide_banner",
+                    "-ss", f"{cut_from:.3f}", "-i", str(src),
+                    "-t", f"{max(0.05, end - cut_from):.3f}",
+                    "-map", "0:v:0", "-c:v", "copy",
+                ]
+                lbl = f"Smart-Cut Kopie Clip {idx + 1}"
+            _map_copy_audio_subs(p_cmd, 0, sel, sub_sel, "mkv", src)
+            if sel:
+                p_cmd += ["-c:a", "copy"]
+            p_cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", str(part_path)]
+            part_jobs.append((p_cmd, part_path, lbl, dur))
+            part_files.append(part_path)
+            temp_files.append(part_path)
+
+    listfile = work_dir / f"smart_{tag}_concat.txt"
+    lines = []
+    for pf in part_files:
+        escaped_pf = str(pf).replace("'", "'\\''")
+        lines.append(f"file '{escaped_pf}'")
+    listfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    temp_files.append(listfile)
+
+    meta_path = None
+    if add_chapters and len(segments) >= 1:
+        meta_path = remux.write_chapter_meta(chapters_from_segments(segments), work_dir)
+        if meta_path:
+            temp_files.append(meta_path)
+
+    final_cmd = [
+        config.FFMPEG, "-y", "-hide_banner",
+        "-f", "concat", "-safe", "0", "-i", str(listfile),
+    ]
+    if meta_path:
+        final_cmd += ["-i", str(meta_path), "-map_chapters", "1"]
+    final_cmd += ["-map", "0:v:0", "-c:v", "copy"]
+    if sel:
+        final_cmd += ["-map", "0:a?", "-c:a", "copy"]
+    else:
+        final_cmd += ["-an"]
+    if sub_sel:
+        for out_i in range(len(sub_sel)):
+            final_cmd += ["-map", f"0:s:{out_i}?"]
+        if container == "mp4":
+            final_cmd += ["-c:s", "mov_text"]
+        else:
+            final_cmd += ["-c:s", "copy"]
+    final_cmd += ["-reset_timestamps", "1", "-progress", "pipe:1", "-nostats", str(output)]
+    return part_jobs, final_cmd, temp_files, ""
+
+
+def render_transition_preview(
+    segments: list[dict],
+    cut_index: int = 0,
+    crossfade: float = 0.0,
+    transition: str = "fade",
+    overlays: Optional[list[dict]] = None,
+) -> tuple[Optional[Path], str]:
+    """Kurze 5-Sekunden-Vorschau (720p H.264 MP4) rund um eine Schnittkante rendern."""
+    segs, err = normalize_segments(segments)
+    if err:
+        return None, err
+    ovs, err_ov = normalize_overlays(overlays or [])
+    if err_ov:
+        return None, err_ov
+    if len(segs) < 1:
+        return None, "Mindestens ein Clip nötig."
+    idx = max(0, min(len(segs) - 2, int(cut_index or 0))) if len(segs) >= 2 else 0
+    sub_segs = []
+    # Letzte 2.5s von Clip idx und erste 2.5s von Clip idx+1
+    s_a = dict(segs[idx])
+    dur_a = max(0.2, float(s_a["end"]) - float(s_a["start"]))
+    if dur_a > 2.8:
+        s_a["start"] = float(s_a["end"]) - 2.5
+        s_a["fade_in"] = 0.0
+    s_a["scale"] = min(int(s_a.get("scale") or 720) or 720, 720)
+    sub_segs.append(s_a)
+
+    if len(segs) >= 2 and idx + 1 < len(segs):
+        s_b = dict(segs[idx + 1])
+        dur_b = max(0.2, float(s_b["end"]) - float(s_b["start"]))
+        if dur_b > 2.8:
+            s_b["end"] = float(s_b["start"]) + 2.5
+            s_b["fade_out"] = 0.0
+        s_b["scale"] = min(int(s_b.get("scale") or 720) or 720, 720)
+        sub_segs.append(s_b)
+
+    out_dir = _cache_dir() / "previews"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"trans_{uuid.uuid4().hex[:10]}.mp4"
+    cmd, cerr = build_editor_encode_cmd(
+        sub_segs, out_file,
+        platform="cpu", codec="h264", cq=23,
+        audio_codec="aac", audio_bitrate=128,
+        crossfade=crossfade, transition=transition,
+        container="mp4", encoder_speed="fast",
+        tonemap=True, preserve_hdr=False,
+        overlays=[], add_chapters=False,
+    )
+    if cerr:
+        return None, cerr
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out_file.unlink(missing_ok=True)
+        return None, str(e)
+    if proc.returncode != 0 or not out_file.is_file() or out_file.stat().st_size <= 0:
+        out_file.unlink(missing_ok=True)
+        return None, (proc.stderr or "")[-400:] or "Vorschau-Render fehlgeschlagen"
+    return out_file, ""
 
 
 def resolve_asset(key: str, name: str) -> Optional[Path]:

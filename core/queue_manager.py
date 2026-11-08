@@ -1769,7 +1769,7 @@ class QueueManager:
         self._run_copy_job(item, info, cmd, out_path, label)
 
     def _process_editor(self, item: "QueueItem", info) -> None:
-        """Video-Editor: geordnete Segmente (Remux-Copy oder Re-Encode)."""
+        """Video-Editor: geordnete Segmente (Remux-Copy, Smart Cut oder Re-Encode)."""
         from . import editor
         s = item.settings
         spec = s.edit_spec or {}
@@ -1778,8 +1778,59 @@ class QueueManager:
             item.status = STATUS_FAILED
             item.error = err
             return
+        ovs, err_ov = editor.normalize_overlays(spec.get("overlays") or [])
+        if err_ov:
+            item.status = STATUS_FAILED
+            item.error = err_ov
+            return
         out_path = _output_path(item)
         mode = (spec.get("mode") or "remux").lower()
+        if editor.any_needs_encode(segs, float(spec.get("crossfade") or 0), ovs):
+            mode = "encode"
+        info.duration = editor.total_duration(segs, float(spec.get("crossfade") or 0)) or getattr(info, "duration", 0.0)
+
+        if mode == "smart":
+            part_jobs, final_cmd, temp_files, err = editor.build_editor_smart_plan(
+                segs, out_path, config.WORK_DIR,
+                add_chapters=bool(spec.get("chapters_from_cuts", True)),
+            )
+            if err:
+                item.status = STATUS_FAILED
+                item.error = err
+                return
+            try:
+                item.status = STATUS_RUNNING
+                self._refresh_global_msg()
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                _log_job_start(item, info, out_path, "Editor-Export (Smart Cut)")
+                for idx, (p_cmd, p_out, p_lbl, p_dur) in enumerate(part_jobs, start=1):
+                    item.message = f"{p_lbl} ({idx}/{len(part_jobs)}) …"
+                    _begin_step(item, p_lbl, "remux.editor", part=idx, parts=len(part_jobs))
+                    _log_cmd(item, p_cmd)
+                    runner = _queue_runner(item, output=p_out)
+                    with self._lock:
+                        self._active[item.id] = runner
+                    try:
+                        rc, stderr = runner.run(p_cmd, p_dur)
+                    finally:
+                        _end_step(item)
+                    if runner._cancel:
+                        item.status = STATUS_CANCELLED
+                        item.message = ""
+                        return
+                    if rc != 0:
+                        item.status = STATUS_FAILED
+                        item.error = stderr[-1500:] if stderr else f"FFmpeg exit {rc}"
+                        return
+                self._run_copy_job(item, info, final_cmd, out_path, "Editor-Export (Smart Cut Zusammenführen)")
+            finally:
+                for tf in temp_files:
+                    try:
+                        tf.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            return
+
         if mode == "encode":
             cmd, err = editor.build_editor_encode_cmd(
                 segs, out_path,
@@ -1791,6 +1842,7 @@ class QueueManager:
                 burn_subs=bool(spec.get("burn_subs")),
                 sub_index=int(spec.get("sub_index", -1) if spec.get("sub_index") is not None else -1),
                 crossfade=float(spec.get("crossfade") or 0),
+                transition=str(spec.get("transition") or "fade"),
                 rate_mode=spec.get("rate_mode") or s.rate_mode or "cq",
                 v_bitrate=int(spec.get("v_bitrate", s.quality if s.rate_mode
                                        in ("bitrate", "abr") else 0) or 0),
@@ -1805,6 +1857,10 @@ class QueueManager:
                     spec.get("keyint_sec", getattr(s, "keyint_sec", 0))),
                 aq_strength=max(1, min(15, int(
                     spec.get("aq_strength", getattr(s, "aq_strength", 8)) or 8))),
+                tonemap=bool(spec.get("tonemap", getattr(s, "tonemap", False))),
+                preserve_hdr=bool(spec.get("preserve_hdr", getattr(s, "preserve_hdr", True))),
+                overlays=ovs,
+                add_chapters=bool(spec.get("chapters_from_cuts", True)),
             )
             label = "Editor-Export (Re-Encode)"
         else:
@@ -1826,8 +1882,6 @@ class QueueManager:
             item.status = STATUS_FAILED
             item.error = err
             return
-        # Dauer = Summe der Segmente (für Fortschritt).
-        info.duration = editor.total_duration(segs, float(spec.get("crossfade") or 0)) or getattr(info, "duration", 0.0)
         self._run_copy_job(item, info, cmd, out_path, label)
 
     def _process_split(self, item: "QueueItem", info) -> None:

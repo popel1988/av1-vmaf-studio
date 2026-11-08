@@ -2461,23 +2461,56 @@
           </div>
           <div class="card-body">
             <p class="hint">Material holst du über der Timeline: <strong>Quelle laden</strong> zum Sichten,
-              <strong>+ Quellen</strong> hängt mehrere Dateien direkt an. Danach Bereiche behalten oder
-              entfernen, Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux oder Encode.</p>
+              <strong>+ Quellen</strong> hängt mehrere Dateien direkt an, <strong>+ B-Roll (V2)</strong> legt
+              ein zweites Video als Bild-im-Bild (PiP) oder Vollbild-Schnittbild auf Spur V2. Danach Bereiche
+              behalten oder entfernen, Tastatur (I/O/J/K/L, Pfeile, S teilen, Strg+Z). Export per Remux, Smart Cut oder Encode.</p>
 
             <div class="ed-layout">
               <div class="ed-preview">
-                <div class="ed-stage">
+                <div class="ed-stage" id="ed-stage">
                   <video id="ed-video" playsinline></video>
+                  <video id="ed-video-v2" class="ed-video-v2" playsinline muted hidden></video>
+                  <div class="ed-crop-overlay" id="ed-crop-overlay" hidden>
+                    <div class="ed-crop-box" id="ed-crop-box">
+                      <span class="ed-crop-handle nw" data-h="nw"></span>
+                      <span class="ed-crop-handle ne" data-h="ne"></span>
+                      <span class="ed-crop-handle sw" data-h="sw"></span>
+                      <span class="ed-crop-handle se" data-h="se"></span>
+                      <span class="ed-crop-label" id="ed-crop-label"></span>
+                    </div>
+                  </div>
                 </div>
-                <div class="ed-src-ruler" id="ed-src-ruler" title="Quellen-Timeline – Klick = Seek">
+                <div class="ed-crop-bar" id="ed-crop-bar" hidden>
+                  <strong>Visueller Zuschnitt:</strong>
+                  <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="free">Frei</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="16:9">16:9</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="21:9">21:9</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="4:3">4:3</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-crop-ratio="1:1">1:1</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-auto">Auto-Crop (Balken)</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-crop-apply">Übernehmen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-reset">Zurücksetzen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-close">Schließen</button>
+                </div>
+                <div class="ed-src-ruler" id="ed-src-ruler" title="Quellen-Timeline – Ziehen = Scrubben, Ränder der Auswahl = In/Out">
                   <div class="ed-src-ruler-bg"></div>
                   <div class="ed-src-strip" id="ed-src-strip"></div>
                   <div class="ed-src-keeps" id="ed-src-keeps"></div>
                   <div class="ed-src-chaps" id="ed-src-chaps"></div>
-                  <div class="ed-src-sel" id="ed-src-sel"></div>
+                  <div class="ed-src-sel" id="ed-src-sel">
+                    <span class="ed-src-sel-grip left" data-sel-grip="in" title="In-Punkt ziehen"></span>
+                    <span class="ed-src-sel-grip right" data-sel-grip="out" title="Out-Punkt ziehen"></span>
+                  </div>
                   <div class="ed-src-playhead" id="ed-src-playhead"></div>
                 </div>
                 <div class="ed-wave" id="ed-wave" hidden></div>
+                <div class="ed-chap-bar" id="ed-chap-bar" hidden>
+                  <div class="ed-chap-head">
+                    <strong class="muted" style="font-size:12px">Kapitel der Quelle:</strong>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-chaps-to-clips" title="Jedes Kapitel als eigenen Clip in die Timeline legen">Alle Kapitel → Clips</button>
+                  </div>
+                  <div class="ed-chap-chips" id="ed-chap-chips"></div>
+                </div>
                 <div class="ed-transport">
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-play" title="Play/Pause (K)">▶</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-jump-back" title="0,2 s zurück">«0,2s</button>
@@ -2489,15 +2522,16 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-in" title="In-Punkt (I)">In</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-mark-out" title="Out-Punkt (O)">Out</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-split" title="Am Playhead teilen (S)">Teilen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-toggle" title="Visuellen Crop-Rahmen im Bild einblenden">✂ Crop</button>
                 </div>
                 <div class="field-row field-row-inline" style="margin-top:8px">
                   <div class="field">
-                    <label>In (s)</label>
-                    <input type="number" id="ed-in" min="0" step="0.01" value="0" />
+                    <label>In (Zeit / s) <span class="muted" id="ed-in-fmt"></span></label>
+                    <input type="text" id="ed-in" value="0" placeholder="0:00.00" />
                   </div>
                   <div class="field">
-                    <label>Out (s)</label>
-                    <input type="number" id="ed-out" min="0" step="0.01" value="0" />
+                    <label>Out (Zeit / s) <span class="muted" id="ed-out-fmt"></span></label>
+                    <input type="text" id="ed-out" value="0" placeholder="0:00.00" />
                   </div>
                   <div class="field">
                     <label>Vorschau-Ton</label>
@@ -2507,6 +2541,10 @@
                     <input type="checkbox" id="ed-burn" />
                     <span data-tip="Erste angehakte Untertitelspur ins Bild brennen – erzwingt Encode.">UT einbrennen</span>
                   </label>
+                </div>
+                <div class="ed-kf-bar" id="ed-kf-bar" hidden>
+                  <span class="muted" id="ed-kf-delta"></span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-kf-round" title="In/Out des aktiven Clips auf die nächsten Keyframes legen">Auf Keyframes runden</button>
                 </div>
                 <div class="ed-tracks">
                   <div class="ed-tracks-head">
@@ -2551,24 +2589,21 @@
                   <strong>I/O</strong> In/Out · <strong>J/K/L</strong> −5s / Pause / Play ·
                   <strong>←→</strong> Frame · <strong>↑↓</strong> Clip wechseln ·
                   <strong>S</strong> Teilen · <strong>Entf</strong> Clip löschen · <strong>Strg+Z</strong> Undo.
-                  Diese Leiste zeigt die <em>ganze Quelldatei</em> – hier wählst du aus,
-                  was in die Timeline wandert. Mit „Timeline folgen“ überspringt die
-                  Wiedergabe geschnittene Stellen und läuft im nächsten Clip weiter.
+                  Ziehe direkt im Quellen-Balken oder an den blauen Kanten der Auswahl.
                 </p>
               </div>
 
               <div class="ed-side">
                 <div class="ed-side-head">
-                  <strong>Clip-Details</strong>
+                  <strong>Clips (V1) &amp; Inspektor</strong>
                   <span>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-clear" disabled>Alle löschen</button>
                   </span>
                 </div>
                 <ul class="ed-seg-list" id="ed-seg-list"></ul>
-                <p class="hint" style="font-size:12px;margin-top:8px">
-                  Klick auf einen Clip wählt ihn aus – hier stellst du Titel, In/Out,
-                  Fades, Tempo, Skalierung und Crop ein.
-                </p>
+                <div class="ed-inspector" id="ed-inspector">
+                  <div class="muted" style="font-size:12px">Klicke auf einen Clip (V1) oder ein B-Roll-Overlay (V2), um alle Details zu bearbeiten.</div>
+                </div>
               </div>
             </div>
 
@@ -2578,6 +2613,12 @@
                 <strong>Timeline</strong>
                 <span class="muted" id="ed-tl-sel">Kein Clip gewählt</span>
                 <span class="muted ed-time" id="ed-tl-time">0:00 / 0:00</span>
+                <div class="ed-tl-zoom-bar">
+                  <label class="muted" style="font-size:11.5px">Zoom</label>
+                  <input type="range" id="ed-tl-zoom" min="1" max="16" step="0.5" value="1" style="width:90px" title="Timeline-Zoom (Strg + Mausrad)" />
+                  <span class="muted" id="ed-tl-zoom-val" style="font-size:11.5px;min-width:28px">1×</span>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-zoom-fit" title="Auf Fensterbreite einpassen">Fit</button>
+                </div>
                 <span class="muted" id="ed-total">0 Clips · 0:00</span>
               </div>
               <div class="ed-tl-tools">
@@ -2596,6 +2637,8 @@
                         title="Gesamte Quelle als einen Clip">Ganze Datei</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source"
                         title="Mehrere Dateien anhaken und in dieser Reihenfolge anhängen">+ Quellen</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-add-v2"
+                        title="Aktuellen Bereich oder Datei als B-Roll / Picture-in-Picture auf Spur V2 am Playhead einfügen">+ B-Roll (V2)</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-black"
                         title="Schwarzclip als Pause einfügen (erzwingt Encode)">Schwarz 3 s</button>
                 <span class="ed-tl-sep"></span>
@@ -2616,6 +2659,19 @@
                 <span class="ed-tl-sep"></span>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-play-tl" disabled
                         title="Alle Clips der Reihe nach abspielen">▶ Vorschau</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ed-preview-cut" disabled
+                        title="5-Sekunden-Übergang am aktuellen Schnitt rendern und im Player prüfen">🎞 Übergang testen</button>
+                <details class="ed-tl-more">
+                  <summary class="btn btn-ghost btn-sm"> Auto-Schnitt</summary>
+                  <div class="ed-tl-more-panel">
+                    <div class="ed-more-label">Automatische Erkennung (aktuelle Quelle)</div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-black">⬛ Schwarzbilder herausschneiden</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-silence">🔇 Sprechpausen / Stille entfernen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-scene">🎬 Bei Szenenwechseln teilen</button>
+                    <div class="ed-more-sep"></div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-autocrop">🖼 Schwarze Ränder erkennen (Auto-Crop)</button>
+                  </div>
+                </details>
                 <details class="ed-tl-more">
                   <summary class="btn btn-ghost btn-sm">Mehr …</summary>
                   <div class="ed-tl-more-panel">
@@ -2644,15 +2700,26 @@
                   </div>
                 </details>
               </div>
-              <div class="ed-tl-ruler" id="ed-tl-ruler"></div>
-              <div class="ed-timeline" id="ed-timeline" title="Klick = Position, Clips per Drag &amp; Drop sortieren">
-                <div class="ed-timeline-track" id="ed-timeline-track"></div>
-                <div class="ed-tl-playhead" id="ed-tl-playhead" hidden></div>
+              <div class="ed-tl-scroll" id="ed-tl-scroll">
+                <div class="ed-tl-canvas" id="ed-tl-canvas">
+                  <div class="ed-tl-ruler" id="ed-tl-ruler"></div>
+                  <div class="ed-tl-v2-row" id="ed-tl-v2-row">
+                    <span class="ed-tl-lane-tag" title="Spur V2: B-Roll / Picture-in-Picture Overlays">V2</span>
+                    <div class="ed-timeline-v2" id="ed-timeline-v2"></div>
+                  </div>
+                  <div class="ed-tl-v1-row">
+                    <span class="ed-tl-lane-tag" title="Spur V1: Haupt-Timeline">V1</span>
+                    <div class="ed-timeline" id="ed-timeline" title="Klick = Position, Clips per Drag &amp; Drop sortieren">
+                      <div class="ed-timeline-track" id="ed-timeline-track"></div>
+                    </div>
+                  </div>
+                  <div class="ed-tl-playhead" id="ed-tl-playhead" hidden></div>
+                </div>
               </div>
               <p class="hint" style="font-size:12px;margin-top:8px">
-                Ziehen in der Timeline schiebt den Playhead. Clip-Mitte ziehen sortiert um,
-                <strong>Clip-Ränder ziehen</strong> trimmt, die <strong>Ecken oben</strong> ziehen Fades auf.
-                <strong>Rechtsklick</strong> auf einen Clip öffnet Teilen, Tempo, Stumm und Löschen.
+                <strong>V1</strong> ist die Hauptspur, <strong>V2</strong> legt B-Roll / Picture-in-Picture frei positionierbar darüber.
+                Ziehen in der Timeline schiebt den Playhead, <strong>Strg + Mausrad</strong> zoomt.
+                Clip-Mitte ziehen sortiert um, <strong>Ränder ziehen</strong> trimmt, <strong>Ecken oben</strong> ziehen Fades auf.
               </p>
             </div>
 
@@ -2663,7 +2730,8 @@
                 <label>Export-Modus</label>
                 <select id="ed-mode">
                   <option value="remux">Remux (Copy, Keyframe)</option>
-                  <option value="encode">Encode (framegenau)</option>
+                  <option value="smart">Smart Cut (Framegenau, nur Schnittränder encodieren)</option>
+                  <option value="encode">Encode (Komplett neu encodieren + Effekte)</option>
                 </select>
               </div>
               <div class="field">
@@ -2704,6 +2772,21 @@
                 <label>Überblenden (s)</label>
                 <input type="number" id="ed-crossfade" value="0" min="0" max="5" step="0.1"
                        title="0 = harter Schnitt. >0 erzwingt Encode." />
+              </div>
+              <div class="field" id="ed-transition-field" style="display:none">
+                <label>Übergangs-Art</label>
+                <select id="ed-transition">
+                  <option value="fade">Weiche Blende (Fade)</option>
+                  <option value="fadeblack">Über Schwarz (Fade Black)</option>
+                  <option value="fadewhite">Über Weiß (Fade White)</option>
+                  <option value="dissolve">Pixel-Auflösung (Dissolve)</option>
+                  <option value="wipeleft">Wipe nach links</option>
+                  <option value="wiperight">Wipe nach rechts</option>
+                  <option value="slideleft">Slide nach links</option>
+                  <option value="slideright">Slide nach rechts</option>
+                  <option value="smoothleft">Sanft nach links</option>
+                  <option value="smoothright">Sanft nach rechts</option>
+                </select>
               </div>
             </div>
             <p class="hint" id="ed-name-preview" style="margin-top:6px"></p>
@@ -2780,6 +2863,13 @@
                   <label>Video kbit/s</label>
                   <input type="number" id="ed-vbr" value="6000" min="200" max="200000" step="250" />
                   <p class="hint" id="ed-vbr-hint">CBR = feste Rate, ABR = variables Ziel.</p>
+                </div>
+                <div class="field">
+                  <label>HDR / Farbraum</label>
+                  <select id="ed-hdr-mode">
+                    <option value="keep">10-Bit / HDR beibehalten</option>
+                    <option value="tonemap">HDR → SDR Tonemapping (Hable)</option>
+                  </select>
                 </div>
               </div>
             </div>

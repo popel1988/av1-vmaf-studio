@@ -263,7 +263,8 @@ def _asset_version() -> str:
     import os
 
     latest = 0.0
-    for rel in ("static/js/app.js", "static/js/player.js", "static/js/i18n.js", "static/css/styles.css"):
+    for rel in ("static/js/app.js", "static/js/player.js", "static/js/editor.js",
+                "static/js/i18n.js", "static/css/styles.css"):
         try:
             latest = max(latest, os.path.getmtime(BASE_DIR / rel))
         except OSError:
@@ -945,7 +946,8 @@ def remux_cut(req: RemuxCutRequest):
 # ---------------------------------------------------------------- Video-Editor
 class EditorEnqueueRequest(BaseModel):
     segments: list[dict] = []
-    mode: str = "remux"              # remux | encode
+    overlays: list[dict] = []        # V2 B-Roll / PiP Overlays
+    mode: str = "remux"              # remux | smart | encode
     container: str = "mkv"
     suffix: str = "_edit"
     name_mode: str = "suffix"        # suffix | custom
@@ -955,7 +957,7 @@ class EditorEnqueueRequest(BaseModel):
     platform: str = "cpu"
     codec: str = "av1"
     cq: int = 30
-    rate_mode: str = "cq"            # cq | bitrate
+    rate_mode: str = "cq"            # cq | bitrate | abr
     v_bitrate: int = 0               # kbit/s im Bitraten-Modus
     audio_codec: str = "aac"
     audio_bitrate: int = 192
@@ -963,6 +965,9 @@ class EditorEnqueueRequest(BaseModel):
     burn_subs: bool = False
     sub_index: int = -1
     crossfade: float = 0.0
+    transition: str = "fade"
+    tonemap: bool = False
+    preserve_hdr: bool = True
     out_mode: str = "default"
     out_subdir: str = ""
     post_processing: str = "keep"
@@ -971,7 +976,23 @@ class EditorEnqueueRequest(BaseModel):
     nvenc_tune: str = "auto"
     keyint_sec: int = 0
     aq_strength: int = 8
+
+
+class EditorDetectRequest(BaseModel):
+    path: str
+    kind: str = "black"              # black | silence | scene
+    start: float = 0.0
+    end: float = 0.0
+    min_duration: float = 0.5
+    threshold: float = 0.0
+
+
+class EditorTransitionPreviewRequest(BaseModel):
     segments: list[dict] = []
+    overlays: list[dict] = []
+    cut_index: int = 0
+    crossfade: float = 0.0
+    transition: str = "fade"
 
 
 @app.post("/api/editor/upload")
@@ -1107,17 +1128,62 @@ async def editor_check(req: EditorCheckRequest):
     return compat
 
 
+@app.get("/api/editor/autocrop")
+async def editor_autocrop(path: str):
+    """Schwarze Balken einer Quelle via cropdetect erkennen."""
+    from core import editor
+    data = await asyncio.to_thread(editor.detect_source_crop, path)
+    if data.get("error"):
+        return JSONResponse(data, status_code=400)
+    return data
+
+
+@app.post("/api/editor/detect")
+async def editor_detect(req: EditorDetectRequest):
+    """Schwarzbilder, Stille oder Szenenwechsel in der Quelle erkennen."""
+    from core import editor
+    data = await asyncio.to_thread(
+        editor.detect_cuts,
+        req.path, req.kind, req.start, req.end, req.min_duration, req.threshold,
+    )
+    if data.get("error"):
+        return JSONResponse(data, status_code=400)
+    return data
+
+
+@app.post("/api/editor/preview-transition")
+async def editor_preview_transition(req: EditorTransitionPreviewRequest):
+    """Kurze 5-Sekunden-Vorschau rund um eine Schnittkante rendern."""
+    from starlette.background import BackgroundTask
+    from core import editor
+    out_file, err = await asyncio.to_thread(
+        editor.render_transition_preview,
+        req.segments or [], req.cut_index, req.crossfade, req.transition, req.overlays or [],
+    )
+    if err or out_file is None:
+        return JSONResponse({"error": err or "Vorschau fehlgeschlagen"}, status_code=400)
+    return FileResponse(
+        out_file,
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(lambda: out_file.unlink(missing_ok=True)),
+    )
+
+
 @app.post("/api/editor/enqueue")
 async def editor_enqueue(req: EditorEnqueueRequest):
-    """Editor-Projekt in die Warteschlange legen (Remux oder Encode)."""
+    """Editor-Projekt in die Warteschlange legen (Remux, Smart Cut oder Encode)."""
     from core import editor
     from core.queue_manager import build_job_settings
 
     segs, err = editor.normalize_segments(req.segments or [])
     if err:
         return JSONResponse({"error": err}, status_code=400)
+    ovs, err_ov = editor.normalize_overlays(req.overlays or [])
+    if err_ov:
+        return JSONResponse({"error": err_ov}, status_code=400)
     mode = (req.mode or "remux").lower()
-    if mode not in ("remux", "encode"):
+    if mode not in ("remux", "smart", "encode"):
         mode = "remux"
     container = req.container if req.container in ("mkv", "mp4") else "mkv"
     first_abs = next((s["abs"] for s in segs if s.get("abs")), None)
@@ -1129,8 +1195,9 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     first = first_abs
     # Persistierte Segmente ohne abs-Pfad (Queue-JSON).
     clean_segs = [editor.segment_to_spec(s) for s in segs]
+    clean_ovs = [editor.overlay_to_spec(o) for o in ovs]
     xf = float(req.crossfade or 0)
-    if editor.any_needs_encode(segs, xf):
+    if editor.any_needs_encode(segs, xf, ovs):
         mode = "encode"
 
     rate_mode = (req.rate_mode or "cq").lower()
@@ -1175,8 +1242,11 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "nvenc_tune": req.nvenc_tune or "auto",
         "keyint_sec": int(req.keyint_sec or 0),
         "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
+        "tonemap": bool(req.tonemap),
+        "preserve_hdr": bool(req.preserve_hdr),
         "edit_spec": {
             "segments": clean_segs,
+            "overlays": clean_ovs,
             "mode": mode,
             "container": container,
             "chapters_from_cuts": bool(req.chapters_from_cuts),
@@ -1192,6 +1262,9 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             "burn_subs": bool(req.burn_subs),
             "sub_index": int(req.sub_index if req.sub_index is not None else -1),
             "crossfade": float(req.crossfade or 0),
+            "transition": req.transition or "fade",
+            "tonemap": bool(req.tonemap),
+            "preserve_hdr": bool(req.preserve_hdr),
             "encoder_speed": req.encoder_speed or "balanced",
             "b_frames": req.b_frames or "auto",
             "nvenc_tune": req.nvenc_tune or "auto",
