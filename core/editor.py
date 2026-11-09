@@ -688,8 +688,11 @@ def build_editor_encode_cmd(
     pad_mode: str = "black",
     aspect_mode: str = "source",
     add_chapters: bool = True,
+    preserve_dv: bool = False,
 ) -> tuple[list, str]:
     """Re-Encode-Export: trim/atrim je Segment, optional xfade + V2-Overlays + BGM, dann concat."""
+    if preserve_dv:
+        return [], "Editor-Re-Encode unterstützt keine zeitgenaue Dolby-Vision-Metadatenübernahme."
     if not segments:
         return [], "Keine Segmente."
     from . import encoder as enc_mod

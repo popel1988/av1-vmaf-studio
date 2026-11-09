@@ -121,7 +121,28 @@ jobs:
       - name: Build Windows EXE & Bundle External Tools
         shell: pwsh
         run: |
-          ./build_exe.ps1
+          ./build_exe.ps1 -Python python
+          if ($LASTEXITCODE -ne 0) { throw "Desktop build failed." }
+
+      - name: Regression tests
+        shell: pwsh
+        run: |
+          ./.venv-desktop/Scripts/python.exe -m pip install httpx==0.28.1 quickjs-ng==0.18.0.1
+          if ($LASTEXITCODE -ne 0) { throw "Test dependencies failed." }
+          ./.venv-desktop/Scripts/python.exe -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed." }
+
+      - name: Check browser scripts
+        shell: pwsh
+        run: |
+          Get-ChildItem static/js/*.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Invalid JavaScript: $($_.Name)" }
+          }
+
+      - name: Package Windows EXE
+        shell: pwsh
+        run: |
           Compress-Archive -Path "dist/AV1-VMAF-Studio/*" -DestinationPath "dist/AV1-VMAF-Studio-Windows-x64.zip" -Force
 
       - name: Upload Windows EXE Artifact

@@ -228,6 +228,17 @@ def resolve_input(rel: str) -> Optional[Path]:
     ``upload:<filename>`` verweist auf eine Datei im Upload-Ordner.
     """
     raw = (rel or "").strip()
+    if raw.startswith("test-export:"):
+        # Only generated video outputs, never arbitrary files in the work folder.
+        token = raw[len("test-export:"):]
+        parts = token.split("/")
+        if (len(parts) != 2 or len(parts[0]) != 32 or
+                any(c not in "0123456789abcdef" for c in parts[0]) or
+                parts[1] not in ("test.mkv", "test.mp4", "test_mobile.mp4")):
+            return None
+        base = (WORK_DIR / "test_exports").resolve()
+        target = (base / token).resolve()
+        return target if _within(target, base) and target.is_file() else None
     roots = all_media_roots()
     if raw:
         candidate = Path(raw)
@@ -290,6 +301,11 @@ def rel_input(abs_path) -> Optional[str]:
     ap = _resolved(Path(abs_path))
     if ap is None:
         return None
+    scratch = (WORK_DIR / "test_exports").resolve()
+    if _within(ap, scratch):
+        token = "test-export:" + ap.relative_to(scratch).as_posix()
+        if resolve_input(token) == ap:
+            return token
     roots = all_media_roots()
     for name, base in roots:
         resolved = _resolved(base)

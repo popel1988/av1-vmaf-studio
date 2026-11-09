@@ -415,6 +415,20 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertAlmostEqual(self.value("a.offset"), 4700.889 - 0.819)
         self.assertIn("test_s0.mkv", self.value("b.clipUrl"))
 
+    def test_testexport_uses_source_time_and_clip_time_without_start_offset(self):
+        self.evaluate("""
+          state.currentPage = 'abcompare';
+          abSwitchContext('standalone');
+          $('ab-path-a').value = 'original.mkv';
+          $('ab-path-b').value = 'test-export:fixture/test.mkv';
+          state.abTestSpan = {start:42, seconds:15, url:'/api/media?path=test'};
+          $('btn-ab-load').click();
+        """)
+        self.assertEqual(self.value("ab.window"), {"start": 42, "end": 57})
+        self.assertAlmostEqual(self.value("abTime(a)"), 42)
+        self.assertAlmostEqual(self.value("abTime(b)"), 42)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 0)
+
     def test_hidden_standard_load_cannot_replace_nerd_clips(self):
         self.evaluate("""
           $('ab-path-a').value = 'normal-source.mkv';

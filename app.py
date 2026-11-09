@@ -53,6 +53,13 @@ def _bundle_dir() -> Path:
 BASE_DIR = _bundle_dir()
 app = FastAPI(title="AV1/VMAF Compression Studio")
 
+from core.export_preflight import ExportRejected
+
+
+@app.exception_handler(ExportRejected)
+async def export_rejected(request: Request, exc: ExportRejected):
+    return JSONResponse({"error": str(exc), "preflight": exc.report}, status_code=409)
+
 
 def _is_authed(request: Request) -> bool:
     if not config.APP_PASSWORD:
@@ -178,9 +185,9 @@ async def _shutdown() -> None:
         retention.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await retention
-    queue.shutdown()
     from core.watcher import watcher
     watcher.stop()
+    await asyncio.to_thread(queue.shutdown)
     try:
         from core import player_hls
         player_hls.cleanup_all()
@@ -238,8 +245,9 @@ async def index(request: Request):
     from core import app_settings
     plats = monitor.available_platforms()
     return templates.TemplateResponse(
-        "index.html",
-        {
+        request=request,
+        name="index.html",
+        context={
             "request": request,
             "platforms": plats,
             "platform_options": [
@@ -275,7 +283,8 @@ def _asset_version() -> str:
 
     latest = 0.0
     for rel in ("static/js/app.js", "static/js/player.js", "static/js/editor.js",
-                "static/js/i18n.js", "static/css/styles.css"):
+                "static/js/i18n.js", "static/js/workspace-ui.js",
+                "static/js/desktop-ui.js", "static/css/styles.css", "static/css/workspace.css"):
         try:
             latest = max(latest, os.path.getmtime(BASE_DIR / rel))
         except OSError:
@@ -334,28 +343,34 @@ async def browse_input(path: str = "", kind: str = "video"):
         allowed = config.VIDEO_EXTENSIONS
 
     dirs, files = [], []
+    skipped = 0
     try:
         for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if entry.name.startswith("."):
                 continue
-            rel = config.rel_input(entry)
-            if rel is None:
-                continue
-            if entry.is_dir():
-                dirs.append({"name": entry.name, "rel": rel})
-            elif entry.suffix.lower() in allowed or (
-                    kind == "video" and entry.suffix.lower() == ".iso"):
-                try:
-                    size = entry.stat().st_size
-                except OSError:
-                    size = 0
-                files.append({
-                    "name": entry.name, "rel": rel,
-                    "size": size, "size_human": ff.human_size(size),
-                    "disc": entry.suffix.lower() == ".iso",
-                })
+            try:
+                rel = config.rel_input(entry)
+                if rel is None:
+                    continue
+                if entry.is_dir():
+                    dirs.append({"name": entry.name, "rel": rel})
+                elif entry.suffix.lower() in allowed or (
+                        kind == "video" and entry.suffix.lower() == ".iso"):
+                    try:
+                        size = entry.stat().st_size
+                    except OSError:
+                        size = 0
+                    files.append({
+                        "name": entry.name, "rel": rel,
+                        "size": size, "size_human": ff.human_size(size),
+                        "disc": entry.suffix.lower() == ".iso",
+                    })
+            except OSError:
+                # Windows system folders/junctions may be inaccessible. A single
+                # entry must not make an otherwise readable drive unbrowsable.
+                skipped += 1
     except OSError as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": f"Ordner kann nicht gelesen werden: {e}"}, status_code=403)
 
     bluray = None
     if kind == "video":
@@ -395,6 +410,7 @@ async def browse_input(path: str = "", kind: str = "video"):
         "is_root": is_root_top and not config.MULTI_MEDIA,
         "dirs": dirs,
         "files": files,
+        "skipped_entries": skipped,
         "bluray": bluray,
     }
 
@@ -650,6 +666,7 @@ class EnqueueRequest(BaseModel):
     out_subdir: str = ""             # bei custom: media-relativer Zielordner
     name_pattern: str = "{stem}{suffix}"
     on_duplicate: str = "ask"        # ask | skip | overwrite
+    approve_inplace: bool = False
     max_output_mb: float = 0
     max_video_bitrate_kbps: int = 0
     size_target_mb: float = 0        # Encode-Ziel Gesamtgröße inkl. Ton (0 = aus)
@@ -659,6 +676,83 @@ class EnqueueRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     result_index: int
+
+
+class ExportPreflightRequest(BaseModel):
+    path: str
+    settings: dict = Field(default_factory=dict)
+
+
+class TestExportRequest(ExportPreflightRequest):
+    start: float = Field(default=0, ge=0, allow_inf_nan=False)
+    seconds: float = Field(default=15, gt=0, le=120, allow_inf_nan=False)
+
+
+@app.post("/api/export/preflight")
+async def export_preflight(req: ExportPreflightRequest):
+    from core.queue_manager import build_job_settings
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Quelldatei nicht gefunden"}, status_code=404)
+    try:
+        settings = build_job_settings(req.settings)
+    except ExportRejected as exc:
+        return {"schema_version": 1, "settings": None, "fingerprint": None, "outputs": [],
+                "warnings": [], "disk": [], "test_export": {"supported": False,
+                "reasons": [str(exc)]}, **exc.report}
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    info = await asyncio.to_thread(ff.ffprobe, target)
+    if info is None:
+        return JSONResponse({"error": "Quelle konnte nicht geprüft werden"}, status_code=422)
+    return await asyncio.to_thread(queue.preflight, str(target), settings, info)
+
+
+@app.post("/api/export/test")
+async def export_test(req: TestExportRequest):
+    from core.queue_manager import build_job_settings
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Quelldatei nicht gefunden"}, status_code=404)
+    try:
+        settings = build_job_settings(req.settings)
+        item = await asyncio.to_thread(queue.add_test_export, str(target), settings, req.start, req.seconds)
+    except ExportRejected:
+        raise
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"error": str(exc), "code": "test_export_unsupported_or_invalid"}, status_code=422)
+    if item is None:
+        return JSONResponse({"error": "Testauftrag konnte nicht eingereiht werden"}, status_code=409)
+    return {"added": 1, "id": item.id, "test_export": True,
+            "fingerprint": item.settings.test_export["fingerprint"],
+            "start": req.start, "seconds": req.seconds}
+
+
+@app.post("/api/desktop/jobs/{item_id}/open-folder")
+async def desktop_job_open_folder(item_id: str):
+    # Desktop host installs a callable. A web/Docker process has no opener.
+    opener = getattr(app.state, "desktop_open_folder", None)
+    if not callable(opener):
+        return JSONResponse({"error": "Ordneröffnung nur in der Desktop-App verfügbar"}, status_code=409)
+    item = queue.get_item(item_id)
+    if item is None:
+        from core import history
+        record = history.get(item_id)
+        if not record:
+            return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
+        outputs = [record.get("output_path")]
+    else:
+        outputs = [item.output_path] + list(item.extra_outputs or [])
+    target = next((Path(value).resolve().parent for value in outputs
+                   if value and Path(value).is_file()), None)
+    if target is None:
+        return JSONResponse({"error": "Noch keine vorhandene Ausgabe für diesen Auftrag"}, status_code=409)
+    try:
+        await asyncio.to_thread(opener, str(target))
+    except Exception:
+        logging.getLogger(__name__).exception("Desktop-Ordneröffnung fehlgeschlagen")
+        return JSONResponse({"error": "Ordner konnte nicht geöffnet werden"}, status_code=500)
+    return {"ok": True}
 
 
 @app.post("/api/enqueue")
@@ -690,6 +784,7 @@ class RemuxEnqueueRequest(BaseModel):
     suffix: str = "_remux"
     name_pattern: str = "{stem}{suffix}"
     on_duplicate: str = "ask"
+    approve_inplace: bool = False
     out_mode: str = "default"
     out_subdir: str = ""
 
@@ -957,6 +1052,7 @@ def remux_cut(req: RemuxCutRequest):
 # ---------------------------------------------------------------- Video-Editor
 class EditorEnqueueRequest(BaseModel):
     segments: list[dict] = []
+    editor_project: dict = Field(default_factory=dict)
     overlays: list[dict] = []        # V2 B-Roll / PiP Overlays
     mode: str = "remux"              # remux | smart | encode
     export_split: bool = False       # True = jeden Clip als eigene Datei einreihen
@@ -985,9 +1081,12 @@ class EditorEnqueueRequest(BaseModel):
     transition: str = "fade"
     tonemap: bool = False
     preserve_hdr: bool = True
+    preserve_dv: bool = False
     out_mode: str = "default"
     out_subdir: str = ""
     post_processing: str = "keep"
+    approve_inplace: bool = False
+    on_duplicate: str = "ask"
     encoder_speed: str = "balanced"
     b_frames: str = "auto"
     nvenc_tune: str = "auto"
@@ -1205,7 +1304,7 @@ async def editor_preview_transition(req: EditorTransitionPreviewRequest):
 
 
 @app.post("/api/editor/enqueue")
-async def editor_enqueue(req: EditorEnqueueRequest):
+async def editor_enqueue(req: EditorEnqueueRequest, preview: bool = False):
     """Editor-Projekt in die Warteschlange legen (Remux, Smart Cut oder Encode)."""
     from core import editor
     from core.queue_manager import build_job_settings
@@ -1264,6 +1363,8 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "workflow": "auto",
         "container": container,
         "post_processing": req.post_processing or "keep",
+        "approve_inplace": req.approve_inplace,
+        "on_duplicate": req.on_duplicate,
         "suffix": req.suffix or "_edit",
         "name_pattern": name_pattern,
         "integrity_check": True,
@@ -1281,7 +1382,9 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         "tonemap": bool(req.tonemap),
         "preserve_hdr": bool(req.preserve_hdr),
+        "preserve_dv": bool(req.preserve_dv),
         "edit_spec": {
+            "project": req.editor_project,
             "segments": clean_segs,
             "overlays": clean_ovs,
             "mode": mode,
@@ -1319,6 +1422,7 @@ async def editor_enqueue(req: EditorEnqueueRequest):
     }
     if req.export_split and len(segs) > 1:
         added_ids = []
+        reports = []
         for idx, (s_norm, s_spec) in enumerate(zip(segs, clean_segs), start=1):
             src_abs = s_norm.get("abs") or first
             safe_title = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (s_norm.get("title") or f"clip{idx}"))[:40]
@@ -1333,12 +1437,21 @@ async def editor_enqueue(req: EditorEnqueueRequest):
             if editor.segment_needs_encode(s_norm) or bgm_path:
                 part_mode = "encode"
             d_part["edit_spec"]["mode"] = part_mode
+            if preview:
+                probe = await asyncio.to_thread(ff.ffprobe, Path(src_abs))
+                reports.append(queue.preflight(str(src_abs), build_job_settings(d_part), probe))
+                continue
             it = queue.add_file(str(src_abs), build_job_settings(d_part))
             if it is not None:
                 added_ids.append(it.id)
+        if preview:
+            return {"ok": all(report["ok"] for report in reports), "reports": reports}
         if not added_ids:
             return JSONResponse({"error": "Keine Einzel-Clips eingereiht"}, status_code=400)
         return {"added": len(added_ids), "id": added_ids[0], "ids": added_ids, "duration": editor.total_duration(segs, 0.0)}
+    if preview:
+        probe = await asyncio.to_thread(ff.ffprobe, Path(first))
+        return {"reports": [queue.preflight(str(first), build_job_settings(d), probe)]}
     item = queue.add_file(str(first), build_job_settings(d))
     if item is None:
         return JSONResponse({"error": "Auftrag nicht hinzugefügt"}, status_code=400)
@@ -1350,6 +1463,11 @@ async def editor_enqueue(req: EditorEnqueueRequest):
         "duration": editor.total_duration(segs, float(req.crossfade or 0)),
         "mode": mode,
     }
+
+
+@app.post("/api/editor/preflight")
+async def editor_preflight(req: EditorEnqueueRequest):
+    return await editor_enqueue(req, preview=True)
 
 
 @app.post("/api/remux/enqueue")
@@ -1425,6 +1543,7 @@ async def remux_enqueue(req: RemuxEnqueueRequest):
         "workflow": "auto",
         "container": container,
         "post_processing": req.post_processing,
+        "approve_inplace": req.approve_inplace,
         "safe_replace": req.safe_replace,
         "integrity_check": req.integrity_check,
         "suffix": suffix,
@@ -1547,7 +1666,7 @@ async def suggest_from_history(req: SuggestRequest):
 
 class RequeueRequest(BaseModel):
     # overwrite = gleiches Ziel ersetzen; suffix = neuer Name (_remux2, …)
-    mode: str = "overwrite"
+    mode: str = "ask"
 
 
 @app.post("/api/queue/{item_id}/requeue")
@@ -1558,7 +1677,10 @@ async def requeue_item(item_id: str, req: RequeueRequest | None = None):
     item = queue.get_item(item_id)
     if item is None:
         return JSONResponse({"error": "Auftrag nicht gefunden"}, status_code=404)
-    mode = (req.mode if req else "overwrite")
+    if item.settings.test_export:
+        return JSONResponse({"error": "Testexport über die separate Testexport-Aktion neu starten"},
+                            status_code=409)
+    mode = (req.mode if req else "ask")
     d, plan = job_plan.apply_requeue_conflict(
         item.settings.__dict__, item.path, mode)
     new = queue.add_file(item.path, build_job_settings(d))
@@ -1589,7 +1711,7 @@ async def requeue_history(item_id: str, req: RequeueRequest | None = None):
     target = Path(path)
     if not target.is_file():
         return JSONResponse({"error": "Quelldatei nicht mehr vorhanden"}, status_code=404)
-    mode = (req.mode if req else "overwrite")
+    mode = (req.mode if req else "ask")
     d, plan = job_plan.apply_requeue_conflict(d, str(target), mode)
     new = queue.add_file(str(target), build_job_settings(d))
     if new is None:
@@ -3327,6 +3449,7 @@ async def ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception:
+        logging.getLogger("vcompress.websocket").exception("Live-Daten konnten nicht gesendet werden")
         with contextlib.suppress(Exception):
             await websocket.close()
 

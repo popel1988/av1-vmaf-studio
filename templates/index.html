@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Video Studio</title>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_version }}" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <link rel="stylesheet" href="/static/css/workspace.css?v={{ asset_version }}" />
+  <script src="/static/vendor/chart.umd.min.js?v=4.4.1" defer></script>
 </head>
 <body>
   {% macro enc_speed_options() %}
@@ -46,23 +47,43 @@
         </div>
       </div>
 
-      <nav class="nav" id="nav">
+      <button type="button" class="btn btn-ghost workspace-sidebar-toggle" id="workspace-sidebar-toggle" aria-expanded="true" aria-controls="workspace-sidebar-content" title="Navigation einklappen"><span data-icon="panel"></span><span class="workspace-sidebar-label">Navigation einklappen</span></button>
+      <div id="workspace-sidebar-content">
+      <nav class="nav" id="nav" aria-label="Arbeitsbereiche">
+        <details class="workspace-nav-group" data-nav-group="compress" open>
+        <summary>Komprimieren</summary>
         <button class="nav-item active" data-nav="encode"><span>▶</span> Encoding</button>
-        <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
-        <button class="nav-item nav-sub" data-nav="vmafnerd"><span>★</span> Nerd-Daten</button>
         <button class="nav-item" data-nav="supertool"><span>✨</span> Super-Tool</button>
+        </details>
+        <details class="workspace-nav-group" data-nav-group="edit" open>
+        <summary>Bearbeiten</summary>
         <button class="nav-item" data-nav="audio"><span>🔊</span> Audio-Optimierung</button>
         <button class="nav-item" data-nav="remux"><span>✂</span> Remux &amp; Bearbeiten</button>
         <button class="nav-item" data-nav="editor"><span>🎬</span> Editor</button>
+        </details>
+        <details class="workspace-nav-group" data-nav-group="inspect" open>
+        <summary>Analysieren</summary>
+        <details class="workspace-nav-subgroup" data-nav-group="vmaf" open>
+        <summary>VMAF</summary>
+        <button class="nav-item" data-nav="vmaf"><span>★</span> VMAF-Tool</button>
+        <button class="nav-item nav-sub" data-nav="vmafnerd"><span>★</span> Nerd-Daten</button>
+        </details>
         <button class="nav-item" data-nav="player"><span>▶</span> Player</button>
         <button class="nav-item" data-nav="abcompare"><span>🎞</span> A/B-Vergleich</button>
+        </details>
+        <details class="workspace-nav-group" data-nav-group="manage" open>
+        <summary>Verwalten</summary>
         <button class="nav-item" data-nav="queue"><span>≡</span> Warteschlange</button>
         <button class="nav-item" data-nav="stats"><span>📊</span> Statistik</button>
         <button class="nav-item" data-nav="library"><span>🔍</span> Bibliothek</button>
         <button class="nav-item" data-nav="data"><span>💾</span> Daten &amp; Archive</button>
+        </details>
+        <details class="workspace-nav-group" data-nav-group="system">
+        <summary>System &amp; Hilfe</summary>
         <button class="nav-item" data-nav="settings"><span>⚙</span> Einstellungen</button>
         <button class="nav-item" data-nav="diag"><span>🩺</span> Diagnose</button>
         <button class="nav-item" data-nav="faq"><span>?</span> FAQ</button>
+        </details>
         <button class="nav-item" type="button" id="btn-global-search"><span>🔎</span> Suche</button>
       </nav>
 
@@ -131,6 +152,7 @@
             <canvas id="spark-gpu" class="spark" width="240" height="34"></canvas>
           </div>
         </div>
+      </div>
       </div>
 
       <div class="sidebar-footer">
@@ -3919,11 +3941,13 @@
       speedPresets: {{ speed_presets|tojson }},
     };
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" defer></script>
+  <script src="/static/vendor/hls.min.js?v=1.5.17" defer></script>
   <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/insights.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/player.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/editor.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/workspace-ui.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/desktop-ui.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

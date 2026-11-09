@@ -1,12 +1,10 @@
-"""Desktop-Starter für AV1 / VMAF Compression Studio (Windows .exe & lokal).
-
-Startet den FastAPI/Uvicorn-Server im Hintergrund und öffnet die Oberfläche
-direkt in einem eigenen nativen Desktop-Fenster (pywebview / Edge WebView2
-oder Chromium/Edge im App-Modus). Beim Schließen des Fensters werden Server
-und laufende Vorschau-Prozesse sauber beendet.
-"""
+"""Windows desktop entry point. No application/.NET imports before bootstrap."""
 from __future__ import annotations
 
+import argparse
+import ctypes
+import json
+import logging
 import os
 import shutil
 import socket
@@ -20,202 +18,273 @@ from pathlib import Path
 
 
 def _app_root() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
-
-
-def _setup_environment() -> Path:
-    root = _app_root()
-    bin_dir = root / "bin"
-    model_dir = bin_dir / "model"
-    data_dir = root / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    model_dir.mkdir(parents=True, exist_ok=True)
-
-    # ./bin an den Anfang von PATH stellen, damit DLLs und Hilfsprogramme
-    # (ffmpeg, ffprobe, mkvpropedit, dovi_tool, hdr10plus_tool) sofort gefunden werden.
-    cur_path = os.environ.get("PATH", "")
-    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{cur_path}"
-    os.environ.setdefault("DATA_DIR", str(data_dir))
-    if model_dir.is_dir():
-        os.environ.setdefault("VMAF_MODEL_DIR", str(model_dir))
-
-    # Unter Windows alle vorhandenen Laufwerke (C:, D:, E:, ...) plus Benutzer-Videos
-    # automatisch als Medienwurzeln anbieten, falls MEDIA_DIRS nicht manuell gesetzt ist.
-    if os.name == "nt" and not os.environ.get("MEDIA_DIRS") and not os.environ.get("MEDIA_DIR"):
-        roots: list[str] = []
-        videos = Path.home() / "Videos"
-        if videos.is_dir():
-            roots.append(f"Videos={videos}")
-        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-            drive = Path(f"{letter}:\\")
-            try:
-                if drive.exists():
-                    roots.append(f"Laufwerk_{letter}={drive}")
-            except OSError:
-                continue
-        if roots:
-            os.environ["MEDIA_DIRS"] = ";".join(roots)
-    return root
+    return (Path(sys.executable) if getattr(sys, "frozen", False)
+            else Path(__file__)).resolve().parent
 
 
 class _NullStream:
-    """Ersatz für fehlendes stdout/stderr, falls die Logdatei nicht schreibbar ist."""
-
     def write(self, data: str) -> int:
-        return 0
+        return len(data)
 
     def flush(self) -> None:
-        return None
+        pass
 
     def isatty(self) -> bool:
         return False
 
 
 def _ensure_stdio(log_dir: Path) -> None:
-    """PyInstaller --windowed setzt stdout/stderr auf None.
-
-    Uvicorn ruft beim Logging-Setup ``stdout.isatty()`` auf und bricht sonst mit
-    ``AttributeError: 'NoneType' object has no attribute 'isatty'`` ab.
-    """
     if sys.stdout is not None and sys.stderr is not None:
         return
-    stream: object
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         stream = open(log_dir / "studio.log", "a", encoding="utf-8", buffering=1)
     except OSError:
         stream = _NullStream()
     if sys.stdout is None:
-        sys.stdout = stream  # type: ignore[assignment]
+        sys.stdout = stream
     if sys.stderr is None:
-        sys.stderr = stream  # type: ignore[assignment]
+        sys.stderr = stream
+
+
+def _setup_environment() -> Path:
+    from core.desktop_diagnostics import writable_directory
+    root = _app_root()
+    data = writable_directory(Path(os.environ.get("DATA_DIR", root / "data")))
+    os.environ["DATA_DIR"] = str(data)
+    os.environ["PATH"] = f"{root / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"
+    if (root / "bin" / "model").is_dir():
+        os.environ.setdefault("VMAF_MODEL_DIR", str(root / "bin" / "model"))
+    # Keep config's configured roots. Never auto-authorize entire Windows drives.
+    return root
 
 
 def _find_free_port(preferred: int = 8080) -> int:
-    for port in (preferred, 8081, 8082, 8765, 0):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return int(s.getsockname()[1])
-            except OSError:
-                continue
-    return preferred
-
-
-def _wait_for_server(url: str, timeout: float = 20.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         try:
-            with urllib.request.urlopen(url, timeout=1.5) as resp:
-                if resp.status < 500:
+            sock.bind(("127.0.0.1", preferred))
+        except OSError:
+            sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_for_server(url: str, timeout: float = 25, thread=None, server=None) -> bool:
+    deadline = time.monotonic() + timeout
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    while time.monotonic() < deadline:
+        if thread is not None and not thread.is_alive():
+            return False
+        if server is not None and not server.started:
+            time.sleep(0.1)
+            continue
+        try:
+            with opener.open(url, timeout=1) as response:
+                if response.status == 200:
                     return True
         except Exception:
-            time.sleep(0.15)
+            pass
+        time.sleep(0.1)
     return False
 
 
 def _find_app_browser() -> str | None:
-    """Sucht Microsoft Edge oder Chrome für den nativen --app=... Fenstermodus."""
     candidates = [
-        shutil.which("msedge"),
-        shutil.which("chrome"),
+        shutil.which("msedge"), shutil.which("chrome"),
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     ]
-    for c in candidates:
-        if c and Path(c).is_file():
-            return str(c)
-    return None
+    return next((str(path) for path in candidates if path and Path(path).is_file()), None)
 
 
-def _embedded_webview_ok() -> bool:
-    """pywebview zieht pythonnet. Im PyInstaller-Build findet der Loader
-    ``Python.Runtime.Loader.Initialize`` in der mitgelieferten DLL nicht.
-    """
-    return not (getattr(sys, "frozen", False) and os.name == "nt")
-
-
-def _open_desktop_window(url: str, root: Path) -> str:
-    """Öffnet die Oberfläche und blockiert, bis das Fenster zu ist.
-
-    Rückgabe ``external``, wenn nur der Standardbrowser geöffnet wurde und der
-    Prozess selbst weiterlaufen muss.
-    """
-    if _embedded_webview_ok():
-        try:
-            import webview  # type: ignore
-            webview.create_window(
-                "AV1 / VMAF Compression Studio",
-                url,
-                width=1480,
-                height=920,
-                min_size=(1024, 680),
-                text_select=True,
-            )
-            webview.start()
-            return "webview"
-        except Exception as exc:
-            print(f"pywebview nicht nutzbar ({exc}); öffne Edge oder Chrome.", flush=True)
-
+def _open_desktop_window(url: str, data: Path, bridge) -> str:
+    try:
+        bridge._open_native(url)
+        return "webview"
+    except Exception:
+        logging.getLogger("desktop").exception("Nativer Host nicht verfügbar; Browser-Fallback")
+        if bridge._window is not None:
+            # A partially initialized native UI cannot safely be mixed with Edge.
+            raise RuntimeError("Der native Host brach nach der Fenstererstellung ab.") from None
     browser_exe = _find_app_browser() if os.name == "nt" else None
-    if browser_exe:
-        profile_dir = root / "data" / "window_profile"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Öffne App-Fenster mit {browser_exe}", flush=True)
-        proc = subprocess.Popen([
-            browser_exe,
-            f"--app={url}",
-            f"--user-data-dir={profile_dir}",
-            "--window-size=1480,920",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ])
-        try:
-            proc.wait()
-        except KeyboardInterrupt:
-            pass
-        return "browser"
+    profile = data / "window_profile"
+    profile.mkdir(parents=True, exist_ok=True)
 
-    print("Kein Edge/Chrome gefunden; öffne den Standardbrowser.", flush=True)
-    webbrowser.open(url)
-    return "external"
+    def reopen():
+        if browser_exe:
+            subprocess.Popen([
+                browser_exe, f"--app={url}", f"--user-data-dir={profile}",
+                "--window-size=1480,920", "--no-first-run", "--no-default-browser-check",
+            ])
+        else:
+            webbrowser.open(url)
+
+    bridge._set_fallback("edge" if browser_exe else "browser", reopen)
+    reopen()
+    if os.name == "nt":
+        # Browser subprocess lifetime is NOT browser-window lifetime. Keep a real
+        # native controller so closing Edge cannot silently kill running jobs.
+        while not bridge._allow_close:
+            answer = ctypes.windll.user32.MessageBoxW(
+                None, "Die Oberfläche läuft im Browser-Fallback.\n"
+                "Explorer-Drop und native Dateiauswahl sind dort nicht verfügbar.\n"
+                "Dateiöffnungen werden über die laufende Instanz weitergereicht.\n\n"
+                "OK: Desktop-Server beenden (aktive Aufträge werden bestätigt).\n"
+                "Abbrechen: Oberfläche erneut öffnen.",
+                "AV1 / VMAF Studio – Browser-Fallback", 0x41,
+            )
+            if answer == 2:
+                reopen()
+                continue
+            bridge._request_close(False)
+            while bridge._stopping and not bridge._allow_close:
+                time.sleep(0.1)
+    else:
+        while not bridge._allow_close:
+            time.sleep(0.5)
+    return "edge" if browser_exe else "browser"
 
 
-def main() -> None:
-    root = _setup_environment()
-    _ensure_stdio(root / "data")
-    port = int(os.environ.get("PORT", "0")) or _find_free_port(8080)
-    url = f"http://127.0.0.1:{port}"
+def _smoke_test() -> dict:
+    """No UI, server, registry writes or encode jobs. Suitable for --windowed EXE."""
+    import importlib.metadata
+    from core.desktop_host import load_webview
+    versions = {name: importlib.metadata.version(name)
+                for name in ("pywebview", "pythonnet", "clr_loader")}
+    load_webview()
+    if os.name == "nt":
+        import clr
+        clr.AddReference("System.Windows.Forms")
+        from webview.util import interop_dll_path
+        for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+            clr.AddReference(interop_dll_path(name))
+        # Importing the backend loads Python.Runtime and the bundled WebView2 DLLs,
+        # but does not create a form or install/modify the Edge runtime.
+        import webview.platforms.winforms  # noqa: F401
+    return {"ok": True, "frozen": bool(getattr(sys, "frozen", False)),
+            "versions": versions, "interactive_webview_verified": False}
 
-    import uvicorn
-    import app as studio_app
 
-    cfg = uvicorn.Config(
-        studio_app.app,
-        host="127.0.0.1",
-        port=port,
-        log_level="info",
-        access_log=False,
-    )
-    server = uvicorn.Server(cfg)
-    srv_thread = threading.Thread(target=server.run, name="studio-uvicorn", daemon=True)
-    srv_thread.start()
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="AV1 / VMAF Studio Desktop")
+    parser.add_argument("--desktop-smoke-test", action="store_true")
+    parser.add_argument("--tray", action="store_true", help="Optionales Symbol im Infobereich")
+    parser.add_argument("--register-open-with", action="store_true",
+                        help="Explizite Registrierung für den aktuellen Benutzer")
+    parser.add_argument("files", nargs="*")
+    options = parser.parse_args(argv)
+    from core.desktop_diagnostics import install_hooks, report_error, writable_directory
+    logs = writable_directory()
+    _ensure_stdio(logs)
+    install_hooks(logs, interactive=not options.desktop_smoke_test)
+    instance = None
+    bridge = None
+    server = None
+    server_thread = None
+    server_socket = None
+    stopped = threading.Event()
+    stop_lock = threading.Lock()
 
-    _wait_for_server(f"{url}/api/config/paths", timeout=25.0)
+    def stop_server():
+        with stop_lock:
+            if stopped.is_set() or server is None:
+                return
+            server.should_exit = True
+            if server_thread is not None:
+                server_thread.join(60)
+                if server_thread.is_alive():
+                    raise RuntimeError(
+                        "Server beendet sich noch nicht. Der Prozess bleibt für die "
+                        "Auftragsbereinigung geöffnet; erneut Beenden versuchen.")
+            stopped.set()
 
-    mode = _open_desktop_window(url, root)
-    if mode == "external":
-        try:
-            while srv_thread.is_alive():
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            pass
-    server.should_exit = True
+    try:
+        if options.desktop_smoke_test:
+            result = _smoke_test()
+            (logs / "desktop-smoke.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+            print(json.dumps(result), flush=True)
+            return 0
+        if options.register_open_with:
+            # CLI also requires a visible confirmation before any registry write.
+            from core.desktop_host import DesktopBridge
+            result = DesktopBridge(None, None, None, logs).register_open_with()
+            return 0 if result.get("ok") else 1
+        from core.desktop_ipc import SingleInstance
+        from core.desktop_paths import DesktopPathGrants, validate_paths
+        paths = validate_paths([str(Path(value).absolute()) for value in options.files])
+        instance = SingleInstance(logs)
+        if not instance.acquire():
+            instance.forward(paths)
+            return 0
+        root = _setup_environment()
+        del root
+        data = Path(os.environ["DATA_DIR"])
+        import uvicorn
+        import app as studio_app
+        from core import config
+        from core.desktop_host import DesktopBridge, install_desktop_routes
+        grants = DesktopPathGrants()
+        grants.install(config)
+        # Bind once and pass this actual socket to Uvicorn, avoiding port races.
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        requested_port = int(os.environ.get("PORT", "0"))
+        server_socket.bind(("127.0.0.1", requested_port))
+        server_socket.listen(128)
+        port = server_socket.getsockname()[1]
+        url = f"http://127.0.0.1:{port}"
+        bridge = DesktopBridge(grants, studio_app.queue, stop_server, logs, options.tray)
+        install_desktop_routes(studio_app.app, bridge, url)
+        studio_app.app.state.desktop_open_folder = bridge._open_folder
+        instance.listen(lambda incoming: bridge._accept_paths(incoming, "ipc"))
+        bridge._accept_paths(paths, "command-line")
+        cfg = uvicorn.Config(studio_app.app, host="127.0.0.1", port=port,
+                             log_level="info", access_log=False)
+        server = uvicorn.Server(cfg)
+        server_thread = threading.Thread(
+            target=lambda: server.run(sockets=[server_socket]), name="studio-uvicorn", daemon=True)
+        server_thread.start()
+        # The root redirects to the login form when APP_PASSWORD is configured.
+        # Probe that route instead of demanding unauthenticated access to an API.
+        if not _wait_for_server(f"{url}/", thread=server_thread, server=server):
+            raise RuntimeError("Der lokale Server wurde nicht bereit. Details stehen in studio.log.")
+        _open_desktop_window(url, data, bridge)
+        stop_server()
+        return 0
+    except KeyboardInterrupt:
+        stop_server()
+        return 0
+    except Exception as exc:
+        if options.desktop_smoke_test:
+            result = {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+            from core.desktop_diagnostics import sanitize
+            (logs / "desktop-smoke.json").write_text(sanitize(json.dumps(result)), encoding="utf-8")
+        report_error(exc, logs, interactive=not options.desktop_smoke_test)
+        return 1
+    finally:
+        if server is not None and not stopped.is_set():
+            try:
+                stop_server()
+            except Exception:
+                logging.getLogger("desktop").exception("Server-Bereinigung unvollständig")
+                # Never let a daemon server disappear while cleanup still owns jobs.
+                if server_thread is not None:
+                    server_thread.join()
+        if bridge is not None:
+            bridge._dispose()
+        if instance is not None:
+            instance.close()
+        if server_socket is not None:
+            server_socket.close()
 
 
 if __name__ == "__main__":
-    main()
+    # Catch even failures importing bootstrap modules or creating the log directory.
+    try:
+        raise SystemExit(main())
+    except Exception as bootstrap_error:
+        if os.name == "nt" and "--desktop-smoke-test" not in sys.argv:
+            ctypes.windll.user32.MessageBoxW(
+                None, f"Desktop-Start fehlgeschlagen ({type(bootstrap_error).__name__}).\n"
+                "Bitte Schreibrechte für LOCALAPPDATA und die Installation prüfen.",
+                "AV1 / VMAF Studio", 0x10)
+        raise SystemExit(1)

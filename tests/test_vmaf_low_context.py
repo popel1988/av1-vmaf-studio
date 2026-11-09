@@ -518,7 +518,7 @@ class LowContextFrontendTests(unittest.TestCase):
                 self.assertNotEqual(js.eval('lateText.nodeValue'), 'Was bedeuten die Werte?')
                 self.assertNotEqual(js.eval('late.attrs.title'), 'Frameanzahl unbekannt')
                 self.assertEqual(json.loads(js.eval('JSON.stringify(observation.attributeFilter)')),
-                                 ['placeholder', 'title', 'data-tip'])
+                                 ['placeholder', 'title', 'data-tip', 'aria-label'])
 
     def test_small_and_large_low_bases(self):
         for n, counts in [(1, [1, 1, 1]), (9, [1, 1, 1]), (20, [1, 1, 2]),

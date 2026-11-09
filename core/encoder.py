@@ -765,6 +765,7 @@ def build_encode_cmd(
     tonemap_engine: str = "cpu",
     deband: str = "off",
     svt_look: str = "standard",
+    overwrite: bool = True,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
 
@@ -778,7 +779,10 @@ def build_encode_cmd(
     do_tone = bool(tonemap and info.is_hdr)
     mobile_tone = bool(mobile) and info.is_hdr
     binary = ffmpeg_binary_for(engine) if (do_tone or mobile_tone) else config.FFMPEG
-    cmd: list[str] = [binary, "-y", "-hide_banner"]
+    if preserve_dv and info.dolby_vision and (
+            codec not in ("av1", "hevc") or (codec == "av1" and platform != "cpu")):
+        raise ValueError("Dieser Encoder unterstützt keinen exakten Dolby-Vision-Erhalt.")
+    cmd: list[str] = [binary, "-y" if overwrite or pass_num == 1 else "-n", "-hide_banner"]
 
     keep_hdr = bool(preserve_hdr and info.is_hdr)
     downscale = bool(target_height and info.height and target_height < info.height)
@@ -865,6 +869,8 @@ def build_encode_cmd(
         enc == "libsvtav1" and preserve_dv and info.dolby_vision
         and not tonemap and not downscale and not software_filters
     )
+    if preserve_dv and info.dolby_vision and codec == "av1" and not av1_dv:
+        raise ValueError("AV1-Dolby-Vision kann mit diesen Filtern/Skalierungen nicht erhalten werden.")
     # setparams ändert keine Helligkeit, schreibt die Kennung aber in den Frame.
     # NVENC liest die oft von dort und setzt sonst video_full_range_flag.
     # Auf einer reinen CUDA-Surface gibt es keinen Software-Filter.
@@ -988,6 +994,8 @@ def build_encode_cmd(
     else:
         cmd += [str(output)]
     if mobile and pass_num != 1:
+        if duration_limit is not None:
+            cmd += ["-t", str(duration_limit)]  # Output options reset after the main filename.
         cmd += mobile_output_args(info, platform, mobile, deinterlace=deinterlace,
                                   crop=crop, keep_chapters=keep_chapters,
                                   tonemap_algo=tonemap_algo,

@@ -148,16 +148,19 @@ def apply_requeue_conflict(settings_dict: dict, src_path: str, mode: str) -> tup
     src = Path(src_path)
     settings = build_job_settings(d)
     plan = plan_one(str(src), settings)
-    mode = (mode or "overwrite").lower().strip()
+    mode = (mode or "ask").lower().strip()
     if mode == "suffix" and plan.get("exists"):
         d["suffix"] = next_free_suffix(src, settings)
-        d["on_duplicate"] = "overwrite"
+        d["on_duplicate"] = "ask"
         settings = build_job_settings(d)
         plan = plan_one(str(src), settings)
         plan["conflict_mode"] = "suffix"
-    else:
+    elif mode == "overwrite":
         d["on_duplicate"] = "overwrite"
         plan["conflict_mode"] = "overwrite"
+    else:
+        d["on_duplicate"] = "ask"
+        plan["conflict_mode"] = "ask"
     return d, plan
 
 
@@ -183,6 +186,9 @@ def preview_batch(paths: list[str], settings_dict: dict,
             est_saved_bytes=est.get("est_saved_bytes", 0),
             est_output_bytes=est.get("est_output_bytes", 0),
         )
+        from . import export_preflight, ffmpeg_utils
+        probe = ffmpeg_utils.ffprobe(target) if target.is_file() else None
+        row["preflight"] = export_preflight.inspect(target, settings, info=probe)
         if row["duplicate"]:
             dup_count += 1
         items.append(row)

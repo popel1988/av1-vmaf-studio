@@ -153,6 +153,62 @@
   }
   window.navTo = navTo;
 
+  // The active source is explicit; visiting a tool never replaces its work.
+  const sourceEntries = new Map();
+  let activeSource = null;
+  window.StudioSourceContext = {
+    get: () => activeSource,
+    entries: sourceEntries,
+    publish(source, origin, analysis) {
+      if (!source || !source.path || String(source.path).startsWith("upload:")) return;
+      const key = source.path + (source.bluray ? "::" + JSON.stringify(source.bluray) : "");
+      const entry = sourceEntries.get(key) || { path: source.path, analyses: {} };
+      Object.assign(entry, source, { origin });
+      if (analysis) entry.analyses[origin] = analysis;
+      sourceEntries.set(key, entry);
+      activeSource = entry;
+      renderSourceContext();
+    },
+  };
+
+  function renderSourceContext() {
+    const hosts = [
+      $("selected-info") && $("selected-info").closest("section"),
+      $("remux-badge") && $("remux-badge").closest("section"),
+      $("ed-src-info") && $("ed-src-info").closest("section"),
+    ];
+    hosts.filter(Boolean).forEach((host) => {
+      let bar = host.querySelector(".studio-source-context");
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "studio-source-context hint";
+        host.insertBefore(bar, host.children[1] || null);
+      }
+      bar.hidden = !activeSource;
+      if (!activeSource) return;
+      bar.innerHTML = `<span>Aktive Quelle: <strong>${escapeHtml(activeSource.name || activeSource.path)}</strong></span>
+        ${["encode", "vmaf", "remux", "editor"].map((tool) =>
+          `<button type="button" class="btn btn-ghost btn-sm" data-source-tool="${tool}">→ ${tool === "encode" ? "Encoding" : tool === "vmaf" ? "VMAF" : tool === "remux" ? "Remux" : "Editor"}</button>`).join("")}
+        <span class="muted">Explizit übernehmen · bestehende Projekte bleiben beim Tabwechsel erhalten</span>`;
+      bar.querySelectorAll("[data-source-tool]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const source = activeSource;
+          const tool = button.dataset.sourceTool;
+          navTo(tool);
+          if (tool === "editor") {
+            if (window.editorOpenSource) await window.editorOpenSource(source.path, source.name);
+          } else if (tool === "remux") {
+            if (state.remuxSel && state.remuxSel.path === source.path) return;
+            if (state.remuxSel && !confirm("Remux-Quelle ersetzen? Die bisherigen Spurauswahlen werden zurückgesetzt.")) return;
+            await remuxSelectFile({ rel: source.path, name: source.name, bluray: source.bluray });
+          } else if (!state.selected || state.selected.path !== source.path || state.selected.isBatch) {
+            await selectFile({ rel: source.path, name: source.name });
+          }
+        });
+      });
+    });
+  }
+
   function initNav() {
     const nav = $("nav");
     if (!nav) return;
@@ -633,7 +689,7 @@
       + footer);
     const picker = makeFolderBrowser({
       listId: "fpick-browser", crumbId: "fpick-crumb",
-      kind: "video", showFiles: true,
+      kind: opts.kind || "video", showFiles: true,
       rootLabel: opts.rootLabel || "Medien",
       playRoot: "media",
       searchPlaceholder: "Im Ordner suchen … (Name)",
@@ -915,6 +971,8 @@
         return;
       }
       state.bitrateData = data;
+      const cached = sourceEntries.get(path);
+      if (cached) cached.analyses.bitrate = data;
       drawBitrateChart(data);
     } catch (e) {
       if (seq === state.bitrateSeq && sum) sum.textContent = "Bitrate-Verlauf konnte nicht geladen werden.";
@@ -958,21 +1016,31 @@
   }
 
   async function selectFile(f) {
+    const cached = sourceEntries.get(f.rel);
+    const sameSource = state.selected && state.selected.path === f.rel && !state.selected.isBatch;
     state.selected = { path: f.rel, name: f.name, isBatch: false };
+    window.StudioSourceContext.publish(state.selected, "encode");
     $("selection-badge").textContent = "Datei ausgewählt";
     enableActionButtons();
-    resetBitrateView(true);
+    if (!sameSource) resetBitrateView(true);
+    if (cached && cached.analyses.bitrate) {
+      state.bitrateData = cached.analyses.bitrate;
+      state.bitrateFor = f.rel;
+      drawBitrateChart(state.bitrateData);
+    }
     $("selected-info").innerHTML = `<strong>${escapeHtml(f.name)}</strong> · analysiere …`;
     document.querySelectorAll(".row-item.selected").forEach((r) => r.classList.remove("selected"));
     try {
       const res = await fetch(`/api/probe?path=${encodeURIComponent(f.rel)}`);
       const info = await res.json();
+      if (!state.selected || state.selected.path !== f.rel) return;
       if (info.error) {
         $("selected-info").innerHTML =
           `<strong>${escapeHtml(f.name)}</strong> · <span class="bad">${escapeHtml(info.error)}</span>`;
         return;
       }
       renderFileDetails(f.name, info);
+      window.StudioSourceContext.publish(state.selected, "encode", info);
       const hdrField = $("hdr-field");
       if (hdrField) hdrField.style.display = info.is_hdr ? "" : "none";
       applyDolbyVision(info);
@@ -3301,9 +3369,13 @@
       return;
     }
     const settings = gatherSettings();
+    settings.approve_inplace = post === "replace" || post === "inplace";
     const paths = [state.selected.path];
     const ok = await confirmDryRunOrDups(paths, settings);
     if (!ok) return;
+    try {
+      if (!state.selected.isBatch && !(await inspectExport(settings, true))) return;
+    } catch (error) { alert(error.message); return; }
     const btn = $("btn-enqueue");
     btn.disabled = true;
     const payload = {
@@ -3319,7 +3391,7 @@
       });
       const data = await res.json();
       if (data.error) {
-        $("selected-info").innerHTML = `<span class="bad">${data.error}</span>`;
+        $("selected-info").innerHTML = `<span class="bad">${escapeHtml(data.error)}</span>`;
       } else {
         $("selected-info").innerHTML =
           `<span class="good">${data.added} Auftrag/Aufträge hinzugefügt.</span>`;
@@ -3330,6 +3402,99 @@
       btn.disabled = false;
     }
   }
+
+  async function inspectExport(settings, approve, allowBlocked) {
+    if (!state.selected || state.selected.isBatch) throw new Error("Bitte eine einzelne Quelldatei wählen.");
+    const response = await fetch("/api/export/preflight", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: state.selected.path, settings }),
+    });
+    const report = await response.json();
+    if (!response.ok || report.error) throw new Error(report.error || "Vorabprüfung fehlgeschlagen.");
+    const host = $("export-preflight-report");
+    if (host) {
+      host.hidden = false;
+      host.innerHTML = `<strong>${tt("Export-Vorabprüfung")}</strong>` +
+        (report.outputs || []).map((out) => `<p>${escapeHtml(out.role)}: <code>${escapeHtml(out.path)}</code></p>`).join("") +
+        `<p>Video: ${escapeHtml(report.settings?.codec || "—")} · HDR: ${report.settings?.preserve_hdr ? "erhalten" : "SDR / Quelle"} · Dolby Vision: ${report.settings?.preserve_dv ? "erhalten" : "nicht übernommen"}</p>` +
+        [...(report.blockers || []), ...(report.warnings || [])].map((issue) =>
+          `<p class="${(report.blockers || []).includes(issue) ? "bad" : "warn"}">${escapeHtml(issue.message)}${issue.track != null ? " · Spur " + escapeHtml(issue.track) : ""}</p>`).join("") +
+        (report.disk || []).map((disk) => `<p class="muted">Speicher: ${disk.free_bytes == null ? "unbekannt" : (disk.free_bytes / 1073741824).toFixed(1) + " GiB frei"} · Bedarf geschätzt: ${(disk.estimated_required_bytes / 1073741824).toFixed(2)} GiB</p>`).join("");
+    }
+    if (!report.ok) {
+      if (approve) alert((report.blockers || []).map((issue) => issue.message).join("\n"));
+      return allowBlocked ? report : null;
+    }
+    if (approve && report.warnings?.length && !confirm("Export mit diesen Änderungen starten?\n\n" + report.warnings.map((issue) => issue.message).join("\n"))) return null;
+    return report;
+  }
+
+  function initExportTools() {
+    const main = $("btn-enqueue");
+    if (!main) return;
+    const tools = document.createElement("div");
+    tools.className = "workspace-export-tools";
+    tools.innerHTML = `<button type="button" class="btn btn-ghost" id="btn-export-preflight">Export-Vorabprüfung</button>
+      <span id="export-test-controls"><label>Start (Sekunden) <input id="export-test-start" type="number" min="0" step="0.1" value="0"></label>
+      <label>Dauer (Sekunden) <input id="export-test-seconds" type="number" min="1" max="120" value="15"></label>
+      <button type="button" class="btn btn-ghost" id="btn-test-export">Testexport</button></span>
+      <p class="hint">Testexport ist freiwillig und blockiert den vollständigen Export nicht.</p>
+      <div id="export-preflight-report" class="hint" hidden></div>`;
+    main.parentElement.after(tools);
+    const setting = document.createElement("label");
+    setting.className = "check";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    try { toggle.checked = localStorage.getItem("studio.showTestExport") !== "false"; } catch (_) { toggle.checked = true; }
+    const text = document.createElement("span");
+    text.textContent = "Testexport anzeigen";
+    setting.append(toggle, text);
+    const settingsHost = document.querySelector('[data-page="settings"] .card-body') || tools;
+    settingsHost.prepend(setting);
+    const sync = () => {
+      $("export-test-controls").hidden = !toggle.checked;
+      try { localStorage.setItem("studio.showTestExport", String(toggle.checked)); } catch (_) { /* optional */ }
+    };
+    toggle.addEventListener("change", sync);
+    sync();
+    $("btn-export-preflight").addEventListener("click", async () => {
+      try { await inspectExport(gatherSettings(), false); } catch (error) { alert(error.message); }
+    });
+    $("btn-test-export").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const settings = gatherSettings();
+        // A scratch export never replaces the original; this is not overwrite consent.
+        const report = await inspectExport({ ...settings, post_processing: "keep" }, false, true);
+        if (!report) return;
+        if (!report.test_export?.supported) throw new Error((report.test_export?.reasons || []).join("\n"));
+        const response = await fetch("/api/export/test", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: state.selected.path, settings,
+            start: Number($("export-test-start").value), seconds: Number($("export-test-seconds").value) }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "Testexport fehlgeschlagen.");
+        $("export-preflight-report").textContent = "Testexport eingereiht. Nach Abschluss in der Warteschlange abspielen oder vergleichen.";
+        navTo("queue");
+      } catch (error) { alert(error.message); }
+      finally { button.disabled = false; }
+    });
+    document.addEventListener("change", (event) => {
+      if (event.target.closest('.settings-card[data-page="encode"]')) $("export-preflight-report").hidden = true;
+    });
+  }
+
+  window.StudioExport = {
+    selection: () => state.selected,
+    settings: gatherSettings,
+    inspect: inspectExport,
+    openSource: async (path) => {
+      await selectFile({ rel: path, name: path.split(/[/\\]/).pop() });
+      navTo("encode");
+    },
+  };
 
   /* ------------------------------------ Dry-Run / Duplikat-Vorschau */
   function tt(s) {
@@ -3441,9 +3606,12 @@
   }
 
   /** Zeigt Dry-Run-Modal. resolve(true) = starten, false = abbrechen. */
-  function showPreviewModal(preview) {
+  function showPreviewModal(preview, settings) {
     const rows = (preview && (preview.items || preview.jobs)) || [];
     const dups = rows.filter((r) => r.duplicate).length;
+    const issues = rows.flatMap((r) => (r.preflight?.blockers || []).map((issue) => ({ ...issue, source: r.source_name || r.source_rel })));
+    const fatal = issues.filter((issue) => issue.code !== "overwrite_consent_required");
+    const consentNeeded = issues.some((issue) => issue.code === "overwrite_consent_required");
     const table = rows.length ? `
       <div class="table-wrap preview-table-wrap">
         <table class="queue-table">
@@ -3455,6 +3623,8 @@
             const flags = [];
             if (r.exists) flags.push(tt("existiert"));
             if (r.history_done) flags.push(tt("in Historie"));
+            flags.push(...(r.preflight?.warnings || []).map((issue) => issue.message));
+            flags.push(...(r.preflight?.blockers || []).map((issue) => issue.message));
             const est = r.est_output_bytes
               ? formatBytes(r.est_output_bytes)
               : (r.est_saved_bytes ? ("≈ −" + formatBytes(r.est_saved_bytes)) : "—");
@@ -3474,8 +3644,9 @@
       openModal(tt("Dry-Run Vorschau"), `
         ${table}
         ${window.StudioInsights ? window.StudioInsights.storageHtml(preview.storage) : ""}
+        ${consentNeeded ? '<label class="check"><input type="checkbox" id="preview-overwrite-consent"><span>Vorhandene Ausgabedateien ausdrücklich überschreiben</span></label>' : ""}
         <div class="lib-actions" style="margin-top:12px">
-          <button class="btn btn-primary" id="preview-go">${tt("Trotzdem starten")}</button>
+          <button class="btn btn-primary" id="preview-go" ${fatal.length || consentNeeded ? "disabled" : ""}>${tt("Starten")}</button>
           <button class="btn btn-ghost" id="preview-cancel">${tt("Abbrechen")}</button>
         </div>`);
       const done = (v) => {
@@ -3486,7 +3657,13 @@
       };
       const go = $("preview-go");
       const cancel = $("preview-cancel");
-      if (go) go.addEventListener("click", () => done(true));
+      const consent = $("preview-overwrite-consent");
+      if (consent) consent.addEventListener("change", () => { go.disabled = fatal.length > 0 || !consent.checked; });
+      if (go) go.addEventListener("click", () => {
+        if (fatal.length || (consentNeeded && !consent?.checked)) return;
+        if (consent?.checked && settings) settings.on_duplicate = "overwrite";
+        done(true);
+      });
       if (cancel) cancel.addEventListener("click", () => done(false));
       // Escape / X-Button: Abbrechen
       const m = $("app-modal");
@@ -3515,10 +3692,10 @@
     const dups = jobs.filter((j) => j.duplicate);
     const onDup = (settings.on_duplicate || "ask").toLowerCase();
     if (forcePreview || onDup === "ask" || (preview.storage && (preview.storage.insufficient || preview.storage.unknown))) {
-      return showPreviewModal(preview);
+      return showPreviewModal(preview, settings);
     }
     if (dups.length && onDup !== "overwrite" && onDup !== "skip") {
-      return showPreviewModal(preview);
+      return showPreviewModal(preview, settings);
     }
     return true;
   }
@@ -3742,7 +3919,39 @@
   }
 
   /* ------------------------------------------------------------ WEBSOCKET */
+  let lastLiveUpdate = 0;
+  let liveFallbackTimer = null;
+  let liveFallbackBusy = false;
+  async function pollLiveFallback() {
+    if (liveFallbackBusy || Date.now() - lastLiveUpdate < 5000) return;
+    liveFallbackBusy = true;
+    try {
+      await Promise.allSettled([
+        (async () => {
+          const response = await fetch("/api/hardware", { signal: AbortSignal.timeout(10000) });
+          if (!response.ok) throw new Error(`Hardware: HTTP ${response.status}`);
+          const hardware = await response.json();
+          if (Date.now() - lastLiveUpdate < 5000) return;
+          updateHardware(hardware);
+          setConn(true, "Live per HTTP – WebSocket wird erneut versucht");
+        })(),
+        (async () => {
+          const response = await fetch("/api/queue", { signal: AbortSignal.timeout(10000) });
+          if (!response.ok) throw new Error(`Queue: HTTP ${response.status}`);
+          const queue = await response.json();
+          if (Date.now() - lastLiveUpdate >= 5000) updateQueue(queue);
+        })(),
+      ]);
+    } finally {
+      liveFallbackBusy = false;
+    }
+  }
+
   function connectWs() {
+    if (liveFallbackTimer === null) {
+      liveFallbackTimer = setInterval(pollLiveFallback, 3000);
+      pollLiveFallback();
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.onopen = () => setConn(true);
@@ -3750,15 +3959,17 @@
     ws.onerror = () => ws.close();
     ws.onmessage = (ev) => {
       const data = JSON.parse(ev.data);
+      lastLiveUpdate = Date.now();
+      setConn(true);
       if (data.hardware) updateHardware(data.hardware);
       if (data.queue) updateQueue(data.queue);
       if (data.runtime && window.StudioInsights) window.StudioInsights.renderRuntime(data.runtime);
     };
   }
 
-  function setConn(online) {
+  function setConn(online, label) {
     $("conn-dot").classList.toggle("online", online);
-    $("conn-text").textContent = online ? "Live verbunden" : "Getrennt – erneuter Versuch …";
+    $("conn-text").textContent = label || (online ? "Live verbunden" : "Getrennt – erneuter Versuch …");
   }
 
   /* ------------------------------------------------------------ HARDWARE */
@@ -4131,7 +4342,7 @@
         <td>${settingsLabel(it)}${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(it) : ""}</td>
         <td>${dur}${finished}${stepsHtml(it.steps)}</td>
         <td class="good">${it.saved_human}</td>
-        <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}</td>
+        <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}${it.status === "fertig" ? resultActionsHtml(it.id) : ""}</td>
       </tr>`;
     }).join("");
     body.querySelectorAll("[data-cancel]").forEach((b) => {
@@ -4160,6 +4371,7 @@
       if (detail && expanded.has(tr.dataset.details)) detail.open = true;
     });
     bindDvPromptButtons(body);
+    bindResultActions(body);
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
       tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
     });
@@ -4345,6 +4557,13 @@
   async function reopenJobWithSettings(d) {
     const raw = (d && d.settings) || {};
     const s = { ...raw };
+    const project = s.editor_project || s.edit_spec?.project;
+    if (project && typeof window.editorRestoreProject === "function") {
+      closeModal();
+      navTo("editor");
+      await window.editorRestoreProject(project);
+      return;
+    }
     if (!s.hdr_mode) {
       if (s.preserve_hdr || s.preserve_dv) s.hdr_mode = "preserve";
       else if (s.tonemap) s.hdr_mode = "tonemap";
@@ -8288,6 +8507,52 @@
     return `<video class="modal-video" controls preload="metadata" src="${mediaUrl}">${track}</video>`;
   }
 
+  function resultActionsHtml(id) {
+    return ["play", "compare", "folder", "settings"].map((action) =>
+      `<button type="button" class="btn btn-ghost btn-sm" data-result-id="${escapeHtml(id)}" data-result-action="${action}">${({ play: "▶ Abspielen", compare: "Quelle / Ausgabe", folder: "Ausgabeordner", settings: "Einstellungen übernehmen" })[action]}</button>`).join("");
+  }
+
+  function bindResultActions(host) {
+    host.querySelectorAll("[data-result-action]").forEach((button) => {
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        button.disabled = true;
+        try {
+          const id = button.dataset.resultId;
+          const action = button.dataset.resultAction;
+          if (action === "folder") {
+            const response = await fetch(`/api/desktop/jobs/${encodeURIComponent(id)}/open-folder`, { method: "POST" });
+            const result = await response.json();
+            if (!response.ok || result.error) throw new Error(result.error || "Ausgabeordner konnte nicht geöffnet werden.");
+            return;
+          }
+          const response = await fetch(`/api/queue/${encodeURIComponent(id)}/details`);
+          const job = await response.json();
+          if (!response.ok || job.error) throw new Error(job.error || "Ergebnis nicht verfügbar.");
+          if (action === "settings") { await reopenJobWithSettings(job); return; }
+          if (!job.output || !job.output.exists) throw new Error("Ausgabedatei fehlt oder wurde verschoben.");
+          if (action === "compare") {
+            if (!job.source || !job.source.exists || !job.source.rel || !job.output.rel) {
+              throw new Error("Für den Vergleich müssen Quelle und Ausgabe verfügbar sein.");
+            }
+            openAbCompare(job.source.root || "media", job.source.rel, job.output.root || "media", job.output.rel,
+              { job: id, testExport: job.settings?.test_export ? { ...job.settings.test_export, url: job.output.media } : null });
+          } else if (job.output.rel) {
+            closeModal();
+            await openPlayer(job.output.root || "media", job.output.rel, job.output.name || job.title);
+          } else if (job.output.media) {
+            openModal(job.title || "Ausgabe", videoHtml(job.output.media));
+          } else throw new Error("Keine abspielbare Ausgabe verfügbar.");
+        } catch (error) {
+          alert(String(error.message || error));
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  }
+
   /** Ob Browser Video+Ton vermutlich nativ abspielen kann (volle Dauer/Seek). */
   function playerCanNative(info, audioIdx) {
     if (!info) return false;
@@ -8505,6 +8770,7 @@
     set("ab-root-a", rootA); set("ab-path-a", pathA);
     set("ab-root-b", rootB); set("ab-path-b", pathB);
     state.abJob = (opts && opts.job) || "";
+    state.abTestSpan = opts?.testExport || null;
     const load = $("btn-ab-load");
     if (load) load.click();
   }
@@ -8571,7 +8837,7 @@
       ? `<button class="btn btn-primary btn-sm" id="modal-ab"
            data-a="${escapeHtml(d.source.rel)}" data-b="${escapeHtml(d.output.rel)}">
            🎞 ${tt("Vorher/Nachher im Vergleichsplayer")}</button>` : "";
-    const requeueBtn = `<button class="btn btn-ghost btn-sm" id="modal-requeue">${tt("Erneut")}</button>` +
+    const requeueBtn = `<button class="btn btn-ghost btn-sm" id="modal-requeue">${tt("Einstellungen übernehmen")}</button>` +
       `<button class="btn btn-ghost btn-sm" id="modal-requeue-now">${tt("Sofort einreihen")}</button>`;
 
     const dvModalBox = (d.status === "auswahl" && d.dv_prompt)
@@ -8582,7 +8848,7 @@
       <div class="stat-grid modal-stats">${statChips}</div>
       ${stepsHtml(d.steps)}
       ${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(d) + window.StudioInsights.reportHtml(d.output_report) : ""}
-      <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}</div>
+      <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}${d.output && d.output.exists ? resultActionsHtml(id) : ""}</div>
       ${playToggle}
       <div id="modal-player">${player}</div>
       <div class="modal-cols">
@@ -8593,6 +8859,7 @@
     openModal(escapeHtml(d.title || "Details"), html);
 
     const body = $("app-modal-body");
+    bindResultActions(body);
     body.querySelectorAll(".modal-tabs [data-src]").forEach((b) => {
       b.addEventListener("click", () => {
         body.querySelectorAll(".modal-tabs [data-src]").forEach((x) => x.classList.remove("active"));
@@ -8917,7 +9184,8 @@
           <td>${escapeHtml(j.status || "")}</td>
           <td>
             <button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button>
-            <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Mit diesen Einstellungen öffnen">Erneut</button>
+            <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Mit diesen Einstellungen öffnen">Einstellungen übernehmen</button>
+            ${j.status === "fertig" ? resultActionsHtml(j.id) : ""}
           </td>
         </tr>`; }).join("") :
         '<tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>';
@@ -8935,6 +9203,7 @@
           reopenJobById(el.dataset.id);
         });
       });
+      bindResultActions(body);
     }
   }
 
@@ -11746,8 +12015,10 @@
         ? `/api/probe?path=${encodeURIComponent(iso)}&disc_clip=${encodeURIComponent((f.bluray.clips || [])[0] || "")}`
         : `/api/probe?path=${encodeURIComponent(f.rel)}`;
       const info = await (await fetch(probeUrl)).json();
+      if (!state.remuxSel || state.remuxSel.path !== (iso || f.rel)) return;
       if (info.error) { $("remux-badge").textContent = info.error; return; }
       state.remuxInfo = info;
+      window.StudioSourceContext.publish(state.remuxSel, "remux", info);
       if (state.remuxSel.bluray && state.remuxSel.bluray.chapters
           && state.remuxSel.bluray.chapters.length) {
         state.remuxChapters = state.remuxSel.bluray.chapters.map((c) => ({ ...c }));
@@ -12711,12 +12982,16 @@
       return;
     }
     const remuxSettings = {
+      video_mode: "edit",
+      edit_spec: spec,
+      vmaf_check: false,
       suffix: $("remux-suffix").value.trim() || "_remux",
       name_pattern: $("remux-name-pattern")
         ? ($("remux-name-pattern").value.trim() || "{stem}{suffix}") : "{stem}{suffix}",
       on_duplicate: $("remux-on-duplicate") ? $("remux-on-duplicate").value : "ask",
       container: spec.container,
       post_processing: $("remux-post").value,
+      approve_inplace: $("remux-post").value === "inplace",
       ...outTargetVals("remux"),
     };
     if (!(await confirmDryRunOrDups([state.remuxSel.path], remuxSettings))) return;
@@ -12731,6 +13006,7 @@
           spec,
           container: spec.container,
           post_processing: $("remux-post").value,
+          approve_inplace: $("remux-post").value === "inplace",
           integrity_check: $("remux-integrity").checked,
           safe_replace: $("remux-safe").checked,
           suffix: remuxSettings.suffix,
@@ -14379,9 +14655,16 @@
       if (badge) badge.textContent = tt("Lädt …");
       abSetStatus(tt("Starte Wiedergabe …"));
       abApplyMode();
-      const ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+      const sample = state.abTestSpan;
+      const origin = sample ? Number(sample.start) || 0 : 0;
+      if (sample && sample.url) {
+        sb.clipUrl = sample.url;
+        sb.offset = origin;
+        ab.window = { start: origin, end: origin + Number(sample.seconds) };
+      }
+      const ok = await Promise.all([abStartSide(sa, origin), abStartSide(sb, 0)]);
       if (!current()) return;
-      const settled = ok.every(Boolean) && await abAlignAndSettleBoth(0, true, current);
+      const settled = ok.every(Boolean) && await abAlignAndSettleBoth(origin, true, current);
       if (!current()) return;
       if (badge) badge.textContent = settled ? tt("Geladen") : tt("Fehler");
       if (settled) abUpdateStatusLine();
@@ -15051,6 +15334,7 @@
     initTooltips();
     initTheme();
     initSettings();
+    initExportTools();
     initVmafTool();
     initSuperTool();
     initDataBrowser();

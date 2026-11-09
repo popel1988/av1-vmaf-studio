@@ -1,0 +1,10 @@
+# Supported Windows build interpreter: CPython 3.12 x64 (not 3.14).
+# Pin pythonnet and clr_loader together; collect their matching Runtime DLL.
+-r requirements.txt
+pywebview==6.1
+pythonnet==3.0.5
+clr_loader==0.2.7.post0
+cffi==1.17.1
+pyinstaller==6.16.0
+pystray==0.19.5
+Pillow==11.3.0

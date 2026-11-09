@@ -42,6 +42,10 @@
     advancing: false,  // Clipwechsel läuft – Follow-Logik pausieren
     lastAdvance: 0,
     followTimer: null,
+    missingMedia: [],
+    mediaManifest: [],
+    projectBusy: false,
+    sourceSeq: 0,
   };
 
   const TL_COLORS = ["#22d3ee", "#38bdf8", "#34d399", "#fbbf24", "#f87171", "#a78bfa"];
@@ -176,7 +180,7 @@
     if (dl) dl.disabled = !ed.src && n === 0;
     const un = $("ed-undo");
     const re = $("ed-redo");
-    if (un) un.disabled = ed.histPos < 1;
+    if (un) un.disabled = ed.histPos < 1 && JSON.stringify(snapshot()) === JSON.stringify(ed.hist[ed.histPos]);
     if (re) re.disabled = ed.histPos >= ed.hist.length - 1;
     syncProgramMonitorInfo();
     updateSizeEstimate();
@@ -245,15 +249,15 @@
   }
 
   function snapshot() {
-    return JSON.parse(JSON.stringify({
-      segments: ed.segments,
-      overlays: ed.overlays,
-    }));
+    return JSON.parse(JSON.stringify(projectData()));
   }
 
   function pushHist() {
+    if (ed.projectBusy) return;
     ed.hist = ed.hist.slice(0, ed.histPos + 1);
-    ed.hist.push(snapshot());
+    const current = snapshot();
+    if (JSON.stringify(ed.hist[ed.histPos]) === JSON.stringify(current)) return;
+    ed.hist.push(current);
     if (ed.hist.length > 80) ed.hist.shift();
     ed.histPos = ed.hist.length - 1;
     syncBadge();
@@ -263,12 +267,7 @@
   function saveAutoSession() {
     try {
       if (!ed.segments.length && !ed.overlays.length && !ed.src) return;
-      localStorage.setItem("edAutoSaveV2", JSON.stringify({
-        ts: Date.now(),
-        segments: ed.segments,
-        overlays: ed.overlays,
-        src: ed.src && { path: ed.src.path, name: ed.src.name },
-      }));
+      localStorage.setItem("edAutoSaveV2", JSON.stringify({ ...projectData(), ts: Date.now() }));
     } catch (e) { /* ignore */ }
   }
 
@@ -287,12 +286,7 @@
     try {
       const raw = JSON.parse(localStorage.getItem("edAutoSaveV2") || "null");
       if (!raw || !Array.isArray(raw.segments) || !raw.segments.length) return;
-      pushHist();
-      ed.segments = raw.segments.map((s) => defaultClip(s));
-      ed.overlays = Array.isArray(raw.overlays) ? raw.overlays.map((o) => defaultOverlay(o)) : [];
-      if (ed.segments[0]) ed.activeId = ed.segments[0].id;
-      renderSegList();
-      if (raw.src && raw.src.path) await loadSource(raw.src.path, raw.src.name);
+      await restoreProject(raw);
       const btn = $("ed-restore-autosave");
       if (btn) btn.style.display = "none";
       setStatus(`${ed.segments.length} ${tt("Clips aus letzter Sitzung wiederhergestellt.")}`);
@@ -301,7 +295,7 @@
     }
   }
 
-  function applyHist(i) {
+  async function applyHist(i) {
     if (i < 0 || i >= ed.hist.length) return;
     ed.histPos = i;
     const snap = JSON.parse(JSON.stringify(ed.hist[i]));
@@ -311,17 +305,31 @@
     } else {
       ed.segments = snap.segments || [];
       ed.overlays = snap.overlays || [];
+      if (snap.v === 3) {
+        ed.projectBusy = true;
+        try {
+          applyProjectSettings(snap);
+          if (snap.src && snap.src.path) await loadSource(snap.src.path, snap.src.name, snap.view);
+          else unloadSource();
+        } finally { ed.projectBusy = false; }
+      }
     }
     renderSegList();
+    saveAutoSession();
+    await checkMissingMedia();
   }
 
   function undo() {
+    if (ed.projectBusy) return;
+    const current = snapshot();
+    if (JSON.stringify(current) !== JSON.stringify(ed.hist[ed.histPos])) pushHist();
     if (ed.histPos < 1) return;
     applyHist(ed.histPos - 1);
     setStatus(tt("Rückgängig"));
   }
 
   function redo() {
+    if (ed.projectBusy) return;
     if (ed.histPos >= ed.hist.length - 1) return;
     applyHist(ed.histPos + 1);
     setStatus(tt("Wiederholt"));
@@ -2023,6 +2031,7 @@
 
   async function loadSource(path, name, opts) {
     opts = opts || {};
+    const seq = ++ed.sourceSeq;
     setStatus(tt("Lade Quelle …"));
     // Beim automatischen Clipwechsel läuft die Timeline-Vorschau weiter.
     if (!ed.advancing) stopTlPreview();
@@ -2031,6 +2040,7 @@
     try {
       const r = await fetch(`/api/editor/probe?path=${encodeURIComponent(path)}`);
       data = await r.json();
+      if (seq !== ed.sourceSeq) return false;
       if (!r.ok || data.error) throw new Error(data.error || "Probe fehlgeschlagen");
     } catch (e) {
       setStatus(String(e.message || e), true);
@@ -2054,6 +2064,9 @@
       height: data.height || 0,
       overall_bitrate: Number(data.overall_bitrate) || 0,
     };
+    if (window.StudioSourceContext && !ed.advancing && !ed.projectBusy) {
+      window.StudioSourceContext.publish(ed.src, "editor", data);
+    }
     const aSel = $("ed-preview-audio");
     if (aSel) {
       aSel.innerHTML = "";
@@ -2093,6 +2106,7 @@
     setStatus("");
     loadPreviewAssets(path);
     loadKeyframes(path);
+    return true;
   }
 
   function afterSoftSeek(t) {
@@ -2107,6 +2121,7 @@
 
   /** Quelle aus der Vorschau nehmen – die Timeline bleibt unangetastet. */
   function unloadSource() {
+    ed.sourceSeq += 1;
     stopTlPreview();
     stopFollowTimer();
     stopVideo();
@@ -2151,6 +2166,12 @@
     pushHist();
     ed.segments = [];
     ed.overlays = [];
+    ed.bgmPath = "";
+    if ($("ed-bgm-path")) $("ed-bgm-path").value = "";
+    if ($("ed-bgm-opts")) $("ed-bgm-opts").style.display = "none";
+    ed.missingMedia = [];
+    ed.mediaManifest = [];
+    renderMissingMedia();
     ed.activeId = null;
     ed.activeV2Id = null;
     ed.trackSel = {};
@@ -2516,13 +2537,188 @@
     setStatus(which === "intro" ? tt("Intro gespeichert.") : tt("Outro gespeichert."));
   }
 
-  function saveProject() {
-    const blob = new Blob([JSON.stringify({
-      v: 2,
-      segments: ed.segments,
-      overlays: ed.overlays,
+  const PROJECT_FIELDS = ("mode hdr-mode export-split bgm-path bgm-vol bgm-duck pad-mode aspect-mode container suffix name-mode out-name chapters force platform codec enc-speed b-frames nvenc-tune aq-strength keyint cq rate-mode vbr acodec abr achannels out-mode out-subdir crossfade transition follow snap-ch snap-kf burn").split(" ").map((name) => "ed-" + name);
+
+  function projectData() {
+    const settings = {};
+    PROJECT_FIELDS.forEach((id) => {
+      const input = $(id);
+      if (input) settings[id] = input.type === "checkbox" ? input.checked : input.value;
+    });
+    const paths = new Map();
+    const add = (path, role, name) => {
+      if (!path) return;
+      const previous = ed.mediaManifest.find((m) => m.path === path) || {};
+      const media = paths.get(path) || { ...previous, path, name: name || previous.name || path.split(/[/\\]/).pop(), roles: [] };
+      if (!media.roles.includes(role)) media.roles.push(role);
+      paths.set(path, media);
+    };
+    if (ed.src) add(ed.src.path, "source", ed.src.name);
+    ed.segments.forEach((s) => { if (s.kind !== "black") add(s.path, "segment", s.name); });
+    ed.overlays.forEach((o) => add(o.path, "overlay", o.name));
+    const bgm = settings["ed-bgm-path"] || ed.bgmPath;
+    add(bgm, "bgm");
+    return {
+      format: "av1convert-editor-project", v: 3,
+      segments: ed.segments, overlays: ed.overlays,
       src: ed.src && { path: ed.src.path, name: ed.src.name },
-    }, null, 2)], { type: "application/json" });
+      bgm: { path: bgm || "", volume_db: Number(settings["ed-bgm-vol"] ?? -12), ducking: settings["ed-bgm-duck"] !== false },
+      settings, media_manifest: [...paths.values()],
+      track_selection: ed.trackSel, subtitle_selection: ed.subSel,
+      view: { inSec: ed.inSec, outSec: ed.outSec, seek: ed.playhead, tlZoom: ed.tlZoom, activeId: ed.activeId, activeV2Id: ed.activeV2Id },
+    };
+  }
+
+  function validateProject(data) {
+    const object = (value) => value && typeof value === "object" && !Array.isArray(value);
+    if (!object(data) || !Array.isArray(data.segments)) throw new Error("Ungültiges Editorprojekt.");
+    const version = data.v == null ? 2 : data.v;
+    if (![2, 3].includes(version)) throw new Error("Nicht unterstützte Projektversion: " + version);
+    if (data.format && data.format !== "av1convert-editor-project") throw new Error("Fremdes Projektformat.");
+    if (data.segments.length > 10000 || (data.overlays && (!Array.isArray(data.overlays) || data.overlays.length > 10000))) throw new Error("Zu viele Clips oder ungültige Overlays.");
+    const validPath = (path) => typeof path === "string" && path.length > 0 && path.length <= 32768 && !/[\0\r\n]/.test(path);
+    const ids = new Set();
+    const validateClip = (clip, overlay) => {
+      if (!object(clip) || !Number.isFinite(clip.start) || !Number.isFinite(clip.end) || clip.start < 0 || clip.end <= clip.start) throw new Error("Ungültige Clip-Zeitgrenzen.");
+      if (!overlay && clip.kind && !["media", "black", "freeze"].includes(clip.kind)) throw new Error("Unbekannter Cliptyp.");
+      if ((overlay || clip.kind !== "black") && !validPath(clip.path)) throw new Error("Medienpfad fehlt.");
+      if (clip.speed != null && (!Number.isFinite(clip.speed) || clip.speed <= 0)) throw new Error("Ungültiges Cliptempo.");
+      if (overlay && clip.tl_start != null && (!Number.isFinite(clip.tl_start) || clip.tl_start < 0)) throw new Error("Ungültige Overlayposition.");
+      if (clip.id && (typeof clip.id !== "string" || !/^[\w-]+$/.test(clip.id) || ids.has(clip.id))) throw new Error("Ungültige oder doppelte Clip-ID.");
+      if (clip.id) ids.add(clip.id);
+    };
+    data.segments.forEach((clip) => validateClip(clip, false));
+    (data.overlays || []).forEach((clip) => validateClip(clip, true));
+    if (data.src != null && (!object(data.src) || !validPath(data.src.path))) throw new Error("Ungültige Projektquelle.");
+    if (data.settings != null && !object(data.settings)) throw new Error("Ungültige Exporteinstellungen.");
+    for (const [key, value] of Object.entries(data.settings || {})) {
+      if (!PROJECT_FIELDS.includes(key) || !["string", "number", "boolean"].includes(typeof value)) throw new Error("Ungültige Projekteinstellung: " + key);
+    }
+    if (data.bgm != null && (!object(data.bgm) || (data.bgm.path && !validPath(data.bgm.path)))) throw new Error("Ungültige Hintergrundmusik.");
+    if (data.media_manifest != null && (!Array.isArray(data.media_manifest) || data.media_manifest.length > 20000 || data.media_manifest.some((m) => !object(m) || !validPath(m.path)))) throw new Error("Ungültiges Medienmanifest.");
+    for (const selection of [data.track_selection, data.subtitle_selection]) {
+      if (selection != null && (!object(selection) || Object.entries(selection).some(([path, indexes]) =>
+        !validPath(path) || !Array.isArray(indexes) || indexes.some((index) => !Number.isInteger(index) || index < 0)))) throw new Error("Ungültige Spurauswahl.");
+    }
+    return JSON.parse(JSON.stringify(data));
+  }
+
+  function applyProjectSettings(data) {
+    for (const id of PROJECT_FIELDS) {
+      const input = $(id);
+      if (!input || !(id in (data.settings || {}))) continue;
+      if (input.type === "checkbox") input.checked = !!data.settings[id];
+      else input.value = String(data.settings[id]);
+      input.dispatchEvent(new Event("change"));
+    }
+    ed.bgmPath = (data.bgm && data.bgm.path) || (data.settings || {})["ed-bgm-path"] || "";
+    if ($("ed-bgm-path")) $("ed-bgm-path").value = ed.bgmPath;
+    if ($("ed-bgm-opts")) $("ed-bgm-opts").style.display = ed.bgmPath ? "" : "none";
+    ed.trackSel = data.track_selection || {};
+    ed.subSel = data.subtitle_selection || {};
+    ed.mediaManifest = data.media_manifest || [];
+    const view = data.view || {};
+    ed.tlZoom = Math.max(1, Math.min(32, Number(view.tlZoom) || 1));
+    ed.activeId = ed.segments.some((s) => s.id === view.activeId) ? view.activeId : (ed.segments[0] || {}).id || null;
+    ed.activeV2Id = ed.overlays.some((o) => o.id === view.activeV2Id) ? view.activeV2Id : null;
+    syncModeUI();
+  }
+
+  async function restoreProject(raw) {
+    const data = validateProject(raw); // Validate everything before touching live work.
+    if (ed.projectBusy) throw new Error("Ein Projekt wird bereits geladen.");
+    pushHist();
+    ed.projectBusy = true;
+    try {
+      stopTlPreview();
+      unloadSource();
+      ed.segments = data.segments.map((s) => defaultClip(s));
+      ed.overlays = (data.overlays || []).map((o) => defaultOverlay(o));
+      applyProjectSettings(data);
+      if (data.src) {
+        // Keep the reference even if the source is missing, so it can be relinked.
+        ed.src = { path: data.src.path, name: data.src.name || data.src.path, duration: 0, audio: [], subtitles: [], chapters: [] };
+        await loadSource(data.src.path, data.src.name, data.view);
+      }
+      renderSegList();
+    } finally { ed.projectBusy = false; }
+    pushHist();
+    await checkMissingMedia();
+    setStatus(ed.missingMedia.length ? `${ed.missingMedia.length} Medien fehlen – bitte neu verknüpfen.` : tt("Projekt geladen."));
+  }
+
+  async function checkMissingMedia() {
+    const manifest = projectData().media_manifest;
+    const results = await Promise.all(manifest.map(async (media) => {
+      try {
+        const response = await fetch(`/api/editor/probe?path=${encodeURIComponent(media.path)}`);
+        const data = await response.json();
+        return !response.ok || data.error ? { ...media, reason: data.error || "Nicht verfügbar" } : null;
+      } catch (error) { return { ...media, reason: String(error.message || error) }; }
+    }));
+    ed.missingMedia = results.filter(Boolean);
+    renderMissingMedia();
+    return ed.missingMedia;
+  }
+
+  function renderMissingMedia() {
+    let panel = $("ed-missing-media");
+    if (!panel) {
+      const host = $("ed-status") && $("ed-status").parentElement;
+      if (!host) return;
+      panel = document.createElement("div");
+      panel.id = "ed-missing-media";
+      panel.className = "hint";
+      host.appendChild(panel);
+    }
+    panel.hidden = !ed.missingMedia.length;
+    panel.innerHTML = ed.missingMedia.length ? `<strong>Fehlende / nicht erreichbare Projektmedien</strong>
+      <button type="button" class="btn btn-ghost btn-sm" data-media-recheck>Erneut prüfen</button>` +
+      ed.missingMedia.map((media, i) => `<div><span title="${escapeHtml(media.reason)}">${escapeHtml(media.path)}</span>
+        <button type="button" class="btn btn-ghost btn-sm" data-media-relink="${i}">Datei neu verknüpfen</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-media-relink="${i}" data-shared="1">Gemeinsamen Ordner neu verknüpfen</button></div>`).join("") : "";
+    panel.querySelectorAll("[data-media-relink]").forEach((button) => button.addEventListener("click", () => {
+      const media = ed.missingMedia[Number(button.dataset.mediaRelink)];
+      if (!media || !window.openFilePickerModal) return;
+      window.openFilePickerModal({
+        title: "Ersatz für " + media.path, kind: media.roles.includes("bgm") ? "aux" : "video",
+        rememberKey: "edRelinkDir",
+        onPick: async (file) => {
+          try {
+            await relinkMedia(media.path, file.rel, button.dataset.shared === "1");
+          } catch (error) { setStatus(String(error.message || error), true); }
+        },
+      });
+    }));
+    const recheck = panel.querySelector("[data-media-recheck]");
+    if (recheck) recheck.addEventListener("click", checkMissingMedia);
+  }
+
+  async function relinkMedia(oldPath, newPath, shared) {
+    const normalize = (path) => String(path || "").replace(/\\/g, "/");
+    const oldNormalized = normalize(oldPath);
+    const newNormalized = normalize(newPath);
+    const oldDir = oldNormalized.slice(0, oldNormalized.lastIndexOf("/") + 1);
+    const newDir = newNormalized.slice(0, newNormalized.lastIndexOf("/") + 1);
+    if (shared && !oldDir) throw new Error("Für diesen Pfad bitte jede Datei einzeln neu verknüpfen.");
+    if (shared && !confirm(`Alle Projektverweise unter „${oldDir}“ nach „${newDir}“ verschieben?`)) return;
+    const replace = (path) => normalize(path) === oldNormalized ? newPath :
+      shared && path && normalize(path).startsWith(oldDir) ? newDir + normalize(path).slice(oldDir.length) : path;
+    const data = snapshot();
+    data.segments.forEach((clip) => { clip.path = replace(clip.path); });
+    data.overlays.forEach((clip) => { clip.path = replace(clip.path); });
+    if (data.src) data.src.path = replace(data.src.path);
+    data.bgm.path = replace(data.bgm.path);
+    if ("ed-bgm-path" in data.settings) data.settings["ed-bgm-path"] = data.bgm.path;
+    data.media_manifest.forEach((media) => { media.path = replace(media.path); });
+    for (const key of ["track_selection", "subtitle_selection"]) {
+      data[key] = Object.fromEntries(Object.entries(data[key]).map(([path, value]) => [replace(path), value]));
+    }
+    await restoreProject(data);
+  }
+
+  function saveProject() {
+    const blob = new Blob([JSON.stringify(projectData(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "editor-projekt.json";
@@ -2534,13 +2730,7 @@
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
-      if (!data || !Array.isArray(data.segments)) throw new Error("Ungültiges Projekt");
-      pushHist();
-      ed.segments = data.segments.map((s) => defaultClip(s));
-      ed.overlays = Array.isArray(data.overlays) ? data.overlays.map((o) => defaultOverlay(o)) : [];
-      renderSegList();
-      if (data.src && data.src.path) await loadSource(data.src.path, data.src.name);
-      setStatus(tt("Projekt geladen."));
+      await restoreProject(data);
     } catch (e) {
       setStatus(String(e.message || e), true);
     }
@@ -2854,6 +3044,10 @@
 
   async function enqueue() {
     if (!ed.segments.length) return;
+    if ((await checkMissingMedia()).length) {
+      setStatus(tt("Export gesperrt: Projektmedien fehlen oder sind nicht erreichbar."), true);
+      return;
+    }
     const mode = ($("ed-mode") && $("ed-mode").value) || "remux";
     const hdrMode = ($("ed-hdr-mode") && $("ed-hdr-mode").value) || "keep";
     const exportSplit = (($("ed-export-split") && $("ed-export-split").value) || "merge") === "split";
@@ -2927,6 +3121,7 @@
       tonemap: hdrMode === "tonemap",
       preserve_hdr: hdrMode !== "tonemap",
       post_processing: "keep",
+      editor_project: projectData(),
     };
     if ((mode === "remux" || mode === "smart") && !payload.force_remux) {
       try {
@@ -2960,6 +3155,22 @@
     }
     setStatus(tt("Reihe ein …"));
     try {
+      const previewResponse = await fetch("/api/editor/preflight", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const preview = await previewResponse.json();
+      if (!previewResponse.ok || preview.error) throw new Error(preview.error || "Vorabprüfung fehlgeschlagen.");
+      const reports = preview.reports || [];
+      const blockers = reports.flatMap((report) => report.blockers || []);
+      const fatal = blockers.filter((issue) => issue.code !== "overwrite_consent_required");
+      if (fatal.length) throw new Error(fatal.map((issue) => issue.message).join("\n"));
+      if (blockers.length) {
+        if (!confirm("Vorhandene Editor-Ausgaben ausdrücklich überschreiben?\n\n" +
+          reports.flatMap((report) => report.outputs || []).map((output) => output.path).join("\n"))) return;
+        payload.on_duplicate = "overwrite";
+      }
+      const warnings = [...new Set(reports.flatMap((report) => report.warnings || []).map((issue) => issue.message))];
+      if (warnings.length && !confirm("Export-Vorabprüfung:\n\n" + warnings.join("\n") + "\n\nExport starten?")) return;
       const r = await fetch("/api/editor/enqueue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4284,14 +4495,40 @@
     const unload = $("ed-unload");
     if (unload) unload.disabled = true;
     checkAutoSession();
+    const page = PAGE();
+    if (page) {
+      page.addEventListener("focusin", (event) => {
+        if (PROJECT_FIELDS.includes(event.target.id)) pushHist();
+      });
+      page.addEventListener("change", (event) => {
+        if (PROJECT_FIELDS.includes(event.target.id)) {
+          if (event.target.id === "ed-bgm-path") ed.bgmPath = event.target.value.trim();
+          pushHist();
+          saveAutoSession();
+        }
+      });
+    }
   }
 
   window.editorOpenSource = async function editorOpenSource(path, name) {
     if (!ed.loaded) window.editorInit();
-    await loadSource(path, name || path);
+    if (ed.src && ed.src.path === path) return;
+    if (ed.src || ed.segments.length || ed.overlays.length) pushHist();
+    const loaded = await loadSource(path, name || path);
+    if (!loaded) return;
     if (!ed.segments.length && ed.src && ed.src.duration > 0) {
       keepWholeFile();
     }
+  };
+
+  window.editorRestoreProject = async (data) => {
+    if (!ed.loaded) window.editorInit();
+    try { await restoreProject(data); }
+    catch (error) { setStatus(String(error.message || error), true); }
+  };
+  window.EditorProject = {
+    version: 3, serialize: () => snapshot(), validate: validateProject,
+    restore: restoreProject, relink: relinkMedia, checkMissingMedia,
   };
 
   window.editorInit = function editorInit() {

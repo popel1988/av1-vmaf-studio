@@ -2,9 +2,28 @@
 # Lädt fehlende externe Tools/Modelle automatisch nach .\bin\ herunter und baut
 # anschließend .\dist\AV1-VMAF-Studio\AV1-VMAF-Studio.exe via PyInstaller.
 
+param(
+    [string]$Python = "py",
+    [switch]$SkipToolDownloads
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+
+# Isolate frozen builds from global Python.Runtime.dll / package mismatches.
+# py defaults to the newest interpreter (possibly unsupported Python 3.14).
+$PythonArgs = if ((Split-Path -Leaf $Python) -in @("py", "py.exe")) { @("-3.12") } else { @() }
+& $Python @PythonArgs -c "import sys,struct; assert sys.version_info[:2] == (3,12) and struct.calcsize('P') == 8, 'Build requires CPython 3.12 x64'"
+if ($LASTEXITCODE -ne 0) { throw "Bitte CPython 3.12 x64 installieren oder -Python mit dessen Pfad angeben." }
+$Venv = Join-Path $Root ".venv-desktop"
+& $Python @PythonArgs -m venv $Venv
+if ($LASTEXITCODE -ne 0) { throw "Desktop-Build-Umgebung konnte nicht angelegt werden." }
+$PyCmd = Join-Path $Venv "Scripts\python.exe"
+& $PyCmd -m pip install -r (Join-Path $Root "requirements-desktop.txt")
+if ($LASTEXITCODE -ne 0) { throw "Desktop-Abhängigkeiten konnten nicht installiert werden." }
+& $PyCmd -m pip check
+if ($LASTEXITCODE -ne 0) { throw "Desktop-Abhängigkeiten sind inkonsistent." }
 
 $BinDir = Join-Path $Root "bin"
 $ModelDir = Join-Path $BinDir "model"
@@ -14,7 +33,7 @@ New-Item -ItemType Directory -Force -Path $BinDir, $ModelDir, $TempDir | Out-Nul
 Write-Host "=== 1. Prüfe & lade externe Tools nach .\bin\ ===" -ForegroundColor Cyan
 
 # 1a) FFmpeg & FFprobe (BtbN GPL Build inkl. libvmaf, libsvtav1, libx265, NVENC, QSV, AMF)
-if (-not (Test-Path (Join-Path $BinDir "ffmpeg.exe"))) {
+if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "ffmpeg.exe"))) {
     Write-Host "Lade FFmpeg (BtbN GPL x64) herunter ..."
     $FfZip = Join-Path $TempDir "ffmpeg.zip"
     Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile $FfZip
@@ -40,7 +59,7 @@ $VmafModels = @(
 )
 foreach ($m in $VmafModels) {
     $TargetModel = Join-Path $ModelDir $m
-    if (-not (Test-Path $TargetModel)) {
+    if (-not $SkipToolDownloads -and -not (Test-Path $TargetModel)) {
         Write-Host "Lade VMAF-Modell $m ..."
         try {
             Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Netflix/vmaf/master/model/$m" -OutFile $TargetModel
@@ -51,7 +70,7 @@ foreach ($m in $VmafModels) {
 }
 
 # 1c) MKVToolNix (mkvpropedit.exe & mkvmerge.exe für MKV-Statistik-Tags)
-if (-not (Test-Path (Join-Path $BinDir "mkvpropedit.exe"))) {
+if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "mkvpropedit.exe"))) {
     Write-Host "Lade mkvpropedit.exe & mkvmerge.exe (MKVToolNix) ..."
     try {
         $Mkv7z = Join-Path $TempDir "mkvtoolnix.7z"
@@ -65,7 +84,7 @@ if (-not (Test-Path (Join-Path $BinDir "mkvpropedit.exe"))) {
 }
 
 # 1c) dovi_tool.exe (Dolby Vision RPU Extraktion/Injektion)
-if (-not (Test-Path (Join-Path $BinDir "dovi_tool.exe"))) {
+if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "dovi_tool.exe"))) {
     Write-Host "Lade dovi_tool.exe ..."
     try {
         $DoviZip = Join-Path $TempDir "dovi_tool.zip"
@@ -79,7 +98,7 @@ if (-not (Test-Path (Join-Path $BinDir "dovi_tool.exe"))) {
 }
 
 # 1d) hdr10plus_tool.exe (HDR10+ Metadaten)
-if (-not (Test-Path (Join-Path $BinDir "hdr10plus_tool.exe"))) {
+if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "hdr10plus_tool.exe"))) {
     Write-Host "Lade hdr10plus_tool.exe ..."
     try {
         $HdrZip = Join-Path $TempDir "hdr10plus_tool.zip"
@@ -94,15 +113,9 @@ if (-not (Test-Path (Join-Path $BinDir "hdr10plus_tool.exe"))) {
 
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 
-Write-Host "=== 2. Prüfe Python-Pakete (pyinstaller, pywebview) ===" -ForegroundColor Cyan
-$PyCmd = if (Get-Command "python" -ErrorAction SilentlyContinue) { "python" } else { "py" }
-& $PyCmd -m pip install --upgrade pip
-& $PyCmd -m pip install --upgrade -r requirements.txt pyinstaller
-try {
-    & $PyCmd -m pip install --upgrade pywebview
-} catch {
-    Write-Warning "pywebview konnte nicht installiert werden – Edge/Chrome App-Modus wird genutzt."
-}
+Write-Host "=== 2. Prüfe gepinnte native Laufzeit ===" -ForegroundColor Cyan
+& $PyCmd desktop_main.py --desktop-smoke-test
+if ($LASTEXITCODE -ne 0) { throw "Native Desktop-Laufzeitprüfung fehlgeschlagen; siehe LOCALAPPDATA\AV1-VMAF-Studio\studio.log." }
 
 Write-Host "=== 3. Baue AV1-VMAF-Studio.exe mit PyInstaller ===" -ForegroundColor Cyan
 & $PyCmd -m PyInstaller `
@@ -115,6 +128,18 @@ Write-Host "=== 3. Baue AV1-VMAF-Studio.exe mit PyInstaller ===" -ForegroundColo
     --add-data "static;static" `
     --collect-submodules "core" `
     --collect-submodules "uvicorn" `
+    --collect-all "webview" `
+    --collect-all "pythonnet" `
+    --collect-all "clr_loader" `
+    --collect-all "pystray" `
+    --copy-metadata "pywebview" `
+    --copy-metadata "pythonnet" `
+    --copy-metadata "clr_loader" `
+    --hidden-import "clr" `
+    --hidden-import "_cffi_backend" `
+    --hidden-import "webview.platforms.winforms" `
+    --hidden-import "webview.platforms.edgechromium" `
+    --hidden-import "pystray._win32" `
     desktop_main.py
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller ist mit Exit-Code $LASTEXITCODE fehlgeschlagen."
@@ -123,7 +148,20 @@ if ($LASTEXITCODE -ne 0) {
 $DistAppDir = Join-Path $Root "dist\AV1-VMAF-Studio"
 $DistBinDir = Join-Path $DistAppDir "bin"
 New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
-Copy-Item -Path (Join-Path $BinDir "*") -Destination $DistBinDir -Recurse -Force
+Get-ChildItem -LiteralPath $BinDir | Copy-Item -Destination $DistBinDir -Recurse -Force
+
+# The smoke test exercises the matching Python.Runtime assembly loader in the
+# frozen process, without opening a window or changing file associations.
+$FrozenExe = Join-Path $DistAppDir "AV1-VMAF-Studio.exe"
+$Smoke = Start-Process -FilePath $FrozenExe -ArgumentList "--desktop-smoke-test" -PassThru
+if (-not $Smoke.WaitForExit(60000)) {
+    Stop-Process -Id $Smoke.Id -Force
+    throw "Frozen-Smoke-Test antwortet nach 60 Sekunden nicht."
+}
+$Smoke.Refresh()
+if ($Smoke.ExitCode -ne 0) {
+    throw "Frozen-Smoke-Test fehlgeschlagen; siehe LOCALAPPDATA\AV1-VMAF-Studio\desktop-smoke.json und studio.log."
+}
 
 Write-Host ""
 Write-Host "Fertig! Die direkt startbare Anwendung liegt unter:" -ForegroundColor Green

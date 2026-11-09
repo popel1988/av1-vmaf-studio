@@ -295,6 +295,8 @@ class JobSettings:
     name_pattern: str = "{stem}{suffix}"
     # Bei existierendem Ziel / History: ask | skip | overwrite
     on_duplicate: str = "ask"
+    approve_inplace: bool = False  # Explicit original-replacement consent.
+    test_export: dict = field(default_factory=dict)  # Server-owned scratch job only.
     # Caps: 0 = aus. Nach Encode prüfen; bei ABR zusätzlich als Obergrenze.
     max_output_mb: float = 0.0
     max_video_bitrate_kbps: int = 0
@@ -689,7 +691,7 @@ class QueueManager:
             return None
         # Duplikat: skip → nicht einreihen; ask/overwrite → einreihen (UI warnt vorher).
         on_dup = (getattr(settings, "on_duplicate", "ask") or "ask").lower()
-        if on_dup == "skip":
+        if on_dup == "skip" and not settings.test_export:
             plan = job_plan.plan_one(str(p), settings)
             if plan.get("duplicate"):
                 return None
@@ -712,10 +714,63 @@ class QueueManager:
             except (TypeError, ValueError):
                 pass
         with self._lock:
+            if getattr(self, "_stop", False):
+                return None
+            self._check_export(item, info)
             self._items.append(item)
         self._persist()
         self._wake.set()
         return item
+
+    def _export_context_locked(self, exclude_id=None):
+        from . import export_preflight as preflight
+        outputs, sources = [], []
+        for other in self._items:
+            if other.id == exclude_id or other.status in self._TERMINAL_STATES:
+                continue
+            outputs.extend(preflight.destinations(other.path, other.settings))
+            outputs.extend({"path": value, "role": "extra"} for value in other.extra_outputs or [])
+            sources.extend(preflight.source_paths(other.path, other.settings))
+        return outputs, sources
+
+    def preflight(self, path, settings, info=None):
+        from . import export_preflight
+        with self._lock:
+            outputs, sources = self._export_context_locked()
+            return export_preflight.inspect(path, settings, info=info,
+                                            reservations=outputs, protected_sources=sources)
+
+    def _check_export(self, item, info=None):
+        from . import export_preflight
+        with self._lock:
+            outputs, sources = self._export_context_locked(item.id)
+            report = export_preflight.inspect(
+                item.path, item.settings, info=info or item.info,
+                reservations=outputs, protected_sources=sources)
+            item.details["preflight"] = report
+            export_preflight.require(report)
+            return report
+
+    def add_test_export(self, path, settings, start, seconds):
+        from copy import deepcopy
+        from . import export_preflight
+        info = ffprobe(Path(path))
+        if info is None:
+            raise ValueError("Quelle konnte nicht geprüft werden.")
+        support = export_preflight.test_support(settings, info.to_dict())
+        if not support["supported"]:
+            raise ValueError(" ".join(support["reasons"]))
+        if not (math.isfinite(start) and math.isfinite(seconds) and start >= 0
+                and 0 < seconds <= 120 and info.duration > 0
+                and start + seconds <= info.duration):
+            raise ValueError("Testbereich muss innerhalb der Quelle liegen (maximal 120 Sekunden).")
+        settings = deepcopy(settings)
+        settings.test_export = {
+            "start": start, "seconds": seconds,
+            "directory": str(config.WORK_DIR / "test_exports" / uuid.uuid4().hex),
+            "fingerprint": export_preflight.fingerprint(path, settings, [start, seconds]),
+        }
+        return self.add_file(path, settings)
 
     def add_batch(self, folder: str, settings: JobSettings) -> list[QueueItem]:
         base = Path(folder)
@@ -947,7 +1002,7 @@ class QueueManager:
     # ------------------------------------------------------------------ Worker
     def _claim_next_locked(self) -> Optional[QueueItem]:
         """Nächsten startbaren Job holen (Lock muss gehalten werden)."""
-        if self._paused:
+        if self._paused or getattr(self, "_stop", False):
             return None
         # Scheduler-Gate prüfen (Zeitfenster/Last). Läuft ein Job bereits,
         # nicht durch das Gate blockieren – nur den Start neuer Jobs steuern.
@@ -1048,6 +1103,8 @@ class QueueManager:
     @staticmethod
     def _record_history(item: QueueItem, duration: float) -> None:
         """Echte Encodes und Fehler in die persistente Historie schreiben."""
+        if item.settings.test_export:
+            return  # Scratch tests never appear in history or notify media servers.
         try:
             from . import history
             encoded = item.status == STATUS_DONE and getattr(item, "output_size", 0)
@@ -1134,6 +1191,11 @@ class QueueManager:
         item.details["source"] = item.info
 
         s = item.settings
+        self._check_export(item, info)
+        item._export_preflight = lambda: self._check_export(item, info)
+        if s.test_export:
+            self._process_test_export(item, info)
+            return
 
         # --- Remux/Bearbeiten: Spuren editieren, Video 1:1 (kein Re-Encode) ---
         if s.video_mode == "edit":
@@ -1863,6 +1925,7 @@ class QueueManager:
                     spec.get("aq_strength", getattr(s, "aq_strength", 8)) or 8))),
                 tonemap=bool(spec.get("tonemap", getattr(s, "tonemap", False))),
                 preserve_hdr=bool(spec.get("preserve_hdr", getattr(s, "preserve_hdr", True))),
+                preserve_dv=s.preserve_dv,
                 overlays=ovs,
                 bgm_path=bgm_path,
                 bgm_volume_db=float(spec.get("bgm_volume_db", -12.0)),
@@ -1982,6 +2045,44 @@ class QueueManager:
             item.progress["percent"] = 100.0
             item.message = ""
 
+    def _process_test_export(self, item, info):
+        from . import export_preflight
+        s = item.settings
+        test = s.test_export
+        support = export_preflight.test_support(s, info.to_dict())
+        if not support["supported"]:
+            raise ValueError(" ".join(support["reasons"]))
+        if export_preflight.fingerprint(item.path, s, [test["start"], test["seconds"]]) != test["fingerprint"]:
+            raise ValueError("Quelle oder Einstellungen haben sich seit dem Testauftrag geändert.")
+        if test["start"] + test["seconds"] > info.duration:
+            raise ValueError("Testbereich liegt nicht mehr innerhalb der Quelle.")
+        out = _output_path(item)
+        out.parent.mkdir(parents=True, exist_ok=False)
+        item.details["test_export"] = dict(test, isolated=True)
+        if s.autocrop:
+            item.crop = ff.detect_crop(info)
+        if s.size_target_mb > 0:
+            from . import size_target
+            size_target.apply_size_target(s, info)
+        item.status = STATUS_RUNNING
+        started = time.time()
+        rc, stderr, cmd, cancelled = self._encode_to(item, s, info, out, lambda p: item.progress.update(
+            percent=p.percent, fps=p.fps, speed=p.speed, eta=p.eta))
+        item.encode_seconds = time.time() - started
+        if cancelled or rc:
+            item.status = STATUS_CANCELLED if cancelled else STATUS_FAILED
+            item.error = "" if cancelled else (stderr[-1500:] or f"FFmpeg exit {rc}")
+            out.unlink(missing_ok=True)
+            _unlink_mobile(item)
+            return
+        item.output_path = str(out)
+        item.output_size = out.stat().st_size if out.exists() else 0
+        mobile = getattr(item, "_mobile_path", None)
+        item.extra_outputs = [str(mobile)] if mobile and Path(mobile).is_file() else []
+        item.progress["percent"] = 100
+        item.status = STATUS_DONE
+        item.message = "Separater Testexport; Original und endgültige Ausgabe unverändert."
+
     def _encode_to(self, item: "QueueItem", s: "JobSettings", info,
                    out_path: Path, on_prog) -> tuple:
         """Ein Encode-Durchlauf (Ein-/Zwei-Pass). Liefert
@@ -2023,6 +2124,9 @@ class QueueManager:
             "deband": s.deband,
             "svt_look": s.svt_look,
         }
+        enc_kw["overwrite"] = s.on_duplicate == "overwrite" and not s.test_export
+        if s.test_export:
+            enc_kw.update(start_at=s.test_export["start"], duration_limit=s.test_export["seconds"])
         mobile_path = _mobile_output_path(item, out_path)
         if mobile_path is not None:
             enc_kw["mobile"] = {
@@ -2048,7 +2152,8 @@ class QueueManager:
         do_two_pass = (s.two_pass and s.platform == "cpu"
                        and s.rate_mode in ("bitrate", "abr"))
         if do_two_pass:
-            passlog = str(config.WORK_DIR / f"pass_{item.id}")
+            passlog = str((Path(s.test_export["directory"]) if s.test_export else config.WORK_DIR)
+                          / f"pass_{item.id}")
             config.WORK_DIR.mkdir(parents=True, exist_ok=True)
             cmd = build_encode_cmd(
                 info, out_path, s.platform, s.codec, s.quality,
@@ -2058,7 +2163,7 @@ class QueueManager:
             item.message = "Zwei-Pass: Analyse-Durchlauf (1/2) …"
             _begin_step(item, "Zwei-Pass · Analyse")
             _log_cmd(item, cmd, "Zwei-Pass 1/2")
-            rc, stderr = runner.run(cmd, info.duration)
+            rc, stderr = runner.run(cmd, s.test_export.get("seconds", info.duration))
             _end_step(item)
             if rc == 0 and not runner._cancel:
                 item.message = "Zwei-Pass: Encode-Durchlauf (2/2) …"
@@ -2069,7 +2174,7 @@ class QueueManager:
                     passlog=passlog, **enc_kw,
                 )
                 _log_cmd(item, cmd, "Zwei-Pass 2/2")
-                rc, stderr = runner.run(cmd, info.duration)
+                rc, stderr = runner.run(cmd, s.test_export.get("seconds", info.duration))
                 _end_step(item)
             self._cleanup_passlog(passlog)
         elif s.two_pass and s.platform == "nvidia":
@@ -2080,7 +2185,7 @@ class QueueManager:
             _log_cmd(item, cmd)
             _begin_step(item, _step_label(item, "Encode"))
             try:
-                rc, stderr = runner.run(cmd, info.duration)
+                rc, stderr = runner.run(cmd, s.test_export.get("seconds", info.duration))
             finally:
                 _end_step(item)
         else:
@@ -2091,7 +2196,7 @@ class QueueManager:
             _log_cmd(item, cmd)
             _begin_step(item, _step_label(item, "Encode"))
             try:
-                rc, stderr = runner.run(cmd, info.duration)
+                rc, stderr = runner.run(cmd, s.test_export.get("seconds", info.duration))
             finally:
                 _end_step(item)
         return rc, stderr, cmd, runner._cancel
@@ -2629,8 +2734,12 @@ class QueueManager:
     @staticmethod
     def _post_process(item: QueueItem, out_path: Path) -> None:
         s = item.settings
+        if s.test_export:
+            return
         mode = s.post_processing
         src = Path(item.path)
+        if mode == "inplace" and not s.approve_inplace:
+            raise ValueError("Original ersetzen erfordert ausdrückliche Freigabe.")
 
         # Sichere Original-Nachbehandlung: Original nur dann löschen/verschieben,
         # wenn die Ausgabe intakt ist UND (falls Guardrail aktiv) die Qualität
@@ -2662,12 +2771,17 @@ class QueueManager:
             if mode == "inplace":
                 # Original durch neues File ersetzen (am Originalort)
                 target = src.with_suffix(out_path.suffix)
-                src.unlink(missing_ok=True)
+                if target.exists() and target.resolve() != src.resolve() and s.on_duplicate != "overwrite":
+                    raise OSError("Neues Ersatzziel existiert bereits; Überschreibfreigabe fehlt.")
                 out_path.replace(target)
+                if target.resolve() != src.resolve():
+                    src.unlink(missing_ok=True)
                 item.output_path = str(target)
             elif mode == "archive":
                 archive_dir = src.parent / config.ARCHIVE_DIRNAME
                 archive_dir.mkdir(parents=True, exist_ok=True)
+                if (archive_dir / src.name).exists() and s.on_duplicate != "overwrite":
+                    raise OSError("Archivziel existiert bereits; Überschreibfreigabe fehlt.")
                 src.replace(archive_dir / src.name)
             # mode == "keep": Original bleibt, Output liegt in der Standard-Ausgabe
         except OSError as e:
@@ -2678,14 +2792,25 @@ class QueueManager:
                 item.report, mode, item.output_path, error=post_error)
 
     def shutdown(self) -> None:
-        self._stop = True
         with self._lock:
-            for runner in self._active.values():
+            self._stop = True
+            self._cancel_ids.update(self._active)
+        self._wake.set()
+        if self._thread is not threading.current_thread():
+            self._thread.join()
+        # Runner can be assigned after a job was claimed. Keep cancelling until
+        # every worker's finally block has persisted its final state.
+        while True:
+            with self._lock:
+                active = list(self._active.values())
+                if not self._active:
+                    break
+            for runner in active:
                 if runner:
                     runner.cancel()
-        # Letzten Stand sichern (inkl. fertiger Einträge), bevor der Prozess endet.
+            self._wake.wait(0.1)
+            self._wake.clear()
         self._persist()
-        self._wake.set()
 
 
 _VALID_CODECS = {"av1", "hevc", "h264", "vp9"}
@@ -2712,7 +2837,8 @@ def _deint(value: str) -> str:
 
 def build_job_settings(d: dict) -> JobSettings:
     """UI-/Profil-Dict → JobSettings (zentrale Zuordnung inkl. HDR-Modus)."""
-    hdr_mode = d.get("hdr_mode", "tonemap")
+    hdr_mode = d.get("hdr_mode", "preserve" if d.get("preserve_hdr") else
+                     "tonemap" if d.get("tonemap", True) else "")
     codec = d.get("codec", "av1")
     # DV-Behandlung: `dv_mode` (aus der UI bei DV-Quellen) hat Vorrang und legt
     # sowohl HDR- als auch DV-Verhalten fest. Ohne dv_mode gilt hdr_mode + Legacy.
@@ -2738,21 +2864,18 @@ def build_job_settings(d: dict) -> JobSettings:
     # injizieren – dovi_tool unterstützt AV1 auf der CLI nicht. Daher hier
     # ehrlich auf den HDR10-Basislayer zurückfallen statt später zu scheitern.
     if preserve_dv and codec == "av1" and platform != "cpu":
-        preserve_dv, preserve_hdr, tonemap = False, True, False
-        logger.info("AV1+DV nur mit CPU/libsvtav1 möglich – %s: HDR10-Fallback "
-                    "(Encoder %s kann keine DV-RPU einbetten).",
-                    d.get("title") or d.get("path") or "?", platform)
+        from .export_preflight import ExportRejected
+        raise ExportRejected({"ok": False, "blockers": [{"code": "unsupported_dv",
+            "message": "AV1 mit Dolby Vision wird nur mit CPU/libsvtav1 unterstützt."}]})
 
     if codec == "vp9" and platform != "cpu":
         logger.info("VP9 nur mit CPU/libvpx – Plattform %s wird auf CPU gesetzt (%s).",
                     platform, d.get("title") or d.get("path") or "?")
         platform = "cpu"
     if preserve_dv and codec == "vp9":
-        preserve_dv = False
-        if not tonemap:
-            preserve_hdr = True
-        logger.info("VP9 kann keine Dolby-Vision-RPU – %s: HDR10-Fallback.",
-                    d.get("title") or d.get("path") or "?")
+        from .export_preflight import ExportRejected
+        raise ExportRejected({"ok": False, "blockers": [{"code": "unsupported_dv",
+            "message": "VP9 unterstützt keinen Dolby-Vision-Erhalt."}]})
 
     speed = d.get("encoder_speed")
     if not speed:
@@ -2839,6 +2962,7 @@ def build_job_settings(d: dict) -> JobSettings:
         out_subdir=str(d.get("out_subdir", "") or ""),
         name_pattern=str(d.get("name_pattern", "") or "{stem}{suffix}"),
         on_duplicate=str(d.get("on_duplicate", "") or "ask"),
+        approve_inplace=bool(d.get("approve_inplace", False)),
         max_output_mb=float(d.get("max_output_mb", 0) or 0),
         max_video_bitrate_kbps=int(d.get("max_video_bitrate_kbps", 0) or 0),
         size_target_mb=float(d.get("size_target_mb", 0) or 0),
@@ -2966,6 +3090,11 @@ def _effective_out_mode(s: JobSettings) -> str:
 
 def _output_path(item: QueueItem) -> Path:
     from . import job_plan
+    check = getattr(item, "_export_preflight", None)
+    if check:
+        check()  # Repeat with final settings, after any manual/VMAF decisions.
+    if item.settings.test_export:
+        return Path(item.settings.test_export["directory"]) / ("test" + _container_ext(item.settings))
     out = job_plan.planned_output_path(Path(item.path), item.settings)
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -3001,7 +3130,7 @@ def _mobile_output_path(item: QueueItem, out_path: Path) -> Optional[Path]:
         return None
     if getattr(s, "video_mode", "encode") != "encode" or getattr(s, "chunked", False):
         return None
-    if s.post_processing == "inplace":
+    if s.post_processing == "inplace" and not s.test_export:
         src = Path(item.path)
         return src.with_name(f"{src.stem}_mobile.mp4")
     return out_path.with_name(f"{out_path.stem}_mobile.mp4")

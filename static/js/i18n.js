@@ -5796,7 +5796,7 @@
   RULES_FR = lowContextRules("fr").concat(RULES_FR);
 
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, CODE: 1, NOSCRIPT: 1 };
-  var ATTRS = ["placeholder", "title", "data-tip"];
+  var ATTRS = ["placeholder", "title", "data-tip", "aria-label"];
 
   // Typografische Anführungszeichen/Bindestriche vereinheitlichen, damit der
   // Abgleich unabhängig von den konkreten Unicode-Zeichen funktioniert.
@@ -5813,6 +5813,56 @@
   var lang = "de";
   try { lang = localStorage.getItem("lang") || "de"; } catch (e) { /* ignore */ }
 
+  // Workspace labels are shared by progressively enhanced and native desktop UI.
+  var WORKSPACE = {
+    "Komprimieren": ["Compress", "Comprimir", "Compresser"],
+    "Bearbeiten": ["Edit", "Editar", "Modifier"],
+    "Analysieren": ["Analyze", "Analizar", "Analyser"],
+    "Verwalten": ["Manage", "Administrar", "Gérer"],
+    "Navigation einklappen": ["Collapse navigation", "Contraer navegación", "Réduire la navigation"],
+    "Navigation ausklappen": ["Expand navigation", "Expandir navegación", "Développer la navigation"],
+    "Hardware-Details": ["Hardware details", "Detalles del hardware", "Détails du matériel"],
+    "Hardware-Auslastung": ["Hardware utilization", "Uso del hardware", "Utilisation du matériel"],
+    "Bedienmodus": ["Interface mode", "Modo de interfaz", "Mode d’interface"],
+    "Einfach": ["Simple", "Simple", "Simple"],
+    "Experte": ["Expert", "Experto", "Expert"],
+    "Alle Expertenwerte bleiben aktiv und werden unverändert übernommen.": ["All expert settings remain active and unchanged.", "Todos los ajustes avanzados siguen activos sin cambios.", "Tous les réglages experts restent actifs et inchangés."],
+    "Profil-Aktionen": ["Profile actions", "Acciones de perfil", "Actions du profil"],
+    "Nur Programm-Monitor": ["Program monitor only", "Solo monitor de programa", "Moniteur programme uniquement"],
+    "Layout zurücksetzen": ["Reset layout", "Restablecer diseño", "Réinitialiser la disposition"],
+    "Monitoraufteilung": ["Monitor split", "División de monitores", "Répartition des moniteurs"],
+    "Timeline-Höhe": ["Timeline height", "Altura de la línea de tiempo", "Hauteur de la timeline"],
+    "Aktionen für alle Clips": ["Actions for all clips", "Acciones para todos los clips", "Actions pour tous les clips"],
+    "Schnittaktionen": ["Editing actions", "Acciones de edición", "Actions de montage"],
+    "Kontexthilfe": ["Context help", "Ayuda contextual", "Aide contextuelle"],
+    "Steuerelement fokussieren, um seine Funktion zu erklären.": ["Focus a control to see what it does.", "Enfoca un control para ver su función.", "Sélectionnez une commande pour afficher sa fonction."],
+    "Aktion": ["Action", "Acción", "Action"],
+    "Aktive Quelle:": ["Active source:", "Fuente activa:", "Source active :"],
+    "Explizit übernehmen · bestehende Projekte bleiben beim Tabwechsel erhalten": ["Apply explicitly · switching tabs preserves existing projects", "Aplicar explícitamente · cambiar de pestaña conserva los proyectos", "Appliquer explicitement · changer d’onglet conserve les projets"],
+    "Ausgabeordner": ["Output folder", "Carpeta de salida", "Dossier de sortie"],
+    "Quelle / Ausgabe": ["Source / output", "Fuente / salida", "Source / sortie"],
+    "Einstellungen übernehmen": ["Apply settings", "Aplicar ajustes", "Appliquer les réglages"],
+    "Fehlende / nicht erreichbare Projektmedien": ["Missing / unavailable project media", "Medios del proyecto no disponibles", "Médias du projet manquants ou indisponibles"],
+    "Datei neu verknüpfen": ["Relink file", "Volver a vincular archivo", "Relier le fichier"],
+    "Gemeinsamen Ordner neu verknüpfen": ["Relink shared folder", "Volver a vincular carpeta común", "Relier le dossier commun"],
+    "Erneut prüfen": ["Check again", "Comprobar de nuevo", "Vérifier à nouveau"],
+    "Testexport": ["Test export", "Exportación de prueba", "Export de test"],
+    "Testexport anzeigen": ["Show test export", "Mostrar exportación de prueba", "Afficher l’export de test"],
+    "Testexport ist freiwillig und blockiert den vollständigen Export nicht.": ["Test export is optional and never blocks the full export.", "La prueba es opcional y no bloquea la exportación completa.", "Le test est facultatif et ne bloque pas l’export complet."],
+    "Export-Vorabprüfung": ["Export preflight", "Comprobación previa de exportación", "Vérification avant export"],
+    "Start (Sekunden)": ["Start (seconds)", "Inicio (segundos)", "Début (secondes)"],
+    "Dauer (Sekunden)": ["Duration (seconds)", "Duración (segundos)", "Durée (secondes)"],
+    "Mit Original vergleichen": ["Compare with original", "Comparar con el original", "Comparer avec l’original"],
+    "Desktop-Funktionen": ["Desktop features", "Funciones de escritorio", "Fonctions bureau"],
+    "Dateien öffnen": ["Open files", "Abrir archivos", "Ouvrir des fichiers"],
+    "Öffnen mit registrieren": ["Register Open with", "Registrar Abrir con", "Enregistrer Ouvrir avec"],
+    "Öffnen mit entfernen": ["Remove Open with", "Quitar Abrir con", "Supprimer Ouvrir avec"]
+  };
+  Object.keys(WORKSPACE).forEach(function (key) {
+    DICT[key] = WORKSPACE[key][0];
+    DICT_ES[key] = WORKSPACE[key][1];
+    DICT_FR[key] = WORKSPACE[key][2];
+  });
   var DICTS = { en: DICT, es: DICT_ES, fr: DICT_FR };
   var RULESETS = { en: RULES, es: RULES_ES, fr: RULES_FR };
   var activeDict = DICTS[lang] || null;
