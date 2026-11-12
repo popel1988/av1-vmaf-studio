@@ -56,6 +56,21 @@
           receive(result);
         } catch (e) { error(e.message); }
       });
+      const folder = document.createElement("button");
+      folder.type = "button";
+      folder.id = "desktop-select-folder";
+      folder.className = "btn btn-ghost btn-sm";
+      folder.textContent = translate("Ordner hinzufügen");
+      folder.title = translate("Ordner oder Laufwerk dauerhaft als Medienquelle hinzufügen");
+      folder.addEventListener("click", async () => {
+        folder.disabled = true;
+        try {
+          const result = await nativeApi().select_folder();
+          if (result.error || !result.ok) throw new Error(result.error || "Ordner konnte nicht hinzugefügt werden.");
+          if (!result.cancelled) error("Medienordner gespeichert: " + result.path);
+        } catch (e) { error(e.message); }
+        finally { folder.disabled = false; }
+      });
       const register = document.createElement("button");
       register.type = "button";
       register.id = "desktop-register-open-with";
@@ -72,10 +87,11 @@
       status.className = "muted";
       const files = document.createElement("div");
       files.id = "desktop-file-list";
-      panel.append(title, select, register, status, files);
+      panel.append(title, select, folder, register, status, files);
       document.querySelector(".topbar").after(panel);
     }
     document.getElementById("desktop-select-files").hidden = !value.file_dialog || !nativeApi();
+    document.getElementById("desktop-select-folder").hidden = !value.folder_dialog || !nativeApi();
     document.getElementById("desktop-register-open-with").hidden = !value.open_with_registration || !nativeApi();
     error(value.native_host
       ? "Natives Fenster · Dateien aus dem Explorer hierher ziehen (ohne Upload)."

@@ -5855,6 +5855,8 @@
     "Mit Original vergleichen": ["Compare with original", "Comparar con el original", "Comparer avec l’original"],
     "Desktop-Funktionen": ["Desktop features", "Funciones de escritorio", "Fonctions bureau"],
     "Dateien öffnen": ["Open files", "Abrir archivos", "Ouvrir des fichiers"],
+    "Ordner hinzufügen": ["Add folder", "Añadir carpeta", "Ajouter un dossier"],
+    "Ordner oder Laufwerk dauerhaft als Medienquelle hinzufügen": ["Permanently add a folder or drive as a media source", "Añadir una carpeta o unidad como fuente multimedia permanente", "Ajouter durablement un dossier ou lecteur comme source multimédia"],
     "Öffnen mit registrieren": ["Register Open with", "Registrar Abrir con", "Enregistrer Ouvrir avec"],
     "Öffnen mit entfernen": ["Remove Open with", "Quitar Abrir con", "Supprimer Ouvrir avec"]
   };

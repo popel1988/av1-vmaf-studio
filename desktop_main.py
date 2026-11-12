@@ -211,6 +211,8 @@ def main(argv=None) -> int:
             return 0 if result.get("ok") else 1
         from core.desktop_ipc import SingleInstance
         from core.desktop_paths import DesktopPathGrants, validate_paths
+        from core.desktop_processes import install_no_console_processes
+        install_no_console_processes()
         paths = validate_paths([str(Path(value).absolute()) for value in options.files])
         instance = SingleInstance(logs)
         if not instance.acquire():
@@ -222,9 +224,12 @@ def main(argv=None) -> int:
         import uvicorn
         import app as studio_app
         from core import config
+        from core.desktop_folders import DesktopMediaFolders
         from core.desktop_host import DesktopBridge, install_desktop_routes
         grants = DesktopPathGrants()
         grants.install(config)
+        folders = DesktopMediaFolders(config, data)
+        folders.restore()
         # Bind once and pass this actual socket to Uvicorn, avoiding port races.
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         requested_port = int(os.environ.get("PORT", "0"))
@@ -232,7 +237,8 @@ def main(argv=None) -> int:
         server_socket.listen(128)
         port = server_socket.getsockname()[1]
         url = f"http://127.0.0.1:{port}"
-        bridge = DesktopBridge(grants, studio_app.queue, stop_server, logs, options.tray)
+        bridge = DesktopBridge(grants, studio_app.queue, stop_server, logs, options.tray,
+                               folders=folders)
         install_desktop_routes(studio_app.app, bridge, url)
         studio_app.app.state.desktop_open_folder = bridge._open_folder
         instance.listen(lambda incoming: bridge._accept_paths(incoming, "ipc"))

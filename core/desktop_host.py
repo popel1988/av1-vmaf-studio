@@ -56,8 +56,10 @@ def load_webview():
 
 
 class DesktopBridge:
-    def __init__(self, grants, queue, stop_server, diagnostics, tray_enabled=False):
+    def __init__(self, grants, queue, stop_server, diagnostics, tray_enabled=False,
+                 folders=None):
         self._grants = grants
+        self._folders = folders
         self._queue = queue
         self._stop_server = stop_server
         self._diagnostics = diagnostics
@@ -78,6 +80,7 @@ class DesktopBridge:
         self._capabilities = {
             "mode": "starting", "native_host": False, "native_drop": False,
             "file_dialog": False, "single_instance": True, "open_paths": True,
+            "folder_dialog": False,
             "tray": False, "close_confirmation": False,
             "open_with_registration": os.name == "nt", "upload_required": False,
             "open_folder": os.name == "nt",
@@ -105,6 +108,18 @@ class DesktopBridge:
         if selected:
             return self._accept_paths(list(selected), "dialog")
         return {"ok": True, "paths": [], "cancelled": True}
+
+    def select_folder(self):
+        self._check_origin()
+        if self._window is None or self._webview is None or self._folders is None:
+            return {"ok": False, "error": "Nativer Ordnerdialog nicht verfügbar."}
+        selected = self._window.create_file_dialog(self._webview.FileDialog.FOLDER)
+        if not selected:
+            return {"ok": True, "cancelled": True}
+        # No JS/HTTP argument can grant a path: use only the native dialog result.
+        result = self._folders.add_selected(str(selected[0]))
+        self._dispatch("studio:media-roots-changed", result)
+        return result
 
     def register_open_with(self):
         self._check_origin()
@@ -294,6 +309,7 @@ class DesktopBridge:
             width=1480, height=920, min_size=(1024, 680), text_select=True,
         )
         self._capabilities.update(mode="webview", native_host=True, file_dialog=True,
+                                  folder_dialog=self._folders is not None,
                                   close_confirmation=True)
         self._window.events.loaded += self._loaded
         self._window.events.closing += self._request_close
@@ -313,7 +329,7 @@ class DesktopBridge:
         self._ready = False
         self._reopen_callback = reopen
         self._capabilities.update(mode=mode, native_host=False, native_drop=False,
-                                  file_dialog=False, close_confirmation=False,
+                                  file_dialog=False, folder_dialog=False, close_confirmation=False,
                                   open_with_registration=False)
         self._start_tray()
 

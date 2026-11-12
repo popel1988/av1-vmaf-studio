@@ -592,13 +592,13 @@ def plan_playback(
     if _look_needs(preview, is_hdr):
         targets = _server_encode_targets(client)
         enc = resolve_encode(platform, codec or targets[0], client_codecs=client)
-        prof = "1080p" if src_h >= 1440 else "original"
-        h, br = _quality_params(prof, height, v_bitrate)
+        # Die Abspielauflösung bleibt die Quelle. Eine kleinere Stufe wählt der Nutzer.
+        h, br = _quality_params("original", height, v_bitrate)
         return _result(
-            strategy="transcode", profile=prof, mode="hls",
+            strategy="transcode", profile="original", mode="hls",
             need_encode=True, encode=enc, height=h, v_bitrate=br,
             will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
-            summary=f"Transcode {prof}, Encode-Vorschau",
+            summary="Transcode original, Encode-Vorschau",
             extra_reasons=[
                 "Encode-Vorschau: Tonemap und Bildfilter brauchen einen Transcode",
                 f"Server: {enc['platform']}/{enc['codec']}/{enc['encoder']}"
@@ -663,14 +663,13 @@ def plan_playback(
     # Video nicht browserfähig → Transcode; Server wählt Encode-HW
     targets = _server_encode_targets(client)
     enc = resolve_encode(platform, codec or targets[0], client_codecs=client)
-    # 4K-Live-Vorschau: 1080p reicht meist
-    prof = "1080p" if src_h >= 1440 else "original"
-    h, br = _quality_params(prof, height, v_bitrate)
+    # Die Abspielauflösung bleibt die Quelle. Eine kleinere Stufe wählt der Nutzer.
+    h, br = _quality_params("original", height, v_bitrate)
     return _result(
-        strategy="transcode", profile=prof, mode="hls",
+        strategy="transcode", profile="original", mode="hls",
         need_encode=True, encode=enc, height=h, v_bitrate=br,
         will_xcode_audio=_audio_will_transcode(ac, want_audio_copy),
-        summary=f"Transcode {prof} → {enc['platform']}/{enc['encoder']}",
+        summary=f"Transcode original → {enc['platform']}/{enc['encoder']}",
         extra_reasons=[
             f"Browser kann {(src_v or '?').upper()} nicht → Encode nötig",
             f"Server: {enc['platform']}/{enc['codec']}/{enc['encoder']}"

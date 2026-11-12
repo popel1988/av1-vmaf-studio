@@ -2138,6 +2138,15 @@
       : ((roots[0] && roots[0].path) || "/media");
   }
 
+  window.addEventListener("studio:media-roots-changed", (event) => {
+    const detail = event.detail || {};
+    if (!Array.isArray(detail.media_roots)) return;
+    applyMediaRoots(detail.media_roots);
+    [mainBrowser, stBrowser, auBrowser, remuxBrowser].forEach((browser) => {
+      if (browser) browser.go(detail.rel || "");
+    });
+  });
+
   function initShares() {
     const form = $("share-form");
     if (!form) return;
@@ -8847,7 +8856,7 @@
       ${dvModalBox}
       <div class="stat-grid modal-stats">${statChips}</div>
       ${stepsHtml(d.steps)}
-      ${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(d) + window.StudioInsights.reportHtml(d.output_report) : ""}
+      ${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(d) : ""}
       <div class="modal-tabs" style="margin-bottom:8px">${abBtn || ""}${requeueBtn}${d.output && d.output.exists ? resultActionsHtml(id) : ""}</div>
       ${playToggle}
       <div id="modal-player">${player}</div>
@@ -8855,7 +8864,8 @@
         <div><h4>Quelle</h4>${infoTableHtml(d.source && d.source.info)}</div>
         <div><h4>Ausgabe</h4>${infoTableHtml(d.output && d.output.info)}</div>
       </div>
-      <div id="modal-vmaf-hist" class="hint" style="margin-top:12px">${tt("Lade frühere Läufe …")}</div>`;
+      <div id="modal-vmaf-hist" class="hint" style="margin-top:12px">${tt("Lade frühere Läufe …")}</div>
+      ${window.StudioInsights ? window.StudioInsights.reportHtml(d.output_report) : ""}`;
     openModal(escapeHtml(d.title || "Details"), html);
 
     const body = $("app-modal-body");

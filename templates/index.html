@@ -3067,7 +3067,7 @@
             <span class="badge" id="fp-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild. <a href="#faq-player-auto" class="faq-jump">FAQ: Wie entscheidet der Player (H.264, 1080p, Tonemap)?</a></p>
+            <p class="hint">Automatisch wählt Direct-Play, Video-Copy (Ton ggf. → AAC) oder Transcode. Der Plan steht neben dem Bild. <a href="#faq-player-auto" class="faq-jump">FAQ: Wie entscheidet der Player (H.264, Auflösung, Tonemap)?</a></p>
             <div class="field-row field-row-inline fp-file-row" style="margin-bottom:10px">
               <div class="field fp-grow">
                 <label>Datei</label>
@@ -3896,10 +3896,10 @@
               </div>
             </details>
             <details class="faq-item" id="faq-player-auto">
-              <summary>Wie entscheidet der Player bei „Automatisch“ (warum H.264, 1080p, Transcode oder Jellyfin)?</summary>
+              <summary>Wie entscheidet der Player bei „Automatisch“ (warum H.264, Auflösung, Transcode oder Jellyfin)?</summary>
               <div class="faq-body">
                 <p><strong>1. Wann Direct-Play, wann Remux, wann Transcode?</strong> Direct-Play reicht die Datei unverändert an den Browser durch (geht nur bei MP4/WebM mit browserfähigem Video und Ton und ohne aktive Filter). Remux (Video-Copy) verpackt das Video ohne Neucodierung in fMP4-HLS um und wandelt bei Bedarf nur den Ton (z. B. TrueHD/DTS → Stereo-AAC). Sobald aber Bildfilter (Denoise, Deband, Schärfen, Korn) oder bei einer HDR-Quelle die Live-Tonemap-Vorschau aktiv sind, muss jedes Einzelbild berechnet werden – „Automatisch“ schaltet dann auf Transcode. Willst du die Datei garantiert ohne Filter als Stream-Copy sehen, wählst du oben „Remux HLS“ oder „Direct-Play“.</p>
-                <p><strong>2. Warum im Transcode standardmäßig H.264 und bei 4K-Quellen 1080p?</strong> Der Zielcodec im Player ist nur das Transportformat zum Browser, nicht dein späterer Archiv-Encode. H.264 (`h264_nvenc` / `libx264`) hat die geringste Start-Latenz beim Spulen und beim Live-Umschalten der Regler und läuft in jedem Browser stabil. 4K-Quellen (ab 1440p) skaliert „Automatisch“ für die Live-Vorschau auf 1080p (6000 kbit/s) herunter, damit auch CPU-Tonemapping und Filter verzögerungsfrei in Echtzeit laufen. Für volle 4K-Auflösung stellst du den Modus auf „Original-Auflösung (Transcode + Bitrate)“.</p>
+                <p><strong>2. Warum im Transcode standardmäßig H.264, die Auflösung aber die der Quelle?</strong> Der Zielcodec im Player ist nur das Transportformat zum Browser, nicht dein späterer Archiv-Encode. H.264 (`h264_nvenc` / `libx264`) hat die geringste Start-Latenz beim Spulen und beim Live-Umschalten der Regler und läuft in jedem Browser stabil. „Automatisch“ behält beim Transcode die Quellauflösung, auch bei 4K, mit 8000 kbit/s als Vorgabe. Eine kleinere Stufe wählst du über 1080p, 720p, 480p oder Benutzerdefiniert. Bilduntertitel einbrennen nutzt in der Automatik weiterhin 720p.</p>
                 <p><strong>3. Wann läuft Standard-FFmpeg (BtbN) und wann Jellyfin-FFmpeg?</strong> Steht die Tonemap-Engine auf CPU (`zscale + tonemap`) oder `libplacebo` (Vulkan), nutzt der Player BtbN-FFmpeg. Sobald du auf CUDA, OpenCL, VAAPI oder `tonemapx` umschaltest, startet die Session an derselben Filmsekunde mit `/usr/local/bin/ffmpeg-jellyfin` neu.</p>
                 <p><strong>4. Welche Kurve geht mit welcher Engine?</strong> Der klassische CPU-Filter kennt kein BT.2390 (dort wird es ausgeblendet). `libplacebo`, CUDA, OpenCL und `tonemapx` unterstützen alle 7 Kurven inkl. BT.2390; bei `libplacebo` entfallen Quell-Peak und Entsättigung. VAAPI nutzt die feste Kurve des Grafiktreibers.</p>
               </div>
