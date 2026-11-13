@@ -3601,6 +3601,23 @@
               <div class="ab-pane" id="ab-pane-a"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
               <div class="ab-pane" id="ab-pane-b"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
               <canvas id="ab-diff-canvas" class="ab-diff-canvas" style="display:none"></canvas>
+              <div id="ab-diff-legend" class="ab-diff-legend" style="display:none">
+                <div class="ab-diff-legend-title" id="ab-diff-legend-title">Fehler-Skala</div>
+                <div class="ab-diff-legend-body">
+                  <div class="ab-diff-legend-bar" id="ab-diff-legend-bar">
+                    <span class="ab-diff-legend-marker" id="ab-diff-legend-marker" style="display:none"></span>
+                  </div>
+                  <div class="ab-diff-legend-ticks" id="ab-diff-legend-ticks">
+                    <span id="ab-diff-tick-max">≥ 32</span>
+                    <span id="ab-diff-tick-q3">24</span>
+                    <span id="ab-diff-tick-mid">16</span>
+                    <span id="ab-diff-tick-q1">8</span>
+                    <span>0 · identisch</span>
+                  </div>
+                </div>
+                <div class="ab-diff-legend-sub" id="ab-diff-legend-sub">ΔRGB (0–255)</div>
+              </div>
+              <div id="ab-diff-tooltip" class="ab-diff-tooltip" style="display:none"></div>
               <div class="ab-diff-hud" id="ab-diff-hud" style="display:none"></div>
               <div class="ab-nerd-hud" id="ab-nerd-hud" style="display:none"></div>
               <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
@@ -3651,6 +3668,7 @@
                   <option value="1" selected>1× · Normal</option>
                   <option value="0.5">½× · Halbe Geschwindigkeit</option>
                   <option value="0.25">¼× · Viertelgeschwindigkeit</option>
+                  <option value="0.125">⅛× · Achtelgeschwindigkeit</option>
                 </select>
               </div>
               <div class="field" style="margin:0">

@@ -46,10 +46,10 @@ class Element {
   removeEventListener(type, fn) {
     this.listeners.set(type, (this.listeners.get(type) || []).filter((h) => h.fn !== fn));
   }
-  emit(type) {
+  emit(type, extra) {
     for (const handler of [...(this.listeners.get(type) || [])]) {
       if (handler.once) this.removeEventListener(type, handler.fn);
-      handler.fn({ target: this, preventDefault() {}, stopPropagation() {} });
+      handler.fn({ target: this, preventDefault() {}, stopPropagation() {}, ...(extra || {}) });
     }
   }
   click() { this.emit("click"); }
@@ -116,7 +116,11 @@ for (const id of ["btn-ab-load", "btn-ab-unload", "ab-play", "ab-seek", "ab-sync
                  "ab-card", "ab-badge", "ab-status", "ab-speed",
                  "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b",
                  "ab-root-a", "ab-root-b", "ab-same-source", "ab-mode", "ab-zoom",
-                 "ab-playback", "ab-weak"]) {
+                 "ab-diff-canvas", "ab-diff-hud", "ab-diff-gain", "ab-diff-gain-field",
+                 "ab-diff-legend", "ab-diff-legend-title", "ab-diff-legend-bar",
+                 "ab-diff-legend-marker", "ab-diff-legend-sub", "ab-diff-tooltip",
+                 "ab-diff-tick-max", "ab-diff-tick-q3", "ab-diff-tick-mid", "ab-diff-tick-q1",
+                 "ab-videos", "ab-playback", "ab-weak"]) {
   elements[id] = new Element();
 }
 elements["ab-video-a"] = new Video();
@@ -271,7 +275,7 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("[a.video.playbackRate, b.video.playbackRate]"), [1, 1])
 
     def test_speed_select_applies_to_both_without_starting_playback(self):
-        for rate in [0.5, 0.25, 1]:
+        for rate in [0.5, 0.25, 0.125, 1]:
             with self.subTest(rate=rate):
                 self.evaluate(f"$('ab-speed').value = '{rate}'; $('ab-speed').emit('change');")
                 self.assertEqual(self.value("[a.video.playbackRate, b.video.playbackRate]"), [rate, rate])
@@ -934,6 +938,123 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertAlmostEqual(self.value("Number($('ab-offset').value)"), 3 / 24, places=4)
         self.assertEqual(self.value("$('ab-offset-frames').textContent"), "+3 Bilder")
         self.assertIn("Auto-Sync", self.value("$('ab-status').textContent"))
+
+    def test_diff_phase_gate_skips_vsync_skew_and_legend_plus_hover_work(self):
+        self.evaluate("""
+          a.info = { fps: 24 }; b.info = { fps: 24 };
+          a.video.videoWidth = 640; a.video.videoHeight = 360;
+          b.video.videoWidth = 640; b.video.videoHeight = 360;
+          let drawCount = 0;
+          const makeBuf = (r, g, bVal) => ({
+            width: 0, height: 0,
+            getContext() {
+              const self = this;
+              return {
+                drawImage() {},
+                getImageData() {
+                  const n = self.width * self.height;
+                  const out = new Uint8Array(n * 4);
+                  for (let i = 0; i < n; i++) {
+                    out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = bVal; out[i * 4 + 3] = 255;
+                  }
+                  return { data: out };
+                },
+                createImageData(w, h) { return { data: new Uint8Array(w * h * 4) }; },
+                putImageData() { drawCount += 1; }
+              };
+            }
+          });
+          let created = 0;
+          globalThis.document = {
+            createElement() {
+              created += 1;
+              return created === 1 ? makeBuf(100, 110, 120) : makeBuf(106, 110, 114);
+            }
+          };
+          const outCanvas = $('ab-diff-canvas');
+          outCanvas.width = 0; outCanvas.height = 0;
+          outCanvas.getContext = () => makeBuf(0, 0, 0).getContext();
+          outCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 });
+          $('ab-videos').getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 });
+          $('ab-diff-gain').value = '8';
+          $('ab-mode').value = 'heatmap';
+          $('ab-mode').emit('change');
+        """)
+        # Initialer Draw im Pause-Zustand zeichnet + befüllt Legende (255/8 = 31.875 -> ≥ 32)
+        self.assertEqual(self.value("drawCount"), 1)
+        self.assertEqual(self.value("$('ab-diff-legend').style.display"), "")
+        self.assertIn("32", self.value("$('ab-diff-tick-max').textContent"))
+
+        # Während Wiedergabe: A ist schon auf Frame 25 (1.0417 s), B hängt noch 1 VSync auf Frame 24 (1.0000 s)
+        # -> Phasen-Gate überspringt den unfertigen Zwischen-Tick!
+        self.evaluate("""
+          a.video.paused = false; b.video.paused = false;
+          ab.mediaTimeA = 25 / 24; ab.mediaTimeB = 24 / 24;
+          abDrawDiffFrame();
+        """)
+        self.assertEqual(self.value("drawCount"), 1)
+
+        # Sobald B im nächsten Callback ebenfalls Frame 25 präsentiert hat -> Zeichnung läuft durch!
+        self.evaluate("ab.mediaTimeB = 25 / 24; abDrawDiffFrame();")
+        self.assertEqual(self.value("drawCount"), 2)
+
+        # Hover über Pixel (320, 180) zeigt exakte RGB-Werte & Fehler und setzt den Skalen-Marker
+        self.evaluate("$('ab-diff-canvas').emit('mousemove', { clientX: 320, clientY: 180 });")
+        self.assertEqual(self.value("$('ab-diff-tooltip').style.display"), "")
+        self.assertIn("Pixel (320, 180)", self.value("$('ab-diff-tooltip').innerHTML"))
+        self.assertIn("RGB(100, 110, 120)", self.value("$('ab-diff-tooltip').innerHTML"))
+        self.assertIn("Δ(+6, 0, -6)", self.value("$('ab-diff-tooltip').innerHTML"))
+        self.assertEqual(self.value("$('ab-diff-legend-marker').style.display"), "")
+
+    def test_auto_sync_at_clip_start_zero_finds_negative_offset_when_b_is_ahead(self):
+        # Klassischer Randfall: Beide Videos stehen ganz am Anfang (t = 0.000 s, Nerd-Clip ab 64.0 s),
+        # und Video B ist bereits 4 Frames voraus (zeigt bei localT=0 schon Film-Frame +4 von A!).
+        # Früher konnte Auto-Sync von t=0 aus nicht ins Negative prüfen und blieb falsch bei 0 stehen.
+        self.evaluate("""
+          a.info = { fps: 25 }; b.info = { fps: 25 };
+          a.offset = 64; b.offset = 64;
+          a.duration = 15; b.duration = 15;
+          ab.window = { start: 64, end: 79 };
+          a.video.videoWidth = 1920; a.video.videoHeight = 1080;
+          b.video.videoWidth = 1920; b.video.videoHeight = 1080;
+          a.video._time = 0.0; b.video._time = 0.0;
+          globalThis.document = {
+            createElement() {
+              return {
+                width: 0, height: 0,
+                _video: null,
+                getContext() {
+                  const self = this;
+                  return {
+                    drawImage(v) { self._video = v; },
+                    getImageData() {
+                      const n = self.width * self.height;
+                      const out = new Uint8Array(n * 4);
+                      const v = self._video;
+                      // Video B ist 4 Frames voraus: bei localT=0 zeigt B bereits Inhalt von Frame 4!
+                      // Damit A und B übereinstimmen, muss tB = tA - 4/25 sein (offsetB = -0.16 s).
+                      const contentFrame = Math.round(((v === b.video) ? (v.currentTime + 4 / 25) : v.currentTime) * 25);
+                      for (let i = 0; i < n; i++) {
+                        const val = ((i * 11 + contentFrame * 67) % 210) + 15;
+                        out[i * 4] = val; out[i * 4 + 1] = val; out[i * 4 + 2] = val; out[i * 4 + 3] = 255;
+                      }
+                      return { data: out };
+                    }
+                  };
+                }
+              };
+            }
+          };
+          $('ab-auto-sync').click();
+        """)
+        # Muss exakt -4 Bilder (-0.16 s) finden statt bei 0 hängen zu bleiben!
+        self.assertAlmostEqual(self.value("Number($('ab-offset').value)"), -4 / 25, places=4)
+        self.assertEqual(self.value("$('ab-offset-frames').textContent"), "-4 Bilder")
+        # Und da B bei Filmzeit 64.00s sonst localT = -0.16s bräuchte, rückt der Player automatisch
+        # auf das erste gemeinsame Bild vor: A auf localT = 0.16s (Frame 4), B auf localT = 0.00s (Frame 0 -> Inhalt 4)!
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 4 / 25, places=3)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 0.0, places=3)
+        self.assertIn("−12/+12 geprüft", self.value("$('ab-status').textContent"))
 
 
 class AbBackendSyncTests(unittest.TestCase):

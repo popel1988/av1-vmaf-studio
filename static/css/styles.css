@@ -1174,7 +1174,60 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 }
 .ab-diff-canvas {
   width: 100%; height: 100%; display: block; object-fit: contain;
-  background: #000; transform-origin: center center;
+  background: #000; transform-origin: center center; cursor: crosshair;
+}
+.ab-diff-legend {
+  position: absolute; bottom: 10px; right: 10px; z-index: 4;
+  background: rgba(8, 10, 16, 0.86); color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 8px;
+  padding: 7px 9px; font-size: 10.5px; line-height: 1.25;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+  backdrop-filter: blur(6px); min-width: 104px;
+}
+.ab-diff-legend-title {
+  font-weight: 600; font-size: 10.5px; color: #f8fafc; margin-bottom: 5px;
+}
+.ab-diff-legend-body {
+  display: flex; align-items: stretch; gap: 7px; height: 96px;
+}
+.ab-diff-legend-bar {
+  position: relative; width: 12px; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: linear-gradient(to top,
+    rgb(0, 0, 0) 0%,
+    rgb(0, 0, 30) 2%,
+    rgb(0, 220, 255) 25%,
+    rgb(60, 255, 0) 50%,
+    rgb(255, 200, 0) 75%,
+    rgb(255, 0, 180) 100%);
+}
+.ab-diff-legend-bar.is-diff {
+  background: linear-gradient(to top, #000000 0%, #3b4252 25%, #8892a6 50%, #cbd5e1 75%, #ffffff 100%);
+}
+.ab-diff-legend-marker {
+  position: absolute; left: -3px; right: -3px; height: 3px;
+  background: #fff; border: 1px solid #000; border-radius: 2px;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.9); transform: translateY(50%);
+}
+.ab-diff-legend-ticks {
+  display: flex; flex-direction: column; justify-content: space-between;
+  color: #cbd5e1; font-size: 10px; white-space: nowrap;
+}
+.ab-diff-legend-sub {
+  margin-top: 5px; color: #94a3b8; font-size: 9.5px;
+}
+.ab-diff-tooltip {
+  position: absolute; z-index: 6; pointer-events: none;
+  background: rgba(8, 10, 16, 0.92); color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 7px;
+  padding: 6px 9px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10.5px; line-height: 1.4; font-variant-numeric: tabular-nums;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+.ab-diff-swatch {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.4); vertical-align: -1px; margin-right: 4px;
 }
 .ab-videos.ab-abx-mode .ab-pane {
   position: absolute; inset: 0; border-radius: 0; background: #000;

@@ -14632,8 +14632,19 @@
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
     rafId: 0,
+    rvfcA: 0,
+    rvfcB: 0,
+    mediaTimeA: NaN,
+    mediaTimeB: NaN,
     bufA: null,
     bufB: null,
+    lastDiffA: null,
+    lastDiffB: null,
+    lastDiffW: 0,
+    lastDiffH: 0,
+    lastDiffSrcW: 0,
+    lastDiffSrcH: 0,
+    hoverState: null,   // {active, clientX, clientY}
     statsOpen: false,
     statsTimer: 0,
     abx: { secret: "a", view: "x", correct: 0, total: 0, roundGuessed: false },
@@ -14691,7 +14702,7 @@
     // Die gemeinsame Auswahl bleibt auch bei load()/HLS-Neustart maßgeblich.
     const select = $("ab-speed");
     const value = Number(select && select.value);
-    const rate = [1, 0.5, 0.25].includes(value) ? value : 1;
+    const rate = [1, 0.5, 0.25, 0.125].includes(value) ? value : 1;
     if (select && select.value !== String(rate)) select.value = String(rate);
     Object.values(ab.sides).forEach((side) => {
       const video = side && side.video;
@@ -15422,6 +15433,8 @@
     side.syncPauses = 0;
     side.ready = false;
     side.syncSeekTarget = null;
+    if (side.key === "a") ab.mediaTimeA = NaN;
+    if (side.key === "b") ab.mediaTimeB = NaN;
   }
 
   function abStale(side, epoch) {
@@ -15780,16 +15793,142 @@
     return [sx, 0, sw, vh];
   }
 
-  function abDrawDiffFrame() {
+  function abUpdateDiffLegend() {
+    const legend = $("ab-diff-legend");
+    const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
+    if (!legend) return;
+    legend.style.display = isCanvas ? "" : "none";
+    if (!isCanvas) return;
+    const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
+    const sat = 255 / gain;
+    const fmtTick = (v) => (v >= 10 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, ""));
+    const titleEl = $("ab-diff-legend-title");
+    const barEl = $("ab-diff-legend-bar");
+    const subEl = $("ab-diff-legend-sub");
+    const tMax = $("ab-diff-tick-max");
+    const tQ3 = $("ab-diff-tick-q3");
+    const tMid = $("ab-diff-tick-mid");
+    const tQ1 = $("ab-diff-tick-q1");
+    const isHeat = ab.mode === "heatmap";
+    if (titleEl) titleEl.textContent = isHeat ? `Heatmap (${gain}×)` : `Differenz (${gain}×)`;
+    if (barEl) barEl.classList.toggle("is-diff", !isHeat);
+    if (tMax) tMax.textContent = `≥ ${fmtTick(sat)} · Sättigung`;
+    if (tQ3) tQ3.textContent = fmtTick(sat * 0.75);
+    if (tMid) tMid.textContent = fmtTick(sat * 0.5);
+    if (tQ1) tQ1.textContent = fmtTick(sat * 0.25);
+    if (subEl) subEl.textContent = isHeat ? "RMS ΔRGB (0–255)" : "|A − B| je Kanal (0–255)";
+  }
+
+  function abUpdateDiffTooltip() {
+    const tip = $("ab-diff-tooltip");
+    const marker = $("ab-diff-legend-marker");
+    const wrap = $("ab-videos");
+    const canvas = $("ab-diff-canvas");
+    const hide = () => {
+      if (tip) tip.style.display = "none";
+      if (marker) marker.style.display = "none";
+    };
+    if (!tip || !wrap || !canvas || (ab.mode !== "diff" && ab.mode !== "heatmap")) {
+      hide();
+      return;
+    }
+    const hs = ab.hoverState;
+    if (!hs || !hs.active || !Number.isFinite(hs.clientX) || !Number.isFinite(hs.clientY)
+        || !ab.lastDiffA || !ab.lastDiffB || !ab.lastDiffW || !ab.lastDiffH) {
+      hide();
+      return;
+    }
+    const rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+    const wrapRect = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : null;
+    if (!rect || !wrapRect || !(rect.width > 0) || !(rect.height > 0)) {
+      hide();
+      return;
+    }
+    // object-fit: contain innerhalb der (ggf. per CSS-Scale gezoomten) Canvas-Box berücksichtigen
+    const imgAspect = ab.lastDiffW / ab.lastDiffH;
+    const boxAspect = rect.width / rect.height;
+    let drawW = rect.width, drawH = rect.height, offX = 0, offY = 0;
+    if (boxAspect > imgAspect) {
+      drawW = rect.height * imgAspect;
+      offX = (rect.width - drawW) / 2;
+    } else {
+      drawH = rect.width / imgAspect;
+      offY = (rect.height - drawH) / 2;
+    }
+    const relX = hs.clientX - (rect.left + offX);
+    const relY = hs.clientY - (rect.top + offY);
+    if (relX < 0 || relY < 0 || relX >= drawW || relY >= drawH) {
+      hide();
+      return;
+    }
+    const u = relX / drawW;
+    const v = relY / drawH;
+    const bx = Math.min(ab.lastDiffW - 1, Math.max(0, Math.floor(u * ab.lastDiffW)));
+    const by = Math.min(ab.lastDiffH - 1, Math.max(0, Math.floor(v * ab.lastDiffH)));
+    const idx = (by * ab.lastDiffW + bx) * 4;
+    const rA = ab.lastDiffA[idx], gA = ab.lastDiffA[idx + 1], bA = ab.lastDiffA[idx + 2];
+    const rB = ab.lastDiffB[idx], gB = ab.lastDiffB[idx + 1], bB = ab.lastDiffB[idx + 2];
+    const dr = rB - rA, dg = gB - gA, db = bB - bA;
+    const adr = Math.abs(dr), adg = Math.abs(dg), adb = Math.abs(db);
+    const rms = Math.sqrt((adr * adr + adg * adg + adb * adb) / 3);
+    const lumaA = 0.2126 * rA + 0.7152 * gA + 0.0722 * bA;
+    const lumaB = 0.2126 * rB + 0.7152 * gB + 0.0722 * bB;
+    const dY = lumaB - lumaA;
+    const srcX = ab.lastDiffSrcW ? Math.min(ab.lastDiffSrcW - 1, Math.floor(u * ab.lastDiffSrcW)) : bx;
+    const srcY = ab.lastDiffSrcH ? Math.min(ab.lastDiffSrcH - 1, Math.floor(v * ab.lastDiffSrcH)) : by;
+    const fmtSigned = (n) => (n > 0 ? `+${n}` : String(n));
+    const pctErr = ((rms / 255) * 100).toFixed(1);
+    const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
+    if (marker) {
+      const norm = Math.max(0, Math.min(1, (rms * gain) / 255));
+      marker.style.display = "";
+      marker.style.bottom = `${(norm * 100).toFixed(1)}%`;
+    }
+    tip.innerHTML =
+      `<div><b>Pixel (${srcX}, ${srcY})</b> · RMS Δ <b>${rms.toFixed(1)}</b> (${pctErr} %) · ΔLuma ${dY >= 0 ? "+" : ""}${dY.toFixed(1)}</div>` +
+      `<div><span class="ab-diff-swatch" style="background:rgb(${rA},${gA},${bA})"></span>A RGB(${rA}, ${gA}, ${bA})</div>` +
+      `<div><span class="ab-diff-swatch" style="background:rgb(${rB},${gB},${bB})"></span>B RGB(${rB}, ${gB}, ${bB}) · Δ(${fmtSigned(dr)}, ${fmtSigned(dg)}, ${fmtSigned(db)})</div>`;
+    tip.style.display = "";
+    const localX = hs.clientX - wrapRect.left;
+    const localY = hs.clientY - wrapRect.top;
+    const tipW = tip.offsetWidth || 240;
+    const tipH = tip.offsetHeight || 62;
+    const placeLeft = localX + 16 + tipW > wrapRect.width - 8;
+    const placeAbove = localY + 16 + tipH > wrapRect.height - 8;
+    tip.style.left = `${Math.max(8, placeLeft ? localX - tipW - 14 : localX + 14)}px`;
+    tip.style.top = `${Math.max(8, placeAbove ? localY - tipH - 12 : localY + 14)}px`;
+  }
+
+  function abDrawDiffFrame(opts) {
     if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
     const canvas = $("ab-diff-canvas");
     const hud = $("ab-diff-hud");
-    const va = ab.sides.a && ab.sides.a.video;
-    const vb = ab.sides.b && ab.sides.b.video;
+    const sa = ab.sides.a, sb = ab.sides.b;
+    const va = sa && sa.video;
+    const vb = sb && sb.video;
     if (!canvas || !va || !vb || !va.videoWidth || !vb.videoWidth
         || va.readyState < 2 || vb.readyState < 2) {
       if (hud) hud.textContent = tt("Warte auf dekodierte Bilder A & B …");
       return;
+    }
+    const fps = Number((ab.weak && ab.weak.fps)
+      || (sa && sa.info && sa.info.fps)
+      || (sb && sb.info && sb.info.fps)) || 24;
+    const bothPlaying = !va.paused && !vb.paused;
+    // Wichtig gegen Geister-Differenzen bei 1× Wiedergabe:
+    // Im 60-Hz-Browser-Compositor aktualisieren zwei <video>-Decoder ein neues Video-Frame
+    // oft mit 1 VSync (~16 ms) Versatz. Zeichnen wir genau in diesem Zwischenmoment,
+    // vergleicht Canvas Frame N mit Frame N-1 ("Schein-Fehler" an allen bewegten Kanten!).
+    // Liegt die gemessene Präsentationszeit beider Frames > 0,38 Bilddauern auseinander,
+    // überspringen wir diesen Zwischen-Tick und zeichnen erst, sobald beide Seiten nachgezogen sind.
+    if (bothPlaying && !(opts && opts.force) && abSynced()) {
+      const tA = Number.isFinite(ab.mediaTimeA) ? (ab.mediaTimeA + (sa.offset || 0)) : abTime(sa);
+      const tB = Number.isFinite(ab.mediaTimeB) ? (ab.mediaTimeB + (sb.offset || 0)) : abTime(sb);
+      const framePhaseSkew = Math.abs(tB - (tA + abOffsetB()));
+      const maxPhaseSkew = (0.38 / Math.max(1, fps));
+      if (framePhaseSkew > maxPhaseSkew && framePhaseSkew < 0.35) {
+        return;
+      }
     }
     const aspectA = va.videoWidth / va.videoHeight;
     const aspectB = vb.videoWidth / vb.videoHeight;
@@ -15819,6 +15958,12 @@
       const imgB = ctxB.getImageData(0, 0, w, h);
       const dA = imgA.data;
       const dB = imgB.data;
+      ab.lastDiffA = dA;
+      ab.lastDiffB = dB;
+      ab.lastDiffW = w;
+      ab.lastDiffH = h;
+      ab.lastDiffSrcW = swA;
+      ab.lastDiffSrcH = shA;
       const ctxOut = canvas.getContext("2d");
       const out = ctxOut.createImageData(w, h);
       const dO = out.data;
@@ -15854,22 +15999,61 @@
         const psnr = mse > 0.0001 ? `${(10 * Math.log10((255 * 255) / mse)).toFixed(1)} dB` : "∞ dB (identisch)";
         hud.textContent = `${isHeat ? "Heatmap" : "Differenz"} (${gain}×) · Ø ΔRGB ${mae.toFixed(2)} · Max Δ ${Math.round(maxDelta)} · RGB-PSNR ~${psnr}`;
       }
+      abUpdateDiffLegend();
+      if (ab.hoverState && ab.hoverState.active) abUpdateDiffTooltip();
     } catch (e) {
       if (hud) hud.textContent = `${tt("Canvas-Analyse nicht möglich")}: ${e}`;
     }
   }
 
-  function abUpdateCanvasLoop() {
+  function abCancelCanvasLoop() {
     if (ab.rafId && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(ab.rafId);
       ab.rafId = 0;
     }
+    const va = ab.sides.a && ab.sides.a.video;
+    const vb = ab.sides.b && ab.sides.b.video;
+    if (ab.rvfcA && va && typeof va.cancelVideoFrameCallback === "function") {
+      try { va.cancelVideoFrameCallback(ab.rvfcA); } catch (e) { /* ignore */ }
+    }
+    if (ab.rvfcB && vb && typeof vb.cancelVideoFrameCallback === "function") {
+      try { vb.cancelVideoFrameCallback(ab.rvfcB); } catch (e) { /* ignore */ }
+    }
+    ab.rvfcA = 0;
+    ab.rvfcB = 0;
+  }
+
+  function abUpdateCanvasLoop() {
+    abCancelCanvasLoop();
     if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+    const va = ab.sides.a && ab.sides.a.video;
+    const vb = ab.sides.b && ab.sides.b.video;
+    const hasRvfc = !!(va && vb
+      && typeof va.requestVideoFrameCallback === "function"
+      && typeof vb.requestVideoFrameCallback === "function");
+    if (hasRvfc && ((!va.paused) || (!vb.paused))) {
+      const onFrameA = (_now, meta) => {
+        ab.rvfcA = 0;
+        if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+        ab.mediaTimeA = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (va.currentTime || 0);
+        abDrawDiffFrame();
+        if (!va.paused) ab.rvfcA = va.requestVideoFrameCallback(onFrameA);
+      };
+      const onFrameB = (_now, meta) => {
+        ab.rvfcB = 0;
+        if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+        ab.mediaTimeB = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (vb.currentTime || 0);
+        abDrawDiffFrame();
+        if (!vb.paused) ab.rvfcB = vb.requestVideoFrameCallback(onFrameB);
+      };
+      if (!va.paused) ab.rvfcA = va.requestVideoFrameCallback(onFrameA);
+      if (!vb.paused) ab.rvfcB = vb.requestVideoFrameCallback(onFrameB);
+      abDrawDiffFrame({ force: true });
+      return;
+    }
     const tick = () => {
       if (ab.mode !== "diff" && ab.mode !== "heatmap") { ab.rafId = 0; return; }
       abDrawDiffFrame();
-      const va = ab.sides.a && ab.sides.a.video;
-      const vb = ab.sides.b && ab.sides.b.video;
       if (((va && !va.paused) || (vb && !vb.paused)) && typeof requestAnimationFrame === "function") {
         ab.rafId = requestAnimationFrame(tick);
       } else {
@@ -16076,6 +16260,8 @@
     const handle = $("ab-wipe-handle");
     const diffCanvas = $("ab-diff-canvas");
     const diffHud = $("ab-diff-hud");
+    const diffLegend = $("ab-diff-legend");
+    const diffTip = $("ab-diff-tooltip");
     const gainField = $("ab-diff-gain-field");
     const abxBar = $("ab-abx-bar");
     const notes = $("ab-preview-notes");
@@ -16091,10 +16277,13 @@
     if (handle) handle.style.display = wipe ? "" : "none";
     if (diffCanvas) diffCanvas.style.display = isCanvas ? "" : "none";
     if (diffHud) diffHud.style.display = isCanvas ? "" : "none";
+    if (diffLegend) diffLegend.style.display = isCanvas ? "" : "none";
+    if (!isCanvas && diffTip) diffTip.style.display = "none";
     if (gainField) gainField.style.display = isCanvas ? "" : "none";
     if (abxBar) abxBar.style.display = isAbx ? "" : "none";
     if (notes) notes.style.visibility = isAbx ? "hidden" : "";
     wrap.style.setProperty("--ab-wipe", ab.wipe + "%");
+    if (isCanvas) abUpdateDiffLegend();
     if (isAbx && prevMode !== "abx") abAbxNewRound(false);
     else abApplyAbxView();
     abApplyZoom();
@@ -16318,15 +16507,18 @@
       if (!force && (va.paused || vb.paused || va.seeking || vb.seeking
           || va.readyState < 3 || vb.readyState < 3)) return;
       const t = Math.max(0, abTime(sa) + abOffsetB());
-      // Beim Pausieren (force=true) nur nachsetzen, wenn B tatsächlich um mind. ~½ Bild
-      // abweicht – sonst löst jedes Pause einen unnötigen MSE/Decoder-Seek aus.
-      const minDiff = force ? Math.max(0.012, 0.45 / abFps()) : 0.25;
+      // Beim Pausieren (force=true) in jedem Fall auf das exakte Bild von A ziehen (> 2 ms),
+      // denn schon 15–18 ms Abweichung über eine Frame-Grenze zeigen im Standbild das Nachbar-Frame!
+      const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
+      const minDiff = force ? 0.002 : (isCanvas ? Math.max(0.06, 1.5 / abFps()) : 0.25);
       if (Math.abs(abTime(sb) - t) > minDiff) {
         if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 6)) {
           abSeekBoth(abTime(sa), va.paused);
         } else {
-          abSetTime(sb, t);
+          abSetTime(sb, t, !!force);
         }
+      } else if (force && isCanvas) {
+        abDrawDiffFrame({ force: true });
       }
     };
 
@@ -16400,10 +16592,11 @@
         abPauseBoth();
         return;
       }
-      // Leichten Frame-Versatz laufen lassen; nur bei grobem Drift (~0,25 s) nachziehen.
+      // Leichten Frame-Versatz laufen lassen; im Canvas-Modus (Heatmap/Differenz) enger halten.
       const sb = ab.sides.b;
       const targetB = abTime(sa) + abOffsetB();
-      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > 0.25) {
+      const runTol = (ab.mode === "diff" || ab.mode === "heatmap") ? Math.max(0.06, 1.5 / abFps()) : 0.25;
+      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > runTol) {
         alignB(false);
       }
     });
@@ -16596,43 +16789,118 @@
       const valid = () => !ab.closing && seq === ab.controlSeq && loadSeq === ab.loadSeq;
       try {
         const fps = abFps();
-        const tA = abPausedAnchorA();
-        abSetStatus(tt("Auto-Sync läuft: prüfe Bildübereinstimmung (±12 Bilder) …"));
-        await abPlaceSide(sa, tA, valid, true);
-        if (!valid()) return;
+        const SEARCH_RADIUS = 12; // ±12 Bilder
+        const userTA = abPausedAnchorA();
+        const baseFrames = Math.round(abOffsetB() * fps);
+        const baseOffSec = baseFrames / fps;
+
+        // Zulässige Grenzen für beide Videos bestimmen (Direct, Clip-Offset, HLS-Puffer, Szenenfenster)
+        const boundsFor = (side, vid) => {
+          let lo = side.mode === "direct" ? (side.offset || 0) : (side.offset || 0);
+          let hi = side.mode === "direct"
+            ? ((side.offset || 0) + (side.duration || vid.duration || Infinity))
+            : (abBufferedEnd(side) - 0.02);
+          if (!Number.isFinite(hi) || hi <= lo) hi = lo + 36000;
+          return { lo, hi };
+        };
+        const bndA = boundsFor(sa, va);
+        const bndB = boundsFor(sb, vb);
+        if (ab.window && ab.window.end > ab.window.start) {
+          bndA.lo = Math.max(bndA.lo, ab.window.start);
+          bndA.hi = Math.min(bndA.hi, ab.window.end - (1 / fps));
+        }
+
+        // Entscheidend am Clip-/Film-Anfang (oder -Ende):
+        // Steht der Player z. B. bei Frame 0, wäre tA + candSec für negative Versätze (< 0, d. h. B ist schon voraus!)
+        // kleiner als der Clip-Anfang von B und würde komplett übersprungen – nur die falsche Richtung (>= 0) würde geprüft!
+        // Deshalb heben wir den Mess-Referenzpunkt probeTA automatisch soweit ins Clip-Innere an, dass BEIDE Richtungen
+        // (±12 Frames) für A und B vollständig im gültigen Bereich liegen.
+        const marginSec = (SEARCH_RADIUS + 1) / fps;
+        const probeMinA = Math.max(bndA.lo, bndB.lo - baseOffSec + marginSec);
+        const probeMaxA = Math.min(bndA.hi, bndB.hi - baseOffSec - marginSec);
+        let probeTA = userTA;
+        if (probeMinA <= probeMaxA) {
+          probeTA = Math.max(probeMinA, Math.min(probeMaxA, userTA));
+        } else {
+          probeTA = Math.max(bndA.lo, Math.min(bndA.hi, (probeMinA + probeMaxA) / 2));
+        }
+        // Auf exaktes Frame-Raster von A runden
+        probeTA = Math.round(probeTA * fps) / fps;
+
+        abSetStatus(tt("Auto-Sync läuft: prüfe Bildübereinstimmung in beide Richtungen (±12 Bilder) …"));
         const aspectA = va.videoWidth / va.videoHeight;
         const aspectB = vb.videoWidth / vb.videoHeight;
         const refAspect = Math.abs(aspectA - aspectB) / Math.max(aspectA, aspectB) >= 0.02
           ? aspectB : aspectA;
         const workCanvas = document.createElement("canvas");
-        const refSample = extractNormalizedLuma(va, refAspect, workCanvas);
+
+        await abPlaceSide(sa, probeTA, valid, true);
+        if (!valid()) return;
+        let refSample = extractNormalizedLuma(va, refAspect, workCanvas);
+        // Falls ganz am Anfang Schwarzblende/Intro ohne Kontrast liegt, bis zu +3 s weiter vorne nach Bildinhalt suchen
+        if (refSample.std < 2.0) {
+          for (const jumpSec of [0.5, 1.0, 2.0, 3.0]) {
+            const altTA = Math.round((probeTA + jumpSec) * fps) / fps;
+            if (altTA > Math.min(bndA.hi, bndB.hi - baseOffSec - marginSec)) break;
+            await abPlaceSide(sa, altTA, valid, true);
+            if (!valid()) return;
+            const trySample = extractNormalizedLuma(va, refAspect, workCanvas);
+            if (trySample.std >= 2.0) {
+              probeTA = altTA;
+              refSample = trySample;
+              break;
+            }
+          }
+        }
         if (refSample.std < 2.0) {
           abSetStatus(tt("Aktuelles Bild ist nahezu einfarbig/schwarz – bitte an einer Szene mit Bilddetails pausieren."), true);
           return;
         }
-        const baseFrames = Math.round(abOffsetB() * fps);
-        const minB = sb.mode === "direct" ? 0 : (sb.offset || 0);
-        const maxB = sb.mode === "direct" ? (sb.duration || vb.duration || Infinity) : (abBufferedEnd(sb) - 0.02);
+
         let bestFrames = baseFrames;
         let bestScore = -2;
         let bestCorr = -1;
         let tested = 0;
-        for (let delta = -12; delta <= 12; delta += 1) {
+        let testedNeg = 0;
+        let testedPos = 0;
+
+        for (let delta = -SEARCH_RADIUS; delta <= SEARCH_RADIUS; delta += 1) {
           if (!valid()) return;
           const candFrames = baseFrames + delta;
           const candSec = candFrames / fps;
-          const candTB = tA + candSec;
-          if (candTB < minB - 0.005 || candTB > maxB) continue;
-          const ok = await abPlaceSide(sb, candTB, valid, true);
+          const candTB = probeTA + candSec;
+          let sampleA = refSample;
+          let evalTB = candTB;
+
+          if (candTB < bndB.lo - 0.002 || candTB > bndB.hi + 0.002) {
+            // Fallback für extrem kurze Clips: statt B unter Clip-Start zu drücken,
+            // schieben wir für diesen Kandidaten A um denselben Betrag nach vorne (tB - tA bleibt exakt candSec!).
+            const shiftedTA = Math.round(( Math.max(bndB.lo, Math.min(bndB.hi, candTB)) - candSec ) * fps) / fps;
+            const shiftedTB = shiftedTA + candSec;
+            if (shiftedTA < bndA.lo - 0.002 || shiftedTA > bndA.hi + 0.002
+                || shiftedTB < bndB.lo - 0.002 || shiftedTB > bndB.hi + 0.002) {
+              continue;
+            }
+            const okA = await abPlaceSide(sa, shiftedTA, valid, true);
+            if (!valid()) return;
+            if (!okA) continue;
+            sampleA = extractNormalizedLuma(va, refAspect, workCanvas);
+            if (sampleA.std < 2.0) continue;
+            evalTB = shiftedTB;
+          }
+
+          const okB = await abPlaceSide(sb, evalTB, valid, true);
           if (!valid()) return;
-          if (!ok) continue;
+          if (!okB) continue;
           const candSample = extractNormalizedLuma(vb, refAspect, workCanvas);
           let corr = 0;
-          const vA = refSample.vec, vB = candSample.vec;
+          const vA = sampleA.vec, vB = candSample.vec;
           for (let i = 0; i < vA.length; i += 1) corr += vA[i] * vB[i];
-          // Minimaler Tie-Breaker zugunsten kleinerer Verschiebung bei Standbildern
+          // Minimaler Tie-Breaker zugunsten kleinerer Verschiebung bei identischen Standbildern
           const score = corr - Math.abs(delta) * 0.0004;
           tested += 1;
+          if (delta < 0) testedNeg += 1;
+          if (delta > 0) testedPos += 1;
           if (score > bestScore) {
             bestScore = score;
             bestCorr = corr;
@@ -16644,15 +16912,26 @@
         const offEl = $("ab-offset");
         if (offEl) offEl.value = String(bestSec === 0 ? 0 : bestSec);
         updateOffsetLabel();
-        ab.stepTargetT = tA;
-        await abAlignAndSettleBoth(tA, true, valid, true);
+
+        // Wenn bei userTA mit dem gefundenen negativen Versatz Video B vor seinem Clip-Anfang läge
+        // (z. B. userTA = 0.000 s, aber B ist schon 3 Frames weiter -> bräuchte -0.125 s in B),
+        // rücken wir A automatisch auf das erste gemeinsame Bild (z. B. Frame +3) vor!
+        const minValidTA = Math.max(bndA.lo, bndB.lo - bestSec);
+        const finalTA = userTA < minValidTA - 0.0005
+          ? (Math.ceil(minValidTA * fps - 1e-6) / fps)
+          : userTA;
+        ab.stepTargetT = finalTA;
+        await abAlignAndSettleBoth(finalTA, true, valid, true);
         if (!valid()) return;
-        abDrawDiffFrame();
+        abDrawDiffFrame({ force: true });
         abRenderNerdHud();
         const sign = bestFrames > 0 ? "+" : "";
         const word = Math.abs(bestFrames) === 1 ? "Bild" : "Bilder";
         const pct = Math.max(0, Math.min(100, bestCorr * 100)).toFixed(1);
-        abSetStatus(`Auto-Sync: Versatz B = ${sign}${bestFrames} ${word} (${bestSec.toFixed(3)} s · Übereinstimmung ${pct} %)`);
+        const movedNote = finalTA > userTA + 0.001
+          ? ` · Position auf erstes gemeinsames Bild (${finalTA.toFixed(3)} s) gesetzt`
+          : "";
+        abSetStatus(`Auto-Sync: Versatz B = ${sign}${bestFrames} ${word} (${bestSec.toFixed(3)} s · −${testedNeg}/+${testedPos} geprüft · Übereinstimmung ${pct} %)${movedNote}`);
       } finally {
         ab.autoSyncing = false;
         if (autoBtn) autoBtn.disabled = false;
@@ -16697,15 +16976,39 @@
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
     const gainEl = $("ab-diff-gain");
-    if (gainEl) gainEl.addEventListener("change", abDrawDiffFrame);
+    if (gainEl) gainEl.addEventListener("change", () => {
+      abUpdateDiffLegend();
+      abDrawDiffFrame({ force: true });
+    });
     const zoomEl = $("ab-zoom");
-    if (zoomEl) zoomEl.addEventListener("change", abApplyZoom);
+    if (zoomEl) zoomEl.addEventListener("change", () => {
+      abApplyZoom();
+      abUpdateDiffTooltip();
+    });
+    const diffCanvasEl = $("ab-diff-canvas");
+    if (diffCanvasEl) {
+      diffCanvasEl.addEventListener("mousemove", (ev) => {
+        ab.hoverState = { active: true, clientX: ev.clientX, clientY: ev.clientY };
+        abUpdateDiffTooltip();
+      });
+      diffCanvasEl.addEventListener("mouseleave", () => {
+        if (ab.hoverState) ab.hoverState.active = false;
+        abUpdateDiffTooltip();
+      });
+    }
     [va, vb].forEach((video) => {
-      video.addEventListener("loadedmetadata", () => { abApplyZoom(); abDrawDiffFrame(); });
-      video.addEventListener("loadeddata", abDrawDiffFrame);
-      video.addEventListener("seeked", abDrawDiffFrame);
+      video.addEventListener("loadedmetadata", () => { abApplyZoom(); abDrawDiffFrame({ force: true }); });
+      video.addEventListener("loadeddata", () => abDrawDiffFrame({ force: true }));
+      video.addEventListener("seeked", () => {
+        if (video === va) ab.mediaTimeA = va.currentTime || 0;
+        if (video === vb) ab.mediaTimeB = vb.currentTime || 0;
+        abDrawDiffFrame({ force: true });
+      });
       video.addEventListener("play", abUpdateCanvasLoop);
-      video.addEventListener("pause", abDrawDiffFrame);
+      video.addEventListener("pause", () => {
+        if (va.paused && vb.paused) abCancelCanvasLoop();
+        abDrawDiffFrame({ force: true });
+      });
       video.addEventListener("resize", abApplyZoom);
     });
     const abxBar = $("ab-abx-bar");
