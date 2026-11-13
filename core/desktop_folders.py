@@ -20,6 +20,25 @@ class DesktopMediaFolders:
         self._lock = threading.RLock()
 
     @staticmethod
+    def _path_keys(value: str) -> set[str]:
+        """Identität eines Ordners, unabhängig von 8.3-Kurznamen und Schrägstrichen.
+
+        GitHub-Actions liefert Temp-Pfade als ``RUNNER~1``, ``Path.resolve()``
+        dagegen als ``runneradmin``. Beide müssen denselben Ordner treffen.
+        """
+        raw = str(value or "").strip().rstrip("\\/")
+        if not raw:
+            return set()
+        keys = {os.path.normcase(os.path.normpath(raw))}
+        try:
+            resolved = Path(raw).resolve()
+        except (OSError, RuntimeError, ValueError):
+            resolved = None
+        if resolved is not None:
+            keys.add(os.path.normcase(os.path.normpath(str(resolved))))
+        return keys
+
+    @staticmethod
     def _validate(value: str) -> Path:
         if not isinstance(value, str) or not value or "\0" in value or len(value) > 32767:
             raise ValueError("Ungültiger Ordnerpfad.")
@@ -114,11 +133,11 @@ class DesktopMediaFolders:
         """Entfernt einen zuvor hinzugefügten Medienordner (reduziert nur Rechte)."""
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Ungültiger Ordnerpfad.")
-        norm_target = os.path.normcase(value.strip().rstrip("\\/"))
+        target_keys = self._path_keys(value)
         with self._lock:
             remaining = [
                 p for p in self._paths
-                if os.path.normcase(p.rstrip("\\/")) != norm_target
+                if self._path_keys(p).isdisjoint(target_keys)
             ]
             temporary = None
             try:

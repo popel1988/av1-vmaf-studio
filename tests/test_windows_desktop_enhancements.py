@@ -233,6 +233,34 @@ class FolderManagementAndToastTests(unittest.TestCase):
                 self.assertEqual(config.MEDIA_ROOTS, [("Videos", vids)])
                 self.assertFalse(config.MULTI_MEDIA)
 
+    def test_remove_matches_short_name_alias_of_resolved_folder(self):
+        """8.3-Kurzpfad (RUNNER~1) und aufgelöster Langpfad sind derselbe Ordner."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vids = root / "Videos"
+            extra = root / "Archiv"
+            vids.mkdir()
+            extra.mkdir()
+            with patch.object(config, "MEDIA_ROOTS", [("Videos", vids)]), \
+                 patch.object(config, "_SHARE_ROOTS", []), \
+                 patch.object(config, "MULTI_MEDIA", False):
+                folders = DesktopMediaFolders(config, root)
+                folders.add_selected(str(extra))
+                stored = folders.list_folders()[0]["path"]
+                alias = r"C:\Users\RUNNER~1\AppData\Local\Temp\alias\Archiv"
+
+                def fake_resolve(self, strict=False):
+                    text = os.path.normcase(str(self))
+                    if "runner~1" in text or os.path.normcase(stored) == os.path.normcase(
+                            os.path.normpath(str(self))):
+                        return Path(stored)
+                    return Path(os.path.normpath(str(self)))
+
+                with patch("core.desktop_folders.Path.resolve", fake_resolve):
+                    removed = folders.remove_selected(alias)
+                self.assertEqual(removed["folders"], [])
+                self.assertEqual(config.MEDIA_ROOTS, [("Videos", vids)])
+
     def test_desktop_notifier_hook_receives_job_completion(self):
         delivered = []
         done_evt = threading.Event()
