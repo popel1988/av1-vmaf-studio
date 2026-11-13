@@ -3551,6 +3551,8 @@ def _finalize_work(work: Path, item_id: str, keep_clips: Optional[bool] = None) 
         if not retain:
             for clip in work.glob("test_*.mkv"):
                 clip.unlink(missing_ok=True)
+            for mp4_cache in work.glob("test_*.mp4"):
+                mp4_cache.unlink(missing_ok=True)
     except OSError:
         pass
     if config.RETAIN_VMAF_SESSIONS and item_id:

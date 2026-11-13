@@ -14627,6 +14627,8 @@
     playTask: null,
     settling: 0,
     settleSeq: 0,
+    stepTargetT: NaN,   // Merkt die exakte Zielzeit beim Einzelbild-Stepping im Pause-Modus.
+    autoSyncing: false,
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
     rafId: 0,
@@ -14961,6 +14963,15 @@
     if (parts.length) abSetStatus(parts.join("   |   "));
   }
 
+  function abUpdatePlayBtn() {
+    const btn = $("ab-play");
+    if (!btn) return;
+    const va = ab.sides.a && ab.sides.a.video;
+    const vb = ab.sides.b && ab.sides.b.video;
+    const active = ab.wantPlay || (va && !va.paused) || (vb && !vb.paused);
+    btn.textContent = active ? `⏸ ${tt("Pause")} (beide)` : `▶ ${tt("Play")} (beide)`;
+  }
+
   function abPauseMedia(side) {
     const video = side && side.video;
     if (!video || video.paused) return;
@@ -14977,12 +14988,14 @@
     ab.controlSeq += 1;
     ab.playTask = null;
     Object.values(ab.sides).forEach(abPauseMedia);
+    abUpdatePlayBtn();
   }
 
   function abBeginLoad() {
     abPauseBoth();
     ab.closing = false;
     ab.seeking = false;
+    ab.stepTargetT = NaN;
     ab.loadSeq += 1;
     Object.values(ab.sides).forEach((side) => {
       if (side.lookTimer) clearTimeout(side.lookTimer);
@@ -15087,9 +15100,9 @@
     });
   }
 
-  // Der Remux beginnt am Keyframe vor der Szene. Ein Seek im Stream zeigt nur
-  // diesen Keyframe. Deshalb stumm und unsichtbar bis zum Szenenbild laufen lassen.
-  function playClipFromLead(video, lead, opts) {
+  // Fallback für unindizierte Streams ohne Seekable-Range: stumm bis Zielzeit vorlaufen lassen.
+  function playClipFromLead(side, lead, opts) {
+    const video = side && side.video;
     const keepPlaying = !!(opts && opts.keepPlaying);
     const target = Math.max(0, Number(lead) || 0);
     if (!video || target <= 0.02 || typeof video.requestVideoFrameCallback !== "function") {
@@ -15097,11 +15110,14 @@
     }
     const prevVis = video.style.visibility;
     const prevMuted = video.muted;
+    const prevRate = video.playbackRate || 1;
     video.style.visibility = "hidden";
     video.muted = true;
+    try { video.playbackRate = Math.max(1, prevRate); } catch (e) { /* ignore */ }
     const restore = () => {
       video.style.visibility = prevVis;
       video.muted = prevMuted;
+      try { if (video.playbackRate !== prevRate) video.playbackRate = prevRate; } catch (e) { /* ignore */ }
     };
     return new Promise((resolve) => {
       let handle = 0;
@@ -15116,7 +15132,7 @@
         }
         video.removeEventListener("ended", onEnd);
         if (!keepPlaying) {
-          try { video.pause(); } catch (e) { /* ignore */ }
+          abPauseMedia(side);
         }
         restore();
         resolve(!!ok);
@@ -15139,55 +15155,92 @@
     });
   }
 
+  function abWaitPlayable(side, timeoutMs, valid = () => true) {
+    const video = side && side.video;
+    if (!video || !valid() || video.error) return Promise.resolve(false);
+    const canPlayNow = () => !!video && !video.seeking && (
+      video.readyState >= 3
+      || (video.readyState >= 2 && (side.mode === "direct" || abBufferedAhead(side) >= 0.25))
+    );
+    if (canPlayNow()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const events = ["canplay", "canplaythrough", "loadeddata", "seeked", "progress"];
+      let hardTimer = 0;
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearTimeout(hardTimer);
+        events.forEach((name) => video.removeEventListener(name, check));
+        video.removeEventListener("error", fail);
+        resolve(!!ok);
+      };
+      const check = () => {
+        if (!valid() || video.error) finish(false);
+        else if (canPlayNow()) finish(true);
+      };
+      const fail = () => finish(false);
+      events.forEach((name) => video.addEventListener(name, check));
+      video.addEventListener("error", fail, { once: true });
+      hardTimer = setTimeout(() => {
+        finish(valid() && !video.error && canPlayNow());
+      }, timeoutMs || 8000);
+    });
+  }
+
   async function abPlaceSide(side, filmT, valid, stepExact = false) {
     const video = side && side.video;
     if (!video || !valid()) return false;
     const localT = Math.max(0, filmT - (side.offset || 0));
+    if (side.mode === "hls" && side.encodePaused && abBufferedAhead(side) < 6) {
+      abSetEncodePaused(side, false);
+    }
     const now = video.currentTime || 0;
-    // Bei Einzelbild-Stepping (< 24 fps -> 1 Frame ~ 17..42 ms) direkt auf localT
-    // setzen statt unsichtbar vorzuspulen, und Toleranz auf 4 ms verschärfen.
-    if (!stepExact && side.clipUrl && localT > 0.02 && now + 0.02 < localT
-        && typeof video.requestVideoFrameCallback === "function") {
-      if (side.alignedAt != null && Math.abs(now - localT) < 0.04
-          && Math.abs(side.alignedAt - localT) < 0.04) return true;
+    const unseekableClip = !!(side.clipUrl && video.seekable && video.seekable.length === 0
+      && typeof video.requestVideoFrameCallback === "function");
+    if (!stepExact && unseekableClip && localT > 0.02 && now + 0.02 < localT) {
       side.catchingUp = true;
       let caught = false;
       try {
-        caught = await playClipFromLead(video, localT);
+        caught = await playClipFromLead(side, localT);
       } finally {
         side.catchingUp = false;
       }
       if (!valid()) return false;
-      side.syncPauses = (side.syncPauses || 0) + 1;
-      try { video.pause(); } catch (e) { /* ignore */ }
       if (caught) {
         side.alignedAt = video.currentTime || localT;
         return true;
       }
     }
-    const tol = stepExact ? 0.004 : 0.02;
+    const tol = stepExact ? 0.002 : 0.025;
     const close = () => Math.abs((video.currentTime || 0) - localT) < tol;
-    const deadline = Date.now() + 8000;
-    while (valid() && Date.now() < deadline) {
-      if (!abBufferedCovers(video, localT)) {
-        const covered = await abWaitCovered(video, localT, valid);
-        if (!covered || !valid()) return false;
-      }
-      if (!close() || video.seeking) abSetTime(side, filmT);
-      if (close() && !video.seeking) {
-        if (stepExact) side.alignedAt = video.currentTime || localT;
-        return true;
-      }
-      const landed = await abWaitMediaReady(
-        video, Math.max(200, deadline - Date.now()), 2, valid);
-      if (!valid()) return false;
-      if (landed && close() && !video.seeking) {
-        if (stepExact) side.alignedAt = video.currentTime || localT;
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 150));
+    if (close() && !video.seeking && video.readyState >= 2) {
+      if (stepExact) side.alignedAt = video.currentTime || localT;
+      return true;
     }
-    return valid() && close() && !video.seeking;
+    // Immer zuerst currentTime setzen: Direct-Play (HTTP Range) und hls.js
+    // fordern Segmente für Zielzeiten erst NACH dem Seek-Befehl an.
+    abSetTime(side, filmT, stepExact);
+    const landed = await abWaitMediaReady(video, stepExact ? 3000 : 6000, 2, valid);
+    if (!valid()) return false;
+    if (landed && !video.seeking) {
+      // Falls hls.js beim ersten Setzen mangels Segment weit weg geklemmt hat (> 0,35 s),
+      // einmalig auf den Puffer warten und nachsetzen – aber niemals in einer 4-ms-Schleife
+      // hängenbleiben, wenn Container-PTS auf Frame-/Millisekundengrenzen gerundet sind.
+      if (side.mode === "hls" && Math.abs((video.currentTime || 0) - localT) > 0.35
+          && !abBufferedCovers(video, localT)) {
+        const covered = await abWaitCovered(video, localT, valid);
+        if (!valid()) return false;
+        if (covered) {
+          abSetTime(side, filmT, true);
+          await abWaitMediaReady(video, 3000, 2, valid);
+          if (!valid()) return false;
+        }
+      }
+      if (stepExact) side.alignedAt = video.currentTime || localT;
+      return !video.seeking && video.readyState >= 2;
+    }
+    return valid() && !video.seeking && video.readyState >= 2;
   }
 
   async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true, stepExact = false) {
@@ -15209,9 +15262,11 @@
       const placed = await Promise.all(sides.map((side) => abPlaceSide(
         side, Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0)), current, stepExact)));
       if (!current() || !placed.every(Boolean)) return false;
-      const ready = await Promise.all(sides.map((side) =>
-        abWaitMediaReady(side.video, 8000, 3, current)));
-      if (!current() || !ready.every(Boolean)) return false;
+      if (!stepExact) {
+        const ready = await Promise.all(sides.map((side) =>
+          abWaitPlayable(side, 8000, current)));
+        if (!current() || !ready.every(Boolean)) return false;
+      }
     } finally {
       if (ab.settling === settling) ab.settling = 0;
     }
@@ -15223,12 +15278,22 @@
     if (ab.closing || ab.seeking || !ab.sides.a.path) return false;
     if (ab.playTask) return ab.playTask;
     const sa = ab.sides.a, sb = ab.sides.b;
+    ab.stepTargetT = NaN;
     abApplyPlaybackRate();
     ab.wantPlay = true;
+    abUpdatePlayBtn();
     if (!abSynced() || !sb.path) {
       ab.holding = false;
       abSetEncodePaused(sa, false);
-      try { await sa.video.play(); return true; } catch (e) { ab.wantPlay = false; return false; }
+      try {
+        await sa.video.play();
+        abUpdatePlayBtn();
+        return true;
+      } catch (e) {
+        ab.wantPlay = false;
+        abUpdatePlayBtn();
+        return false;
+      }
     }
     const seq = ++ab.controlSeq;
     const loadSeq = ab.loadSeq;
@@ -15241,12 +15306,24 @@
       abSetEncodePaused(sa, false);
       abSetEncodePaused(sb, false);
       const ready = await abAlignAndSettleBoth(masterT, true, current);
-      if (!current() || !ready) return false;
+      if (!current()) return false;
+      if (!ready) {
+        const stillLoading = sa.starting || sb.starting
+          || (sa.video && sa.video.readyState < 2)
+          || (sb.video && sb.video.readyState < 2);
+        if (!stillLoading) {
+          ab.wantPlay = false;
+          ab.holding = false;
+          abUpdatePlayBtn();
+        }
+        return false;
+      }
       abApplyPlaybackRate();
       // Beide Uhren erst nach Daten UND Seek-Ende im selben Task starten.
       ab.holding = false;
       try {
         await Promise.all([sa.video.play(), sb.video.play()]);
+        abUpdatePlayBtn();
         return current();
       } catch (e) {
         if (current()) abPauseBoth();
@@ -15341,6 +15418,8 @@
       side.video.removeAttribute("src");
       side.video.load();
     } catch (e) { /* ignore */ }
+    // load() verwirft ausstehende Media-Events im Browser – syncPauses daher nullen!
+    side.syncPauses = 0;
     side.ready = false;
     side.syncSeekTarget = null;
   }
@@ -15386,12 +15465,13 @@
     }
     return t;
   };
-  const abSetTime = (side, t) => {
+  const abSetTime = (side, t, force = false) => {
     side.lastTime = Math.max(0, t);
     const localT = Math.max(0, t - (side.offset || 0));
-    if (Math.abs(side.video.currentTime - localT) < 0.001) return;
+    if (!force && Math.abs(side.video.currentTime - localT) < 0.001) return false;
     side.syncSeekTarget = localT;
     side.video.currentTime = localT;
+    return true;
   };
   const abBufferedEnd = (side) => {
     const b = side.video.buffered;
@@ -15625,11 +15705,19 @@
       const jobs = [];
       const want = (side, target) => {
         if (!side.path || side.mode === "direct") return;
-        if (stepExact && side.encodePaused && abBufferedAhead(side) < 4) {
+        const bufEnd = abBufferedEnd(side);
+        if (side.encodePaused && (abBufferedAhead(side) < 6 || target > bufEnd - 4)) {
           abSetEncodePaused(side, false);
         }
-        const inWin = target >= (side.offset || 0) - 0.01 && target <= abBufferedEnd(side) + 20;
-        if (!side.ready || !inWin) jobs.push(abStartSide(side, Math.max(0, target)));
+        const inWin = target >= (side.offset || 0) - 0.01 && target <= bufEnd + 6;
+        if (!side.ready || !inWin) {
+          // Beim Einzelbild-Rückwärtssprung vor den aktuellen HLS-Start 2 s Vorlauf laden,
+          // damit weitere „−1 Bild"-Klicks flüssig im Puffer bleiben statt jedes Mal neu zu starten.
+          const startAt = (stepExact && target < (side.offset || 0) - 0.01)
+            ? Math.max(0, target - 2)
+            : Math.max(0, target);
+          jobs.push(abStartSide(side, startAt));
+        }
       };
       want(sa, t);
       want(sb, t + abOffsetB());
@@ -15674,6 +15762,24 @@
     return [255, Math.round(200 * (1 - k)), Math.round(k * 180)];
   }
 
+  // Liefert den aktiven Bildausschnitt [sx, sy, sw, sh], falls z. B. das Original
+  // schwarze Letterbox-/Pillarbox-Balken hat und der Encode gecroppt wurde.
+  function abActiveCropRect(video, targetAspect) {
+    const vw = (video && video.videoWidth) || 0;
+    const vh = (video && video.videoHeight) || 0;
+    if (!vw || !vh || !(targetAspect > 0)) return [0, 0, vw, vh];
+    const ownAspect = vw / vh;
+    if (Math.abs(ownAspect - targetAspect) / targetAspect < 0.02) return [0, 0, vw, vh];
+    if (targetAspect > ownAspect) {
+      const sh = Math.max(1, Math.round(vw / targetAspect));
+      const sy = Math.max(0, Math.round((vh - sh) / 2));
+      return [0, sy, vw, sh];
+    }
+    const sw = Math.max(1, Math.round(vh * targetAspect));
+    const sx = Math.max(0, Math.round((vw - sw) / 2));
+    return [sx, 0, sw, vh];
+  }
+
   function abDrawDiffFrame() {
     if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
     const canvas = $("ab-diff-canvas");
@@ -15685,11 +15791,17 @@
       if (hud) hud.textContent = tt("Warte auf dekodierte Bilder A & B …");
       return;
     }
+    const aspectA = va.videoWidth / va.videoHeight;
+    const aspectB = vb.videoWidth / vb.videoHeight;
+    const refAspect = Math.abs(aspectA - aspectB) / Math.max(aspectA, aspectB) >= 0.02
+      ? aspectB : aspectA;
+    const [sxA, syA, swA, shA] = abActiveCropRect(va, refAspect);
+    const [sxB, syB, swB, shB] = abActiveCropRect(vb, refAspect);
     // Arbeitsauflösung begrenzen (~960px Breite) für flüssige 60-fps-Berechnung
     const maxW = 960;
-    const scale = Math.min(1, maxW / va.videoWidth);
-    const w = Math.max(16, Math.round(va.videoWidth * scale));
-    const h = Math.max(16, Math.round(va.videoHeight * scale));
+    const scale = Math.min(1, maxW / swA);
+    const w = Math.max(16, Math.round(swA * scale));
+    const h = Math.max(16, Math.round(shA * scale));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -15701,8 +15813,8 @@
     try {
       const ctxA = ab.bufA.getContext("2d", { willReadFrequently: true });
       const ctxB = ab.bufB.getContext("2d", { willReadFrequently: true });
-      ctxA.drawImage(va, 0, 0, w, h);
-      ctxB.drawImage(vb, 0, 0, w, h);
+      ctxA.drawImage(va, sxA, syA, swA, shA, 0, 0, w, h);
+      ctxB.drawImage(vb, sxB, syB, swB, shB, 0, 0, w, h);
       const imgA = ctxA.getImageData(0, 0, w, h);
       const imgB = ctxB.getImageData(0, 0, w, h);
       const dA = imgA.data;
@@ -16054,12 +16166,14 @@
     box.querySelectorAll("[data-ab-jump]").forEach((b) => b.addEventListener("click", () => {
       box.querySelectorAll("[data-ab-jump]").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
+      ab.stepTargetT = NaN;
       abSeekBoth(parseFloat(b.dataset.abJump) || 0, true);
     }));
   }
 
   async function abUnload(clearPaths) {
     ab.closing = true;
+    ab.stepTargetT = NaN;
     const unloadSeq = ++ab.loadSeq;
     abPauseBoth();
     const jobs = [];
@@ -16204,9 +16318,12 @@
       if (!force && (va.paused || vb.paused || va.seeking || vb.seeking
           || va.readyState < 3 || vb.readyState < 3)) return;
       const t = Math.max(0, abTime(sa) + abOffsetB());
-      if (force || Math.abs(abTime(sb) - t) > 0.25) {
-        if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 20)) {
-          abSeekBoth(abTime(sa));
+      // Beim Pausieren (force=true) nur nachsetzen, wenn B tatsächlich um mind. ~½ Bild
+      // abweicht – sonst löst jedes Pause einen unnötigen MSE/Decoder-Seek aus.
+      const minDiff = force ? Math.max(0.012, 0.45 / abFps()) : 0.25;
+      if (Math.abs(abTime(sb) - t) > minDiff) {
+        if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 6)) {
+          abSeekBoth(abTime(sa), va.paused);
         } else {
           abSetTime(sb, t);
         }
@@ -16220,12 +16337,14 @@
         if (side.catchingUp) return;
         abApplyPlaybackRate();
         if (ab.closing || ab.seeking || ab.settling) { abPauseMedia(side); return; }
+        ab.stepTargetT = NaN;
         abSetEncodePaused(side, false);
         if (!abSynced() || !ab.sides.b.path) {
           if (side.key === "a") ab.wantPlay = true;
+          abUpdatePlayBtn();
           return;
         }
-        if (ab.wantPlay && !ab.holding) return; // Gemeinsamer Start, kein neuer Auftrag.
+        if (ab.wantPlay && !ab.holding) { abUpdatePlayBtn(); return; } // Gemeinsamer Start, kein neuer Auftrag.
         abPlayTogether();
       });
       video.addEventListener("pause", () => {
@@ -16233,7 +16352,7 @@
         if (side.syncPauses > 0) { side.syncPauses -= 1; return; }
         if (ab.closing) return;
         if (abSynced()) { abPauseBoth(); alignB(true); }
-        else if (side.key === "a") { ab.wantPlay = false; ab.controlSeq += 1; }
+        else if (side.key === "a") { ab.wantPlay = false; ab.controlSeq += 1; abUpdatePlayBtn(); }
         if (!ab.seeking && abBufferedAhead(side) >= 6) abSetEncodePaused(side, true);
       });
       video.addEventListener("seeking", () => {
@@ -16241,7 +16360,8 @@
             && Math.abs(video.currentTime - side.syncSeekTarget) < 0.05) return;
         if (ab.closing || !abSynced() || ab.seeking || ab.settling || side.starting) return;
         side.syncSeekTarget = null;
-        abSeekBoth(abTime(side) - (side.key === "b" ? abOffsetB() : 0));
+        ab.stepTargetT = NaN;
+        abSeekBoth(abTime(side) - (side.key === "b" ? abOffsetB() : 0), va.paused && vb.paused);
       });
       video.addEventListener("seeked", () => {
         side.syncSeekTarget = null;
@@ -16289,21 +16409,41 @@
     });
 
     $("ab-play").addEventListener("click", () => {
-      if (ab.wantPlay || !va.paused) { abPauseBoth(); alignB(true); }
-      else abPlayTogether();
+      const active = ab.wantPlay || !va.paused || (vb && !vb.paused);
+      if (active) {
+        abPauseBoth();
+        alignB(true);
+      } else {
+        // Falls noch ein Einzelbild-Seek aktiv war, sauber ablösen statt Play zu ignorieren.
+        if (ab.seeking) {
+          ab.seeking = false;
+          ab.controlSeq += 1;
+        }
+        ab.stepTargetT = NaN;
+        abPlayTogether();
+      }
     });
-    // Einzelbild vor/zurück (beide): Frame-Index exakt runden, damit kein Gleitkomma-Drift entsteht.
+    // Einzelbild vor/zurück (beide): Frame-Index exakt runden und stepTargetT im Pause-Modus
+    // behalten, damit Container-PTS-Rundung (z. B. MKV 1 ms / B-Frames) das Weiterschalten nie festhält.
     const abFps = () => {
       const f = Number((ab.weak && ab.weak.fps)
         || (ab.sides.a.info && ab.sides.a.info.fps)
         || (ab.sides.b.info && ab.sides.b.info.fps));
       return f > 1 && f <= 240 ? f : 24;
     };
+    const abPausedAnchorA = () => {
+      const sa = ab.sides.a;
+      const vaEl = sa && sa.video;
+      if (vaEl && vaEl.paused && !ab.wantPlay && Number.isFinite(ab.stepTargetT)) {
+        return ab.stepTargetT;
+      }
+      return abTime(sa);
+    };
     const step = (dir) => {
       const sa = ab.sides.a;
       if (!sa || (!sa.path && !sa.clipUrl)) return;
       const fps = abFps();
-      const baseT = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+      const baseT = abPausedAnchorA();
       const nextFrame = Math.max(0, Math.round(baseT * fps) + dir);
       const win = ab.window;
       let targetT = nextFrame / fps;
@@ -16316,9 +16456,7 @@
       const shownFrame = Math.max(0, Math.round(targetT * fps));
       const ms = String(Math.min(999, Math.round((targetT % 1) * 1000))).padStart(3, "0");
       abSetStatus(`${tt("Einzelbild")} #${shownFrame} · ${fmtClock(Math.floor(targetT))}.${ms} (${fps.toFixed(3).replace(/\.?0+$/, "")} fps)`);
-      abSeekBoth(targetT, true, { stepExact: true }).finally(() => {
-        if (ab.stepTargetT === targetT) ab.stepTargetT = NaN;
-      });
+      abSeekBoth(targetT, true, { stepExact: true });
     };
     const sbk = $("ab-step-back"), sfw = $("ab-step-fwd");
     if (sbk) sbk.addEventListener("click", () => step(-1));
@@ -16341,10 +16479,11 @@
 
     const applyOffsetSync = (masterTarget) => {
       updateOffsetLabel();
-      const sa = ab.sides.a, sb = ab.sides.b;
+      const sa = ab.sides.a;
       if (!sa || (!sa.path && !sa.clipUrl)) return;
       const wasPlaying = ab.wantPlay || (va && !va.paused) || (vb && !vb.paused);
-      const tA = masterTarget != null ? masterTarget : abTime(sa);
+      const tA = masterTarget != null ? masterTarget : abPausedAnchorA();
+      if (!wasPlaying) ab.stepTargetT = tA;
       abSeekBoth(tA, !wasPlaying, { stepExact: !wasPlaying });
     };
 
@@ -16364,12 +16503,12 @@
           const nextFrames = curFrames + deltaFrames;
           const nextSec = Number((nextFrames / fps).toFixed(4));
           offEl.value = String(nextSec === 0 ? 0 : nextSec);
-          const curA = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+          const curA = abPausedAnchorA();
           const sign = nextFrames > 0 ? "+" : "";
           abSetStatus(`Video B ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextSec.toFixed(3)} s)`);
           applyOffsetSync(curA);
         } else {
-          const baseA = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+          const baseA = abPausedAnchorA();
           const nextFrameA = Math.max(0, Math.round(baseA * fps) + deltaFrames);
           let targetA = nextFrameA / fps;
           if (ab.window && ab.window.end > ab.window.start) {
@@ -16384,9 +16523,7 @@
           const sign = nextFrames > 0 ? "+" : "";
           ab.stepTargetT = targetA;
           abSetStatus(`Video A ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextOff.toFixed(3)} s)`);
-          abSeekBoth(targetA, true, { stepExact: true }).finally(() => {
-            if (ab.stepTargetT === targetA) ab.stepTargetT = NaN;
-          });
+          abSeekBoth(targetA, true, { stepExact: true });
           updateOffsetLabel();
         }
         return;
@@ -16396,10 +16533,130 @@
       if (!side || (!side.path && !side.clipUrl)) return;
       abPauseMedia(side);
       const nextT = Math.max(0, (Math.round(abTime(side) * fps) + deltaFrames) / fps);
-      abSetTime(side, nextT);
+      abSetTime(side, nextT, true);
       abDrawDiffFrame();
       abRenderNerdHud();
       abSetStatus(`Video ${sideKey.toUpperCase()} → #${Math.round(nextT * fps)} (${nextT.toFixed(3)} s · unsynchron)`);
+    };
+
+    // Helligkeits-/Tonemapping-invarianter Pixel-Auto-Sync (ZNCC auf 160×90 Luma-Gitter).
+    const extractNormalizedLuma = (video, refAspect, workCanvas) => {
+      const W = 160, H = 90;
+      if (workCanvas.width !== W || workCanvas.height !== H) {
+        workCanvas.width = W;
+        workCanvas.height = H;
+      }
+      const [sx, sy, sw, sh] = abActiveCropRect(video, refAspect);
+      const ctx = workCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
+      const data = ctx.getImageData(0, 0, W, H).data;
+      const n = W * H;
+      const luma = new Float32Array(n);
+      let sum = 0;
+      for (let i = 0, p = 0; i < n; i += 1, p += 4) {
+        const y = 0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2];
+        luma[i] = y;
+        sum += y;
+      }
+      const mean = sum / n;
+      let normSq = 0;
+      for (let i = 0; i < n; i += 1) {
+        const d = luma[i] - mean;
+        luma[i] = d;
+        normSq += d * d;
+      }
+      const std = Math.sqrt(normSq / n);
+      const invNorm = normSq > 1e-6 ? (1 / Math.sqrt(normSq)) : 0;
+      if (invNorm > 0) {
+        for (let i = 0; i < n; i += 1) luma[i] *= invNorm;
+      }
+      return { vec: luma, std };
+    };
+
+    const autoSyncFrames = async () => {
+      if (ab.autoSyncing || ab.closing) return;
+      const sa = ab.sides.a, sb = ab.sides.b;
+      if (!sa || !sb || (!sa.path && !sa.clipUrl) || (!sb.path && !sb.clipUrl)) {
+        abSetStatus(tt("Bitte zuerst beide Videos A und B laden."), true);
+        return;
+      }
+      if (!va.videoWidth || !vb.videoWidth || va.readyState < 2 || vb.readyState < 2) {
+        abSetStatus(tt("Warte auf dekodierte Videobilder für Auto-Sync …"), true);
+        return;
+      }
+      if (typeof document === "undefined" || typeof document.createElement !== "function") return;
+      abPauseBoth();
+      const syncBox = $("ab-sync");
+      if (syncBox && !syncBox.checked) syncBox.checked = true;
+      ab.autoSyncing = true;
+      const autoBtn = $("ab-auto-sync");
+      if (autoBtn) autoBtn.disabled = true;
+      const seq = ab.controlSeq;
+      const loadSeq = ab.loadSeq;
+      const valid = () => !ab.closing && seq === ab.controlSeq && loadSeq === ab.loadSeq;
+      try {
+        const fps = abFps();
+        const tA = abPausedAnchorA();
+        abSetStatus(tt("Auto-Sync läuft: prüfe Bildübereinstimmung (±12 Bilder) …"));
+        await abPlaceSide(sa, tA, valid, true);
+        if (!valid()) return;
+        const aspectA = va.videoWidth / va.videoHeight;
+        const aspectB = vb.videoWidth / vb.videoHeight;
+        const refAspect = Math.abs(aspectA - aspectB) / Math.max(aspectA, aspectB) >= 0.02
+          ? aspectB : aspectA;
+        const workCanvas = document.createElement("canvas");
+        const refSample = extractNormalizedLuma(va, refAspect, workCanvas);
+        if (refSample.std < 2.0) {
+          abSetStatus(tt("Aktuelles Bild ist nahezu einfarbig/schwarz – bitte an einer Szene mit Bilddetails pausieren."), true);
+          return;
+        }
+        const baseFrames = Math.round(abOffsetB() * fps);
+        const minB = sb.mode === "direct" ? 0 : (sb.offset || 0);
+        const maxB = sb.mode === "direct" ? (sb.duration || vb.duration || Infinity) : (abBufferedEnd(sb) - 0.02);
+        let bestFrames = baseFrames;
+        let bestScore = -2;
+        let bestCorr = -1;
+        let tested = 0;
+        for (let delta = -12; delta <= 12; delta += 1) {
+          if (!valid()) return;
+          const candFrames = baseFrames + delta;
+          const candSec = candFrames / fps;
+          const candTB = tA + candSec;
+          if (candTB < minB - 0.005 || candTB > maxB) continue;
+          const ok = await abPlaceSide(sb, candTB, valid, true);
+          if (!valid()) return;
+          if (!ok) continue;
+          const candSample = extractNormalizedLuma(vb, refAspect, workCanvas);
+          let corr = 0;
+          const vA = refSample.vec, vB = candSample.vec;
+          for (let i = 0; i < vA.length; i += 1) corr += vA[i] * vB[i];
+          // Minimaler Tie-Breaker zugunsten kleinerer Verschiebung bei Standbildern
+          const score = corr - Math.abs(delta) * 0.0004;
+          tested += 1;
+          if (score > bestScore) {
+            bestScore = score;
+            bestCorr = corr;
+            bestFrames = candFrames;
+          }
+        }
+        if (!valid() || tested === 0) return;
+        const bestSec = Number((bestFrames / fps).toFixed(4));
+        const offEl = $("ab-offset");
+        if (offEl) offEl.value = String(bestSec === 0 ? 0 : bestSec);
+        updateOffsetLabel();
+        ab.stepTargetT = tA;
+        await abAlignAndSettleBoth(tA, true, valid, true);
+        if (!valid()) return;
+        abDrawDiffFrame();
+        abRenderNerdHud();
+        const sign = bestFrames > 0 ? "+" : "";
+        const word = Math.abs(bestFrames) === 1 ? "Bild" : "Bilder";
+        const pct = Math.max(0, Math.min(100, bestCorr * 100)).toFixed(1);
+        abSetStatus(`Auto-Sync: Versatz B = ${sign}${bestFrames} ${word} (${bestSec.toFixed(3)} s · Übereinstimmung ${pct} %)`);
+      } finally {
+        ab.autoSyncing = false;
+        if (autoBtn) autoBtn.disabled = false;
+      }
     };
 
     const offInput = $("ab-offset");
@@ -16419,7 +16676,10 @@
       abSetStatus(tt("Frame-Versatz auf 0 zurückgesetzt."));
       applyOffsetSync(null);
     });
+    const autoSyncBtn = $("ab-auto-sync");
+    if (autoSyncBtn) autoSyncBtn.addEventListener("click", () => autoSyncFrames());
     updateOffsetLabel();
+    abUpdatePlayBtn();
     const seekEl = $("ab-seek");
     seekEl.addEventListener("input", () => { ab.seeking = true; });
     seekEl.addEventListener("change", (e) => {
@@ -16428,6 +16688,7 @@
       const origin = boxed ? win.start : 0;
       const dur = boxed ? (win.end - win.start) : (ab.sides.a.duration || va.duration || 0);
       ab.seeking = false;
+      ab.stepTargetT = NaN;
       if (dur) abSeekBoth(origin + (parseInt(e.target.value, 10) / 1000) * dur);
     });
     va.addEventListener("ended", abPauseBoth);

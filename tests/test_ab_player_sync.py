@@ -111,7 +111,7 @@ class Video extends Element {
 }
 const elements = {};
 for (const id of ["btn-ab-load", "btn-ab-unload", "ab-play", "ab-seek", "ab-sync",
-                 "ab-offset", "ab-offset-frames", "ab-offset-reset",
+                 "ab-offset", "ab-offset-frames", "ab-offset-reset", "ab-auto-sync",
                  "ab-nudge-b-back", "ab-nudge-b-fwd", "ab-nudge-a-back", "ab-nudge-a-fwd",
                  "ab-card", "ab-badge", "ab-status", "ab-speed",
                  "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b",
@@ -829,6 +829,140 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertAlmostEqual(self.value("a.video.currentTime"), 10.08, places=3)
         self.assertAlmostEqual(self.value("b.video.currentTime"), 10.08, places=3)
         self.assertEqual(self.value("$('ab-offset-frames').textContent"), "±0 Bilder")
+
+    def test_pause_and_resume_works_even_when_mse_stays_at_readystate_2_while_paused(self):
+        # Simuliert hls.js / MSE im Browser: Nach dem Pausieren bleibt readyState auf 2
+        # (HAVE_CURRENT_DATA) stehen, obwohl Puffer vorhanden ist, bis play() gerufen wird.
+        self.evaluate("$('ab-play').click();")
+        self.assert_playing_together()
+        self.evaluate("a.video.advance(5); b.video.advance(5);")
+        # Pause drücken
+        self.evaluate("$('ab-play').click();")
+        self.assertEqual(self.value("[a.video.paused, b.video.paused, ab.wantPlay]"), [True, True, False])
+        # Browser belässt HLS-Seite A im Pause-Zustand auf readyState 2 (mit Puffer voraus)
+        self.evaluate("a.mode = 'hls'; a.video.readyState = 2;")
+        # Erneut Play drücken -> startet sofort ohne Timer-Wartezeit!
+        self.evaluate("$('ab-play').click();")
+        self.assertEqual(self.value("[a.video.paused, b.video.paused, ab.wantPlay, ab.holding]"),
+                         [False, False, True, False])
+
+    def test_frame_stepping_advances_reliably_despite_container_pts_quantization_and_resumes(self):
+        # Simuliert ein Original-MKV/HLS, dessen Demuxer currentTime beim Setzen leicht abrundet
+        # (z. B. um 22 ms nach unten), was früher zum Hängen auf demselben Frame + 8-s-Blockade führte.
+        self.evaluate("""
+          a.info = { fps: 24 }; b.info = { fps: 24 };
+          a.video._time = 10.0; b.video._time = 10.0;
+          const origDesc = Object.getOwnPropertyDescriptor(Video.prototype, 'currentTime');
+          Object.defineProperty(a.video, 'currentTime', {
+            get() { return this._time; },
+            set(v) { origDesc.set.call(this, Math.max(0, v - 0.022)); }
+          });
+        """)
+        for expected_frame in range(241, 246):
+            self.evaluate("$('ab-step-fwd').click();")
+            self.assertAlmostEqual(self.value("ab.stepTargetT"), expected_frame / 24, places=4)
+            self.assertFalse(self.value("ab.seeking"))
+        # Rückwärtsschritt klappt ebenfalls sofort
+        self.evaluate("$('ab-step-back').click();")
+        self.assertAlmostEqual(self.value("ab.stepTargetT"), 244 / 24, places=4)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 244 / 24, places=4)
+        # Direkt danach Weiterlaufen lassen per Play-Button darf nicht blockieren
+        self.evaluate("$('ab-play').click();")
+        self.assertEqual(self.value("[a.video.paused, b.video.paused]"), [False, False])
+
+    def test_play_click_interrupts_in_flight_frame_step_instead_of_ignoring_user(self):
+        self.evaluate("""
+          a.video.autoSeek = false; b.video.autoSeek = false;
+          $('ab-step-fwd').click();
+        """)
+        self.assertTrue(self.value("ab.seeking"))
+        # Benutzer klickt während eines noch laufenden Einzelbild-Seeks auf Play
+        self.evaluate("""
+          a.video.autoSeek = true; b.video.autoSeek = true;
+          a.video.finishSeek(); b.video.finishSeek();
+          $('ab-play').click();
+        """)
+        self.assertEqual(self.value("[a.video.paused, b.video.paused]"), [False, False])
+
+    def test_detach_load_resets_sync_pauses_so_native_pause_is_not_swallowed(self):
+        # In echten Browsern verwirft video.load() das ausstehende pause-Event.
+        self.evaluate("""
+          a.video.paused = false;
+          a.video.pause = function() { this.paused = true; /* load() verschluckt Event */ };
+          abDetach(a);
+        """)
+        self.assertEqual(self.value("a.syncPauses"), 0)
+
+    def test_auto_sync_finds_exact_frame_offset_against_original(self):
+        # Video B hinkt inhaltlich um 3 Frames hinterher (zeigt Inhalt von A erst bei t + 3/24 s,
+        # z. B. durch Container-Startversatz / Audio-Preroll / B-Frame-Delay) und ist zudem dunkler (Tonemap).
+        self.evaluate("""
+          a.info = { fps: 24 }; b.info = { fps: 24 };
+          a.video.videoWidth = 1920; a.video.videoHeight = 1080;
+          b.video.videoWidth = 1920; b.video.videoHeight = 1080;
+          a.video._time = 5.0; b.video._time = 5.0;
+          globalThis.document = {
+            createElement() {
+              return {
+                width: 0, height: 0,
+                _video: null,
+                getContext() {
+                  const self = this;
+                  return {
+                    drawImage(v) { self._video = v; },
+                    getImageData() {
+                      const n = self.width * self.height;
+                      const out = new Uint8Array(n * 4);
+                      const v = self._video;
+                      // Video B zeigt exakt dasselbe Bildmuster bei (t - 3/24), aber mit halber Helligkeit + Offset
+                      const contentFrame = Math.round(((v === b.video) ? (v.currentTime - 3 / 24) : v.currentTime) * 24);
+                      const gain = (v === b.video) ? 0.55 : 1.0;
+                      const bias = (v === b.video) ? 20 : 0;
+                      for (let i = 0; i < n; i++) {
+                        const val = Math.min(255, Math.round(bias + gain * (((i * 7 + contentFrame * 53) % 200) + 10)));
+                        out[i * 4] = val; out[i * 4 + 1] = val; out[i * 4 + 2] = val; out[i * 4 + 3] = 255;
+                      }
+                      return { data: out };
+                    }
+                  };
+                }
+              };
+            }
+          };
+          $('ab-auto-sync').click();
+        """)
+        self.assertAlmostEqual(self.value("Number($('ab-offset').value)"), 3 / 24, places=4)
+        self.assertEqual(self.value("$('ab-offset-frames').textContent"), "+3 Bilder")
+        self.assertIn("Auto-Sync", self.value("$('ab-status').textContent"))
+
+
+class AbBackendSyncTests(unittest.TestCase):
+    def test_ab_hls_cmd_disables_fast_seek_overshoot_and_uses_short_gop(self):
+        from core import player_hls
+        copy_ab = player_hls._build_hls_cmd(
+            Path("orig.mkv"), Path("out"),
+            audio_index=0, start_sec=64.0, audio_codec="dts",
+            platform="cpu", encoder="copy", codec="h264",
+            height=0, v_bitrate=0, video_copy=True, accurate_target=True,
+        )
+        copy_player = player_hls._build_hls_cmd(
+            Path("orig.mkv"), Path("out"),
+            audio_index=0, start_sec=64.0, audio_codec="dts",
+            platform="cpu", encoder="copy", codec="h264",
+            height=0, v_bitrate=0, video_copy=True, accurate_target=False,
+        )
+        # Im normalen Player +0,5 s Fast-Seek, im A/B-Vergleich exakt 64.000 (kein Überspringen der Zielszene)
+        self.assertEqual(copy_player[copy_player.index("-ss") + 1], "64.500")
+        self.assertEqual(copy_ab[copy_ab.index("-ss") + 1], "64.000")
+
+        xcode_ab = player_hls._build_hls_cmd(
+            Path("orig.mkv"), Path("out"),
+            audio_index=0, start_sec=10.0, audio_codec="aac",
+            platform="cpu", encoder="libx264", codec="h264",
+            height=1080, v_bitrate=8000, video_copy=False, accurate_target=True,
+        )
+        self.assertEqual(xcode_ab[xcode_ab.index("-g") + 1], "24")
+        self.assertEqual(xcode_ab[xcode_ab.index("-keyint_min") + 1], "12")
 
 
 if __name__ == "__main__":

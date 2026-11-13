@@ -195,3 +195,86 @@ async def async_stream_bytes(cmd: list[str], chunk: int = 65536, *, owner="playe
         # shield schützt den Cleanup-Task auch vor der CancelScope des HTTP-
         # Streams. Der Thread existiert unabhängig vom geschlossenen Request.
         await asyncio.shield(asyncio.create_task(asyncio.to_thread(stream.close)))
+
+
+def ensure_seekable_clip_mp4(
+    target: Path,
+    *,
+    rebase_ts: bool = False,
+    video_codec: str = "",
+) -> Optional[Path]:
+    """Erzeugt einmalig eine per HTTP-Range spulbare MP4-Datei (+faststart) für VMAF-Clips.
+
+    Hintergrund: Ein unindizierter Pipe-Stream (`empty_moov` ohne `Content-Length` und
+    ohne `Accept-Ranges`) verhindert im Browser zuverlässiges Einzelbild-Stepping (+/-1 Bild)
+    sowie sauberes Fortsetzen nach Pause. Mit vollständiger `moov`-Sample-Tabelle am
+    Dateianfang kann `<video>` framegenau vorwärts und rückwärts springen.
+    """
+    if not target or not target.is_file():
+        return None
+    suffix_tag = ".rebase.play.mp4" if rebase_ts else ".play.mp4"
+    out_path = target.with_name(f"{target.stem}{suffix_tag}")
+    try:
+        if out_path.is_file() and out_path.stat().st_size > 256:
+            if out_path.stat().st_mtime >= target.stat().st_mtime:
+                return out_path
+    except OSError:
+        pass
+
+    vc = (video_codec or "").lower().strip()
+    base_in = [
+        config.FFMPEG, "-y", "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-fflags", "+genpts",
+        "-i", str(target),
+        "-map_metadata", "-1",
+        "-map_chapters", "-1",
+        "-map", "0:v:0",
+    ]
+    copy_args = ["-c:v", "copy"]
+    if vc in ("hevc", "h265"):
+        copy_args += ["-tag:v", "hvc1"]
+    elif vc == "av1":
+        copy_args += ["-tag:v", "av01"]
+    if rebase_ts:
+        copy_args += ["-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS"]
+
+    tail_args = [
+        "-an", "-sn", "-dn",
+        "-avoid_negative_ts", "make_zero",
+        "-movflags", "+faststart",
+    ]
+
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.stem}_", suffix=".mp4", dir=str(target.parent)
+    )
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+    try:
+        proc = subprocess.run(
+            base_in + copy_args + tail_args + [str(tmp_path)],
+            capture_output=True, timeout=45, check=False,
+        )
+        if proc.returncode != 0 or not tmp_path.is_file() or tmp_path.stat().st_size <= 256:
+            # Fallback für exotische Quell-Codecs (z. B. VC-1 / MPEG-2 im Quell-Remux),
+            # die nicht verlustfrei in MP4 gemuxt werden können.
+            vf = ["-vf", "setpts=PTS-STARTPTS"] if rebase_ts else []
+            proc = subprocess.run(
+                base_in + vf + [
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "14",
+                    "-pix_fmt", "yuv420p", "-g", "24", "-keyint_min", "1",
+                ] + tail_args + [str(tmp_path)],
+                capture_output=True, timeout=90, check=False,
+            )
+        if proc.returncode == 0 and tmp_path.is_file() and tmp_path.stat().st_size > 256:
+            os.replace(str(tmp_path), str(out_path))
+            return out_path
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Seekable-Clip-MP4 fehlgeschlagen (%s): %s", target.name, exc)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return None
+

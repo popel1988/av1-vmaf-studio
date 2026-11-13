@@ -1223,6 +1223,7 @@ def _build_hls_cmd(
     source_codec: str = "",
     is_hdr: bool = False,
     look: Optional[dict] = None,
+    accurate_target: bool = False,
 ) -> list[str]:
     """HLS als fMP4, Zeitstempel wie Jellyfin Dynamic HLS.
 
@@ -1276,9 +1277,10 @@ def _build_hls_cmd(
 
     if start_sec and start_sec > 0:
         ss = float(start_sec)
-        if video_copy:
-            # Jellyfin GetFastSeek: +0,5 s, sonst landet Copy auf dem
-            # *vorherigen* Keyframe, wenn die Zielzeit selbst ein Keyframe ist.
+        if video_copy and not accurate_target:
+            # Jellyfin GetFastSeek: +0,5 s im normalen Player; im A/B-Vergleich
+            # dagegen nie HINTER die Zielzeit springen, damit das Original exakt
+            # am oder vor dem Vergleichspunkt einsetzt.
             ss += 0.5
         cmd += ["-ss", f"{ss:.3f}"]
         # Copy kann nicht framegenau; ohne noaccurate_seek trimmt AAC auf
@@ -1293,7 +1295,7 @@ def _build_hls_cmd(
         audio_in_idx = 1
         cmd += ["-itsoffset", f"{delay_ms / 1000.0:.3f}"]
         if start_sec and start_sec > 0:
-            ss_a = float(start_sec) + (0.5 if video_copy else 0.0)
+            ss_a = float(start_sec) + (0.5 if (video_copy and not accurate_target) else 0.0)
             cmd += ["-ss", f"{ss_a:.3f}"]
             if video_copy:
                 cmd += ["-noaccurate_seek"]
@@ -1313,11 +1315,13 @@ def _build_hls_cmd(
         cmd += vmap
         cmd += ["-c:v", encoder]
         cmd += _encoder_rate_args(encoder, codec, v_bitrate)
-        # Keyframes an Segmentgrenzen (Jellyfin GetHlsVideoKeyFrameArguments)
-        gop = max(24, int(hls_time * 24))
-        cmd += ["-g", str(gop), "-keyint_min", str(gop)]
+        # Im A/B-Vergleich kürzere GOP (24 Frames ≈ 1s) für flüssiges Einzelbild-Stepping.
+        gop = 24 if accurate_target else max(24, int(hls_time * 24))
+        keyint_min = 12 if accurate_target else gop
+        cmd += ["-g", str(gop), "-keyint_min", str(keyint_min)]
         if encoder in ("libx264", "libx265"):
-            cmd += ["-force_key_frames", f"expr:gte(t,n_forced*{hls_time})"]
+            kf_step = 1 if accurate_target else hls_time
+            cmd += ["-force_key_frames", f"expr:gte(t,n_forced*{kf_step})"]
         if encoder == "libx264":
             cmd += ["-sc_threshold", "0"]
         if (codec or "h264").lower() == "h264":
@@ -1666,6 +1670,7 @@ def start_session(
             "plan": plan,
         }
 
+    is_ab = str(sess.owner or "").startswith("ab_")
     neg_audio_delay = int(audio_delay_ms or 0) if int(audio_delay_ms or 0) < 0 else 0
     if use_video_copy:
         cmd = _build_hls_cmd(
@@ -1680,6 +1685,7 @@ def start_session(
             audio_delay_ms=neg_audio_delay,
             source_codec=source_vcodec,
             is_hdr=is_hdr,
+            accurate_target=is_ab,
         )
         sess.encoder = "copy"
         sess.platform = "cpu"
@@ -1703,6 +1709,7 @@ def start_session(
             source_codec=source_vcodec,
             is_hdr=is_hdr,
             look=preview,
+            accurate_target=is_ab,
         )
 
     _record_effective(sess, cmd)
@@ -1790,6 +1797,7 @@ def start_session(
                     source_codec=source_vcodec,
                     is_hdr=is_hdr,
                     look=preview,
+                    accurate_target=is_ab,
                 )
                 _record_effective(sess, cmd, fallback_reason="HW-Verarbeitung fehlgeschlagen → CPU/H.264, Tonemap CPU/Hable falls aktiv.")
                 sess.debug_cmd = _cmd_preview(cmd, 800)

@@ -5,6 +5,16 @@ All notable changes, new features, and milestones of this project in reverse chr
 ---
 
 ## [This Release] – 2026-11-13
+- **A/B Player Frame-Stepping & Pause/Resume Fix:** Resolved a seek/readyState deadlock where single-frame stepping (`±1` frame) got stuck on quantized container timestamps and prevented playback from resuming after pausing.
+- **Range-Seekable VMAF Clips & Accurate A/B HLS Seeking:** Served VMAF test and source clips as `+faststart` MP4s with HTTP range support, disabled fast-seek overshoot (`+0.5s`), and shortened HLS GOPs in A/B mode for responsive frame stepping.
+- **1-Click Pixel Auto-Sync (`⚡ Auto-Sync`):** Added luminance cross-correlation frame matching (`±12` frames, crop- and tonemap-aware) to automatically align encodes 100% with the original source.
+
+---
+
+## [v9.3.1](https://github.com/popel1988/av1-vmaf-studio/commit/34e9368) – 2026-11-13
+- **Windows CI & Custom Folder Path Fix (`core/desktop_folders.py`):** Fixed custom media folder normalization and test path resolution on Windows builds.
+
+## [v9.3.0](https://github.com/popel1988/av1-vmaf-studio/commit/0340600) – 2026-11-13
 
 ### Video, VMAF & Quality Analysis
 - **GPU-accelerated `libvmaf` (`vmaf_cuda`) & Subsampling:** Automatic detection and use of `vmaf_cuda` on NVIDIA systems (aware of `latest` vs. `legacy` FFmpeg builds and driver requirements), plus optional frame subsampling (`n_subsample`) for significantly faster VMAF runs.
