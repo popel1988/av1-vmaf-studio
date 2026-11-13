@@ -1,15 +1,15 @@
 # Video Studio — VMAF-guided compression & editing
 
-**Repository:** [github.com/popel1988/av1-vmaf-studio](https://github.com/popel1988/av1-vmaf-studio)  
+**Repository:** [github.com/popel1988/av1-vmaf-studio](https://github.com/popel1988/av1-vmaf-studio) · **[Changelog](CHANGELOG.md)**  
 **Container image (GHCR):** `ghcr.io/popel1988/av1-vmaf-studio:latest`  
 NVIDIA NVENC on `:latest` needs driver **610** or newer. Older drivers use [`latest-legacy`](#image-channels).
 
-A production-ready all-in-one tool for space-saving video compression with
-**VMAF-guided quality selection**, a modern dashboard, live hardware metrics, and
-hardware encoding for **Nvidia (NVENC)**, **Intel (QSV/VAAPI)**, **AMD (VAAPI)**,
+A production-ready all-in-one tool (Docker container **and** native **Windows Desktop App**) for space-saving video compression with
+**VMAF-guided quality selection**, a modern workspace dashboard, live hardware metrics, and
+hardware encoding for **Nvidia (NVENC)**, **Intel (QSV/VAAPI)**, **AMD (VAAPI/AMF)**,
 plus a CPU fallback (**SVT-AV1 / x265 / x264 / VP9**).
 
-![Dashboard](https://img.shields.io/badge/UI-FastAPI%20Dashboard-22d3ee) ![VMAF](https://img.shields.io/badge/VMAF-libvmaf-38bdf8) ![Codecs](https://img.shields.io/badge/Codecs-AV1%20%7C%20HEVC%20%7C%20H.264%20%7C%20VP9-6366f1) ![HDR](https://img.shields.io/badge/HDR-HDR10%2B%20%7C%20HLG%20%7C%20Dolby%20Vision-f59e0b)
+![Dashboard](https://img.shields.io/badge/UI-FastAPI%20Dashboard-22d3ee) ![Windows](https://img.shields.io/badge/Desktop-Windows%20WebView2-0ea5e9) ![VMAF](https://img.shields.io/badge/VMAF-libvmaf-38bdf8) ![Codecs](https://img.shields.io/badge/Codecs-AV1%20%7C%20HEVC%20%7C%20H.264%20%7C%20VP9-6366f1) ![HDR](https://img.shields.io/badge/HDR-HDR10%2B%20%7C%20HLG%20%7C%20Dolby%20Vision-f59e0b)
 
 ---
 
@@ -31,6 +31,7 @@ plus a CPU fallback (**SVT-AV1 / x265 / x264 / VP9**).
 - [REST API](#rest-api)
 - [Persistence & data layout](#persistence--data-layout)
 - [Deployment](#deployment)
+- [Windows Desktop App](#windows-desktop-app)
 - [Local development](#local-development-without-docker)
 - [Project structure](#project-structure)
 - [Configuration (environment variables)](#configuration-environment-variables)
@@ -45,26 +46,25 @@ mode**, and language support for **DE / EN / ES / FR**:
 
 | Page | Purpose |
 |------|---------|
-| **Encoding** | Direct encoding with CQ/bitrate/ABR **or target-VMAF** (test encodes, then automatic encode), size target, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side. A **suggestion from history** proposes a CQ without a test run when similar sources have been encoded before. An optional **mobile copy** (H.264 MP4) is written from the same decode. |
-| **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, screenshots, and “→ Encoding” transfer. Same two-column layout as Encoding. |
+| **Encoding** | Direct encoding with CQ/bitrate/ABR **or target-VMAF** (test encodes, then automatic encode), 2-pass target size, scene-aware smart chunking, auto-crop, export preflight & quick sample test export, naming templates, audio/HDR options, dry-run preview. Source browser and settings sit side by side. A **suggestion from history** proposes a CQ without a test run when similar sources have been encoded before. An optional **mobile copy** (H.264 MP4) is written from the same decode. |
+| **VMAF Tool** | Pure comparison of multiple encoders/codecs & quality levels with charts, 0.1%/1%/5%-low dip context, optional GPU decode acceleration & frame subsampling, targeted scene/range picks, screenshots, 2-way/3-way clip comparison, and “→ Encoding” transfer. |
 | **Super Tool** | Guided batch processing: target VMAF, representative VMAF, or fixed quality for entire folders (incl. remux-only profiles). |
-| **Audio optimization** | Audio-only remux: transcode bloated audio tracks, copy video 1:1. |
-| **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, attachments, chapters, trim, extract — plus merge & split. |
-| **Editor** | Timeline editor: In/Out cuts, keep/cut ranges, reorder, multi-file concat, **direct upload**, per-source audio/subtitle selection, remux (keyframe copy) or encode export (CQ/CBR/ABR) to the queue. |
-| **Player** | Full media player: Direct-Play when possible, else HLS; quality profiles (NVENC/CPU from diagnostics), chapters, text subs + optional PGS burn-in. |
-| **A/B compare** | Original vs. encode in sync, side by side or as a **wipe** (split image with a draggable edge). Files the browser cannot decode run through the HLS player (server transcode). Opened from a job's details it lists the **weakest VMAF spots** as clickable times (jump and pause), plus the test scenes. |
-| **Queue** | Live progress (bar, FPS, bitrate, ETA), pause/resume, reorder, cancel, **requeue** finished jobs. Waiting encodes show an **estimated runtime** from the history (median speed of earlier encodes on the same encoder and resolution class). |
-| **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes; requeue from history. |
+| **Audio optimization** | Audio-only remux: transcode bloated audio tracks (incl. true 2-pass EBU R128 `loudnorm` and optional dialogue boost on downmixes), copy video 1:1. |
+| **Remux & edit** | Lossless container editing (no video re-encode): add/remove/reorder tracks, edit flags/language/title, external tracks, optional local PGS/VobSub → SRT OCR, attachments, chapters, trim, extract — plus merge & split. |
+| **Editor** | Timeline editor: In/Out cuts, keep/cut ranges, automatic scene/cut & crop detection, crossfades, logo removal (`delogo`), text overlays, color/look presets, multi-file concat, **direct upload**, per-source audio/subtitle selection, remux (keyframe copy) or encode export (CQ/CBR/ABR) to the queue. |
+| **Player** | Full media player: probes native browser codec & HDR support in Automatic mode (keeps native resolution such as 2160p whenever supported and only tone-maps when needed, showing explicit DV → HDR10 fallback indicators), Direct-Play when possible, else HLS; single-frame stepping (`±1` frame), chapters, text subs + optional PGS burn-in. |
+| **A/B compare** | Synchronized **2-way (`A / B`) and 3-way (`A / B / C`)** visual inspection: Side-by-Side, Wipe, **Pixel-Difference**, **Error Heatmap**, **ABX Blind Test**, and **Direct 3-Way Delta-Error Heatmap (`Δ(C − B)` vs. Original `A`)**. Includes a **Frame-Indexed Ring Buffer** for ghost-free live motion diffing (`Frame-Lock #N`), **1-click `⚡ Auto-Sync`** (`±12` frames), independent per-side frame nudging, `⅛×`–`2×` playback speed, dynamic color legend, 2-way/3-way pixel hover inspector, PNG snapshot export, and clickable weakest VMAF spots. |
+| **Queue** | Live progress (bar, FPS, bitrate, ETA), queue & per-job process suspend/resume (`⏸`), worker priority control, reorder, cancel, **requeue** finished jobs, and a structured output verification report at the bottom of job details. Waiting encodes show an **estimated runtime** from history. |
+| **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes, CSV export; requeue from history. |
 | **Library** | Recursive scan with live filters, savings estimates (not a probe encode), **sub-libraries**, NFO title/year on each row (sort and search), NFO popup, CSV export. |
-| **Settings** | Parallel encodes, encoder speed and bench, watch folder, notifications, optional Jellyfin/Sonarr/Radarr rescan, API keys, profiles, default output folder, VMAF recommendation (1% gap, minimum savings). |
-| **Data & archives** | Browse saved VMAF sessions and encode directly from them. |
-| **Diagnostics** | System health self-test including functional encoder tests. |
+| **Settings** | Parallel encodes, encoder speed and bench, watch folder (with write-stability check & dry-run), network shares, notifications, optional Jellyfin/Sonarr/Radarr rescan, API keys, profiles, default output folder, VMAF recommendation (1% gap, minimum savings). |
+| **Data & archives** | Browse saved VMAF sessions with provenance/toolchain checks, manage retention/cleanup policies, and encode directly from archives. |
+| **Diagnostics** | System health self-test including functional encoder tests (NVENC, QSV, VAAPI, AMF, CPU). |
 | **FAQ** | In-app explanations of CQ/CBR/ABR, HDR / Dolby Vision profiles, VMAF, bitrate and VMAF curve shapes, keyframe interval, and containers. |
 
 Other highlights:
 
-- **Sidebar with live hardware rings**: CPU, RAM, and GPU(s) via `psutil`,
-  `nvidia-smi`, sysfs (AMD `gpu_busy_percent`), and `intel_gpu_top`.
+- **Sidebar with live hardware rings**: CPU, RAM, and GPU(s) — on Linux via `psutil`, `nvidia-smi`, sysfs (`gpu_busy_percent`), and `intel_gpu_top`; on Windows directly in-process via `nvml.dll` (incl. NVENC/NVDEC & multi-engine counts) and `dxgi.dll` + `pdh.dll` without console window flashing.
 - **Global search** across the media tree (sidebar).
 - **Structured file/folder browser** for `/media` (recursive, with filter/sort).
 - **Multiple named input roots** via `MEDIA_DIRS` (optional extra mounts).
@@ -98,8 +98,9 @@ matching FFmpeg encoder:
 | **CPU** | `libsvtav1` (SVT-AV1) | `libx265` (x265) | `libx264` (x264) | `libvpx-vp9` |
 | **Nvidia (NVENC)** | `av1_nvenc` | `hevc_nvenc` | `h264_nvenc` | — |
 | **Intel (QSV)** | `av1_qsv` | `hevc_qsv` | `h264_qsv` | — |
-| **Intel (VAAPI, default)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
-| **AMD (VAAPI)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
+| **Intel (VAAPI, Linux default)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
+| **AMD (VAAPI, Linux)** | `av1_vaapi` | `hevc_vaapi` | `h264_vaapi` | — |
+| **AMD (AMF, Windows)** | `av1_amf` | `hevc_amf` | `h264_amf` | — |
 
 - The Intel backend is switchable via `INTEL_ENCODER` (`vaapi` = default, `qsv`).
 - If an encoder is missing from the FFmpeg build, the job is rejected with a clear
@@ -265,9 +266,9 @@ failed HDR10+ step does not fail the job. Editor cuts do not reinject HDR10+.
 | **VP9** | CPU only | No DV RPU. Static HDR10 can be kept when tone-map is off. |
 
 Source profiles 5, 7 (dual-layer → converted to 8.1), and 8 are supported for HEVC
-targets. `dovi_tool` does **not** process AV1 on the CLI — so AV1 DV is created only
+targets. Dolby Vision detection (`core/dolby_vision.py`) strictly verifies genuine RPU/DOVI side-data so standard Full HD / SDR sources are never misclassified. `dovi_tool` does **not** process AV1 on the CLI — so AV1 DV is created only
 when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is kept
-(best-effort; the job does not fail).
+(best-effort; the job does not fail). In the Player and A/B compare, **Automatic** playback mode probes actual browser HDR/HEVC support on load, keeps native source resolution (such as 2160p) whenever playable, and displays a clear indicator when Dolby Vision falls back to its HDR10 base layer.
 
 ---
 
@@ -286,8 +287,8 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
   the final encode and, on the VMAF tool, Super Tool and Encoding target-VMAF,
   the test clips. CQ ignores it. On a 12–30 s SVT clip, one-pass often misses
   the requested average; two-pass is what makes that ladder comparable.
-- **Chunked adaptive encoding** (CQ mode): segments with complexity-based CQ —
-  demanding scenes get more bits, calm scenes fewer.
+- **Chunked adaptive encoding** (CQ mode): scene-cut-aware segments (`core/chunked.py`) with complexity-based CQ —
+  demanding scenes get more bits, calm scenes fewer, without GOP boundary artifacts.
 - **Auto-crop** (`cropdetect`): black letterbox/pillarbox bars are detected and
   removed before encoding. VMAF analysis and the guardrail automatically use the
   same cropped area so scores stay correct.
@@ -296,9 +297,9 @@ when encoding on the CPU. If a DV step fails, the HDR10-compatible base layer is
 - **Scaling**: downscale to a target height; the test encode is scaled back up to
   the original resolution for the VMAF comparison.
 - **Per-track audio**: copy / re-encode (AAC/Opus/AC3/E-AC3/FLAC) / remove,
-  channel downmix, and loudness normalization (EBU R128).
+  channel downmix (with optional center/dialogue boost), and true 2-pass loudness normalization (EBU R128 `loudnorm`).
 - **Per-track subtitles & chapters**, metadata preservation, automatic
-  `mov_text`/`tx3g`→SRT conversion.
+  `mov_text`/`tx3g`→SRT conversion, and optional local **PGS / VobSub → SRT OCR** (`core/subtitle_ocr.py` via Tesseract).
 - **Post-encode caps**: optional max output size (MB) and max video bitrate
   (kbit/s); failed caps are reported after the job.
 - **Mobile copy** (Encoding → options): a second output in the same FFmpeg run.
@@ -652,9 +653,10 @@ optional fades/tempo) and sends it to the same queue as Encoding/Remux.
 - Direct file playback in the browser when the codec is playable; otherwise a
   light FFmpeg/HLS fallback. Jump **±0.2 s** and frame-step; **Timeline follow**
   skips cut-away parts and continues at the next clip.
-- Source ruler for the whole loaded file (In/Out, keep/cut range, snap to
-  chapters or keyframes). The output timeline supports trim-by-drag, fade
+- Source ruler for the whole loaded file (In/Out, keep/cut range, automatic scene/cut detection, snap to
+  chapters or keyframes). The output timeline supports trim-by-drag, fade/crossfade
   corners, reorder, split, duplicate, black clips, intro/outro, undo/redo.
+- Optional picture tools in the editor: auto-crop detection, logo/watermark removal (`delogo`), text overlays (`drawtext`), color/look presets, and frame snapshot export (`/api/editor/snapshot`).
 - Keyboard: **I/O** In/Out · **J/K/L** −5 s / pause / play · arrows for frames
   and clip change · **S** split · **Del** delete clip · **Ctrl+Z** undo.
 - Unload a source from the preview without dropping clips already on the
@@ -793,13 +795,17 @@ One media mount is enough — sources and encodes live in the same tree:
 - **Safe original post-processing**: “replace in place” or “move to `.archiv/`”
   deletes/moves the original **only** if the integrity check and (if enabled) the
   guardrail passed — protects against data loss.
+- **GPU-accelerated VMAF decode & optional subsampling**: NVIDIA hosts can enable GPU-assisted VMAF acceleration (`vmaf_cuda` when present in FFmpeg, or hardware `cuda_decode` feeding `libvmaf`, respecting the driver gate of `latest` ≥ 610 vs. `latest-legacy` ≥ 525), plus optional frame subsampling (`n_subsample`, default `1` = every frame) and targeted time-range scene selection.
+- **Visual A/B & 3-Way (`A / B / C`) Inspection**:
+  - Compare Original (`A`) + Encode (`B`) — or add a second Encode (`C`, e.g., 10,000 kbit/s vs. 3,000 kbit/s) — across **Side-by-Side**, **Wipe**, **Pixel-Difference**, **Error Heatmap**, **ABX Blind Test**, and **Direct 3-Way Delta-Error Heatmap (`Δ(C − B)` vs. Original `A`)**.
+  - **Frame-Indexed Ring Buffer (`Frame-Lock #N`)**: each active video decoder feeds a `requestVideoFrameCallback` ring buffer normalized to film frame indices so live motion heatmaps and pixel diffs strictly compare identical frame numbers (`#N` of `A` with `#N` of `B`/`C`) without compositor presentation skew or motion ghosting.
+  - **`⚡ Auto-Sync` & Frame Controls**: 1-click bidirectional (`±12` frames) luminance cross-correlation sync aligns `B` (and `C`) 100% with the original source (even at clip boundaries `0:00`), complemented by joint single-frame stepping (`±1` frame), independent per-side frame offset nudging, `⅛×`–`2×` speed, a gain-aware color scale legend, an interactive 2-way/3-way pixel hover inspector (`RGB`, `ΔRGB`, `RMS Δ`, `ΔLuma`), and PNG comparison export.
 
 ---
 
 ## Automation & integration
 
-- **Watch folder**: automatically enqueue new files in the media tree (with a time
-  window, configurable in the UI).
+- **Watch folder**: automatically enqueue new files in the media tree (with write-stability verification, rule dry-run simulation, and configurable time windows in the UI).
 - **Notifications**: generic webhook, **Discord**, and **Telegram**
   (via env or UI).
 - **Media servers** (optional, Settings): after a finished job, rescan the
@@ -939,6 +945,24 @@ On push to `main`, GitHub Actions builds both images and publishes them under
 
 ---
 
+## Windows Desktop App
+
+In addition to Docker, the project ships as a native standalone **Windows Desktop Application** (`desktop_main.py`, `build_exe.ps1`, `installer.iss`):
+
+- **Native WebView2 Host & Zero-Upload Security (`core/desktop_host.py`, `core/desktop_paths.py`)**: runs the local FastAPI backend inside a native desktop window with single-instance IPC (`core/desktop_ipc.py`), native folder/file dialogs, drag-and-drop path grants without browser file uploads, custom media folder management (`core/desktop_folders.py`), and optional per-user *"Open with"* file associations (`core/desktop_associations.py`).
+- **In-Process GPU Telemetry (`core/win_gpu.py`)**: queries NVIDIA (`nvml.dll`, including dedicated NVENC/NVDEC utilization and multi-NVENC engine counts on RTX 40/50 series) as well as AMD Radeon and Intel Arc/UHD GPUs (`dxgi.dll` + `pdh.dll`) directly in-process — eliminating `nvidia-smi.exe` subprocess overhead and flashing console windows (`CREATE_NO_WINDOW`).
+- **Windows Hardware Encoding**: full support and self-tests for **NVIDIA NVENC**, **AMD AMF** (`av1_amf`, `hevc_amf`, `h264_amf`, `d3d11va`), and **Intel QSV** (`av1_qsv`, `hevc_qsv`, `h264_qsv`).
+- **Desktop Comfort (`core/desktop_win32.py`)**: live Windows taskbar progress (`ITaskbarList3` green/yellow/red), automatic standby/sleep prevention (`SetThreadExecutionState`) while jobs are running, post-queue power actions (*Sleep*, *Hibernate*, *Shut down* with a 30 s cancellable countdown), and system tray toast notifications.
+- **Building the Portable App & Installer**:
+  ```powershell
+  # Build standalone bundle (unblocks Mark-of-the-Web automatically)
+  .\build_exe.ps1
+  # Optional: compile AV1-VMAF-Studio-Setup.exe with Inno Setup 6 (ISCC.exe)
+  ISCC.exe .\installer.iss
+  ```
+
+---
+
 ## Local development (without Docker)
 
 ```bash
@@ -959,41 +983,55 @@ are `MEDIA_DIR` / `DATA_DIR`.
 
 ```
 app.py                  FastAPI app, routes, file-browser API, WebSocket, REST API
+desktop_main.py         Standalone Windows Desktop launcher (WebView2 + tray + single-instance)
+build_exe.ps1           Windows PyInstaller build & tool bundling script
+installer.iss           Inno Setup 6 script for AV1-VMAF-Studio-Setup.exe
+CHANGELOG.md            Full release history linked to GitHub versions/commits
 core/
   config.py             Paths, VMAF parameters, env configuration
   app_settings.py       Persistent settings.json (default output, sub-libraries)
-  hardware.py           CPU/RAM/GPU monitoring (Nvidia/Intel/AMD)
+  hardware.py           CPU/RAM/GPU monitoring (Linux + Windows integration)
+  win_gpu.py            Direct Windows GPU telemetry via nvml.dll, dxgi.dll & pdh.dll
   capabilities.py       Functional encoder capability tests (mini encodes)
   ffmpeg_utils.py       ffprobe, encoder mapping, sampled integrity check, auto-crop
   encoder.py            FFmpeg command builder, filter chains, tone-map engines, progress parser
-  vmaf.py               VMAF pipeline (VMAF/PSNR/SSIM/percentiles, sessions)
-  dolby_vision.py       Dolby Vision RPU preservation via dovi_tool (HEVC 8.1)
+  vmaf.py               VMAF pipeline (VMAF/PSNR/SSIM/XPSNR/CAMBI/SSIMULACRA2, low context, GPU decode)
+  dolby_vision.py       Strict Dolby Vision detection & RPU preservation via dovi_tool (HEVC 8.1)
   hdr10plus.py          HDR10+ JSON extract/inject via hdr10plus_tool (HEVC only)
+  subtitle_ocr.py       Local PGS / VobSub → SRT OCR via Tesseract
+  export_preflight.py   Pre-encode compatibility & storage preflight checks
+  output_report.py      Post-encode verification & stream audit report
+  provenance.py         Toolchain & source provenance verification for archived VMAF runs
+  storage_policy.py     Disk space budgeting & safe VMAF archive retention/cleanup
   media_servers.py      Optional Jellyfin / Sonarr / Radarr library rescan
-  chunked.py            Chunked adaptive encoding
-  size_target.py        Size-target → ABR bitrate preview
+  shares.py             Network share management
+  chunked.py            Scene-aware smart chunked adaptive encoding
+  size_target.py        Size-target → 1-pass/2-pass ABR bitrate calculation
   job_plan.py           Naming templates, dry-run, duplicate / requeue paths
-  audio_opt.py          Audio-only remux/optimization
+  audio_opt.py          Audio-only remux, 2-pass EBU R128 loudnorm & dialogue boost
   remux.py              Lossless remux/edit: tracks, attachments, chapters, trim, concat/split
-  editor.py             Timeline editor: remux/encode (CQ/CBR/ABR), audio/sub copy
-  media_stream.py       Light modal player: fMP4 stream + VTT
-  player_hls.py         Full Player: HLS sessions (audio remux, seek)
-  queue_manager.py      Async queue, guardrail, post-processing, persistence
+  bluray.py / dvd.py    BDMV / VIDEO_TS & unencrypted ISO playlist/title inspection
+  editor.py             Timeline editor: scenes, filters, remux/encode (CQ/CBR/ABR)
+  media_stream.py       Light modal player & range-seekable clip streaming
+  player_hls.py         Full & A/B Player: capability-aware HLS sessions, short-GOP A/B seek
+  queue_manager.py      Async queue, process suspend/priority, guardrail, post-processing
   supertool.py          Guided batch processing (target/representative VMAF)
   library.py            Library scan, NFO title/year, savings estimate, NFO copy beside source
   data_browser.py       Data/archive browser
-  history.py            Job history (SQLite, settings_json)
-  watcher.py            Watch-folder automation
+  history.py            Job history & CSV export (SQLite, settings_json)
+  watcher.py            Watch-folder automation (stability check & dry-run)
   scheduler.py          Scheduling/time windows
-  notify.py             Notifications (webhook/Discord/Telegram)
+  notify.py             Notifications (webhook/Discord/Telegram + Windows tray toasts)
   apikeys.py            API key management (REST/integration)
   profiles.py           Settings profiles
   diagnostics.py        Self-test/system diagnostics
+  desktop_*.py          Windows host bridge, Win32 taskbar/power, folders, IPC & associations
 templates/index.html    Dashboard markup
-static/css/styles.css   Theme system
-static/js/app.js        Dashboard logic (WebSocket, charts, browser)
+static/css/             Theme & workspace stylesheet system (styles.css, workspace.css)
+static/js/app.js        Dashboard logic, 2-way/3-way A/B & delta inspector, charts, browser
 static/js/editor.js     Timeline video editor UI
-static/js/player.js     Full Player UI (HLS)
+static/js/player.js     Full Player UI (capability probe & HLS)
+static/js/workspace-ui.js / desktop-ui.js / insights.js  Workspace shell, Windows bridge & audit UI
 static/js/i18n.js       DE / EN / ES / FR translations
 Dockerfile              All-in-one image (CUDA 12.6, BtbN FFmpeg, Jellyfin-FFmpeg 8.1.3-1, dovi_tool, hdr10plus_tool, ssimulacra2)
 docker-compose.yml      Portainer stack

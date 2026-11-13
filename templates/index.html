@@ -3459,9 +3459,10 @@
             <div id="ab-from-nerd" class="ab-from-nerd" hidden>
               <label>Video A <select id="ab-nerd-a"></select></label>
               <label>Video B <select id="ab-nerd-b"></select></label>
+              <label>Video C <select id="ab-nerd-c" title="Optionaler 3. Clip (z. B. zweiter Encode zum direkten Fehler-Vergleich gegen das Original)"></select></label>
               <button class="btn btn-primary btn-sm" id="btn-ab-nerd" type="button" disabled>Diese Szene abspielen</button>
               <button class="btn btn-ghost btn-sm" id="btn-ab-nerd-unload" type="button" title="Videos und Sessions entladen">Entladen</button>
-              <p class="hint">A und B sind Clips aus diesem Vergleich. Die Szene ist die oben gewählte.</p>
+              <p class="hint">Wähle 2 oder 3 Clips (z. B. Original + zwei Encodes), um direkt zu sehen, wie viel mehr Fehler Encode C gegenüber Encode B zum Original hat.</p>
             </div>
             <p class="hint" id="ab-intro">Spielt zwei Videos synchron ab – nebeneinander oder als Wipe
               (geteiltes Bild mit verschiebbarer Kante). Du kannst zwei verschiedene Dateien laden oder
@@ -3489,8 +3490,16 @@
                 <label>Video B</label>
                 <div class="field-row field-row-inline fp-file-pick">
                   <input type="hidden" id="ab-root-b" value="media" />
-                  <input type="text" id="ab-path-b" placeholder="Medienpfad, z. B. output/Filme/film_av1.mkv (leer = wie Video A)" />
+                  <input type="text" id="ab-path-b" placeholder="Medienpfad, z. B. output/Filme/film_10mbit.mkv (leer = wie Video A)" />
                   <button class="btn btn-ghost btn-sm" id="btn-ab-browse-b" type="button">Durchsuchen …</button>
+                </div>
+              </div>
+              <div class="field" id="ab-picker-c">
+                <label>Video C <span class="muted" style="font-weight:400">(optional · 2. Encode zum 3er-Vergleich)</span></label>
+                <div class="field-row field-row-inline fp-file-pick">
+                  <input type="hidden" id="ab-root-c" value="media" />
+                  <input type="text" id="ab-path-c" placeholder="Optional: z. B. output/Filme/film_3mbit.mkv" />
+                  <button class="btn btn-ghost btn-sm" id="btn-ab-browse-c" type="button">Durchsuchen …</button>
                 </div>
               </div>
             </div>
@@ -3596,10 +3605,20 @@
               </div>
               {% endfor %}
             </div>
-            <div class="ab-preview-notes" id="ab-preview-notes"><div id="ab-provenance-a"></div><div id="ab-provenance-b"></div></div>
+            <div class="ab-preview-notes" id="ab-preview-notes"><div id="ab-provenance-a"></div><div id="ab-provenance-b"></div><div id="ab-provenance-c"></div></div>
+            <div id="ab-pair-bar" class="ab-pair-bar" style="display:none">
+              <span class="muted" style="font-size:12px">3er-Vergleich (Taste 1–4):</span>
+              <div class="ab-pair-btns">
+                <button type="button" class="btn btn-primary btn-sm" data-ab-pair="ab" id="ab-pair-ab">1 · A ↔ B</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-ab-pair="ac" id="ab-pair-ac">2 · A ↔ C</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-ab-pair="bc" id="ab-pair-bc">3 · B ↔ C</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-ab-pair="delta" id="ab-pair-delta" title="Zeigt direkt den Qualitätsunterschied beider Encodes zum Original A: Gelb/Rot = C hat mehr Fehler als B · Cyan/Blau = C ist näher an A · Schwarz = gleich gut">4 · Δ Mehr-Fehler: C vs. B (zu A)</button>
+              </div>
+            </div>
             <div class="ab-videos" id="ab-videos">
               <div class="ab-pane" id="ab-pane-a"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
               <div class="ab-pane" id="ab-pane-b"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
+              <div class="ab-pane" id="ab-pane-c" style="display:none"><span class="ab-tag" id="ab-tag-c">C</span><video id="ab-video-c" controls preload="auto" playsinline></video></div>
               <canvas id="ab-diff-canvas" class="ab-diff-canvas" style="display:none"></canvas>
               <div id="ab-diff-legend" class="ab-diff-legend" style="display:none">
                 <div class="ab-diff-legend-title" id="ab-diff-legend-title">Fehler-Skala</div>
@@ -3612,7 +3631,7 @@
                     <span id="ab-diff-tick-q3">24</span>
                     <span id="ab-diff-tick-mid">16</span>
                     <span id="ab-diff-tick-q1">8</span>
-                    <span>0 · identisch</span>
+                    <span id="ab-diff-tick-min">0 · identisch</span>
                   </div>
                 </div>
                 <div class="ab-diff-legend-sub" id="ab-diff-legend-sub">ΔRGB (0–255)</div>
@@ -3659,7 +3678,16 @@
                   <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-a-back" title="Nur Video A 1 Bild zurück · verschiebt A gegenüber B">A −1</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-a-fwd" title="Nur Video A 1 Bild vor · verschiebt A gegenüber B">A +1</button>
                   <button type="button" class="btn btn-ghost btn-sm iconbtn" id="ab-offset-reset" title="Frame-Versatz zwischen A und B auf 0 zurücksetzen">0</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ab-auto-sync" title="Automatischer Frame-Abgleich: vergleicht die dekodierten Bilder von A und B im Bereich ±12 Frames und stellt 100 % Bildsynchronität zum Original her">⚡ Auto-Sync</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-auto-sync" title="Automatischer Frame-Abgleich: vergleicht die dekodierten Bilder im Bereich ±12 Frames und stellt 100 % Bildsynchronität zum Original A her (auch für C, falls geladen)">⚡ Auto-Sync</button>
+                </div>
+              </div>
+              <div class="field" id="ab-offset-c-field" style="margin:0;display:none">
+                <label style="font-size:11px" data-tip="Verschiebt das optionale Video C relativ zu Video A.">Versatz C (s) · <span id="ab-offset-c-frames" class="muted">±0 Bilder</span></label>
+                <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+                  <input type="number" id="ab-offset-c" value="0" step="0.001" style="width:78px" title="Zeitversatz von Video C gegenüber A in Sekunden" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-c-back" title="Nur Video C 1 Bild zurück">C −1</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-c-fwd" title="Nur Video C 1 Bild vor">C +1</button>
+                  <button type="button" class="btn btn-ghost btn-sm iconbtn" id="ab-offset-c-reset" title="Frame-Versatz von C auf 0 zurücksetzen">0</button>
                 </div>
               </div>
               <div class="field" style="margin:0">

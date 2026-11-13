@@ -14341,7 +14341,9 @@
         syncScreenshotChecks();
         applyClipPicksToSelects();
         const picks = picksFromClipIds();
-        if (picks.length === 2 && !clipAbBlock(picks)) openClipAb(picks, { stay: true });
+        if ((picks.length === 2 || picks.length === 3) && !clipAbBlock(picks)) {
+          openClipAb(picks, { stay: true });
+        }
       });
     });
     applyClipPicksToSelects();
@@ -14351,12 +14353,20 @@
     const ids = state.clipPickIds || [];
     const a = $("ab-nerd-a");
     const b = $("ab-nerd-b");
+    const c = $("ab-nerd-c");
     if (!a || !b || ids.length < 2) return;
-    const has = (sel, id) => [...sel.options].some((o) => o.value === id);
+    const has = (sel, id) => sel && [...sel.options].some((o) => o.value === id);
     if (has(a, ids[0])) a.value = ids[0];
     if (has(b, ids[1])) b.value = ids[1];
+    if (c) {
+      c.value = (ids.length >= 3 && has(c, ids[2]) && ids[2] !== a.value && ids[2] !== b.value)
+        ? ids[2] : "";
+    }
     const btn = $("btn-ab-nerd");
-    if (btn) btn.disabled = !a.value || !b.value || a.value === b.value;
+    if (btn) {
+      const cBad = !!(c && c.value && (c.value === a.value || c.value === b.value));
+      btn.disabled = !a.value || !b.value || a.value === b.value || cBad;
+    }
   }
 
   function syncScreenshotChecks() {
@@ -14433,78 +14443,100 @@
   function fillNerdAbSelects(vmaf) {
     const a = $("ab-nerd-a");
     const b = $("ab-nerd-b");
+    const c = $("ab-nerd-c");
     const btn = $("btn-ab-nerd");
     if (!a || !b) return;
     if (!vmaf) {
       a.innerHTML = "";
       b.innerHTML = "";
+      if (c) c.innerHTML = "";
       if (btn) btn.disabled = true;
       return;
     }
     const choices = nerdAbChoices(vmaf, nerdAbScene(vmaf));
     const prevA = a.value;
     const prevB = b.value;
-    const html = choices.map((c) =>
-      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.label)}</option>`).join("");
+    const prevC = c ? c.value : "";
+    const html = choices.map((ch) =>
+      `<option value="${escapeHtml(ch.id)}">${escapeHtml(ch.label)}</option>`).join("");
     a.innerHTML = html;
     b.innerHTML = html;
-    const ids = choices.map((c) => c.id);
+    if (c) {
+      c.innerHTML = `<option value="">${escapeHtml(tt("— Kein 3. Clip —"))}</option>` + html;
+    }
+    const ids = choices.map((ch) => ch.id);
     const defA = ids.includes("ref") ? "ref" : (ids[0] || "");
     const defB = ids.find((id) => id !== defA) || "";
     a.value = ids.includes(prevA) ? prevA : defA;
     b.value = ids.includes(prevB) && prevB !== a.value ? prevB : defB;
     if (a.value && a.value === b.value) b.value = defB;
-    if (btn) btn.disabled = !a.value || !b.value || a.value === b.value;
+    if (c) {
+      c.value = (prevC && ids.includes(prevC) && prevC !== a.value && prevC !== b.value) ? prevC : "";
+    }
+    if (btn) {
+      const cBad = !!(c && c.value && (c.value === a.value || c.value === b.value));
+      btn.disabled = !a.value || !b.value || a.value === b.value || cBad;
+    }
   }
 
   function syncNerdAbToPicks(picks) {
     const a = $("ab-nerd-a");
     const b = $("ab-nerd-b");
+    const c = $("ab-nerd-c");
     const vmaf = state.vmafShown;
     if (!a || !b || !vmaf || !picks) return;
     fillNerdAbSelects(vmaf);
     const choices = nerdAbChoices(vmaf, nerdAbScene(vmaf));
     const idOf = (p) => {
       if (p.kind === "ref") return "ref";
-      const hit = choices.find((c) => c.clip && p.clip && c.clip === p.clip);
+      const hit = choices.find((ch) => ch.clip && p.clip && ch.clip === p.clip);
       return hit ? hit.id : "";
     };
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
-    if (refs.length === 1 && encs.length === 1) {
+    if (refs.length === 1 && encs.length >= 1) {
       a.value = "ref";
-      const id = idOf(encs[0]);
-      if (id) b.value = id;
-    } else if (encs.length === 2) {
+      const ib = idOf(encs[0]);
+      if (ib) b.value = ib;
+      if (c) c.value = encs.length >= 2 ? (idOf(encs[1]) || "") : "";
+    } else if (encs.length >= 2) {
       const ia = idOf(encs[0]);
       const ib = idOf(encs[1]);
       if (ia) a.value = ia;
       if (ib) b.value = ib;
+      if (c) c.value = encs.length >= 3 ? (idOf(encs[2]) || "") : "";
     }
     const btn = $("btn-ab-nerd");
-    if (btn) btn.disabled = !a.value || !b.value || a.value === b.value;
+    if (btn) {
+      const cBad = !!(c && c.value && (c.value === a.value || c.value === b.value));
+      btn.disabled = !a.value || !b.value || a.value === b.value || cBad;
+    }
   }
 
   function playNerdAb() {
     const vmaf = state.vmafShown;
     const a = $("ab-nerd-a");
     const b = $("ab-nerd-b");
+    const c = $("ab-nerd-c");
     if (!vmaf || !a || !b) return;
     const byId = {};
-    nerdAbChoices(vmaf, nerdAbScene(vmaf)).forEach((c) => { byId[c.id] = c; });
+    nerdAbChoices(vmaf, nerdAbScene(vmaf)).forEach((ch) => { byId[ch.id] = ch; });
     const ca = byId[a.value];
     const cb = byId[b.value];
+    const cc = c && c.value ? byId[c.value] : null;
     if (!ca || !cb || ca.id === cb.id) return;
-    state.clipPickIds = [ca.id, cb.id];
-    const toPick = (c) => ({
-      kind: c.kind,
-      clip: c.clip || "",
-      lead: Number(c.lead) || 0,
-      start: c.start,
-      len: c.len,
-      label: c.label,
+    if (cc && (cc.id === ca.id || cc.id === cb.id)) return;
+    const list = cc ? [ca, cb, cc] : [ca, cb];
+    state.clipPickIds = list.map((x) => x.id);
+    const toPick = (x) => ({
+      kind: x.kind,
+      clip: x.clip || "",
+      lead: Number(x.lead) || 0,
+      start: x.start,
+      len: x.len,
+      label: x.label,
     });
-    openClipAb([toPick(ca), toPick(cb)]);
+    openClipAb(list.map(toPick));
   }
 
   function clipPlayUrl(file) {
@@ -14513,24 +14545,24 @@
   }
 
   function clipAbBlock(picks) {
-    if (!picks || picks.length !== 2) {
-      return "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.";
+    if (!picks || (picks.length !== 2 && picks.length !== 3)) {
+      return "2 oder 3 Clips auswählen: z. B. Original + 1–2 Testclips, oder 2–3 Testclips.";
     }
     const refs = picks.filter((p) => p.kind === "ref");
     const encs = picks.filter((p) => p.kind !== "ref");
-    if (refs.length === 1 && encs.length === 1) {
-      if (!encs[0].clip || !state.vmafSession || !(encs[0].len > 0)) return "Testclip fehlt";
+    if (refs.length === 1 && (encs.length === 1 || encs.length === 2)) {
+      if (!state.vmafSession || encs.some((e) => !e.clip || !(e.len > 0))) return "Testclip fehlt";
       if (!refs[0].clip) {
         const src = state.vmafSource;
         if (!src || src.available === false || !src.path) return "Quelle nicht mehr verfügbar";
       }
       return "";
     }
-    if (!refs.length && encs.length === 2) {
+    if (!refs.length && (encs.length === 2 || encs.length === 3)) {
       if (!state.vmafSession || encs.some((p) => !p.clip)) return "Testclip fehlt";
       return "";
     }
-    return "Genau zwei auswählen: Original und ein Testclip, oder zwei Testclips.";
+    return "2 oder 3 Clips auswählen: z. B. Original + 1–2 Testclips, oder 2–3 Testclips.";
   }
 
   async function openClipAb(picks, opts) {
@@ -14545,46 +14577,67 @@
     const encs = picks.filter((p) => p.kind !== "ref");
     const sa = ab.sides.a;
     const sb = ab.sides.b;
-    sa.clipUrl = "";
-    sb.clipUrl = "";
-    sa.path = "";
-    sb.path = "";
-    sa.info = null;
-    sb.info = null;
+    const sc = ab.sides.c;
+    [sa, sb, sc].forEach((s) => {
+      if (!s) return;
+      s.clipUrl = "";
+      s.path = "";
+      s.info = null;
+      s.labelOverride = "";
+    });
     state.abJob = "";
     const off = $("ab-offset");
     if (off) off.value = "0";
     if ($("ab-offset-frames")) $("ab-offset-frames").textContent = "±0 Bilder";
+    const offC = $("ab-offset-c");
+    if (offC) offC.value = "0";
+    if ($("ab-offset-c-frames")) $("ab-offset-c-frames").textContent = "±0 Bilder";
     const pickedIds = idsForPicks(picks);
     if (pickedIds.length) state.clipPickIds = pickedIds;
-    abApplyMode();
+    const hasC = !!(sc && ((refs.length === 1 && encs.length === 2) || (!refs.length && encs.length === 3)));
+    if (!hasC && ab.pair !== "ab") ab.pair = "ab";
     const badge = $("ab-badge");
     if (badge) badge.textContent = tt("Lädt …");
     let ok;
     let masterT = 0;
     const jumpOff = Math.max(0, Number(opts && opts.offsetSec) || 0);
     if (refs.length === 1) {
-      const enc = encs[0];
-      const start = enc.start || refs[0].start || 0;
-      const len = enc.len || refs[0].len || 0;
+      const encB = encs[0];
+      const encC = encs[1] || null;
+      const start = encB.start || refs[0].start || 0;
+      const len = encB.len || refs[0].len || 0;
       const relJump = len > 0 ? Math.min(Math.max(0, len - 0.2), jumpOff) : jumpOff;
       masterT = start + relJump;
       ab.window = len > 0 ? { start, end: start + len } : null;
-      sb.clipUrl = clipPlayUrl(enc.clip);
+      sa.labelOverride = tt("Original");
+      sb.clipUrl = clipPlayUrl(encB.clip);
       sb.offset = start;
-      abSetStatus(`${tt("Original")} · ${enc.label || ""}`);
+      sb.labelOverride = encB.label || "B";
+      const startJobs = [];
       if (refs[0].clip) {
         const lead = Math.max(0, Number(refs[0].lead) || 0);
         sa.clipUrl = clipPlayUrl(refs[0].clip);
         sa.path = "";
         sa.offset = start - lead;
-        ok = await Promise.all([abStartSide(sa, lead + relJump), abStartSide(sb, relJump)]);
+        startJobs.push(abStartSide(sa, lead + relJump));
       } else {
         sa.path = state.vmafSource.path;
         sa.root = "media";
         sa.offset = 0;
-        ok = await Promise.all([abStartSide(sa, start + relJump), abStartSide(sb, relJump)]);
+        startJobs.push(abStartSide(sa, start + relJump));
       }
+      startJobs.push(abStartSide(sb, relJump));
+      if (encC && sc) {
+        sc.clipUrl = clipPlayUrl(encC.clip);
+        sc.offset = encC.start != null ? encC.start : start;
+        sc.labelOverride = encC.label || "C";
+        startJobs.push(abStartSide(sc, relJump));
+        abSetStatus(`${tt("Original")} (A) · ${encB.label || "B"} (B) · ${encC.label || "C"} (C)`);
+      } else {
+        abSetStatus(`${tt("Original")} · ${encB.label || ""}`);
+      }
+      abApplyMode();
+      ok = await Promise.all(startJobs);
     } else {
       const len = encs[0].len || encs[1].len || 0;
       const relJump = len > 0 ? Math.min(Math.max(0, len - 0.2), jumpOff) : jumpOff;
@@ -14594,8 +14647,20 @@
       sb.clipUrl = clipPlayUrl(encs[1].clip);
       sa.offset = 0;
       sb.offset = 0;
-      abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
-      ok = await Promise.all([abStartSide(sa, relJump), abStartSide(sb, relJump)]);
+      sa.labelOverride = encs[0].label || "A";
+      sb.labelOverride = encs[1].label || "B";
+      const startJobs = [abStartSide(sa, relJump), abStartSide(sb, relJump)];
+      if (encs[2] && sc) {
+        sc.clipUrl = clipPlayUrl(encs[2].clip);
+        sc.offset = 0;
+        sc.labelOverride = encs[2].label || "C";
+        startJobs.push(abStartSide(sc, relJump));
+        abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"} · ${encs[2].label || "C"}`);
+      } else {
+        abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
+      }
+      abApplyMode();
+      ok = await Promise.all(startJobs);
     }
     const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
     if (!current()) return;
@@ -14603,6 +14668,7 @@
     if (!current()) return;
     if (badge) badge.textContent = settled ? tt("Geladen") : tt("Fehler");
     syncNerdAbToPicks(picks);
+    abSyncPairUi();
     const box = $("ab-weak");
     if (box) { box.style.display = "none"; box.innerHTML = ""; }
   }
@@ -14613,17 +14679,18 @@
   // des Studio-Players (Server-Transcode). HLS-Sessions beginnen am Seek-Punkt
   // (EVENT-Playlist) – ein Sprung außerhalb des Puffers startet die Session neu.
   const ab = {
-    sides: {},          // {a: side, b: side}
+    sides: {},          // {a: side, b: side, c: side}
+    pair: "ab",         // ab | ac | bc | delta (delta = Mehr-Fehler C vs. B relativ zu Original A)
     context: state.currentPage === "vmafnerd" ? "nerd" : "standalone",
     contexts: {},       // UI-Auswahl je Kontext; keine laufenden Sessions speichern.
-    mode: "side",       // side | wipe
+    mode: "side",       // side | wipe | diff | heatmap | abx
     wipe: 50,           // Kante in %
     seeking: false,
     closing: false,     // Entladen: kein neuer Encode, kein Nachziehen
     loadSeq: 0,         // Ein älterer Clip-/Dateiwechsel darf den neuen nicht verändern.
     controlSeq: 0,      // Play/Pause/Seek verwirft ältere asynchrone Startversuche.
     wantPlay: false,
-    holding: false,     // Beide warten gemeinsam auf Daten/Seek-Ende.
+    holding: false,     // Alle aktiven Seiten warten gemeinsam auf Daten/Seek-Ende.
     playTask: null,
     settling: 0,
     settleSeq: 0,
@@ -14632,14 +14699,18 @@
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
     rafId: 0,
-    rvfcA: 0,
-    rvfcB: 0,
-    mediaTimeA: NaN,
-    mediaTimeB: NaN,
+    rvfcHandles: { a: 0, b: 0, c: 0 },
+    lastMatchedFrame: NaN,
+    lastMatchedAt: 0,
     bufA: null,
     bufB: null,
+    bufC: null,
     lastDiffA: null,
     lastDiffB: null,
+    lastDiffC: null,
+    lastDiffMode: "pair", // "pair" | "delta"
+    lastDiffLeftLabel: "A",
+    lastDiffRightLabel: "B",
     lastDiffW: 0,
     lastDiffH: 0,
     lastDiffSrcW: 0,
@@ -14650,14 +14721,46 @@
     abx: { secret: "a", view: "x", correct: 0, total: 0, roundGuessed: false },
   };
 
+  function abHasSideC() {
+    const sc = ab.sides.c;
+    return !!(sc && (sc.path || sc.clipUrl));
+  }
+
+  function abLoadedSides() {
+    return ["a", "b", "c"].map((k) => ab.sides[k]).filter((s) => s && (s.path || s.clipUrl));
+  }
+
+  function abPairKeys() {
+    if (!abHasSideC()) return ["a", "b"];
+    if (ab.pair === "ac") return ["a", "c"];
+    if (ab.pair === "bc") return ["b", "c"];
+    return ["a", "b"];
+  }
+
+  function abSideShortLabel(key) {
+    const s = ab.sides[key];
+    const up = (key || "a").toUpperCase();
+    if (!s) return up;
+    if (s.labelOverride) return `${up} (${s.labelOverride})`;
+    return up;
+  }
+
+  function abClearFrameRings() {
+    ["a", "b", "c"].forEach((k) => {
+      const s = ab.sides[k];
+      if (s && s.ring) s.ring.length = 0;
+    });
+    ab.lastMatchedFrame = NaN;
+  }
+
   function abSwitchContext(page) {
     const next = page === "vmafnerd" ? "nerd" : "standalone";
     if (ab.context === next) return;
     const defaults = {
-      "ab-sync": true, "ab-offset": "0", "ab-speed": "1",
+      "ab-sync": true, "ab-offset": "0", "ab-offset-c": "0", "ab-speed": "1",
       "ab-mode": "side", "ab-zoom": "fit", "ab-playback": "auto",
     };
-    const saved = { job: state.abJob || "", controls: {}, wipe: ab.wipe };
+    const saved = { job: state.abJob || "", controls: {}, wipe: ab.wipe, pair: ab.pair };
     Object.keys(defaults).forEach((id) => {
       const el = $(id);
       if (el) saved.controls[id] = id === "ab-sync" ? el.checked : el.value;
@@ -14678,6 +14781,7 @@
     });
     state.abJob = restore ? restore.job : "";
     ab.wipe = restore ? restore.wipe : 50;
+    ab.pair = restore && restore.pair ? restore.pair : "ab";
     abApplyMode();
     abApplyPlaybackRate();
     const offLab = $("ab-offset-frames");
@@ -14685,16 +14789,23 @@
       const sec = abOffsetB();
       offLab.textContent = Math.abs(sec) < 0.0005 ? "±0 Bilder" : `${sec > 0 ? "+" : ""}${sec.toFixed(3)} s`;
     }
+    const offCLab = $("ab-offset-c-frames");
+    if (offCLab) {
+      const secC = abOffsetC();
+      offCLab.textContent = Math.abs(secC) < 0.0005 ? "±0 Bilder" : `${secC > 0 ? "+" : ""}${secC.toFixed(3)} s`;
+    }
   }
 
   function abMakeSide(key) {
     return {
       key, video: $("ab-video-" + key), path: "", root: "media", clipUrl: "",
+      labelOverride: "",
       mode: "", sid: "", offset: 0, hls: null, duration: 0, ready: false,
       info: null, sess: null, plan: null, lookSummary: "", lookTimer: 0,
       starting: false, lookAgain: false, lastTime: 0, encodePaused: false,
       encodePauseWanted: false, encodePauseTask: null,
       epoch: 0, token: "", syncPauses: 0, syncSeekTarget: null,
+      ring: [], workCanvas: null, mediaTime: NaN,
     };
   }
 
@@ -14792,7 +14903,7 @@
     const dvProf = libDvProfileName(info) ? ` P${libDvProfileName(info)}` : "";
     const isHdr = !!info.is_hdr;
     const modeEl = $(`ab-${side.key}-filter-mode`);
-    const filterOn = abIsStandalone() && (!modeEl || modeEl.value === "on");
+    const filterOn = abIsStandalone() && !!modeEl && modeEl.value === "on";
 
     if (side.mode === "direct") {
       const dyn = isDv ? `DV${dvProf}` : (isHdr ? (info.hdr_type || "HDR10") : "SDR");
@@ -14835,9 +14946,11 @@
     const same = !!($("ab-same-source") && $("ab-same-source").checked);
     const pickers = $("ab-pickers");
     const pickB = $("ab-picker-b");
+    const pickC = $("ab-picker-c");
     const labA = $("ab-label-a");
     if (pickers) pickers.classList.toggle("ab-single-source", same);
     if (pickB) pickB.hidden = same;
+    if (pickC) pickC.hidden = same;
     if (labA) labA.textContent = same ? tt("Quelldatei (für A und B)") : tt("Video A");
   }
 
@@ -14922,14 +15035,20 @@
     const provenance = $(`ab-provenance-${key}`);
     if (provenance && window.StudioInsights) provenance.innerHTML = side && side.path
       ? window.StudioInsights.previewHtml({...side.sess, mode: side.mode, label: up}) : "";
-    if (!side || !side.path) {
+    if (!side || (!side.path && !side.clipUrl)) {
       if (sumEl) sumEl.textContent = "—";
       if (tagEl) tagEl.textContent = up;
       return;
     }
     const desc = abDescribeSideStream(side);
     if (sumEl) sumEl.textContent = desc || "—";
-    if (tagEl) tagEl.textContent = abIsStandalone() && desc ? `${up} · ${desc}` : up;
+    if (tagEl) {
+      if (!abIsStandalone() && side.labelOverride) {
+        tagEl.textContent = `${up} · ${side.labelOverride}`;
+      } else {
+        tagEl.textContent = abIsStandalone() && desc ? `${up} · ${desc}` : up;
+      }
+    }
   }
 
   function abGatherSideLook(side) {
@@ -14966,8 +15085,7 @@
   }
 
   function abUpdateStatusLine() {
-    const sa = ab.sides.a, sb = ab.sides.b;
-    const parts = [sa, sb].filter((s) => s && s.path).map((s) => {
+    const parts = abLoadedSides().map((s) => {
       const up = s.key.toUpperCase();
       return `${up}: ${abDescribeSideStream(s)}`;
     });
@@ -14977,10 +15095,10 @@
   function abUpdatePlayBtn() {
     const btn = $("ab-play");
     if (!btn) return;
-    const va = ab.sides.a && ab.sides.a.video;
-    const vb = ab.sides.b && ab.sides.b.video;
-    const active = ab.wantPlay || (va && !va.paused) || (vb && !vb.paused);
-    btn.textContent = active ? `⏸ ${tt("Pause")} (beide)` : `▶ ${tt("Play")} (beide)`;
+    const anyPlaying = abLoadedSides().some((s) => s.video && !s.video.paused);
+    const active = ab.wantPlay || anyPlaying;
+    const suffix = abHasSideC() ? "(alle 3)" : "(beide)";
+    btn.textContent = active ? `⏸ ${tt("Pause")} ${suffix}` : `▶ ${tt("Play")} ${suffix}`;
   }
 
   function abPauseMedia(side) {
@@ -15007,6 +15125,7 @@
     ab.closing = false;
     ab.seeking = false;
     ab.stepTargetT = NaN;
+    abClearFrameRings();
     ab.loadSeq += 1;
     Object.values(ab.sides).forEach((side) => {
       if (side.lookTimer) clearTimeout(side.lookTimer);
@@ -15256,9 +15375,8 @@
 
   async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true, stepExact = false) {
     if (ab.closing) return false;
-    const sa = ab.sides.a, sb = ab.sides.b;
-    if (!sa || !sb) return false;
-    const sides = [sa, sb].filter((side) => side.path);
+    const sides = abLoadedSides();
+    if (!sides.length) return false;
     const epochs = sides.map((side) => side.epoch);
     const loadSeq = ab.loadSeq;
     const current = () => !ab.closing && ab.loadSeq === loadSeq && valid()
@@ -15271,7 +15389,7 @@
         abWaitMediaReady(side.video, 8000, 1, current)));
       if (!current() || !metadata.every(Boolean)) return false;
       const placed = await Promise.all(sides.map((side) => abPlaceSide(
-        side, Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0)), current, stepExact)));
+        side, Math.max(0, masterT + abSideOffset(side.key)), current, stepExact)));
       if (!current() || !placed.every(Boolean)) return false;
       if (!stepExact) {
         const ready = await Promise.all(sides.map((side) =>
@@ -15286,14 +15404,16 @@
   }
 
   async function abPlayTogether() {
-    if (ab.closing || ab.seeking || !ab.sides.a.path) return false;
+    const sa = ab.sides.a;
+    if (ab.closing || ab.seeking || !sa || (!sa.path && !sa.clipUrl)) return false;
     if (ab.playTask) return ab.playTask;
-    const sa = ab.sides.a, sb = ab.sides.b;
+    const sides = abLoadedSides();
     ab.stepTargetT = NaN;
+    abClearFrameRings();
     abApplyPlaybackRate();
     ab.wantPlay = true;
     abUpdatePlayBtn();
-    if (!abSynced() || !sb.path) {
+    if (!abSynced() || sides.length < 2) {
       ab.holding = false;
       abSetEncodePaused(sa, false);
       try {
@@ -15308,20 +15428,17 @@
     }
     const seq = ++ab.controlSeq;
     const loadSeq = ab.loadSeq;
-    const epochs = [sa.epoch, sb.epoch];
+    const epochs = sides.map((s) => s.epoch);
     const current = () => !ab.closing && ab.wantPlay && seq === ab.controlSeq
-      && loadSeq === ab.loadSeq && sa.epoch === epochs[0] && sb.epoch === epochs[1];
+      && loadSeq === ab.loadSeq && sides.every((s, i) => s.epoch === epochs[i]);
     const masterT = abTime(sa);
     ab.holding = true;
     const task = (async () => {
-      abSetEncodePaused(sa, false);
-      abSetEncodePaused(sb, false);
+      sides.forEach((s) => abSetEncodePaused(s, false));
       const ready = await abAlignAndSettleBoth(masterT, true, current);
       if (!current()) return false;
       if (!ready) {
-        const stillLoading = sa.starting || sb.starting
-          || (sa.video && sa.video.readyState < 2)
-          || (sb.video && sb.video.readyState < 2);
+        const stillLoading = sides.some((s) => s.starting || (s.video && s.video.readyState < 2));
         if (!stillLoading) {
           ab.wantPlay = false;
           ab.holding = false;
@@ -15330,10 +15447,10 @@
         return false;
       }
       abApplyPlaybackRate();
-      // Beide Uhren erst nach Daten UND Seek-Ende im selben Task starten.
+      // Alle Uhren erst nach Daten UND Seek-Ende im selben Task starten.
       ab.holding = false;
       try {
-        await Promise.all([sa.video.play(), sb.video.play()]);
+        await Promise.all(sides.map((s) => s.video.play()));
         abUpdatePlayBtn();
         return current();
       } catch (e) {
@@ -15348,15 +15465,15 @@
 
   function abResumeIfReady() {
     if (ab.closing || !ab.wantPlay || !ab.holding || ab.playTask || ab.seeking || ab.settling) return;
-    const sides = Object.values(ab.sides).filter((side) => side.path);
-    if (sides.every((side) => !side.starting && !side.video.seeking && side.video.readyState >= 3)) {
+    const sides = abLoadedSides();
+    if (sides.length && sides.every((side) => !side.starting && !side.video.seeking && side.video.readyState >= 3)) {
       abPlayTogether();
     }
   }
 
   function abHoldForBuffer(side) {
     if (ab.closing || !abSynced() || !ab.wantPlay || ab.holding || ab.seeking || ab.settling
-        || !ab.sides.b.path || side.starting || side.video.ended) return;
+        || abLoadedSides().length < 2 || side.starting || side.video.ended) return;
     ab.controlSeq += 1;
     ab.playTask = null;
     ab.holding = true;
@@ -15386,7 +15503,7 @@
       const seq = ab.controlSeq;
       const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
       const masterT = sa ? Math.max(0, abTime(sa)) : 0;
-      const targetT = key === "b" ? Math.max(0, masterT + abOffsetB()) : masterT;
+      const targetT = Math.max(0, masterT + abSideOffset(key));
       abSetStatus(`${key.toUpperCase()}: ${tt("Aktualisiere Vorschau (beide Seiten pausiert) …")}`);
       await abStartSide(side, targetT);
       if (!current()) return;
@@ -15491,6 +15608,8 @@
     return b.length ? b.end(b.length - 1) + (side.offset || 0) : (side.offset || 0);
   };
   const abOffsetB = () => parseFloat(($("ab-offset") || {}).value) || 0;
+  const abOffsetC = () => parseFloat(($("ab-offset-c") || {}).value) || 0;
+  const abSideOffset = (key) => (key === "b" ? abOffsetB() : (key === "c" ? abOffsetC() : 0));
   const abSynced = () => !$("ab-sync") || $("ab-sync").checked;
   const abSetStatus = (msg, bad) => {
     const el = $("ab-status");
@@ -15696,19 +15815,20 @@
     }
   }
 
-  // Beide Seiten auf Filmzeit t setzen. Auch im Puffer bleiben beide pausiert,
-  // bis BEIDE Seeks fertig sind; HLS außerhalb des Puffers startet neu ab t.
+  // Alle aktiven Seiten (A, B und optional C) auf Filmzeit t setzen. Auch im Puffer
+  // bleiben alle pausiert, bis ALLE Seeks fertig sind; HLS außerhalb des Puffers startet neu ab t.
   async function abSeekBoth(t, pauseAfter, opts) {
     const stepExact = !!(opts && opts.stepExact);
     if (ab.closing) return;
-    const sa = ab.sides.a, sb = ab.sides.b;
-    if (!sa || !sb) return;
+    const sides = abLoadedSides();
+    if (!sides.length) return;
     const win = ab.window;
     if (win && win.end > win.start) {
       t = Math.max(win.start, Math.min(win.end - 0.05, t));
     }
-    const resume = !pauseAfter && (ab.wantPlay || !sa.video.paused || !sb.video.paused);
+    const resume = !pauseAfter && (ab.wantPlay || sides.some((s) => s.video && !s.video.paused));
     abPauseBoth();
+    abClearFrameRings();
     const seq = ab.controlSeq;
     const loadSeq = ab.loadSeq;
     const current = () => !ab.closing && seq === ab.controlSeq && loadSeq === ab.loadSeq;
@@ -15717,7 +15837,7 @@
     try {
       const jobs = [];
       const want = (side, target) => {
-        if (!side.path || side.mode === "direct") return;
+        if (!side || !side.path || side.mode === "direct") return;
         const bufEnd = abBufferedEnd(side);
         if (side.encodePaused && (abBufferedAhead(side) < 6 || target > bufEnd - 4)) {
           abSetEncodePaused(side, false);
@@ -15732,8 +15852,7 @@
           jobs.push(abStartSide(side, startAt));
         }
       };
-      want(sa, t);
-      want(sb, t + abOffsetB());
+      sides.forEach((s) => want(s, t + abSideOffset(s.key)));
       if (jobs.length) {
         abSetStatus(tt("Spule …"));
         const ok = await Promise.all(jobs);
@@ -15743,7 +15862,7 @@
       if (!current()) return;
       if (jobs.length && !stepExact) abUpdateStatusLine();
       if (stepExact) {
-        abDrawDiffFrame();
+        abDrawDiffFrame({ force: true });
         abRenderNerdHud();
       }
     } finally {
@@ -15775,6 +15894,31 @@
     return [255, Math.round(200 * (1 - k)), Math.round(k * 180)];
   }
 
+  // Diverging-Farbskala für 3-Wege-Delta Δe = Fehler(C,A) - Fehler(B,A), normiert in [-1, +1]:
+  //   0      -> Schwarz (beide Encodes gleich nah am Original A)
+  //  > 0 (+) -> Dunkelgold -> Gelb -> Orange -> Rot/Pink (C hat MEHR Fehler zum Original als B!)
+  //  < 0 (-) -> Dunkelblau -> Türkis -> Helles Cyan (C liegt NÄHER am Original als B)
+  function abDivergingDeltaColor(signedNorm) {
+    const s = Math.max(-1, Math.min(1, signedNorm));
+    const a = Math.abs(s);
+    if (a < 0.025) return [0, 0, 0];
+    const t = (a - 0.025) / 0.975;
+    if (s > 0) {
+      if (t < 0.45) {
+        const k = t / 0.45;
+        return [Math.round(250 * k), Math.round(204 * k), Math.round(21 * k)];
+      }
+      const k = (t - 0.45) / 0.55;
+      return [250 + Math.round(5 * k), Math.round(204 * (1 - 0.82 * k)), Math.round(21 + 75 * k)];
+    }
+    if (t < 0.5) {
+      const k = t / 0.5;
+      return [0, Math.round(115 * k), Math.round(170 * k)];
+    }
+    const k = (t - 0.5) / 0.5;
+    return [Math.round(40 * k), 115 + Math.round(115 * k), 170 + Math.round(85 * k)];
+  }
+
   // Liefert den aktiven Bildausschnitt [sx, sy, sw, sh], falls z. B. das Original
   // schwarze Letterbox-/Pillarbox-Balken hat und der Encode gecroppt wurde.
   function abActiveCropRect(video, targetAspect) {
@@ -15793,6 +15937,94 @@
     return [sx, 0, sw, vh];
   }
 
+  function abCurrentFps() {
+    const f = Number((ab.weak && ab.weak.fps)
+      || (ab.sides.a && ab.sides.a.info && ab.sides.a.info.fps)
+      || (ab.sides.b && ab.sides.b.info && ab.sides.b.info.fps)
+      || (ab.sides.c && ab.sides.c.info && ab.sides.c.info.fps));
+    return f > 1 && f <= 240 ? f : 24;
+  }
+
+  function abDiffRequiredKeys() {
+    if (abHasSideC() && ab.pair === "delta") return ["a", "b", "c"];
+    return abPairKeys();
+  }
+
+  // Gemeinsame Arbeitsgeometrie (Ref-Seitenverhältnis & ~960px Zielbreite) bestimmen.
+  function abComputeDiffLayout() {
+    const keys = abDiffRequiredKeys();
+    const videos = keys.map((k) => ab.sides[k] && ab.sides[k].video);
+    if (videos.some((v) => !v || !v.videoWidth || !v.videoHeight || v.readyState < 2)) return null;
+    const v0 = videos[0], v1 = videos[1];
+    const asp0 = v0.videoWidth / v0.videoHeight;
+    const asp1 = v1.videoWidth / v1.videoHeight;
+    const refAspect = Math.abs(asp0 - asp1) / Math.max(asp0, asp1) >= 0.02 ? asp1 : asp0;
+    const [sx0, sy0, sw0, sh0] = abActiveCropRect(v0, refAspect);
+    const maxW = 960;
+    const scale = Math.min(1, maxW / sw0);
+    const w = Math.max(16, Math.round(sw0 * scale));
+    const h = Math.max(16, Math.round(sh0 * scale));
+    return { keys, refAspect, w, h, srcW: sw0, srcH: sh0, sx0, sy0 };
+  }
+
+  // Legt ein frisch dekodiertes Video-Frame samt exaktem Master-Frame-Index im Ringpuffer ab.
+  // Dadurch vergleicht der Live-Player immer exakt Frame #N mit Frame #N (nie #N mit #N-1!).
+  function abCaptureSideRingFrame(side, mediaTime) {
+    if (!side || !side.video || side.video.readyState < 2 || !side.video.videoWidth) return;
+    const layout = abComputeDiffLayout();
+    if (!layout) return;
+    const { refAspect, w, h, srcW, srcH } = layout;
+    const fps = abCurrentFps();
+    const localMediaT = Number.isFinite(mediaTime) ? mediaTime : (side.video.currentTime || 0);
+    side.mediaTime = localMediaT;
+    const refFilmT = (localMediaT + (side.offset || 0)) - abSideOffset(side.key);
+    const frameIdx = Math.round(refFilmT * fps);
+    const ring = side.ring || (side.ring = []);
+    const last = ring.length ? ring[ring.length - 1] : null;
+    if (last && last.frameIdx === frameIdx && last.w === w && last.h === h) return;
+    if (!side.workCanvas) side.workCanvas = document.createElement("canvas");
+    if (side.workCanvas.width !== w || side.workCanvas.height !== h) {
+      side.workCanvas.width = w;
+      side.workCanvas.height = h;
+    }
+    const [sx, sy, sw, sh] = abActiveCropRect(side.video, refAspect);
+    const nowMs = (typeof performance !== "undefined" && typeof performance.now === "function")
+      ? performance.now() : Date.now();
+    try {
+      const ctx = side.workCanvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(side.video, sx, sy, sw, sh, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      ring.push({ frameIdx, refFilmT, data, w, h, srcW, srcH, ts: nowMs });
+      while (ring.length > 14) ring.shift();
+    } catch (e) { /* ignore */ }
+  }
+
+  // Sucht den neuesten gemeinsamen Frame-Index, der in ALLEN benötigten Seiten im Ringpuffer liegt.
+  function abFindMatchedRingFrames(keys, w, h) {
+    if (!keys.length) return null;
+    const firstRing = (ab.sides[keys[0]] && ab.sides[keys[0]].ring) || [];
+    for (let i = firstRing.length - 1; i >= 0; i -= 1) {
+      const cand = firstRing[i];
+      if (cand.w !== w || cand.h !== h) continue;
+      const entries = { [keys[0]]: cand };
+      let allHit = true;
+      for (let k = 1; k < keys.length; k += 1) {
+        const r = (ab.sides[keys[k]] && ab.sides[keys[k]].ring) || [];
+        let found = null;
+        for (let j = r.length - 1; j >= 0; j -= 1) {
+          if (r[j].frameIdx === cand.frameIdx && r[j].w === w && r[j].h === h) {
+            found = r[j];
+            break;
+          }
+        }
+        if (!found) { allHit = false; break; }
+        entries[keys[k]] = found;
+      }
+      if (allHit) return { frameIdx: cand.frameIdx, entries };
+    }
+    return null;
+  }
+
   function abUpdateDiffLegend() {
     const legend = $("ab-diff-legend");
     const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
@@ -15809,14 +16041,32 @@
     const tQ3 = $("ab-diff-tick-q3");
     const tMid = $("ab-diff-tick-mid");
     const tQ1 = $("ab-diff-tick-q1");
+    const tMin = $("ab-diff-tick-min");
+    const isDelta = abHasSideC() && ab.pair === "delta";
     const isHeat = ab.mode === "heatmap";
-    if (titleEl) titleEl.textContent = isHeat ? `Heatmap (${gain}×)` : `Differenz (${gain}×)`;
-    if (barEl) barEl.classList.toggle("is-diff", !isHeat);
+    if (barEl) {
+      barEl.classList.toggle("is-delta", isDelta);
+      barEl.classList.toggle("is-diff", !isDelta && !isHeat);
+    }
+    if (isDelta) {
+      if (titleEl) titleEl.textContent = `Δ Fehler C−B (${gain}×)`;
+      if (tMax) tMax.textContent = `+${fmtTick(sat)} (C schlechter)`;
+      if (tQ3) tQ3.textContent = `+${fmtTick(sat * 0.5)}`;
+      if (tMid) tMid.textContent = "0 (gleich gut)";
+      if (tQ1) tQ1.textContent = `−${fmtTick(sat * 0.5)}`;
+      if (tMin) tMin.textContent = `−${fmtTick(sat)} (C näher an A)`;
+      if (subEl) subEl.textContent = "|C − A| minus |B − A| (RGB)";
+      return;
+    }
+    const [kL, kR] = abPairKeys();
+    const pairStr = `${kL.toUpperCase()} ↔ ${kR.toUpperCase()}`;
+    if (titleEl) titleEl.textContent = `${isHeat ? "Heatmap" : "Differenz"} ${pairStr} (${gain}×)`;
     if (tMax) tMax.textContent = `≥ ${fmtTick(sat)} · Sättigung`;
     if (tQ3) tQ3.textContent = fmtTick(sat * 0.75);
     if (tMid) tMid.textContent = fmtTick(sat * 0.5);
     if (tQ1) tQ1.textContent = fmtTick(sat * 0.25);
-    if (subEl) subEl.textContent = isHeat ? "RMS ΔRGB (0–255)" : "|A − B| je Kanal (0–255)";
+    if (tMin) tMin.textContent = "0 · identisch";
+    if (subEl) subEl.textContent = isHeat ? `RMS ΔRGB |${kL.toUpperCase()} − ${kR.toUpperCase()}|` : `|${kL.toUpperCase()} − ${kR.toUpperCase()}| je Kanal`;
   }
 
   function abUpdateDiffTooltip() {
@@ -15866,33 +16116,58 @@
     const bx = Math.min(ab.lastDiffW - 1, Math.max(0, Math.floor(u * ab.lastDiffW)));
     const by = Math.min(ab.lastDiffH - 1, Math.max(0, Math.floor(v * ab.lastDiffH)));
     const idx = (by * ab.lastDiffW + bx) * 4;
-    const rA = ab.lastDiffA[idx], gA = ab.lastDiffA[idx + 1], bA = ab.lastDiffA[idx + 2];
-    const rB = ab.lastDiffB[idx], gB = ab.lastDiffB[idx + 1], bB = ab.lastDiffB[idx + 2];
-    const dr = rB - rA, dg = gB - gA, db = bB - bA;
-    const adr = Math.abs(dr), adg = Math.abs(dg), adb = Math.abs(db);
-    const rms = Math.sqrt((adr * adr + adg * adg + adb * adb) / 3);
-    const lumaA = 0.2126 * rA + 0.7152 * gA + 0.0722 * bA;
-    const lumaB = 0.2126 * rB + 0.7152 * gB + 0.0722 * bB;
-    const dY = lumaB - lumaA;
     const srcX = ab.lastDiffSrcW ? Math.min(ab.lastDiffSrcW - 1, Math.floor(u * ab.lastDiffSrcW)) : bx;
     const srcY = ab.lastDiffSrcH ? Math.min(ab.lastDiffSrcH - 1, Math.floor(v * ab.lastDiffSrcH)) : by;
-    const fmtSigned = (n) => (n > 0 ? `+${n}` : String(n));
-    const pctErr = ((rms / 255) * 100).toFixed(1);
     const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
-    if (marker) {
-      const norm = Math.max(0, Math.min(1, (rms * gain) / 255));
-      marker.style.display = "";
-      marker.style.bottom = `${(norm * 100).toFixed(1)}%`;
+    const fmtSigned = (n) => (n > 0 ? `+${n}` : String(n));
+
+    if (ab.lastDiffMode === "delta" && ab.lastDiffC) {
+      const rA = ab.lastDiffA[idx], gA = ab.lastDiffA[idx + 1], bA = ab.lastDiffA[idx + 2];
+      const rB = ab.lastDiffB[idx], gB = ab.lastDiffB[idx + 1], bB = ab.lastDiffB[idx + 2];
+      const rC = ab.lastDiffC[idx], gC = ab.lastDiffC[idx + 1], bC = ab.lastDiffC[idx + 2];
+      const errB = Math.sqrt(((rB - rA) ** 2 + (gB - gA) ** 2 + (bB - bA) ** 2) / 3);
+      const errC = Math.sqrt(((rC - rA) ** 2 + (gC - gA) ** 2 + (bC - bA) ** 2) / 3);
+      const delta = errC - errB;
+      if (marker) {
+        const norm = Math.max(-1, Math.min(1, (delta * gain) / 255));
+        marker.style.display = "";
+        marker.style.bottom = `${((norm + 1) * 50).toFixed(1)}%`;
+      }
+      const verdict = Math.abs(delta) < 0.35
+        ? "gleich gut"
+        : (delta > 0 ? `C +${delta.toFixed(1)} mehr Fehler` : `C ${delta.toFixed(1)} weniger Fehler`);
+      tip.innerHTML =
+        `<div><b>Pixel (${srcX}, ${srcY})</b> · <b>${verdict}</b></div>` +
+        `<div><span class="ab-diff-swatch" style="background:rgb(${rA},${gA},${bA})"></span>A (Orig): RGB(${rA}, ${gA}, ${bA})</div>` +
+        `<div><span class="ab-diff-swatch" style="background:rgb(${rB},${gB},${bB})"></span>B: RGB(${rB}, ${gB}, ${bB}) · Fehler zu A: <b>${errB.toFixed(1)}</b></div>` +
+        `<div><span class="ab-diff-swatch" style="background:rgb(${rC},${gC},${bC})"></span>C: RGB(${rC}, ${gC}, ${bC}) · Fehler zu A: <b>${errC.toFixed(1)}</b></div>`;
+    } else {
+      const rA = ab.lastDiffA[idx], gA = ab.lastDiffA[idx + 1], bA = ab.lastDiffA[idx + 2];
+      const rB = ab.lastDiffB[idx], gB = ab.lastDiffB[idx + 1], bB = ab.lastDiffB[idx + 2];
+      const dr = rB - rA, dg = gB - gA, db = bB - bA;
+      const adr = Math.abs(dr), adg = Math.abs(dg), adb = Math.abs(db);
+      const rms = Math.sqrt((adr * adr + adg * adg + adb * adb) / 3);
+      const lumaA = 0.2126 * rA + 0.7152 * gA + 0.0722 * bA;
+      const lumaB = 0.2126 * rB + 0.7152 * gB + 0.0722 * bB;
+      const dY = lumaB - lumaA;
+      const pctErr = ((rms / 255) * 100).toFixed(1);
+      if (marker) {
+        const norm = Math.max(0, Math.min(1, (rms * gain) / 255));
+        marker.style.display = "";
+        marker.style.bottom = `${(norm * 100).toFixed(1)}%`;
+      }
+      const labL = ab.lastDiffLeftLabel || "A";
+      const labR = ab.lastDiffRightLabel || "B";
+      tip.innerHTML =
+        `<div><b>Pixel (${srcX}, ${srcY})</b> · RMS Δ <b>${rms.toFixed(1)}</b> (${pctErr} %) · ΔLuma ${dY >= 0 ? "+" : ""}${dY.toFixed(1)}</div>` +
+        `<div><span class="ab-diff-swatch" style="background:rgb(${rA},${gA},${bA})"></span>${escapeHtml(labL)}: RGB(${rA}, ${gA}, ${bA})</div>` +
+        `<div><span class="ab-diff-swatch" style="background:rgb(${rB},${gB},${bB})"></span>${escapeHtml(labR)}: RGB(${rB}, ${gB}, ${bB}) · Δ(${fmtSigned(dr)}, ${fmtSigned(dg)}, ${fmtSigned(db)})</div>`;
     }
-    tip.innerHTML =
-      `<div><b>Pixel (${srcX}, ${srcY})</b> · RMS Δ <b>${rms.toFixed(1)}</b> (${pctErr} %) · ΔLuma ${dY >= 0 ? "+" : ""}${dY.toFixed(1)}</div>` +
-      `<div><span class="ab-diff-swatch" style="background:rgb(${rA},${gA},${bA})"></span>A RGB(${rA}, ${gA}, ${bA})</div>` +
-      `<div><span class="ab-diff-swatch" style="background:rgb(${rB},${gB},${bB})"></span>B RGB(${rB}, ${gB}, ${bB}) · Δ(${fmtSigned(dr)}, ${fmtSigned(dg)}, ${fmtSigned(db)})</div>`;
     tip.style.display = "";
     const localX = hs.clientX - wrapRect.left;
     const localY = hs.clientY - wrapRect.top;
-    const tipW = tip.offsetWidth || 240;
-    const tipH = tip.offsetHeight || 62;
+    const tipW = tip.offsetWidth || 255;
+    const tipH = tip.offsetHeight || 72;
     const placeLeft = localX + 16 + tipW > wrapRect.width - 8;
     const placeAbove = localY + 16 + tipH > wrapRect.height - 8;
     tip.style.left = `${Math.max(8, placeLeft ? localX - tipW - 14 : localX + 14)}px`;
@@ -15903,80 +16178,149 @@
     if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
     const canvas = $("ab-diff-canvas");
     const hud = $("ab-diff-hud");
-    const sa = ab.sides.a, sb = ab.sides.b;
-    const va = sa && sa.video;
-    const vb = sb && sb.video;
-    if (!canvas || !va || !vb || !va.videoWidth || !vb.videoWidth
-        || va.readyState < 2 || vb.readyState < 2) {
-      if (hud) hud.textContent = tt("Warte auf dekodierte Bilder A & B …");
+    const layout = abComputeDiffLayout();
+    if (!canvas || !layout) {
+      if (hud) hud.textContent = tt("Warte auf dekodierte Bilder …");
       return;
     }
-    const fps = Number((ab.weak && ab.weak.fps)
-      || (sa && sa.info && sa.info.fps)
-      || (sb && sb.info && sb.info.fps)) || 24;
-    const bothPlaying = !va.paused && !vb.paused;
-    // Wichtig gegen Geister-Differenzen bei 1× Wiedergabe:
-    // Im 60-Hz-Browser-Compositor aktualisieren zwei <video>-Decoder ein neues Video-Frame
-    // oft mit 1 VSync (~16 ms) Versatz. Zeichnen wir genau in diesem Zwischenmoment,
-    // vergleicht Canvas Frame N mit Frame N-1 ("Schein-Fehler" an allen bewegten Kanten!).
-    // Liegt die gemessene Präsentationszeit beider Frames > 0,38 Bilddauern auseinander,
-    // überspringen wir diesen Zwischen-Tick und zeichnen erst, sobald beide Seiten nachgezogen sind.
-    if (bothPlaying && !(opts && opts.force) && abSynced()) {
-      const tA = Number.isFinite(ab.mediaTimeA) ? (ab.mediaTimeA + (sa.offset || 0)) : abTime(sa);
-      const tB = Number.isFinite(ab.mediaTimeB) ? (ab.mediaTimeB + (sb.offset || 0)) : abTime(sb);
-      const framePhaseSkew = Math.abs(tB - (tA + abOffsetB()));
-      const maxPhaseSkew = (0.38 / Math.max(1, fps));
-      if (framePhaseSkew > maxPhaseSkew && framePhaseSkew < 0.35) {
-        return;
+    const { keys, refAspect, w, h, srcW, srcH } = layout;
+    const fps = abCurrentFps();
+    const force = !!(opts && opts.force);
+    const anyPlaying = keys.some((k) => ab.sides[k] && ab.sides[k].video && !ab.sides[k].video.paused);
+    const hasRvfc = keys.every((k) => ab.sides[k] && ab.sides[k].video
+      && typeof ab.sides[k].video.requestVideoFrameCallback === "function");
+
+    let arraysByKey = null;
+    let syncBadge = "";
+
+    const nowMs = (typeof performance !== "undefined" && typeof performance.now === "function")
+      ? performance.now() : Date.now();
+    // 1. Live-Wiedergabe mit Frame-Ringpuffer: paart ausschließlich identische Frame-Nummern!
+    if (anyPlaying && !force && abSynced() && hasRvfc) {
+      if (!ab.lastMatchedAt) ab.lastMatchedAt = nowMs;
+      const matched = abFindMatchedRingFrames(keys, w, h);
+      if (matched) {
+        if (matched.frameIdx === ab.lastMatchedFrame) return; // Schon gezeichnet
+        ab.lastMatchedFrame = matched.frameIdx;
+        ab.lastMatchedAt = nowMs;
+        arraysByKey = {};
+        keys.forEach((k) => { arraysByKey[k] = matched.entries[k].data; });
+        syncBadge = `Frame-Lock #${matched.frameIdx}`;
+      } else {
+        // Warten, bis der langsamere Hardware-Decoder denselben Frame-Index nachgeliefert hat!
+        // Nur falls > 600 ms überhaupt kein gemeinsamer Index kam (z. B. grober Drift), Fallback zeichnen.
+        if (nowMs - ab.lastMatchedAt < 600) return;
+        ab.lastMatchedAt = nowMs;
+        syncBadge = "Sync läuft nach … (exakt im Pause-/Einzelbild-Modus)";
       }
     }
-    const aspectA = va.videoWidth / va.videoHeight;
-    const aspectB = vb.videoWidth / vb.videoHeight;
-    const refAspect = Math.abs(aspectA - aspectB) / Math.max(aspectA, aspectB) >= 0.02
-      ? aspectB : aspectA;
-    const [sxA, syA, swA, shA] = abActiveCropRect(va, refAspect);
-    const [sxB, syB, swB, shB] = abActiveCropRect(vb, refAspect);
-    // Arbeitsauflösung begrenzen (~960px Breite) für flüssige 60-fps-Berechnung
-    const maxW = 960;
-    const scale = Math.min(1, maxW / swA);
-    const w = Math.max(16, Math.round(swA * scale));
-    const h = Math.max(16, Math.round(shA * scale));
+
+    // 2. Standbild / Einzelbild / Fallback ohne rVFC: direkt von den aktuellen Video-Texturen lesen
+    if (!arraysByKey) {
+      arraysByKey = {};
+      const bufMap = { a: "bufA", b: "bufB", c: "bufC" };
+      try {
+        for (const k of keys) {
+          const side = ab.sides[k];
+          const bName = bufMap[k];
+          if (!ab[bName]) ab[bName] = document.createElement("canvas");
+          const buf = ab[bName];
+          if (buf.width !== w || buf.height !== h) { buf.width = w; buf.height = h; }
+          const [sx, sy, sw, sh] = abActiveCropRect(side.video, refAspect);
+          const ctx = buf.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(side.video, sx, sy, sw, sh, 0, 0, w, h);
+          arraysByKey[k] = ctx.getImageData(0, 0, w, h).data;
+        }
+      } catch (e) {
+        if (hud) hud.textContent = `${tt("Canvas-Analyse nicht möglich")}: ${e}`;
+        return;
+      }
+      if (!anyPlaying) {
+        const curF = Math.max(0, Math.round(abTime(ab.sides.a) * fps));
+        syncBadge = `Standbild #${curF} (100 % exakt)`;
+      } else if (!syncBadge) {
+        syncBadge = hasRvfc ? "Live" : "Live-Vorschau (100 % exakt im Pause-/Einzelbild-Modus)";
+      }
+    }
+
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
-    if (!ab.bufA) ab.bufA = document.createElement("canvas");
-    if (!ab.bufB) ab.bufB = document.createElement("canvas");
-    if (ab.bufA.width !== w || ab.bufA.height !== h) { ab.bufA.width = w; ab.bufA.height = h; }
-    if (ab.bufB.width !== w || ab.bufB.height !== h) { ab.bufB.width = w; ab.bufB.height = h; }
-    try {
-      const ctxA = ab.bufA.getContext("2d", { willReadFrequently: true });
-      const ctxB = ab.bufB.getContext("2d", { willReadFrequently: true });
-      ctxA.drawImage(va, sxA, syA, swA, shA, 0, 0, w, h);
-      ctxB.drawImage(vb, sxB, syB, swB, shB, 0, 0, w, h);
-      const imgA = ctxA.getImageData(0, 0, w, h);
-      const imgB = ctxB.getImageData(0, 0, w, h);
-      const dA = imgA.data;
-      const dB = imgB.data;
+    const ctxOut = canvas.getContext("2d");
+    const out = ctxOut.createImageData(w, h);
+    const dO = out.data;
+    const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
+    const nPx = w * h;
+    const isDelta = abHasSideC() && ab.pair === "delta";
+
+    if (isDelta) {
+      const dA = arraysByKey.a, dB = arraysByKey.b, dC = arraysByKey.c;
       ab.lastDiffA = dA;
       ab.lastDiffB = dB;
+      ab.lastDiffC = dC;
+      ab.lastDiffMode = "delta";
       ab.lastDiffW = w;
       ab.lastDiffH = h;
-      ab.lastDiffSrcW = swA;
-      ab.lastDiffSrcH = shA;
-      const ctxOut = canvas.getContext("2d");
-      const out = ctxOut.createImageData(w, h);
-      const dO = out.data;
-      const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
+      ab.lastDiffSrcW = srcW;
+      ab.lastDiffSrcH = srcH;
+
+      let sumErrB = 0, sumSqB = 0;
+      let sumErrC = 0, sumSqC = 0;
+      let worseCountC = 0;
+      for (let i = 0; i < dA.length; i += 4) {
+        const drB = dB[i] - dA[i], dgB = dB[i + 1] - dA[i + 1], dbB = dB[i + 2] - dA[i + 2];
+        const drC = dC[i] - dA[i], dgC = dC[i + 1] - dA[i + 1], dbC = dC[i + 2] - dA[i + 2];
+        const sqB = (drB * drB + dgB * dgB + dbB * dbB) / 3;
+        const sqC = (drC * drC + dgC * dgC + dbC * dbC) / 3;
+        const eB = Math.sqrt(sqB);
+        const eC = Math.sqrt(sqC);
+        sumErrB += eB; sumSqB += sqB;
+        sumErrC += eC; sumSqC += sqC;
+        const delta = eC - eB;
+        if (delta > 0.5) worseCountC += 1;
+        const [r, g, b] = abDivergingDeltaColor((delta * gain) / 255);
+        dO[i] = r; dO[i + 1] = g; dO[i + 2] = b; dO[i + 3] = 255;
+      }
+      ctxOut.putImageData(out, 0, 0);
+      if (hud && nPx > 0) {
+        const maeB = sumErrB / nPx;
+        const maeC = sumErrC / nPx;
+        const mseB = sumSqB / nPx;
+        const mseC = sumSqC / nPx;
+        const psnrB = mseB > 0.0001 ? (10 * Math.log10((255 * 255) / mseB)) : 99;
+        const psnrC = mseC > 0.0001 ? (10 * Math.log10((255 * 255) / mseC)) : 99;
+        const diffMae = maeC - maeB;
+        const pctMore = maeB > 0.02 ? ` (${diffMae >= 0 ? "+" : ""}${Math.round((diffMae / maeB) * 100)} %)` : "";
+        const dbDiff = (psnrB < 90 && psnrC < 90) ? `, ${(psnrC - psnrB) >= 0 ? "+" : ""}${(psnrC - psnrB).toFixed(1)} dB` : "";
+        const worsePct = ((worseCountC / nPx) * 100).toFixed(1);
+        hud.textContent =
+          `B vs A: Ø ${maeB.toFixed(2)} (${psnrB >= 90 ? "∞" : psnrB.toFixed(1)} dB) · ` +
+          `C vs A: Ø ${maeC.toFixed(2)} (${psnrC >= 90 ? "∞" : psnrC.toFixed(1)} dB) · ` +
+          `Δ(C−B): ${diffMae >= 0 ? "+" : ""}${diffMae.toFixed(2)}${pctMore}${dbDiff} · C schlechter an ${worsePct} % Px · ${syncBadge}`;
+      }
+    } else {
+      const [kL, kR] = keys;
+      const dL = arraysByKey[kL], dR = arraysByKey[kR];
+      ab.lastDiffA = dL;
+      ab.lastDiffB = dR;
+      ab.lastDiffC = null;
+      ab.lastDiffMode = "pair";
+      ab.lastDiffLeftLabel = kL.toUpperCase();
+      ab.lastDiffRightLabel = kR.toUpperCase();
+      ab.lastDiffW = w;
+      ab.lastDiffH = h;
+      ab.lastDiffSrcW = srcW;
+      ab.lastDiffSrcH = srcH;
+
       const isHeat = ab.mode === "heatmap";
       let sumAbs = 0;
       let sumSq = 0;
       let maxDelta = 0;
-      const nPx = w * h;
-      for (let i = 0; i < dA.length; i += 4) {
-        const dr = Math.abs(dA[i] - dB[i]);
-        const dg = Math.abs(dA[i + 1] - dB[i + 1]);
-        const db = Math.abs(dA[i + 2] - dB[i + 2]);
+      for (let i = 0; i < dL.length; i += 4) {
+        const dr = Math.abs(dL[i] - dR[i]);
+        const dg = Math.abs(dL[i + 1] - dR[i + 1]);
+        const db = Math.abs(dL[i + 2] - dR[i + 2]);
         const avgD = (dr + dg + db) / 3;
         sumAbs += avgD;
         sumSq += (dr * dr + dg * dg + db * db) / 3;
@@ -15997,13 +16341,12 @@
         const mae = sumAbs / nPx;
         const mse = sumSq / nPx;
         const psnr = mse > 0.0001 ? `${(10 * Math.log10((255 * 255) / mse)).toFixed(1)} dB` : "∞ dB (identisch)";
-        hud.textContent = `${isHeat ? "Heatmap" : "Differenz"} (${gain}×) · Ø ΔRGB ${mae.toFixed(2)} · Max Δ ${Math.round(maxDelta)} · RGB-PSNR ~${psnr}`;
+        const pairTag = `${kL.toUpperCase()}↔${kR.toUpperCase()}`;
+        hud.textContent = `${isHeat ? "Heatmap" : "Differenz"} ${pairTag} (${gain}×) · Ø ΔRGB ${mae.toFixed(2)} · Max Δ ${Math.round(maxDelta)} · PSNR ~${psnr} · ${syncBadge}`;
       }
-      abUpdateDiffLegend();
-      if (ab.hoverState && ab.hoverState.active) abUpdateDiffTooltip();
-    } catch (e) {
-      if (hud) hud.textContent = `${tt("Canvas-Analyse nicht möglich")}: ${e}`;
     }
+    abUpdateDiffLegend();
+    if (ab.hoverState && ab.hoverState.active) abUpdateDiffTooltip();
   }
 
   function abCancelCanvasLoop() {
@@ -16011,50 +16354,46 @@
       cancelAnimationFrame(ab.rafId);
       ab.rafId = 0;
     }
-    const va = ab.sides.a && ab.sides.a.video;
-    const vb = ab.sides.b && ab.sides.b.video;
-    if (ab.rvfcA && va && typeof va.cancelVideoFrameCallback === "function") {
-      try { va.cancelVideoFrameCallback(ab.rvfcA); } catch (e) { /* ignore */ }
-    }
-    if (ab.rvfcB && vb && typeof vb.cancelVideoFrameCallback === "function") {
-      try { vb.cancelVideoFrameCallback(ab.rvfcB); } catch (e) { /* ignore */ }
-    }
-    ab.rvfcA = 0;
-    ab.rvfcB = 0;
+    ["a", "b", "c"].forEach((k) => {
+      const v = ab.sides[k] && ab.sides[k].video;
+      const h = ab.rvfcHandles[k];
+      if (h && v && typeof v.cancelVideoFrameCallback === "function") {
+        try { v.cancelVideoFrameCallback(h); } catch (e) { /* ignore */ }
+      }
+      ab.rvfcHandles[k] = 0;
+    });
   }
 
   function abUpdateCanvasLoop() {
     abCancelCanvasLoop();
     if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
-    const va = ab.sides.a && ab.sides.a.video;
-    const vb = ab.sides.b && ab.sides.b.video;
-    const hasRvfc = !!(va && vb
-      && typeof va.requestVideoFrameCallback === "function"
-      && typeof vb.requestVideoFrameCallback === "function");
-    if (hasRvfc && ((!va.paused) || (!vb.paused))) {
-      const onFrameA = (_now, meta) => {
-        ab.rvfcA = 0;
-        if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
-        ab.mediaTimeA = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (va.currentTime || 0);
-        abDrawDiffFrame();
-        if (!va.paused) ab.rvfcA = va.requestVideoFrameCallback(onFrameA);
-      };
-      const onFrameB = (_now, meta) => {
-        ab.rvfcB = 0;
-        if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
-        ab.mediaTimeB = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (vb.currentTime || 0);
-        abDrawDiffFrame();
-        if (!vb.paused) ab.rvfcB = vb.requestVideoFrameCallback(onFrameB);
-      };
-      if (!va.paused) ab.rvfcA = va.requestVideoFrameCallback(onFrameA);
-      if (!vb.paused) ab.rvfcB = vb.requestVideoFrameCallback(onFrameB);
-      abDrawDiffFrame({ force: true });
+    const keys = abDiffRequiredKeys();
+    const sides = keys.map((k) => ab.sides[k]).filter((s) => s && s.video);
+    const anyPlaying = sides.some((s) => !s.video.paused);
+    const hasRvfc = sides.length === keys.length
+      && sides.every((s) => typeof s.video.requestVideoFrameCallback === "function");
+    if (hasRvfc && anyPlaying) {
+      sides.forEach((side) => {
+        const k = side.key;
+        const v = side.video;
+        const onFrame = (_now, meta) => {
+          ab.rvfcHandles[k] = 0;
+          if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+          const mt = meta && Number.isFinite(meta.mediaTime) ? meta.mediaTime : (v.currentTime || 0);
+          abCaptureSideRingFrame(side, mt);
+          abDrawDiffFrame();
+          if (!v.paused) ab.rvfcHandles[k] = v.requestVideoFrameCallback(onFrame);
+        };
+        if (!v.paused) ab.rvfcHandles[k] = v.requestVideoFrameCallback(onFrame);
+        else abCaptureSideRingFrame(side, v.currentTime || 0);
+      });
       return;
     }
+    if (!anyPlaying) return;
     const tick = () => {
       if (ab.mode !== "diff" && ab.mode !== "heatmap") { ab.rafId = 0; return; }
       abDrawDiffFrame();
-      if (((va && !va.paused) || (vb && !vb.paused)) && typeof requestAnimationFrame === "function") {
+      if (sides.some((s) => !s.video.paused) && typeof requestAnimationFrame === "function") {
         ab.rafId = requestAnimationFrame(tick);
       } else {
         ab.rafId = 0;
@@ -16078,12 +16417,82 @@
     return Math.min(1, Math.max(0, sum));
   }
 
+  function abSyncPairUi() {
+    const hasC = abHasSideC();
+    if (!hasC && ab.pair !== "ab") ab.pair = "ab";
+    const pairBar = $("ab-pair-bar");
+    const offCField = $("ab-offset-c-field");
+    if (pairBar) pairBar.style.display = hasC ? "" : "none";
+    if (offCField) offCField.style.display = hasC ? "" : "none";
+    if (hasC && pairBar) {
+      const nA = ab.sides.a && ab.sides.a.labelOverride ? ab.sides.a.labelOverride : "A";
+      const nB = ab.sides.b && ab.sides.b.labelOverride ? ab.sides.b.labelOverride : "B";
+      const nC = ab.sides.c && ab.sides.c.labelOverride ? ab.sides.c.labelOverride : "C";
+      const bAb = $("ab-pair-ab"), bAc = $("ab-pair-ac"), bBc = $("ab-pair-bc"), bDt = $("ab-pair-delta");
+      if (bAb) bAb.textContent = `1 · A ↔ B${nB !== "B" ? ` (${nB})` : ""}`;
+      if (bAc) bAc.textContent = `2 · A ↔ C${nC !== "C" ? ` (${nC})` : ""}`;
+      if (bBc) bBc.textContent = `3 · B ↔ C`;
+      if (bDt) bDt.textContent = `4 · Δ Mehr-Fehler: ${nC !== "C" ? nC : "C"} vs. ${nB !== "B" ? nB : "B"} (zu ${nA !== "A" ? nA : "A"})`;
+      pairBar.querySelectorAll("[data-ab-pair]").forEach((btn) => {
+        const on = btn.dataset.abPair === ab.pair;
+        btn.classList.toggle("btn-primary", on);
+        btn.classList.toggle("btn-ghost", !on);
+      });
+    }
+    const wrap = $("ab-videos");
+    if (wrap && typeof wrap.toggleAttribute === "function") {
+      wrap.toggleAttribute("data-custom-pair", hasC);
+    }
+    if (ab.mode !== "abx") {
+      const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
+      const [kL, kR] = abPairKeys();
+      ["a", "b", "c"].forEach((k) => {
+        const pane = $(`ab-pane-${k}`);
+        if (!pane) return;
+        const sideLoaded = !!(ab.sides[k] && (ab.sides[k].path || ab.sides[k].clipUrl));
+        let show = false;
+        if (isCanvas) {
+          // Im Canvas-Modus (opacity: 0.004 hinter dem schwarzen Canvas) bleiben alle für die
+          // Berechnung benötigten Panes gerendert, damit der Browser deren Decoder aktiv hält!
+          show = abDiffRequiredKeys().includes(k) && sideLoaded;
+        } else {
+          show = (k === kL || k === kR) && (k !== "c" || hasC);
+        }
+        pane.style.display = show ? "" : "none";
+        pane.classList.toggle("is-wipe-right", k === kR);
+      });
+      const wh = $("ab-wipe-handle");
+      const handleSpan = wh && typeof wh.querySelector === "function" ? wh.querySelector("span") : null;
+      if (handleSpan) handleSpan.textContent = `◂ ${kL.toUpperCase()} | ${kR.toUpperCase()} ▸`;
+    }
+  }
+
+  function abSetPair(nextPair) {
+    if (!abHasSideC() && nextPair !== "ab") return;
+    ab.pair = nextPair;
+    ab.lastMatchedFrame = NaN;
+    // Delta-Fehlervergleich ist eine Canvas-Analyse: falls man gerade in Side/Wipe/ABX ist,
+    // automatisch auf Heatmap umschalten, damit die Diverging-Karte sofort sichtbar wird.
+    if (nextPair === "delta" && ab.mode !== "heatmap" && ab.mode !== "diff") {
+      const modeSel = $("ab-mode");
+      if (modeSel) modeSel.value = "heatmap";
+      abApplyMode();
+      return;
+    }
+    abSyncPairUi();
+    abUpdateDiffLegend();
+    abUpdateCanvasLoop();
+    abDrawDiffFrame({ force: true });
+    abApplyZoom();
+  }
+
   function abAbxNewRound(resetStats) {
     if (resetStats) {
       ab.abx.correct = 0;
       ab.abx.total = 0;
     }
-    ab.abx.secret = Math.random() < 0.5 ? "a" : "b";
+    const [kL, kR] = abPairKeys();
+    ab.abx.secret = Math.random() < 0.5 ? kL : kR;
     ab.abx.roundGuessed = false;
     ab.abx.view = "x";
     abApplyAbxView();
@@ -16091,24 +16500,22 @@
   }
 
   function abApplyAbxView() {
-    const paneA = $("ab-pane-a");
-    const paneB = $("ab-pane-b");
-    const tagA = $("ab-tag-a");
-    const tagB = $("ab-tag-b");
     const bar = $("ab-abx-bar");
     if (ab.mode !== "abx") {
-      if (paneA) paneA.style.display = "";
-      if (paneB) paneB.style.display = "";
-      abUpdateSideBadge("a");
-      abUpdateSideBadge("b");
+      ["a", "b", "c"].forEach(abUpdateSideBadge);
+      abSyncPairUi();
       return;
     }
-    const target = ab.abx.view === "x" ? ab.abx.secret : ab.abx.view;
-    const label = ab.abx.view === "a" ? "Quelle A" : (ab.abx.view === "b" ? "Quelle B" : "Unbekannt X");
-    if (paneA) paneA.style.display = target === "a" ? "" : "none";
-    if (paneB) paneB.style.display = target === "b" ? "" : "none";
-    if (tagA) tagA.textContent = label;
-    if (tagB) tagB.textContent = label;
+    const [kL, kR] = abPairKeys();
+    const chosenKey = ab.abx.view === "a" ? kL : (ab.abx.view === "b" ? kR : ab.abx.secret);
+    const label = ab.abx.view === "a" ? `Quelle ${kL.toUpperCase()}`
+      : (ab.abx.view === "b" ? `Quelle ${kR.toUpperCase()}` : "Unbekannt X");
+    ["a", "b", "c"].forEach((k) => {
+      const pane = $(`ab-pane-${k}`);
+      const tag = $(`ab-tag-${k}`);
+      if (pane) pane.style.display = k === chosenKey ? "" : "none";
+      if (tag && k === chosenKey) tag.textContent = label;
+    });
     if (bar) {
       bar.querySelectorAll("[data-abx-view]").forEach((btn) => {
         const on = btn.dataset.abxView === ab.abx.view;
@@ -16136,13 +16543,15 @@
 
   function abAbxGuess(choice) {
     if (ab.mode !== "abx") return;
-    const hit = choice === ab.abx.secret;
+    const [kL, kR] = abPairKeys();
+    const mappedChoice = choice === "a" ? kL : kR;
+    const hit = mappedChoice === ab.abx.secret;
     ab.abx.total += 1;
     if (hit) ab.abx.correct += 1;
     const truth = ab.abx.secret.toUpperCase();
     const msg = hit ? `✓ Richtig (X war ${truth})` : `✗ Daneben (X war ${truth})`;
     // Direkt nächste Zufallsrunde starten
-    ab.abx.secret = Math.random() < 0.5 ? "a" : "b";
+    ab.abx.secret = Math.random() < 0.5 ? kL : kR;
     ab.abx.view = "x";
     abApplyAbxView();
     abRenderAbxScore(msg);
@@ -16162,17 +16571,21 @@
       const mode = ab.mode === "abx" ? "verdeckt (ABX)" : `${s.mode || "—"}${s.encodePaused ? " (pausiert)" : ""}`;
       return `${s.key.toUpperCase()}: ${res} · ${mode} · Puffer ${buf}s · Drop ${drp}/${tot}`;
     };
-    const sa = ab.sides.a, sb = ab.sides.b;
+    const sa = ab.sides.a, sb = ab.sides.b, sc = ab.sides.c;
     const ta = sa ? abTime(sa) : 0;
     const tb = sb ? abTime(sb) : 0;
-    const driftMs = sb && sb.ready ? ((tb - (ta + abOffsetB())) * 1000).toFixed(1) : "0.0";
-    const fps = (ab.weak && ab.weak.fps) || (sa && sa.info && sa.info.fps) || 24;
-    const lines = [
-      `Position : A ${ta.toFixed(3)}s · B ${tb.toFixed(3)}s · Drift Δt ${driftMs} ms (~${fps} fps)`,
-      fmtSide(sa),
-      fmtSide(sb),
-      `Ansicht  : ${ab.mode} · Zoom ${($("ab-zoom") && $("ab-zoom").value) || "fit"} · Tempo ${($("ab-speed") && $("ab-speed").value) || "1"}×`,
-    ];
+    const driftB = sb && sb.ready ? ((tb - (ta + abOffsetB())) * 1000).toFixed(1) : "0.0";
+    const fps = abCurrentFps();
+    let posLine = `Position : A ${ta.toFixed(3)}s · B ${tb.toFixed(3)}s (ΔB ${driftB} ms)`;
+    if (abHasSideC() && sc) {
+      const tc = abTime(sc);
+      const driftC = sc.ready ? ((tc - (ta + abOffsetC())) * 1000).toFixed(1) : "0.0";
+      posLine += ` · C ${tc.toFixed(3)}s (ΔC ${driftC} ms)`;
+    }
+    posLine += ` · ~${fps} fps`;
+    const lines = [posLine, fmtSide(sa), fmtSide(sb)];
+    if (abHasSideC() && sc) lines.push(fmtSide(sc));
+    lines.push(`Ansicht  : ${ab.mode}${abHasSideC() ? ` (${ab.pair})` : ""} · Zoom ${($("ab-zoom") && $("ab-zoom").value) || "fit"} · Tempo ${($("ab-speed") && $("ab-speed").value) || "1"}×`);
     hud.textContent = lines.join("\n");
   }
 
@@ -16190,65 +16603,67 @@
   }
 
   function abExportPngSnapshot() {
-    const sa = ab.sides.a, sb = ab.sides.b;
-    const va = sa && sa.video, vb = sb && sb.video;
-    if (!va || !va.videoWidth) {
+    const [kL, kR] = abPairKeys();
+    const sL = ab.sides[kL], sR = ab.sides[kR];
+    const vL = sL && sL.video, vR = sR && sR.video;
+    if (!vL || !vL.videoWidth) {
       abSetStatus(tt("Kein dekodiertes Videobild für PNG-Export vorhanden."), true);
       return;
     }
     try {
       const out = document.createElement("canvas");
       const ctx = out.getContext("2d");
-      const t = abTime(sa);
+      const t = abTime(ab.sides.a || sL);
       const stamp = fmtClock(t).replace(/:/g, "-") + "." + String(Math.round((t % 1) * 1000)).padStart(3, "0");
       if ((ab.mode === "diff" || ab.mode === "heatmap") && $("ab-diff-canvas")) {
-        abDrawDiffFrame();
+        abDrawDiffFrame({ force: true });
         const dc = $("ab-diff-canvas");
         out.width = dc.width;
         out.height = dc.height;
         ctx.drawImage(dc, 0, 0);
-      } else if (ab.mode === "wipe" && vb && vb.videoWidth) {
-        const w = va.videoWidth, h = va.videoHeight;
+      } else if (ab.mode === "wipe" && vR && vR.videoWidth) {
+        const w = vL.videoWidth, h = vL.videoHeight;
         out.width = w; out.height = h;
         const splitX = Math.round((ab.wipe / 100) * w);
-        ctx.drawImage(va, 0, 0, w, h);
+        ctx.drawImage(vL, 0, 0, w, h);
         ctx.save();
         ctx.beginPath();
         ctx.rect(splitX, 0, w - splitX, h);
         ctx.clip();
-        ctx.drawImage(vb, 0, 0, w, h);
+        ctx.drawImage(vR, 0, 0, w, h);
         ctx.restore();
         ctx.fillStyle = "rgba(255,255,255,0.9)";
         ctx.fillRect(splitX - 1, 0, 2, h);
-      } else if (vb && vb.videoWidth && ab.mode !== "abx") {
-        const w = va.videoWidth, h = va.videoHeight;
+      } else if (vR && vR.videoWidth && ab.mode !== "abx") {
+        const w = vL.videoWidth, h = vL.videoHeight;
         out.width = w * 2 + 8;
         out.height = h;
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, out.width, out.height);
-        ctx.drawImage(va, 0, 0, w, h);
-        ctx.drawImage(vb, w + 8, 0, w, h);
+        ctx.drawImage(vL, 0, 0, w, h);
+        ctx.drawImage(vR, w + 8, 0, w, h);
         ctx.font = `bold ${Math.max(16, Math.round(h * 0.028))}px sans-serif`;
         ctx.fillStyle = "rgba(0,0,0,0.65)";
         ctx.fillRect(12, 12, 46, Math.max(28, Math.round(h * 0.042)));
         ctx.fillRect(w + 20, 12, 46, Math.max(28, Math.round(h * 0.042)));
         ctx.fillStyle = "#fff";
-        ctx.fillText("A", 26, 12 + Math.max(21, Math.round(h * 0.032)));
-        ctx.fillText("B", w + 34, 12 + Math.max(21, Math.round(h * 0.032)));
+        ctx.fillText(kL.toUpperCase(), 26, 12 + Math.max(21, Math.round(h * 0.032)));
+        ctx.fillText(kR.toUpperCase(), w + 34, 12 + Math.max(21, Math.round(h * 0.032)));
       } else {
-        out.width = va.videoWidth;
-        out.height = va.videoHeight;
-        ctx.drawImage(va, 0, 0);
+        out.width = vL.videoWidth;
+        out.height = vL.videoHeight;
+        ctx.drawImage(vL, 0, 0);
       }
+      const pairSuffix = abHasSideC() ? `_${ab.pair}` : "";
       out.toBlob((blob) => {
         if (!blob) return;
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `ab_${ab.mode}_${stamp}.png`;
+        a.download = `ab_${ab.mode}${pairSuffix}_${stamp}.png`;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-        abSetStatus(`${tt("PNG-Vergleich gespeichert")}: ab_${ab.mode}_${stamp}.png`);
+        abSetStatus(`${tt("PNG-Vergleich gespeichert")}: ab_${ab.mode}${pairSuffix}_${stamp}.png`);
       }, "image/png");
     } catch (e) {
       abSetStatus(`${tt("PNG-Export fehlgeschlagen")}: ${e}`, true);
@@ -16271,6 +16686,9 @@
     const wipe = ab.mode === "wipe";
     const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
     const isAbx = ab.mode === "abx";
+    // Wenn man von Heatmap/Diff zurück auf Side/Wipe wechselt und ab.pair noch auf "delta" stand,
+    // sauber auf A↔B schalten, weil Side/Wipe ein echtes Videopaar zeigen.
+    if (!isCanvas && ab.pair === "delta") ab.pair = "ab";
     wrap.classList.toggle("ab-wipe", wipe);
     wrap.classList.toggle("ab-canvas-mode", isCanvas);
     wrap.classList.toggle("ab-abx-mode", isAbx);
@@ -16288,6 +16706,7 @@
     else abApplyAbxView();
     abApplyZoom();
     abUpdateCanvasLoop();
+    if (isCanvas) abDrawDiffFrame({ force: true });
   }
 
   // 1:1 und darüber: die Mitte füllt das Fenster in echten Pixeln (bzw. 2×/4×).
@@ -16363,10 +16782,11 @@
   async function abUnload(clearPaths) {
     ab.closing = true;
     ab.stepTargetT = NaN;
+    abClearFrameRings();
     const unloadSeq = ++ab.loadSeq;
     abPauseBoth();
     const jobs = [];
-    ["a", "b"].forEach((key) => {
+    ["a", "b", "c"].forEach((key) => {
       const side = ab.sides[key];
       if (!side) return;
       if (side.lookTimer) {
@@ -16385,6 +16805,7 @@
       if (token) jobs.push(abCancelToken(token));
       side.path = "";
       side.clipUrl = "";
+      side.labelOverride = "";
       side.info = null;
       side.sess = null;
       side.plan = null;
@@ -16400,7 +16821,9 @@
     if (clearPaths && abIsStandalone()) {
       if ($("ab-path-a")) $("ab-path-a").value = "";
       if ($("ab-path-b")) $("ab-path-b").value = "";
+      if ($("ab-path-c")) $("ab-path-c").value = "";
     }
+    ab.pair = "ab";
     ab.window = null;
     ab.weak = null;
     state.abJob = "";
@@ -16414,6 +16837,7 @@
     if (badge) badge.textContent = "—";
     abSyncSideLookUi("a");
     abSyncSideLookUi("b");
+    abSyncPairUi();
     await Promise.all(jobs);
     if (ab.closing && ab.loadSeq === unloadSeq) abSetStatus(tt("Video entladen."));
   }
@@ -16423,7 +16847,10 @@
     if (!load) return;
     ab.sides.a = abMakeSide("a");
     ab.sides.b = abMakeSide("b");
-    const va = ab.sides.a.video, vb = ab.sides.b.video;
+    ab.sides.c = abMakeSide("c");
+    const va = ab.sides.a.video, vb = ab.sides.b.video, vc = ab.sides.c && ab.sides.c.video;
+    const allSides = [ab.sides.a, ab.sides.b, ab.sides.c].filter((s) => s && s.video);
+    const allVideos = allSides.map((s) => s.video);
 
     const nerdPlay = $("btn-ab-nerd");
     if (nerdPlay) nerdPlay.addEventListener("click", playNerdAb);
@@ -16431,36 +16858,55 @@
     if (nerdUnload) nerdUnload.addEventListener("click", () => abUnload(false));
     const unload = $("btn-ab-unload");
     if (unload) unload.addEventListener("click", () => abUnload(true));
-    ["ab-nerd-a", "ab-nerd-b"].forEach((id) => {
+    ["ab-nerd-a", "ab-nerd-b", "ab-nerd-c"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("change", () => {
         const btn = $("btn-ab-nerd");
-        if (btn) btn.disabled = !el.value || $("ab-nerd-a").value === $("ab-nerd-b").value;
+        const aVal = ($("ab-nerd-a") || {}).value || "";
+        const bVal = ($("ab-nerd-b") || {}).value || "";
+        const cVal = ($("ab-nerd-c") || {}).value || "";
+        const cBad = !!(cVal && (cVal === aVal || cVal === bVal));
+        if (btn) btn.disabled = !aVal || !bVal || aVal === bVal || cBad;
       });
     });
+
+    const pairBar = $("ab-pair-bar");
+    if (pairBar) {
+      pairBar.querySelectorAll("[data-ab-pair]").forEach((btn) => {
+        btn.addEventListener("click", () => abSetPair(btn.dataset.abPair || "ab"));
+      });
+    }
 
     load.addEventListener("click", async () => {
       if (!abIsStandalone()) return;
       const loadSeq = abBeginLoad();
       const seq = ab.controlSeq;
       const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
-      const sa = ab.sides.a, sb = ab.sides.b;
-      sa.clipUrl = "";
-      sb.clipUrl = "";
+      const sa = ab.sides.a, sb = ab.sides.b, sc = ab.sides.c;
+      [sa, sb, sc].forEach((s) => {
+        if (!s) return;
+        s.clipUrl = "";
+        s.labelOverride = "";
+      });
       ab.window = null;
       const same = !!($("ab-same-source") && $("ab-same-source").checked);
       const pathA = $("ab-path-a").value.trim();
       const rootA = $("ab-root-a").value || "media";
       let pathB = $("ab-path-b").value.trim();
       let rootB = $("ab-root-b").value || "media";
+      const pathC = (!same && $("ab-path-c")) ? $("ab-path-c").value.trim() : "";
+      const rootC = ($("ab-root-c") && $("ab-root-c").value) || "media";
       if (same || (!pathB && pathA)) {
         pathB = pathA;
         rootB = rootA;
       }
       if (sa.path !== pathA) sa.info = null;
       if (sb.path !== pathB) sb.info = null;
+      if (sc && sc.path !== pathC) sc.info = null;
       sa.path = pathA; sa.root = rootA;
       sb.path = pathB; sb.root = rootB;
+      if (sc) { sc.path = pathC; sc.root = rootC; }
+      if (!pathC && ab.pair !== "ab") ab.pair = "ab";
       if (!sa.path && !sb.path) {
         abSetStatus(tt("Bitte eine Datei wählen."), true);
         return;
@@ -16478,6 +16924,7 @@
       if (!current()) return;
       abSyncSideLookUi("a");
       abSyncSideLookUi("b");
+      if (sc) abUpdateSideBadge("c");
       const badge = $("ab-badge");
       if (badge) badge.textContent = tt("Lädt …");
       abSetStatus(tt("Starte Wiedergabe …"));
@@ -16489,40 +16936,51 @@
         sb.offset = origin;
         ab.window = { start: origin, end: origin + Number(sample.seconds) };
       }
-      const ok = await Promise.all([abStartSide(sa, origin), abStartSide(sb, 0)]);
+      const startJobs = [abStartSide(sa, origin), abStartSide(sb, sample && sample.url ? 0 : Math.max(0, origin + abOffsetB()))];
+      if (sc && sc.path) {
+        startJobs.push(abStartSide(sc, Math.max(0, origin + abOffsetC())));
+      }
+      const ok = await Promise.all(startJobs);
       if (!current()) return;
       const settled = ok.every(Boolean) && await abAlignAndSettleBoth(origin, true, current);
       if (!current()) return;
       if (badge) badge.textContent = settled ? tt("Geladen") : tt("Fehler");
+      abSyncPairUi();
       if (settled) abUpdateStatusLine();
       abLoadWeakSpots();
     });
 
     // Leichten Frame-Versatz laufen lassen. Während Start/Seek/Pufferpause
-    // übernimmt die gemeinsame Wartephase; hier nur groben laufenden Drift korrigieren.
-    const alignB = (force) => {
+    // übernimmt die gemeinsame Wartephase; hier nur groben laufenden Drift von B (und C) korrigieren.
+    const alignFollowers = (force) => {
       if (ab.closing || !abSynced() || ab.seeking || ab.settling || ab.holding) return;
-      const sa = ab.sides.a, sb = ab.sides.b;
-      if (!sb.path || !sb.ready || sa.starting || sb.starting) return;
-      if (!force && (va.paused || vb.paused || va.seeking || vb.seeking
-          || va.readyState < 3 || vb.readyState < 3)) return;
-      const t = Math.max(0, abTime(sa) + abOffsetB());
-      // Beim Pausieren (force=true) in jedem Fall auf das exakte Bild von A ziehen (> 2 ms),
-      // denn schon 15–18 ms Abweichung über eine Frame-Grenze zeigen im Standbild das Nachbar-Frame!
+      const sa = ab.sides.a;
+      if (!sa || sa.starting || !va) return;
+      if (!force && (va.paused || va.seeking || va.readyState < 3)) return;
       const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
       const minDiff = force ? 0.002 : (isCanvas ? Math.max(0.06, 1.5 / abFps()) : 0.25);
-      if (Math.abs(abTime(sb) - t) > minDiff) {
-        if (sb.mode !== "direct" && (t < (sb.offset || 0) - 0.01 || t > abBufferedEnd(sb) + 6)) {
-          abSeekBoth(abTime(sa), va.paused);
-        } else {
-          abSetTime(sb, t, !!force);
+      let anyMoved = false;
+      for (const follower of [ab.sides.b, ab.sides.c]) {
+        if (!follower || (!follower.path && !follower.clipUrl) || !follower.ready || follower.starting) continue;
+        const vf = follower.video;
+        if (!vf) continue;
+        if (!force && (vf.paused || vf.seeking || vf.readyState < 3)) continue;
+        const target = Math.max(0, abTime(sa) + abSideOffset(follower.key));
+        if (Math.abs(abTime(follower) - target) > minDiff) {
+          if (follower.mode !== "direct" && (target < (follower.offset || 0) - 0.01 || target > abBufferedEnd(follower) + 6)) {
+            abSeekBoth(abTime(sa), va.paused);
+            return;
+          }
+          abSetTime(follower, target, !!force);
+          anyMoved = true;
         }
-      } else if (force && isCanvas) {
+      }
+      if (force && !anyMoved && isCanvas) {
         abDrawDiffFrame({ force: true });
       }
     };
 
-    [ab.sides.a, ab.sides.b].forEach((side) => {
+    allSides.forEach((side) => {
       const video = side.video;
       video.addEventListener("play", () => {
         if (video.paused) return; // Event eines inzwischen abgebrochenen Starts.
@@ -16531,7 +16989,7 @@
         if (ab.closing || ab.seeking || ab.settling) { abPauseMedia(side); return; }
         ab.stepTargetT = NaN;
         abSetEncodePaused(side, false);
-        if (!abSynced() || !ab.sides.b.path) {
+        if (!abSynced() || abLoadedSides().length < 2) {
           if (side.key === "a") ab.wantPlay = true;
           abUpdatePlayBtn();
           return;
@@ -16543,7 +17001,7 @@
         if (side.catchingUp) return;
         if (side.syncPauses > 0) { side.syncPauses -= 1; return; }
         if (ab.closing) return;
-        if (abSynced()) { abPauseBoth(); alignB(true); }
+        if (abSynced()) { abPauseBoth(); alignFollowers(true); }
         else if (side.key === "a") { ab.wantPlay = false; ab.controlSeq += 1; abUpdatePlayBtn(); }
         if (!ab.seeking && abBufferedAhead(side) >= 6) abSetEncodePaused(side, true);
       });
@@ -16553,7 +17011,8 @@
         if (ab.closing || !abSynced() || ab.seeking || ab.settling || side.starting) return;
         side.syncSeekTarget = null;
         ab.stepTargetT = NaN;
-        abSeekBoth(abTime(side) - (side.key === "b" ? abOffsetB() : 0), va.paused && vb.paused);
+        const allPaused = abLoadedSides().every((s) => !s.video || s.video.paused);
+        abSeekBoth(abTime(side) - abSideOffset(side.key), allPaused);
       });
       video.addEventListener("seeked", () => {
         side.syncSeekTarget = null;
@@ -16567,7 +17026,7 @@
       video.addEventListener("progress", () => { abThrottleSide(side); abResumeIfReady(); });
       video.addEventListener("timeupdate", () => abThrottleSide(side));
     });
-    [va, vb].forEach((video) => {
+    allVideos.forEach((video) => {
       video.addEventListener("ratechange", abApplyPlaybackRate);
       video.addEventListener("loadedmetadata", abApplyPlaybackRate);
     });
@@ -16587,25 +17046,30 @@
         if (seek && !ab.seeking) seek.value = String(Math.round((Math.max(0, cur) / dur) * 1000));
         if (time) time.textContent = fmtClock(Math.max(0, cur)) + " / " + fmtClock(dur);
       }
-      if (boxed && !ab.seeking && !ab.settling && !sa.starting && !ab.sides.b.starting
+      const anyStarting = abLoadedSides().some((s) => s.starting);
+      if (boxed && !ab.seeking && !ab.settling && !anyStarting
           && abTime(sa) >= win.end - 0.05) {
         abPauseBoth();
         return;
       }
       // Leichten Frame-Versatz laufen lassen; im Canvas-Modus (Heatmap/Differenz) enger halten.
-      const sb = ab.sides.b;
-      const targetB = abTime(sa) + abOffsetB();
       const runTol = (ab.mode === "diff" || ab.mode === "heatmap") ? Math.max(0.06, 1.5 / abFps()) : 0.25;
-      if (abSynced() && sb.ready && !sb.video.seeking && Math.abs(abTime(sb) - targetB) > runTol) {
-        alignB(false);
+      if (abSynced()) {
+        for (const f of [ab.sides.b, ab.sides.c]) {
+          if (f && (f.path || f.clipUrl) && f.ready && f.video && !f.video.seeking
+              && Math.abs(abTime(f) - (abTime(sa) + abSideOffset(f.key))) > runTol) {
+            alignFollowers(false);
+            break;
+          }
+        }
       }
     });
 
     $("ab-play").addEventListener("click", () => {
-      const active = ab.wantPlay || !va.paused || (vb && !vb.paused);
+      const active = ab.wantPlay || abLoadedSides().some((s) => s.video && !s.video.paused);
       if (active) {
         abPauseBoth();
-        alignB(true);
+        alignFollowers(true);
       } else {
         // Falls noch ein Einzelbild-Seek aktiv war, sauber ablösen statt Play zu ignorieren.
         if (ab.seeking) {
@@ -16616,14 +17080,7 @@
         abPlayTogether();
       }
     });
-    // Einzelbild vor/zurück (beide): Frame-Index exakt runden und stepTargetT im Pause-Modus
-    // behalten, damit Container-PTS-Rundung (z. B. MKV 1 ms / B-Frames) das Weiterschalten nie festhält.
-    const abFps = () => {
-      const f = Number((ab.weak && ab.weak.fps)
-        || (ab.sides.a.info && ab.sides.a.info.fps)
-        || (ab.sides.b.info && ab.sides.b.info.fps));
-      return f > 1 && f <= 240 ? f : 24;
-    };
+    const abFps = abCurrentFps;
     const abPausedAnchorA = () => {
       const sa = ab.sides.a;
       const vaEl = sa && sa.video;
@@ -16655,50 +17112,51 @@
     if (sbk) sbk.addEventListener("click", () => step(-1));
     if (sfw) sfw.addEventListener("click", () => step(1));
 
-    const updateOffsetLabel = () => {
-      const lab = $("ab-offset-frames");
-      if (!lab) return;
-      const fps = abFps();
-      const sec = abOffsetB();
+    const fmtOffsetBadge = (sec, fps) => {
       const frames = Math.round(sec * fps);
-      if (frames === 0 && Math.abs(sec) < 0.0005) {
-        lab.textContent = "±0 Bilder";
-      } else {
-        const sign = frames > 0 ? "+" : (frames === 0 && sec > 0 ? "+" : "");
-        const word = Math.abs(frames) === 1 ? "Bild" : "Bilder";
-        lab.textContent = `${sign}${frames} ${word}`;
-      }
+      if (frames === 0 && Math.abs(sec) < 0.0005) return "±0 Bilder";
+      const sign = frames > 0 ? "+" : (frames === 0 && sec > 0 ? "+" : "");
+      const word = Math.abs(frames) === 1 ? "Bild" : "Bilder";
+      return `${sign}${frames} ${word}`;
+    };
+
+    const updateOffsetLabel = () => {
+      const fps = abFps();
+      const lab = $("ab-offset-frames");
+      if (lab) lab.textContent = fmtOffsetBadge(abOffsetB(), fps);
+      const labC = $("ab-offset-c-frames");
+      if (labC) labC.textContent = fmtOffsetBadge(abOffsetC(), fps);
     };
 
     const applyOffsetSync = (masterTarget) => {
       updateOffsetLabel();
       const sa = ab.sides.a;
       if (!sa || (!sa.path && !sa.clipUrl)) return;
-      const wasPlaying = ab.wantPlay || (va && !va.paused) || (vb && !vb.paused);
+      const wasPlaying = ab.wantPlay || abLoadedSides().some((s) => s.video && !s.video.paused);
       const tA = masterTarget != null ? masterTarget : abPausedAnchorA();
       if (!wasPlaying) ab.stepTargetT = tA;
       abSeekBoth(tA, !wasPlaying, { stepExact: !wasPlaying });
     };
 
-    // Einzelnes Video (A oder B) um `deltaFrames` verschieben und den Versatz dauerhaft speichern,
+    // Einzelnes Video (A, B oder C) um `deltaFrames` verschieben und den Versatz dauerhaft speichern,
     // damit auch anschließende gemeinsame Einzelschritte & Wiedergabe synchron bleiben.
     const nudgeSingleSide = (sideKey, deltaFrames) => {
-      const sa = ab.sides.a, sb = ab.sides.b;
+      const sa = ab.sides.a;
       const fps = abFps();
       const offEl = $("ab-offset");
-      // Wenn „Synchron" aktiv ist (Standard), wird der relative Versatz B dauerhaft angepasst:
-      // B um +1 Bild verschieben -> offsetB += 1/fps (A bleibt stehen, B rückt +1 Frame vor).
-      // A um +1 Bild verschieben -> A rückt +1 Frame vor, B bleibt stehen -> offsetB -= 1/fps.
+      const offCEl = $("ab-offset-c");
       if (abSynced() && offEl) {
-        const curOff = abOffsetB();
-        const curFrames = Math.round(curOff * fps);
-        if (sideKey === "b") {
+        if (sideKey === "b" || sideKey === "c") {
+          const targetEl = sideKey === "c" ? offCEl : offEl;
+          if (!targetEl) return;
+          const curOff = sideKey === "c" ? abOffsetC() : abOffsetB();
+          const curFrames = Math.round(curOff * fps);
           const nextFrames = curFrames + deltaFrames;
           const nextSec = Number((nextFrames / fps).toFixed(4));
-          offEl.value = String(nextSec === 0 ? 0 : nextSec);
+          targetEl.value = String(nextSec === 0 ? 0 : nextSec);
           const curA = abPausedAnchorA();
           const sign = nextFrames > 0 ? "+" : "";
-          abSetStatus(`Video B ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextSec.toFixed(3)} s)`);
+          abSetStatus(`Video ${sideKey.toUpperCase()} ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz ${sideKey.toUpperCase()}: ${sign}${nextFrames} (${nextSec.toFixed(3)} s)`);
           applyOffsetSync(curA);
         } else {
           const baseA = abPausedAnchorA();
@@ -16710,24 +17168,28 @@
             targetA = Math.min(sa.duration, targetA);
           }
           const actualDeltaA = targetA - baseA;
-          const nextOff = Number((curOff - actualDeltaA).toFixed(4));
-          offEl.value = String(Math.abs(nextOff) < 0.0002 ? 0 : nextOff);
-          const nextFrames = Math.round(nextOff * fps);
+          const nextOffB = Number((abOffsetB() - actualDeltaA).toFixed(4));
+          offEl.value = String(Math.abs(nextOffB) < 0.0002 ? 0 : nextOffB);
+          if (offCEl && abHasSideC()) {
+            const nextOffC = Number((abOffsetC() - actualDeltaA).toFixed(4));
+            offCEl.value = String(Math.abs(nextOffC) < 0.0002 ? 0 : nextOffC);
+          }
+          const nextFrames = Math.round(nextOffB * fps);
           const sign = nextFrames > 0 ? "+" : "";
           ab.stepTargetT = targetA;
-          abSetStatus(`Video A ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextOff.toFixed(3)} s)`);
+          abSetStatus(`Video A ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextOffB.toFixed(3)} s)`);
           abSeekBoth(targetA, true, { stepExact: true });
           updateOffsetLabel();
         }
         return;
       }
       // Falls „Synchron" deaktiviert ist: wirklich nur die gewählte Seite direkt um deltaFrames bewegen
-      const side = sideKey === "b" ? sb : sa;
+      const side = ab.sides[sideKey];
       if (!side || (!side.path && !side.clipUrl)) return;
       abPauseMedia(side);
       const nextT = Math.max(0, (Math.round(abTime(side) * fps) + deltaFrames) / fps);
       abSetTime(side, nextT, true);
-      abDrawDiffFrame();
+      abDrawDiffFrame({ force: true });
       abRenderNerdHud();
       abSetStatus(`Video ${sideKey.toUpperCase()} → #${Math.round(nextT * fps)} (${nextT.toFixed(3)} s · unsynchron)`);
     };
@@ -16768,12 +17230,14 @@
 
     const autoSyncFrames = async () => {
       if (ab.autoSyncing || ab.closing) return;
-      const sa = ab.sides.a, sb = ab.sides.b;
+      const sa = ab.sides.a, sb = ab.sides.b, sc = ab.sides.c;
+      const hasC = abHasSideC() && sc && sc.video;
       if (!sa || !sb || (!sa.path && !sa.clipUrl) || (!sb.path && !sb.clipUrl)) {
         abSetStatus(tt("Bitte zuerst beide Videos A und B laden."), true);
         return;
       }
-      if (!va.videoWidth || !vb.videoWidth || va.readyState < 2 || vb.readyState < 2) {
+      if (!va.videoWidth || !vb.videoWidth || va.readyState < 2 || vb.readyState < 2
+          || (hasC && (!vc.videoWidth || vc.readyState < 2))) {
         abSetStatus(tt("Warte auf dekodierte Videobilder für Auto-Sync …"), true);
         return;
       }
@@ -16791,12 +17255,9 @@
         const fps = abFps();
         const SEARCH_RADIUS = 12; // ±12 Bilder
         const userTA = abPausedAnchorA();
-        const baseFrames = Math.round(abOffsetB() * fps);
-        const baseOffSec = baseFrames / fps;
 
-        // Zulässige Grenzen für beide Videos bestimmen (Direct, Clip-Offset, HLS-Puffer, Szenenfenster)
         const boundsFor = (side, vid) => {
-          let lo = side.mode === "direct" ? (side.offset || 0) : (side.offset || 0);
+          let lo = side.offset || 0;
           let hi = side.mode === "direct"
             ? ((side.offset || 0) + (side.duration || vid.duration || Infinity))
             : (abBufferedEnd(side) - 0.02);
@@ -16804,134 +17265,150 @@
           return { lo, hi };
         };
         const bndA = boundsFor(sa, va);
-        const bndB = boundsFor(sb, vb);
         if (ab.window && ab.window.end > ab.window.start) {
           bndA.lo = Math.max(bndA.lo, ab.window.start);
           bndA.hi = Math.min(bndA.hi, ab.window.end - (1 / fps));
         }
 
-        // Entscheidend am Clip-/Film-Anfang (oder -Ende):
-        // Steht der Player z. B. bei Frame 0, wäre tA + candSec für negative Versätze (< 0, d. h. B ist schon voraus!)
-        // kleiner als der Clip-Anfang von B und würde komplett übersprungen – nur die falsche Richtung (>= 0) würde geprüft!
-        // Deshalb heben wir den Mess-Referenzpunkt probeTA automatisch soweit ins Clip-Innere an, dass BEIDE Richtungen
-        // (±12 Frames) für A und B vollständig im gültigen Bereich liegen.
-        const marginSec = (SEARCH_RADIUS + 1) / fps;
-        const probeMinA = Math.max(bndA.lo, bndB.lo - baseOffSec + marginSec);
-        const probeMaxA = Math.min(bndA.hi, bndB.hi - baseOffSec - marginSec);
-        let probeTA = userTA;
-        if (probeMinA <= probeMaxA) {
-          probeTA = Math.max(probeMinA, Math.min(probeMaxA, userTA));
-        } else {
-          probeTA = Math.max(bndA.lo, Math.min(bndA.hi, (probeMinA + probeMaxA) / 2));
-        }
-        // Auf exaktes Frame-Raster von A runden
-        probeTA = Math.round(probeTA * fps) / fps;
-
-        abSetStatus(tt("Auto-Sync läuft: prüfe Bildübereinstimmung in beide Richtungen (±12 Bilder) …"));
-        const aspectA = va.videoWidth / va.videoHeight;
-        const aspectB = vb.videoWidth / vb.videoHeight;
-        const refAspect = Math.abs(aspectA - aspectB) / Math.max(aspectA, aspectB) >= 0.02
-          ? aspectB : aspectA;
         const workCanvas = document.createElement("canvas");
+        const syncOneFollower = async (targetSide, targetVid, curOffSec) => {
+          const baseFrames = Math.round(curOffSec * fps);
+          const baseOffSec = baseFrames / fps;
+          const bndT = boundsFor(targetSide, targetVid);
+          const marginSec = (SEARCH_RADIUS + 1) / fps;
+          const probeMinA = Math.max(bndA.lo, bndT.lo - baseOffSec + marginSec);
+          const probeMaxA = Math.min(bndA.hi, bndT.hi - baseOffSec - marginSec);
+          let probeTA = userTA;
+          if (probeMinA <= probeMaxA) {
+            probeTA = Math.max(probeMinA, Math.min(probeMaxA, userTA));
+          } else {
+            probeTA = Math.max(bndA.lo, Math.min(bndA.hi, (probeMinA + probeMaxA) / 2));
+          }
+          probeTA = Math.round(probeTA * fps) / fps;
 
-        await abPlaceSide(sa, probeTA, valid, true);
-        if (!valid()) return;
-        let refSample = extractNormalizedLuma(va, refAspect, workCanvas);
-        // Falls ganz am Anfang Schwarzblende/Intro ohne Kontrast liegt, bis zu +3 s weiter vorne nach Bildinhalt suchen
-        if (refSample.std < 2.0) {
-          for (const jumpSec of [0.5, 1.0, 2.0, 3.0]) {
-            const altTA = Math.round((probeTA + jumpSec) * fps) / fps;
-            if (altTA > Math.min(bndA.hi, bndB.hi - baseOffSec - marginSec)) break;
-            await abPlaceSide(sa, altTA, valid, true);
-            if (!valid()) return;
-            const trySample = extractNormalizedLuma(va, refAspect, workCanvas);
-            if (trySample.std >= 2.0) {
-              probeTA = altTA;
-              refSample = trySample;
-              break;
+          const aspectA = va.videoWidth / va.videoHeight;
+          const aspectT = targetVid.videoWidth / targetVid.videoHeight;
+          const refAspect = Math.abs(aspectA - aspectT) / Math.max(aspectA, aspectT) >= 0.02
+            ? aspectT : aspectA;
+
+          await abPlaceSide(sa, probeTA, valid, true);
+          if (!valid()) return null;
+          let refSample = extractNormalizedLuma(va, refAspect, workCanvas);
+          if (refSample.std < 2.0) {
+            for (const jumpSec of [0.5, 1.0, 2.0, 3.0]) {
+              const altTA = Math.round((probeTA + jumpSec) * fps) / fps;
+              if (altTA > Math.min(bndA.hi, bndT.hi - baseOffSec - marginSec)) break;
+              await abPlaceSide(sa, altTA, valid, true);
+              if (!valid()) return null;
+              const trySample = extractNormalizedLuma(va, refAspect, workCanvas);
+              if (trySample.std >= 2.0) {
+                probeTA = altTA;
+                refSample = trySample;
+                break;
+              }
             }
           }
-        }
-        if (refSample.std < 2.0) {
+          if (refSample.std < 2.0) return { lowContrast: true };
+
+          let bestFrames = baseFrames;
+          let bestScore = -2;
+          let bestCorr = -1;
+          let tested = 0, testedNeg = 0, testedPos = 0;
+
+          for (let delta = -SEARCH_RADIUS; delta <= SEARCH_RADIUS; delta += 1) {
+            if (!valid()) return null;
+            const candFrames = baseFrames + delta;
+            const candSec = candFrames / fps;
+            const candTT = probeTA + candSec;
+            let sampleA = refSample;
+            let evalTT = candTT;
+
+            if (candTT < bndT.lo - 0.002 || candTT > bndT.hi + 0.002) {
+              const shiftedTA = Math.round((Math.max(bndT.lo, Math.min(bndT.hi, candTT)) - candSec) * fps) / fps;
+              const shiftedTT = shiftedTA + candSec;
+              if (shiftedTA < bndA.lo - 0.002 || shiftedTA > bndA.hi + 0.002
+                  || shiftedTT < bndT.lo - 0.002 || shiftedTT > bndT.hi + 0.002) {
+                continue;
+              }
+              const okA = await abPlaceSide(sa, shiftedTA, valid, true);
+              if (!valid()) return null;
+              if (!okA) continue;
+              sampleA = extractNormalizedLuma(va, refAspect, workCanvas);
+              if (sampleA.std < 2.0) continue;
+              evalTT = shiftedTT;
+            }
+
+            const okT = await abPlaceSide(targetSide, evalTT, valid, true);
+            if (!valid()) return null;
+            if (!okT) continue;
+            const candSample = extractNormalizedLuma(targetVid, refAspect, workCanvas);
+            let corr = 0;
+            const vA = sampleA.vec, vT = candSample.vec;
+            for (let i = 0; i < vA.length; i += 1) corr += vA[i] * vT[i];
+            const score = corr - Math.abs(delta) * 0.0004;
+            tested += 1;
+            if (delta < 0) testedNeg += 1;
+            if (delta > 0) testedPos += 1;
+            if (score > bestScore) {
+              bestScore = score;
+              bestCorr = corr;
+              bestFrames = candFrames;
+            }
+          }
+          if (tested === 0) return null;
+          const bestSec = Number((bestFrames / fps).toFixed(4));
+          return { bestFrames, bestSec, bestCorr, testedNeg, testedPos, minA: bndT.lo - bestSec };
+        };
+
+        abSetStatus(tt("Auto-Sync läuft: prüfe Bildübereinstimmung in beide Richtungen (±12 Bilder) …"));
+        const resB = await syncOneFollower(sb, vb, abOffsetB());
+        if (!valid() || !resB) return;
+        if (resB.lowContrast) {
           abSetStatus(tt("Aktuelles Bild ist nahezu einfarbig/schwarz – bitte an einer Szene mit Bilddetails pausieren."), true);
           return;
         }
+        const offEl = $("ab-offset");
+        if (offEl) offEl.value = String(resB.bestSec === 0 ? 0 : resB.bestSec);
 
-        let bestFrames = baseFrames;
-        let bestScore = -2;
-        let bestCorr = -1;
-        let tested = 0;
-        let testedNeg = 0;
-        let testedPos = 0;
-
-        for (let delta = -SEARCH_RADIUS; delta <= SEARCH_RADIUS; delta += 1) {
+        let resC = null;
+        if (hasC) {
+          abSetStatus(tt("Auto-Sync läuft: gleiche Video C mit Original A ab (±12 Bilder) …"));
+          resC = await syncOneFollower(sc, vc, abOffsetC());
           if (!valid()) return;
-          const candFrames = baseFrames + delta;
-          const candSec = candFrames / fps;
-          const candTB = probeTA + candSec;
-          let sampleA = refSample;
-          let evalTB = candTB;
-
-          if (candTB < bndB.lo - 0.002 || candTB > bndB.hi + 0.002) {
-            // Fallback für extrem kurze Clips: statt B unter Clip-Start zu drücken,
-            // schieben wir für diesen Kandidaten A um denselben Betrag nach vorne (tB - tA bleibt exakt candSec!).
-            const shiftedTA = Math.round(( Math.max(bndB.lo, Math.min(bndB.hi, candTB)) - candSec ) * fps) / fps;
-            const shiftedTB = shiftedTA + candSec;
-            if (shiftedTA < bndA.lo - 0.002 || shiftedTA > bndA.hi + 0.002
-                || shiftedTB < bndB.lo - 0.002 || shiftedTB > bndB.hi + 0.002) {
-              continue;
-            }
-            const okA = await abPlaceSide(sa, shiftedTA, valid, true);
-            if (!valid()) return;
-            if (!okA) continue;
-            sampleA = extractNormalizedLuma(va, refAspect, workCanvas);
-            if (sampleA.std < 2.0) continue;
-            evalTB = shiftedTB;
-          }
-
-          const okB = await abPlaceSide(sb, evalTB, valid, true);
-          if (!valid()) return;
-          if (!okB) continue;
-          const candSample = extractNormalizedLuma(vb, refAspect, workCanvas);
-          let corr = 0;
-          const vA = sampleA.vec, vB = candSample.vec;
-          for (let i = 0; i < vA.length; i += 1) corr += vA[i] * vB[i];
-          // Minimaler Tie-Breaker zugunsten kleinerer Verschiebung bei identischen Standbildern
-          const score = corr - Math.abs(delta) * 0.0004;
-          tested += 1;
-          if (delta < 0) testedNeg += 1;
-          if (delta > 0) testedPos += 1;
-          if (score > bestScore) {
-            bestScore = score;
-            bestCorr = corr;
-            bestFrames = candFrames;
+          if (resC && !resC.lowContrast) {
+            const offCEl = $("ab-offset-c");
+            if (offCEl) offCEl.value = String(resC.bestSec === 0 ? 0 : resC.bestSec);
           }
         }
-        if (!valid() || tested === 0) return;
-        const bestSec = Number((bestFrames / fps).toFixed(4));
-        const offEl = $("ab-offset");
-        if (offEl) offEl.value = String(bestSec === 0 ? 0 : bestSec);
         updateOffsetLabel();
 
-        // Wenn bei userTA mit dem gefundenen negativen Versatz Video B vor seinem Clip-Anfang läge
-        // (z. B. userTA = 0.000 s, aber B ist schon 3 Frames weiter -> bräuchte -0.125 s in B),
-        // rücken wir A automatisch auf das erste gemeinsame Bild (z. B. Frame +3) vor!
-        const minValidTA = Math.max(bndA.lo, bndB.lo - bestSec);
+        let minValidTA = Math.max(bndA.lo, resB.minA);
+        if (resC && !resC.lowContrast) minValidTA = Math.max(minValidTA, resC.minA);
         const finalTA = userTA < minValidTA - 0.0005
           ? (Math.ceil(minValidTA * fps - 1e-6) / fps)
           : userTA;
         ab.stepTargetT = finalTA;
+        abClearFrameRings();
         await abAlignAndSettleBoth(finalTA, true, valid, true);
         if (!valid()) return;
         abDrawDiffFrame({ force: true });
         abRenderNerdHud();
-        const sign = bestFrames > 0 ? "+" : "";
-        const word = Math.abs(bestFrames) === 1 ? "Bild" : "Bilder";
-        const pct = Math.max(0, Math.min(100, bestCorr * 100)).toFixed(1);
+        const fmtRes = (label, r) => {
+          const sign = r.bestFrames > 0 ? "+" : "";
+          const pct = Math.max(0, Math.min(100, r.bestCorr * 100)).toFixed(1);
+          return `${label} = ${sign}${r.bestFrames} (${r.bestSec.toFixed(3)} s · ${pct} %)`;
+        };
         const movedNote = finalTA > userTA + 0.001
-          ? ` · Position auf erstes gemeinsames Bild (${finalTA.toFixed(3)} s) gesetzt`
+          ? ` · Erstes gemeinsames Bild (${finalTA.toFixed(3)} s)`
           : "";
-        abSetStatus(`Auto-Sync: Versatz B = ${sign}${bestFrames} ${word} (${bestSec.toFixed(3)} s · −${testedNeg}/+${testedPos} geprüft · Übereinstimmung ${pct} %)${movedNote}`);
+        if (resC && !resC.lowContrast) {
+          abSetStatus(`Auto-Sync: ${fmtRes("Versatz B", resB)} · ${fmtRes("Versatz C", resC)}${movedNote}`);
+        } else {
+          const sign = resB.bestFrames > 0 ? "+" : "";
+          const word = Math.abs(resB.bestFrames) === 1 ? "Bild" : "Bilder";
+          const pct = Math.max(0, Math.min(100, resB.bestCorr * 100)).toFixed(1);
+          abSetStatus(`Auto-Sync: Versatz B = ${sign}${resB.bestFrames} ${word} (${resB.bestSec.toFixed(3)} s · −${resB.testedNeg}/+${resB.testedPos} geprüft · Übereinstimmung ${pct} %)${movedNote}`);
+        }
       } finally {
         ab.autoSyncing = false;
         if (autoBtn) autoBtn.disabled = false;
@@ -16943,16 +17420,30 @@
       offInput.addEventListener("change", () => applyOffsetSync(null));
       offInput.addEventListener("input", updateOffsetLabel);
     }
+    const offCInput = $("ab-offset-c");
+    if (offCInput) {
+      offCInput.addEventListener("change", () => applyOffsetSync(null));
+      offCInput.addEventListener("input", updateOffsetLabel);
+    }
     const nbBack = $("ab-nudge-b-back"), nbFwd = $("ab-nudge-b-fwd");
     const naBack = $("ab-nudge-a-back"), naFwd = $("ab-nudge-a-fwd");
+    const ncBack = $("ab-nudge-c-back"), ncFwd = $("ab-nudge-c-fwd");
     const offReset = $("ab-offset-reset");
+    const offCReset = $("ab-offset-c-reset");
     if (nbBack) nbBack.addEventListener("click", (ev) => nudgeSingleSide("b", ev.shiftKey ? -5 : -1));
     if (nbFwd) nbFwd.addEventListener("click", (ev) => nudgeSingleSide("b", ev.shiftKey ? 5 : 1));
     if (naBack) naBack.addEventListener("click", (ev) => nudgeSingleSide("a", ev.shiftKey ? -5 : -1));
     if (naFwd) naFwd.addEventListener("click", (ev) => nudgeSingleSide("a", ev.shiftKey ? 5 : 1));
+    if (ncBack) ncBack.addEventListener("click", (ev) => nudgeSingleSide("c", ev.shiftKey ? -5 : -1));
+    if (ncFwd) ncFwd.addEventListener("click", (ev) => nudgeSingleSide("c", ev.shiftKey ? 5 : 1));
     if (offReset) offReset.addEventListener("click", () => {
       if (offInput) offInput.value = "0";
-      abSetStatus(tt("Frame-Versatz auf 0 zurückgesetzt."));
+      abSetStatus(tt("Frame-Versatz B auf 0 zurückgesetzt."));
+      applyOffsetSync(null);
+    });
+    if (offCReset) offCReset.addEventListener("click", () => {
+      if (offCInput) offCInput.value = "0";
+      abSetStatus(tt("Frame-Versatz C auf 0 zurückgesetzt."));
       applyOffsetSync(null);
     });
     const autoSyncBtn = $("ab-auto-sync");
@@ -16970,8 +17461,7 @@
       ab.stepTargetT = NaN;
       if (dur) abSeekBoth(origin + (parseInt(e.target.value, 10) / 1000) * dur);
     });
-    va.addEventListener("ended", abPauseBoth);
-    vb.addEventListener("ended", abPauseBoth);
+    allVideos.forEach((v) => v.addEventListener("ended", abPauseBoth));
 
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
@@ -16996,17 +17486,17 @@
         abUpdateDiffTooltip();
       });
     }
-    [va, vb].forEach((video) => {
+    allSides.forEach((side) => {
+      const video = side.video;
       video.addEventListener("loadedmetadata", () => { abApplyZoom(); abDrawDiffFrame({ force: true }); });
       video.addEventListener("loadeddata", () => abDrawDiffFrame({ force: true }));
       video.addEventListener("seeked", () => {
-        if (video === va) ab.mediaTimeA = va.currentTime || 0;
-        if (video === vb) ab.mediaTimeB = vb.currentTime || 0;
+        side.mediaTime = video.currentTime || 0;
         abDrawDiffFrame({ force: true });
       });
       video.addEventListener("play", abUpdateCanvasLoop);
       video.addEventListener("pause", () => {
-        if (va.paused && vb.paused) abCancelCanvasLoop();
+        if (allSides.every((s) => !s.video || s.video.paused)) abCancelCanvasLoop();
         abDrawDiffFrame({ force: true });
       });
       video.addEventListener("resize", abApplyZoom);
@@ -17062,13 +17552,13 @@
         else if (ev.key === "]" || ev.key === "}") { ev.preventDefault(); nudgeSingleSide("b", ev.shiftKey || ev.key === "}" ? 5 : 1); }
         else if (ev.key === "ArrowLeft") {
           ev.preventDefault();
-          const paused = (!va || va.paused) && (!vb || vb.paused) && !ab.wantPlay;
+          const paused = abLoadedSides().every((s) => !s.video || s.video.paused) && !ab.wantPlay;
           if (ev.shiftKey) step(-10);
           else if (paused) step(-1);
           else abSeekBoth(Math.max(0, abTime(ab.sides.a) - 5), false);
         } else if (ev.key === "ArrowRight") {
           ev.preventDefault();
-          const paused = (!va || va.paused) && (!vb || vb.paused) && !ab.wantPlay;
+          const paused = abLoadedSides().every((s) => !s.video || s.video.paused) && !ab.wantPlay;
           if (ev.shiftKey) step(10);
           else if (paused) step(1);
           else abSeekBoth(Math.max(0, abTime(ab.sides.a) + 5), false);
@@ -17082,6 +17572,11 @@
           ev.preventDefault();
           ab.abx.view = ev.key === "1" ? "a" : (ev.key === "2" ? "b" : "x");
           abApplyAbxView();
+        }
+        else if (ab.mode !== "abx" && abHasSideC() && ["1", "2", "3", "4"].includes(ev.key)) {
+          ev.preventDefault();
+          const map = { "1": "ab", "2": "ac", "3": "bc", "4": "delta" };
+          abSetPair(map[ev.key]);
         }
       });
     }
@@ -17108,7 +17603,7 @@
     }
     const pb = $("ab-playback");
     if (pb) pb.addEventListener("change", () => {
-      if (ab.sides.a.clipUrl || ab.sides.b.clipUrl) return;
+      if (ab.sides.a.clipUrl || ab.sides.b.clipUrl || (ab.sides.c && ab.sides.c.clipUrl)) return;
       if (ab.sides.a.path || ab.sides.b.path) load.click();
     });
     const laEl = $("ab-lookahead");
@@ -17119,8 +17614,7 @@
       } catch (e) { /* ignore */ }
       laEl.addEventListener("change", () => {
         try { localStorage.setItem("abLookahead", String(abLookaheadSec())); } catch (e) { /* ignore */ }
-        abThrottleSide(ab.sides.a);
-        abThrottleSide(ab.sides.b);
+        allSides.forEach(abThrottleSide);
       });
     }
 
@@ -17192,6 +17686,8 @@
     if (ba) ba.addEventListener("click", () => browse("a"));
     const bb = $("btn-ab-browse-b");
     if (bb) bb.addEventListener("click", () => browse("b"));
+    const bc = $("btn-ab-browse-c");
+    if (bc) bc.addEventListener("click", () => browse("c"));
   }
 
   // Beide A/B-Videos pausieren (z. B. beim Verlassen der Seite). HLS-Sessions

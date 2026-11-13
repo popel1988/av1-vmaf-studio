@@ -5,10 +5,14 @@ All notable changes, new features, and milestones of this project in reverse chr
 ---
 
 ## [This Release] – 2026-11-13
-- **Bidirectional Auto-Sync at Clip Boundaries (`⚡ Auto-Sync`):** Fixed an edge case when triggering Auto-Sync at the very start/end of a clip (`0:00`) where negative frame offsets could not be evaluated; the probe window now shifts inward automatically so both `−12` and `+12` frames are always tested, advancing to the first shared frame if one clip leads the other.
-- **VSync-Gated Heatmap/Diff, Scale Legend, Pixel Inspector & `⅛×` Speed:** Eliminated false-positive motion-edge diffs caused by 1-VSync decoder presentation skew during live playback (`requestVideoFrameCallback` phase gate + exact frame snap on pause), added `⅛×` playback speed, a dynamic gain-aware color legend, and an interactive hover pixel inspector (`RGB`, `ΔRGB`, `RMS Δ`, `ΔLuma`).
+- **Frame-Indexed Ring Buffer against Live Motion Ghosting:** Prevented browser compositor occlusion throttling (`opacity > 0` behind opaque diff canvas) and introduced a per-side `requestVideoFrameCallback` ring buffer that strictly pairs matching film frame numbers (`#N` of A with `#N` of B/C) during live playback, plus explicit `Frame-Lock #N` / `Standbild #N` HUD indicators.
+- **3-Way Comparison (`A / B / C`) & Direct Delta-Error View (`Δ(C − B)` vs. Original `A`):** Added an optional third video slot `C` in both VMAF Nerd (pick 2 or 3 clips) and standalone A/B Compare with instant pair switching (`1: A↔B`, `2: A↔C`, `3: B↔C`), a diverging delta-error heatmap (`4: Δ Mehr-Fehler C vs. B zu A` highlighting where encode `C` loses more detail than `B` in yellow/red), 3-way pixel hover inspection, and multi-target `⚡ Auto-Sync` (`B` & `C` against `A`).
 
 ---
+
+## [v9.3.3](https://github.com/popel1988/av1-vmaf-studio/commit/35ffbdb) – 2026-11-13
+- **Bidirectional Auto-Sync at Clip Boundaries (`⚡ Auto-Sync`):** Fixed an edge case when triggering Auto-Sync at the very start/end of a clip (`0:00`) where negative frame offsets could not be evaluated; the probe window now shifts inward automatically so both `−12` and `+12` frames are always tested, advancing to the first shared frame if one clip leads the other.
+- **VSync-Gated Heatmap/Diff, Scale Legend, Pixel Inspector & `⅛×` Speed:** Eliminated false-positive motion-edge diffs caused by 1-VSync decoder presentation skew during live playback (`requestVideoFrameCallback` phase gate + exact frame snap on pause), added `⅛×` playback speed, a dynamic gain-aware color legend, and an interactive hover pixel inspector (`RGB`, `ΔRGB`, `RMS Δ`, `ΔLuma`).
 
 ## [v9.3.2](https://github.com/popel1988/av1-vmaf-studio/commit/b523fe4) – 2026-11-13
 - **A/B Player Frame-Stepping & Pause/Resume Fix:** Resolved a seek/readyState deadlock where single-frame stepping (`±1` frame) got stuck on quantized container timestamps and prevented playback from resuming after pausing.

@@ -112,32 +112,39 @@ class Video extends Element {
 const elements = {};
 for (const id of ["btn-ab-load", "btn-ab-unload", "ab-play", "ab-seek", "ab-sync",
                  "ab-offset", "ab-offset-frames", "ab-offset-reset", "ab-auto-sync",
+                 "ab-offset-c", "ab-offset-c-frames", "ab-offset-c-reset", "ab-offset-c-field",
                  "ab-nudge-b-back", "ab-nudge-b-fwd", "ab-nudge-a-back", "ab-nudge-a-fwd",
+                 "ab-nudge-c-back", "ab-nudge-c-fwd",
+                 "ab-pair-bar", "ab-pair-ab", "ab-pair-ac", "ab-pair-bc", "ab-pair-delta",
+                 "ab-pane-a", "ab-pane-b", "ab-pane-c", "ab-tag-a", "ab-tag-b", "ab-tag-c",
                  "ab-card", "ab-badge", "ab-status", "ab-speed",
-                 "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b",
-                 "ab-root-a", "ab-root-b", "ab-same-source", "ab-mode", "ab-zoom",
+                 "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b", "ab-path-c",
+                 "ab-root-a", "ab-root-b", "ab-root-c", "ab-same-source", "ab-mode", "ab-zoom",
                  "ab-diff-canvas", "ab-diff-hud", "ab-diff-gain", "ab-diff-gain-field",
                  "ab-diff-legend", "ab-diff-legend-title", "ab-diff-legend-bar",
                  "ab-diff-legend-marker", "ab-diff-legend-sub", "ab-diff-tooltip",
-                 "ab-diff-tick-max", "ab-diff-tick-q3", "ab-diff-tick-mid", "ab-diff-tick-q1",
+                 "ab-diff-tick-max", "ab-diff-tick-q3", "ab-diff-tick-mid", "ab-diff-tick-q1", "ab-diff-tick-min",
                  "ab-videos", "ab-playback", "ab-weak"]) {
   elements[id] = new Element();
 }
 elements["ab-video-a"] = new Video();
 elements["ab-video-b"] = new Video();
+elements["ab-video-c"] = new Video();
 elements["ab-sync"].checked = true;
 elements["ab-offset"].value = "0";
+elements["ab-offset-c"].value = "0";
 elements["ab-speed"].value = "1";
 elements["ab-mode"].value = "side";
 elements["ab-zoom"].value = "fit";
 elements["ab-playback"].value = "auto";
-elements["ab-root-a"].value = elements["ab-root-b"].value = "media";
+elements["ab-root-a"].value = elements["ab-root-b"].value = elements["ab-root-c"].value = "media";
 elements["ab-card"].classList.add("is-nerd");
 const $ = (id) => elements[id] || null;
 const window = { addEventListener() {}, devicePixelRatio: 1 };
 const localStorage = { getItem: () => null, setItem() {} };
 const state = { currentPage: "vmafnerd", abJob: "", vmafSession: "test", vmafSource: { path: "source.mkv" } };
 const tt = (text) => text;
+const escapeHtml = (s) => String(s ?? "");
 function libDvProfileName() { return ""; }
 const fmtClock = (value) => String(value);
 function navTo() {}
@@ -939,23 +946,28 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("$('ab-offset-frames').textContent"), "+3 Bilder")
         self.assertIn("Auto-Sync", self.value("$('ab-status').textContent"))
 
-    def test_diff_phase_gate_skips_vsync_skew_and_legend_plus_hover_work(self):
+    def test_diff_ringbuffer_pairs_exact_frame_numbers_and_legend_plus_hover_work(self):
         self.evaluate("""
           a.info = { fps: 24 }; b.info = { fps: 24 };
           a.video.videoWidth = 640; a.video.videoHeight = 360;
           b.video.videoWidth = 640; b.video.videoHeight = 360;
+          a.video.requestVideoFrameCallback = () => 1;
+          b.video.requestVideoFrameCallback = () => 2;
           let drawCount = 0;
-          const makeBuf = (r, g, bVal) => ({
-            width: 0, height: 0,
+          let curRgbA = [100, 110, 120];
+          let curRgbB = [106, 110, 114];
+          const makeWorkCanvas = () => ({
+            width: 0, height: 0, _src: null,
             getContext() {
               const self = this;
               return {
-                drawImage() {},
+                drawImage(v) { self._src = v; },
                 getImageData() {
                   const n = self.width * self.height;
                   const out = new Uint8Array(n * 4);
+                  const rgb = self._src === a.video ? curRgbA : curRgbB;
                   for (let i = 0; i < n; i++) {
-                    out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = bVal; out[i * 4 + 3] = 255;
+                    out[i * 4] = rgb[0]; out[i * 4 + 1] = rgb[1]; out[i * 4 + 2] = rgb[2]; out[i * 4 + 3] = 255;
                   }
                   return { data: out };
                 },
@@ -964,16 +976,10 @@ class AbPlayerSyncTests(unittest.TestCase):
               };
             }
           });
-          let created = 0;
-          globalThis.document = {
-            createElement() {
-              created += 1;
-              return created === 1 ? makeBuf(100, 110, 120) : makeBuf(106, 110, 114);
-            }
-          };
+          globalThis.document = { createElement: () => makeWorkCanvas() };
           const outCanvas = $('ab-diff-canvas');
           outCanvas.width = 0; outCanvas.height = 0;
-          outCanvas.getContext = () => makeBuf(0, 0, 0).getContext();
+          outCanvas.getContext = () => makeWorkCanvas().getContext();
           outCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 });
           $('ab-videos').getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 });
           $('ab-diff-gain').value = '8';
@@ -985,26 +991,91 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("$('ab-diff-legend').style.display"), "")
         self.assertIn("32", self.value("$('ab-diff-tick-max').textContent"))
 
-        # Während Wiedergabe: A ist schon auf Frame 25 (1.0417 s), B hängt noch 1 VSync auf Frame 24 (1.0000 s)
-        # -> Phasen-Gate überspringt den unfertigen Zwischen-Tick!
+        # Live-Wiedergabe: A dekodiert Frame #25 (RGB 100,110,120) UND ist sogar schon auf Frame #26 (RGB 200,200,200)!
+        # B ist langsamer und hat noch keinen Frame #25/#26 geliefert -> Ringpuffer wartet, kein Geister-Draw!
         self.evaluate("""
           a.video.paused = false; b.video.paused = false;
-          ab.mediaTimeA = 25 / 24; ab.mediaTimeB = 24 / 24;
+          curRgbA = [100, 110, 120];
+          abCaptureSideRingFrame(a, 25 / 24);
+          curRgbA = [200, 200, 200];
+          abCaptureSideRingFrame(a, 26 / 24);
           abDrawDiffFrame();
         """)
         self.assertEqual(self.value("drawCount"), 1)
 
-        # Sobald B im nächsten Callback ebenfalls Frame 25 präsentiert hat -> Zeichnung läuft durch!
-        self.evaluate("ab.mediaTimeB = 25 / 24; abDrawDiffFrame();")
+        # Jetzt liefert B endlich Frame #25 (RGB 106,110,114):
+        # Obwohl A aktuell schon Frame #26 (200,200,200) im Video-Element hat, paart der Ringpuffer
+        # exakt A#25 (100,110,120) mit B#25 (106,110,114) -> Ø ΔRGB = 4.00 statt Geisterfehler ~90!
+        self.evaluate("""
+          curRgbB = [106, 110, 114];
+          abCaptureSideRingFrame(b, 25 / 24);
+          abDrawDiffFrame();
+        """)
         self.assertEqual(self.value("drawCount"), 2)
+        self.assertIn("Frame-Lock #25", self.value("$('ab-diff-hud').textContent"))
+        self.assertIn("Ø ΔRGB 4.00", self.value("$('ab-diff-hud').textContent"))
 
-        # Hover über Pixel (320, 180) zeigt exakte RGB-Werte & Fehler und setzt den Skalen-Marker
+        # Hover über Pixel (320, 180) zeigt exakte RGB-Werte aus dem gematchten Paar #25
         self.evaluate("$('ab-diff-canvas').emit('mousemove', { clientX: 320, clientY: 180 });")
         self.assertEqual(self.value("$('ab-diff-tooltip').style.display"), "")
         self.assertIn("Pixel (320, 180)", self.value("$('ab-diff-tooltip').innerHTML"))
         self.assertIn("RGB(100, 110, 120)", self.value("$('ab-diff-tooltip').innerHTML"))
         self.assertIn("Δ(+6, 0, -6)", self.value("$('ab-diff-tooltip').innerHTML"))
         self.assertEqual(self.value("$('ab-diff-legend-marker').style.display"), "")
+
+    def test_three_way_abc_delta_error_view_and_hover_inspector(self):
+        self.evaluate("""
+          const c = ab.sides.c;
+          a.path = 'orig.mkv'; b.path = '10mbit.mkv'; c.path = '3mbit.mkv';
+          a.info = { fps: 24 }; b.info = { fps: 24 }; c.info = { fps: 24 };
+          a.video.videoWidth = 320; a.video.videoHeight = 180;
+          b.video.videoWidth = 320; b.video.videoHeight = 180;
+          c.video.videoWidth = 320; c.video.videoHeight = 180;
+          const makeWork = () => ({
+            width: 0, height: 0, _src: null,
+            getContext() {
+              const self = this;
+              return {
+                drawImage(v) { self._src = v; },
+                getImageData() {
+                  const n = self.width * self.height;
+                  const out = new Uint8Array(n * 4);
+                  // Original A = 100, Encode B (10 Mbit) = 102 (Fehler 2), Encode C (3 Mbit) = 112 (Fehler 12 -> +10 mehr Fehler!)
+                  const val = self._src === a.video ? 100 : (self._src === b.video ? 102 : 112);
+                  for (let i = 0; i < n; i++) {
+                    out[i * 4] = val; out[i * 4 + 1] = val; out[i * 4 + 2] = val; out[i * 4 + 3] = 255;
+                  }
+                  return { data: out };
+                },
+                createImageData(w, h) { return { data: new Uint8Array(w * h * 4) }; },
+                putImageData() {}
+              };
+            }
+          });
+          globalThis.document = { createElement: () => makeWork() };
+          const outCanvas = $('ab-diff-canvas');
+          outCanvas.width = 0; outCanvas.height = 0;
+          outCanvas.getContext = () => makeWork().getContext();
+          outCanvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 180 });
+          $('ab-videos').getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 180 });
+          $('ab-diff-gain').value = '8';
+          abSetPair('delta');
+        """)
+        # Wechselt automatisch auf Heatmap und zeigt B vs A (2.00), C vs A (12.00) und Δ(C−B) = +10.00 (+500 %)
+        self.assertEqual(self.value("ab.mode"), "heatmap")
+        self.assertEqual(self.value("$('ab-pair-bar').style.display"), "")
+        hud = self.value("$('ab-diff-hud').textContent")
+        self.assertIn("B vs A: Ø 2.00", hud)
+        self.assertIn("C vs A: Ø 12.00", hud)
+        self.assertIn("Δ(C−B): +10.00 (+500 %)", hud)
+        self.assertTrue(self.value("$('ab-diff-legend-bar').classList.contains('is-delta')"))
+
+        # 3er-Hover zeigt gleichzeitig A, B (Fehler 2.0) und C (Fehler 12.0 -> C +10.0 mehr Fehler)
+        self.evaluate("$('ab-diff-canvas').emit('mousemove', { clientX: 160, clientY: 90 });")
+        tip = self.value("$('ab-diff-tooltip').innerHTML")
+        self.assertIn("C +10.0 mehr Fehler", tip)
+        self.assertIn("Fehler zu A: <b>2.0</b>", tip)
+        self.assertIn("Fehler zu A: <b>12.0</b>", tip)
 
     def test_auto_sync_at_clip_start_zero_finds_negative_offset_when_b_is_ahead(self):
         # Klassischer Randfall: Beide Videos stehen ganz am Anfang (t = 0.000 s, Nerd-Clip ab 64.0 s),
