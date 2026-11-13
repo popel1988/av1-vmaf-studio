@@ -22,10 +22,21 @@
     audioMode: "",
     windowEnd: 0,
     lookahead: 30,
+    hdrCodec: "",
     extending: false,
     encodePaused: false,
     plan: null,
     starting: false,
+    statsOpen: false,
+    statsTimer: 0,
+    sessMeta: null,
+    audioDelayMs: 0,
+    subDelayMs: 0,
+    negSessionDelayMs: 0,
+    negAudioTimer: 0,
+    audioCtx: null,
+    audioSrcNode: null,
+    audioDelayNode: null,
   };
 
   const ENCODE_PROFILES = ["original", "1080p", "720p", "480p", "custom"];
@@ -50,6 +61,13 @@
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
     return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  }
+
+  function fmtClockPrecise(s) {
+    const val = Math.max(0, Number(s) || 0);
+    const whole = Math.floor(val);
+    const ms = String(Math.min(999, Math.round((val - whole) * 1000))).padStart(3, "0");
+    return `${fmtClock(whole)}.${ms}`;
   }
 
   function setStatus(msg, bad) {
@@ -243,6 +261,7 @@
           v_bitrate: ENCODE_PROFILES.includes(profile) ? vBitrate : 0,
           client_codecs: detectClientCodecs(),
           audio_copy: audioCopy,
+          audio_delay_ms: fp.audioDelayMs < 0 ? fp.audioDelayMs : 0,
           look: playerLook(),
         }),
       })).json();
@@ -310,7 +329,112 @@
         || v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"')) out.push("hevc");
     if (v.canPlayType('video/mp4; codecs="av01.0.05M.08"')
         || v.canPlayType('video/webm; codecs="av01.0.05M.08"')) out.push("av1");
+    if (fp.hdrCodec && !out.includes(fp.hdrCodec)) out.push(fp.hdrCodec);
     return out;
+  }
+
+  function evenSize(value, fallback) {
+    const n = Math.round(Number(value) || fallback);
+    return Math.max(2, n - (n % 2));
+  }
+
+  function hdrContentType(info) {
+    const codec = String((info && info.codec) || "").toLowerCase();
+    const height = Number(info && info.height) || 0;
+    let family = "";
+    let contentType = "";
+    if (codec.startsWith("hev") || codec.includes("h265")) {
+      family = "hevc";
+      const level = height > 2160 ? "L183" : (height > 1080 ? "L153" : "L123");
+      contentType = `video/mp4; codecs="hvc1.2.4.${level}.B0"`;
+    } else if (codec.startsWith("av1") || codec.startsWith("av01")) {
+      family = "av1";
+      const level = height > 2160 ? "16" : (height > 1080 ? "13" : "08");
+      contentType = `video/mp4; codecs="av01.0.${level}M.10"`;
+    }
+    return family ? { codec: family, contentType } : null;
+  }
+
+  function hdrTonemapChoice(info, supported) {
+    if (!info || !info.is_hdr) return { on: false, codec: "", reason: "" };
+    if (info.dolby_vision && Number(info.dv_profile) === 5) {
+      return { on: true, codec: "", reason: "Dolby Vision Profil 5 hat keine HDR10-Basis. Tonemapping ist nötig." };
+    }
+    const spec = hdrContentType(info);
+    if (!spec) {
+      return { on: true, codec: "", reason: "Dieses HDR-Format kann der Browser nicht direkt abspielen. Tonemapping ist an." };
+    }
+    if (supported) {
+      return { on: false, codec: spec.codec, reason: "Dieser Browser kann den HDR-Pfad abspielen. Tonemapping bleibt aus." };
+    }
+    return { on: true, codec: "", reason: "Dieser Browser kann den HDR-Pfad nicht abspielen. Tonemapping ist an." };
+  }
+
+  async function queryHdrPlayback(info) {
+    if (!info || !info.is_hdr || (info.dolby_vision && Number(info.dv_profile) === 5)) {
+      return hdrTonemapChoice(info, false);
+    }
+    const spec = hdrContentType(info);
+    if (!spec) return hdrTonemapChoice(info, false);
+    const transfer = String(info.color_transfer || "").toLowerCase();
+    const video = {
+      contentType: spec.contentType,
+      width: evenSize(info.width, 1920),
+      height: evenSize(info.height, 1080),
+      bitrate: Math.max(1, Math.round(Number(info.video_bitrate || info.bit_rate) || 15000000)),
+      framerate: Number(info.fps) > 0 ? Number(info.fps) : 24,
+      hdrMetadataType: "smpteSt2086",
+      colorGamut: "bt2020",
+      transferFunction: transfer.includes("hlg") || transfer.includes("arib") ? "hlg" : "pq",
+    };
+    let supported = false;
+    const fallback = () => {
+      try {
+        return !!document.createElement("video").canPlayType(spec.contentType);
+      } catch (e) {
+        return false;
+      }
+    };
+    try {
+      if (navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo) {
+        const result = await navigator.mediaCapabilities.decodingInfo({ type: "media-source", video });
+        supported = !!(result && result.supported);
+      } else {
+        supported = fallback();
+      }
+    } catch (e) {
+      supported = fallback();
+    }
+    return hdrTonemapChoice(info, supported);
+  }
+
+  function setTonemapReason(text) {
+    const reason = $("fp-tonemap-reason");
+    if (!reason) return;
+    reason.hidden = !text;
+    reason.textContent = text ? tt(text) : "";
+  }
+
+  async function applyHdrCheck(info) {
+    const decision = await queryHdrPlayback(info);
+    fp.hdrCodec = decision.codec || "";
+    const box = $("fp-tonemap");
+    if (box) box.checked = decision.on;
+    setTonemapReason(decision.reason);
+  }
+
+  function enforceTonemapForH264() {
+    const hdr = !!(fp.info && fp.info.is_hdr);
+    const codec = (($("fp-codec") || {}).value) || "h264";
+    const filters = ["fp-deband", "fp-denoise", "fp-sharpen", "fp-grain"].some((id) => {
+      const el = $(id);
+      return !!(el && el.value && el.value !== "off");
+    });
+    const burn = !!($("fp-burn") && $("fp-burn").checked);
+    if (!(hdr && codec === "h264" && (filters || burn))) return;
+    const box = $("fp-tonemap");
+    if (box) box.checked = true;
+    setTonemapReason("H.264 kann diese HDR-Quelle nicht tragen. Tonemapping ist für den Transcode nötig.");
   }
 
   function syncLookUi() {
@@ -321,8 +445,12 @@
     const prof = (($("fp-profile") || {}).value) || "auto";
     const fixedCopy = prof === "direct" || prof === "copy";
     const showTone = hdr && !fixedCopy;
+    const toggle = $("fp-tonemap-toggle");
+    if (toggle) toggle.hidden = !showTone;
+    const enabled = !!($("fp-tonemap") && $("fp-tonemap").checked);
     const box = $("fp-tonemap-opts");
-    if (box) box.hidden = !showTone;
+    if (box) box.hidden = !(showTone && enabled);
+    if (!showTone) setTonemapReason("");
 
     const rawPlat = (($("fp-platform") || {}).value) || "auto";
     const plat = rawPlat === "auto"
@@ -389,7 +517,9 @@
   }
 
   function playerLook() {
+    enforceTonemapForH264();
     const hdr = !!(fp.info && fp.info.is_hdr);
+    const tonemap = hdr && !!($("fp-tonemap") && $("fp-tonemap").checked);
     let desat = parseFloat(($("fp-tonemap-desat") || {}).value);
     if (!Number.isFinite(desat)) desat = 0;
     const peakEl = $("fp-tonemap-peak");
@@ -404,7 +534,7 @@
     };
     return {
       apply: true,
-      tonemap: hdr,
+      tonemap,
       platform: (($("fp-platform") || {}).value) || "auto",
       tonemap_engine: (($("fp-tonemap-engine") || {}).value) || "cpu",
       tonemap_algo: (($("fp-tonemap-algo") || {}).value) || "hable",
@@ -428,6 +558,7 @@
 
   function queueLookApply() {
     if (!fp.path) return;
+    enforceTonemapForH264();
     syncLookUi();
     if (fp.lookTimer) clearTimeout(fp.lookTimer);
     fp.lookTimer = setTimeout(() => {
@@ -655,6 +786,7 @@
     if (!aSel || !sSel) return;
     const audio = (info && info.audio) || [];
     const subs = (info && info.subtitles) || [];
+    const sidecars = ((info && info.sidecar_subtitles) || []).filter((sc) => !sc.bitmap);
     aSel.innerHTML = audio.length
       ? audio.map((a, i) => {
           const lab = [a.language || "und", a.codec || "", a.channels ? `${a.channels}ch` : "",
@@ -671,6 +803,11 @@
         const lab = [s.language || "und", s.codec || "", img ? tt("Bild") : "", s.title || ""]
           .filter(Boolean).join(" · ");
         return `<option value="${idx}" data-image="${img ? "1" : "0"}">${escapeHtml(lab)}</option>`;
+      }).join("") +
+      sidecars.map((sc, idx) => {
+        const lab = ["Extern", sc.name || "Sidecar", sc.language || "und", sc.forced ? "Forced" : "", sc.sdh ? "SDH" : ""]
+          .filter(Boolean).join(" · ");
+        return `<option value="sidecar:${idx}" data-image="0" data-sidecar-path="${escapeHtml(sc.rel || sc.path || "")}">${escapeHtml(lab)}</option>`;
       }).join("");
     syncBurnHint();
     updateAudioModeHint(null);
@@ -752,6 +889,12 @@
     fp.windowEnd = 0;
     fp.encodePaused = false;
     fp.mode = "hls";
+    fp.audioDelayMs = 0;
+    fp.subDelayMs = 0;
+    fp.negSessionDelayMs = 0;
+    if ($("fp-aud-delay")) $("fp-aud-delay").value = "0";
+    if ($("fp-sub-delay")) $("fp-sub-delay").value = "0";
+    if (fp.audioDelayNode) fp.audioDelayNode.delayTime.value = 0;
     if ($("fp-path")) $("fp-path").value = "";
     const aSel = $("fp-audio");
     const sSel = $("fp-sub");
@@ -769,9 +912,113 @@
     if (play) play.textContent = "▶";
   }
 
-  function attachSubtitles(path, subIdx) {
+  function ensureWebAudioDelay() {
     const v = $("fp-video");
-    if (!v || subIdx < 0) return;
+    if (!v) return null;
+    if (fp.audioDelayNode) {
+      if (fp.audioCtx && fp.audioCtx.state === "suspended") {
+        fp.audioCtx.resume().catch(() => {});
+      }
+      return fp.audioDelayNode;
+    }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      const ctx = new Ctx();
+      const src = ctx.createMediaElementSource(v);
+      const dly = ctx.createDelay(5.0);
+      dly.delayTime.value = 0;
+      src.connect(dly);
+      dly.connect(ctx.destination);
+      fp.audioCtx = ctx;
+      fp.audioSrcNode = src;
+      fp.audioDelayNode = dly;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      return dly;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function applyLiveAudioDelay(ms) {
+    ms = Math.max(-15000, Math.min(5000, Math.round(Number(ms) || 0)));
+    fp.audioDelayMs = ms;
+    if ($("fp-aud-delay") && document.activeElement !== $("fp-aud-delay")) {
+      $("fp-aud-delay").value = String(ms);
+    }
+    if (fp.negAudioTimer) {
+      clearTimeout(fp.negAudioTimer);
+      fp.negAudioTimer = 0;
+    }
+    if (ms > 0) {
+      const dly = ensureWebAudioDelay();
+      if (dly) dly.delayTime.value = Math.min(5.0, ms / 1000);
+      if (fp.negSessionDelayMs < 0 && fp.path && fp.sid) {
+        const v = $("fp-video");
+        fp.negAudioTimer = setTimeout(() => {
+          startSession(absoluteTime(), !(v && v.paused));
+        }, 250);
+      } else {
+        setStatus(`Ton-Versatz live: +${ms} ms`);
+      }
+    } else if (ms === 0) {
+      if (fp.audioDelayNode) fp.audioDelayNode.delayTime.value = 0;
+      if (fp.negSessionDelayMs < 0 && fp.path && fp.sid) {
+        const v = $("fp-video");
+        fp.negAudioTimer = setTimeout(() => {
+          startSession(absoluteTime(), !(v && v.paused));
+        }, 250);
+      } else {
+        setStatus("Ton-Versatz: 0 ms");
+      }
+    } else {
+      if (fp.audioDelayNode) fp.audioDelayNode.delayTime.value = 0;
+      if (fp.path && fp.sid) {
+        const v = $("fp-video");
+        setStatus(`Ton-Versatz ${ms} ms wird per FFmpeg -itsoffset angewendet …`);
+        fp.negAudioTimer = setTimeout(() => {
+          startSession(absoluteTime(), !(v && v.paused));
+        }, 450);
+      }
+    }
+  }
+
+  function applyLiveSubDelay(ms) {
+    if (ms !== undefined) {
+      fp.subDelayMs = Math.max(-15000, Math.min(15000, Math.round(Number(ms) || 0)));
+      if ($("fp-sub-delay") && document.activeElement !== $("fp-sub-delay")) {
+        $("fp-sub-delay").value = String(fp.subDelayMs);
+      }
+    }
+    const v = $("fp-video");
+    if (!v || !v.textTracks || !v.textTracks.length) return;
+    const deltaSec = (fp.subDelayMs || 0) / 1000;
+    for (let t = 0; t < v.textTracks.length; t += 1) {
+      const ttObj = v.textTracks[t];
+      const cues = ttObj && ttObj.cues;
+      if (!cues) continue;
+      for (let i = 0; i < cues.length; i += 1) {
+        const c = cues[i];
+        if (c._origStart === undefined) {
+          c._origStart = c.startTime;
+          c._origEnd = c.endTime;
+        }
+        const ns = Math.max(0, c._origStart + deltaSec);
+        const ne = Math.max(ns + 0.05, c._origEnd + deltaSec);
+        try {
+          c.startTime = ns;
+          c.endTime = ne;
+        } catch (e) { /* ignore read-only cue edge case */ }
+      }
+    }
+  }
+
+  function attachSubtitles(path, subVal) {
+    const v = $("fp-video");
+    if (!v) return;
+    [...v.querySelectorAll("track")].forEach((t) => t.remove());
+    const raw = String(subVal != null ? subVal : (($("fp-sub") && $("fp-sub").value) || "-1"));
+    if (raw === "-1" || raw === "") return;
     const opt = ($("fp-sub") || {}).selectedOptions;
     if (opt && opt[0] && opt[0].dataset.image === "1") return; // Burn-in / nicht als VTT
     const track = document.createElement("track");
@@ -779,11 +1026,24 @@
     track.label = "Subtitles";
     track.srclang = "und";
     track.default = true;
-    track.src = `/api/media/vtt?path=${encodeURIComponent(path)}&subtitle=${subIdx}`;
+    if (raw.startsWith("sidecar:")) {
+      const scPath = (opt && opt[0] && opt[0].dataset.sidecarPath) || "";
+      if (!scPath) return;
+      track.src = `/api/media/vtt?path=${encodeURIComponent(path)}&sidecar=${encodeURIComponent(scPath)}`;
+    } else {
+      const subIdx = parseInt(raw, 10);
+      if (isNaN(subIdx) || subIdx < 0) return;
+      track.src = `/api/media/vtt?path=${encodeURIComponent(path)}&subtitle=${subIdx}`;
+    }
+    track.addEventListener("load", () => {
+      if (v.textTracks && v.textTracks[0]) v.textTracks[0].mode = "showing";
+      applyLiveSubDelay();
+    });
     v.appendChild(track);
     setTimeout(() => {
       if (v.textTracks && v.textTracks[0]) v.textTracks[0].mode = "showing";
-    }, 200);
+      applyLiveSubDelay();
+    }, 250);
   }
 
   async function reportClientError(payload) {
@@ -809,7 +1069,7 @@
     } catch (e) { /* ignore */ }
   }
 
-  function playDirect(url) {
+  function playDirect(url, autoplay = true) {
     const v = $("fp-video");
     if (!v) return;
     destroyPlayback();
@@ -819,12 +1079,13 @@
       if (fp.duration <= 0 && v.duration && isFinite(v.duration)) {
         fp.duration = v.duration;
       }
-      v.play().catch(() => {});
+      if (autoplay !== false) v.play().catch(() => {});
+      else v.pause();
       updateTimeUi();
     }, { once: true });
   }
 
-  function playHls(url) {
+  function playHls(url, autoplay = true) {
     const v = $("fp-video");
     if (!v) return;
     destroyPlayback();
@@ -850,7 +1111,8 @@
       fp.hls.loadSource(url);
       fp.hls.attachMedia(v);
       fp.hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-        v.play().catch(() => {});
+        if (autoplay !== false) v.play().catch(() => {});
+        else v.pause();
       });
       fp.hls.on(window.Hls.Events.ERROR, (_, data) => {
         if (!data) return;
@@ -883,7 +1145,10 @@
       });
     } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
       v.src = url;
-      v.addEventListener("loadedmetadata", () => v.play().catch(() => {}), { once: true });
+      v.addEventListener("loadedmetadata", () => {
+        if (autoplay !== false) v.play().catch(() => {});
+        else v.pause();
+      }, { once: true });
     } else {
       setStatus(tt("HLS wird von diesem Browser nicht unterstützt."), true);
     }
@@ -917,6 +1182,8 @@
     fp.lastPosition = targetStart;
     fp.startOffset = targetStart;
     const directOk = clientDirectOk(fp.info);
+    const rawSubVal = ($("fp-sub") && $("fp-sub").value) || "-1";
+    const negAudMs = fp.audioDelayMs < 0 ? fp.audioDelayMs : 0;
     const body = {
       path,
       audio: isNaN(audio) ? 0 : audio,
@@ -933,6 +1200,7 @@
       client_codecs: detectClientCodecs(),
       lookahead_sec: fp.lookahead,
       audio_copy: audioCopy,
+      audio_delay_ms: negAudMs,
       look: playerLook(),
       owner: "player",
     };
@@ -961,6 +1229,13 @@
       fp.mode = sess.mode || "hls";
       fp.windowEnd = 0;
       fp.encodePaused = false;
+      fp.negSessionDelayMs = negAudMs;
+      if (fp.audioDelayMs > 0) {
+        const dly = ensureWebAudioDelay();
+        if (dly) dly.delayTime.value = Math.min(5.0, fp.audioDelayMs / 1000);
+      } else if (fp.audioDelayNode) {
+        fp.audioDelayNode.delayTime.value = 0;
+      }
       if ($("fp-audio-copy") && sess.audio_copy != null) {
         $("fp-audio-copy").checked = !!sess.audio_copy;
       }
@@ -969,7 +1244,10 @@
         syncLookUi();
         fillTracks(d.info);
         if ($("fp-audio") && sess.audio != null) $("fp-audio").value = String(sess.audio);
-        if ($("fp-sub") && sess.subtitle != null) $("fp-sub").value = String(sess.subtitle);
+        if ($("fp-sub")) {
+          if (rawSubVal.startsWith("sidecar:")) $("fp-sub").value = rawSubVal;
+          else if (sess.subtitle != null) $("fp-sub").value = String(sess.subtitle);
+        }
       }
       renderChapters(d.chapters || []);
       updateAudioModeHint(sess);
@@ -989,9 +1267,10 @@
       }, sess);
 
       if (sess.mode === "direct") {
-        playDirect(sess.media_url || sess.playlist_url);
+        playDirect(sess.media_url || sess.playlist_url, autoplay);
         setBadge(tt("Direct-Play"));
         setStatus(fp.duration ? fmtClock(fp.duration) : "");
+        if (rawSubVal !== "-1") attachSubtitles(path, rawSubVal);
       } else {
         const url = sess.playlist_url || `/api/player/session/${fp.sid}/index.m3u8`;
         let tries = 0;
@@ -1008,18 +1287,19 @@
           return waitReady();
         };
         await waitReady();
-        playHls(url);
+        playHls(url, autoplay);
         const kind = planKind(d.plan, sess);
         const badgeLab = (PLAN_KIND[kind] && PLAN_KIND[kind].label) || sess.profile || tt("HLS");
         setBadge(tt(badgeLab));
         const extra = [];
         if (sess.look_summary) extra.push(tt("Encode-Vorschau") + ": " + sess.look_summary);
         if (sess.burn_subs) extra.push(tt("Bild-UT eingebrannt"));
+        if (negAudMs < 0) extra.push(`Ton ${negAudMs} ms`);
         if (sess.warning && !(d.plan && d.plan.summary && sess.warning.indexOf(d.plan.summary) >= 0)) {
           extra.push(sess.warning);
         }
         setStatus(extra.join(" · "));
-        if (!isNaN(sub) && sub >= 0 && !sess.burn_subs) attachSubtitles(path, sub);
+        if (rawSubVal !== "-1" && !sess.burn_subs) attachSubtitles(path, rawSubVal);
       }
 
       const ov = $("fp-overlay");
@@ -1065,6 +1345,7 @@
         return;
       }
       fp.info = info;
+      await applyHdrCheck(info);
       syncLookUi();
       fp.duration = info.duration || 0;
       fp.lastPosition = 0;
@@ -1124,6 +1405,188 @@
         else v.pause();
       });
     }
+
+    function fpFps() {
+      const f = Number(fp.info && fp.info.fps);
+      return f > 1 && f <= 240 ? f : 24;
+    }
+
+    function stepFrame(dir) {
+      if (!v || !fp.path) return;
+      if (!v.paused) v.pause();
+      const fps = fpFps();
+      const dt = dir / fps;
+      const curRel = v.currentTime || 0;
+      // Frame-Index exakt runden, damit wiederholtes Tippen keinen Gleitkomma-Drift hat
+      const curAbs = fp.startOffset + curRel;
+      const nextFrame = Math.max(0, Math.round(curAbs * fps) + dir);
+      const maxDur = fp.duration || (isFinite(v.duration) ? v.duration : 0) || Infinity;
+      const targetAbs = Math.min(maxDur, nextFrame / fps);
+      const targetRel = targetAbs - fp.startOffset;
+      const showStepStatus = () => {
+        setStatus(`${tt("Einzelbild")} #${nextFrame} · ${fmtClockPrecise(targetAbs)} (${fps.toFixed(3).replace(/\.?0+$/, "")} fps)`);
+      };
+      if (fp.mode === "direct") {
+        try { v.currentTime = Math.max(0, targetRel); } catch (e) { /* ignore */ }
+        updateTimeUi();
+        renderStatsHud();
+        showStepStatus();
+        return;
+      }
+      // Wenn man nahe an das Ende des Puffers vorrückt, FFmpeg rechtzeitig aufwecken
+      if (dir > 0 && fp.encodePaused && bufferedAhead() < 4) {
+        setEncodePaused(false);
+      }
+      // Innerhalb des bereits gepufferten HLS-Bereichs direkt im Video-Element springen
+      let inBuf = false;
+      if (targetRel >= -0.005 && v.buffered) {
+        for (let i = 0; i < v.buffered.length; i++) {
+          if (targetRel >= v.buffered.start(i) - 0.02 && targetRel <= v.buffered.end(i) + 0.02) {
+            inBuf = true;
+            break;
+          }
+        }
+      }
+      if (inBuf) {
+        try { v.currentTime = Math.max(0, targetRel); } catch (e) { /* ignore */ }
+        updateTimeUi();
+        renderStatsHud();
+        showStepStatus();
+      } else {
+        startSession(Math.max(0, targetAbs), false).then(() => showStepStatus());
+      }
+    }
+
+    function exportPngSnapshot() {
+      if (!v || !v.videoWidth || !v.videoHeight) {
+        setStatus(tt("Kein dekodiertes Videobild für PNG-Export vorhanden."), true);
+        return;
+      }
+      try {
+        const c = document.createElement("canvas");
+        c.width = v.videoWidth;
+        c.height = v.videoHeight;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const t = absoluteTime();
+        const ms = String(Math.round((t % 1) * 1000)).padStart(3, "0");
+        const stamp = fmtClock(t).replace(/:/g, "-") + "." + ms;
+        const base = String(fp.path || "frame").split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+        c.toBlob((blob) => {
+          if (!blob) return;
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `${base}_${stamp}.png`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          setStatus(`${tt("PNG gespeichert")}: ${base}_${stamp}.png`);
+        }, "image/png");
+      } catch (e) {
+        setStatus(`${tt("PNG-Export fehlgeschlagen")}: ${e}`, true);
+      }
+    }
+
+    function renderStatsHud() {
+      const hud = $("fp-stats-hud");
+      if (!hud || !fp.statsOpen) return;
+      const info = fp.info || {};
+      const vw = (v && v.videoWidth) || 0;
+      const vh = (v && v.videoHeight) || 0;
+      const srcRes = info.width && info.height ? `${info.width}×${info.height}` : "—";
+      const outRes = vw && vh ? `${vw}×${vh}` : "—";
+      const q = v && typeof v.getVideoPlaybackQuality === "function" ? v.getVideoPlaybackQuality() : null;
+      const totalF = q ? q.totalVideoFrames : (v && v.webkitDecodedFrameCount) || 0;
+      const dropF = q ? q.droppedVideoFrames : (v && v.webkitDroppedFrameCount) || 0;
+      const dropPct = totalF > 0 ? ((dropF / totalF) * 100).toFixed(2) : "0.00";
+      const fps = fpFps();
+      const t = absoluteTime();
+      const estFrame = Math.round(t * fps);
+      const buf = bufferedAhead().toFixed(1);
+      const plan = fp.plan || {};
+      const strat = plan.strategy || fp.mode || "—";
+      const enc = (plan.encoder || (fp.mode === "direct" ? "direct" : "—"));
+      const hdr = info.dolby_vision
+        ? `Dolby Vision P${info.dv_profile ?? "?"}`
+        : (info.is_hdr ? (info.hdr_type || "HDR10") : "SDR");
+      const bw = fp.hls && fp.hls.bandwidthEstimate
+        ? `${(fp.hls.bandwidthEstimate / 1e6).toFixed(1)} Mbit/s`
+        : "—";
+      const lines = [
+        `Datei       : ${(fp.path || "—").split(/[\\/]/).pop()}`,
+        `Pfad / Mode : ${strat} (Encoder: ${enc}${fp.encodePaused ? " · pausiert" : ""})`,
+        `Auflösung   : Quelle ${srcRes} → Player ${outRes} @ ${fps.toFixed(3).replace(/\.?0+$/, "")} fps`,
+        `Codec / HDR : ${prettyCodec(info.codec) || "—"} · ${info.pix_fmt || "—"} · ${hdr}`,
+        `Position    : ${fmtClock(t)} (${t.toFixed(3)} s · ~Frame #${estFrame})`,
+        `Frames      : ${dropF} dropped / ${totalF} decoded (${dropPct} %)`,
+        `Puffer      : ${buf} s voraus (Ziel: ${fp.lookahead || "∞"} s) · HLS-BW: ${bw}`,
+      ];
+      hud.textContent = lines.join("\n");
+    }
+
+    function toggleStatsHud(force) {
+      const hud = $("fp-stats-hud");
+      const btn = $("fp-stats-toggle");
+      fp.statsOpen = typeof force === "boolean" ? force : !fp.statsOpen;
+      if (hud) hud.hidden = !fp.statsOpen;
+      if (btn) btn.setAttribute("aria-pressed", fp.statsOpen ? "true" : "false");
+      if (fp.statsTimer) { clearInterval(fp.statsTimer); fp.statsTimer = 0; }
+      if (fp.statsOpen) {
+        renderStatsHud();
+        fp.statsTimer = setInterval(renderStatsHud, 400);
+      }
+    }
+
+    const sbk = $("fp-step-back");
+    const sfw = $("fp-step-fwd");
+    if (sbk) sbk.addEventListener("click", () => stepFrame(-1));
+    if (sfw) sfw.addEventListener("click", () => stepFrame(1));
+    const snapBtn = $("fp-snapshot");
+    if (snapBtn) snapBtn.addEventListener("click", exportPngSnapshot);
+    const statsBtn = $("fp-stats-toggle");
+    if (statsBtn) statsBtn.addEventListener("click", () => toggleStatsHud());
+    const vmafSceneBtn = $("fp-use-vmaf-scene");
+    if (vmafSceneBtn) vmafSceneBtn.addEventListener("click", () => {
+      if (!fp.path) {
+        setStatus(tt("Bitte zuerst ein Video laden."), true);
+        return;
+      }
+      if (typeof window.addCustomVmafScene === "function") {
+        const res = window.addCustomVmafScene(fp.path, absoluteTime(), fp.info);
+        if (res && res.ok) {
+          setStatus(`${tt("Als gezielte VMAF-Testszene übernommen")}: ${fmtClock(res.start)} (${res.length} s · ${res.count}/5)`);
+        } else if (res && res.error) {
+          setStatus(res.error, true);
+        }
+      }
+    });
+
+    document.addEventListener("keydown", (ev) => {
+      const sec = document.querySelector('section[data-page="player"]');
+      if (!sec || sec.hidden || sec.style.display === "none") return;
+      const tag = (ev.target && ev.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || (ev.target && ev.target.isContentEditable)) return;
+      if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      if (ev.key === ",") { ev.preventDefault(); stepFrame(-1); }
+      else if (ev.key === ".") { ev.preventDefault(); stepFrame(1); }
+      else if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        if (ev.shiftKey || (v && v.paused)) stepFrame(ev.shiftKey ? -10 : -1);
+        else if (v) stepFrame(-Math.round(fpFps() * 5));
+      } else if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        if (ev.shiftKey || (v && v.paused)) stepFrame(ev.shiftKey ? 10 : 1);
+        else if (v) stepFrame(Math.round(fpFps() * 5));
+      } else if (ev.key === " ") {
+        if (tag !== "button" && v && fp.path) {
+          ev.preventDefault();
+          if (v.paused) v.play().catch(() => {});
+          else v.pause();
+        }
+      }
+      else if (ev.key === "i" || ev.key === "I") { ev.preventDefault(); toggleStatsHud(); }
+      else if (ev.key === "s" || ev.key === "S") { ev.preventDefault(); exportPngSnapshot(); }
+    });
 
     function fsElement() {
       return document.fullscreenElement || document.webkitFullscreenElement || null;
@@ -1207,7 +1670,15 @@
       const el = $(id);
       if (!el) return;
       const onChange = () => {
-        if (id === "fp-sub") syncBurnHint();
+        if (id === "fp-sub") {
+          syncBurnHint();
+          const opt = ($("fp-sub") || {}).selectedOptions;
+          const isImg = opt && opt[0] && opt[0].dataset.image === "1";
+          if (fp.path && fp.sid && !isImg && !($("fp-burn") && $("fp-burn").checked)) {
+            attachSubtitles(fp.path, $("fp-sub").value);
+            return;
+          }
+        }
         if (id === "fp-profile") syncEncodeUi({ presetBr: true });
         if (id === "fp-platform") {
           syncCodecOptionsForPlatform();
@@ -1229,7 +1700,7 @@
       if (id === "fp-height" || id === "fp-vbr") el.addEventListener("input", onChange);
     });
 
-    ["fp-tonemap-engine", "fp-tonemap-algo", "fp-tonemap-desat", "fp-tonemap-peak",
+    ["fp-tonemap", "fp-tonemap-engine", "fp-tonemap-algo", "fp-tonemap-desat", "fp-tonemap-peak",
       "fp-deband", "fp-denoise", "fp-sharpen", "fp-grain"].forEach((id) => {
       const el = $(id);
       if (!el) return;
@@ -1253,6 +1724,68 @@
       if (!fp.path) return;
       startSession(absoluteTime(), true);
     });
+
+    // Live Audio- & Untertitel-Versatz + 1-Klick Remux-Übernahme
+    const audInp = $("fp-aud-delay");
+    if (audInp) {
+      audInp.addEventListener("change", () => applyLiveAudioDelay(parseInt(audInp.value, 10) || 0));
+    }
+    if ($("fp-aud-delay-minus")) $("fp-aud-delay-minus").addEventListener("click", () => applyLiveAudioDelay((fp.audioDelayMs || 0) - 100));
+    if ($("fp-aud-delay-plus")) $("fp-aud-delay-plus").addEventListener("click", () => applyLiveAudioDelay((fp.audioDelayMs || 0) + 100));
+    if ($("fp-aud-delay-zero")) $("fp-aud-delay-zero").addEventListener("click", () => applyLiveAudioDelay(0));
+
+    const subInp = $("fp-sub-delay");
+    if (subInp) {
+      subInp.addEventListener("input", () => {
+        applyLiveSubDelay(parseInt(subInp.value, 10) || 0);
+        setStatus(`Untertitel-Versatz live: ${fp.subDelayMs > 0 ? "+" : ""}${fp.subDelayMs} ms`);
+      });
+    }
+    if ($("fp-sub-delay-minus")) $("fp-sub-delay-minus").addEventListener("click", () => {
+      applyLiveSubDelay((fp.subDelayMs || 0) - 100);
+      setStatus(`Untertitel-Versatz live: ${fp.subDelayMs > 0 ? "+" : ""}${fp.subDelayMs} ms`);
+    });
+    if ($("fp-sub-delay-plus")) $("fp-sub-delay-plus").addEventListener("click", () => {
+      applyLiveSubDelay((fp.subDelayMs || 0) + 100);
+      setStatus(`Untertitel-Versatz live: ${fp.subDelayMs > 0 ? "+" : ""}${fp.subDelayMs} ms`);
+    });
+    if ($("fp-sub-delay-zero")) $("fp-sub-delay-zero").addEventListener("click", () => {
+      applyLiveSubDelay(0);
+      setStatus("Untertitel-Versatz: 0 ms");
+    });
+
+    const syncRemuxBtn = $("fp-sync-to-remux");
+    if (syncRemuxBtn) {
+      syncRemuxBtn.addEventListener("click", async () => {
+        if (!fp.path) {
+          setStatus(tt("Bitte zuerst ein Video im Player laden."), true);
+          return;
+        }
+        const aIdx = parseInt(($("fp-audio") || {}).value, 10);
+        const rawSub = String(($("fp-sub") || {}).value || "-1");
+        let sidecarSub = null;
+        let sIdx = -1;
+        if (rawSub.startsWith("sidecar:")) {
+          const scIdx = parseInt(rawSub.split(":")[1], 10);
+          const scList = ((fp.info && fp.info.sidecar_subtitles) || []).filter((sc) => !sc.bitmap);
+          sidecarSub = scList[scIdx] || null;
+        } else {
+          sIdx = parseInt(rawSub, 10);
+          if (isNaN(sIdx)) sIdx = -1;
+        }
+        if (typeof window.openRemuxWithSyncOffsets === "function") {
+          await window.openRemuxWithSyncOffsets({
+            path: fp.path,
+            name: String(fp.path).split(/[\\/]/).pop(),
+            audioIndex: isNaN(aIdx) ? -1 : aIdx,
+            audioDelayMs: fp.audioDelayMs || 0,
+            subtitleIndex: sIdx,
+            subDelayMs: fp.subDelayMs || 0,
+            sidecarSub,
+          });
+        }
+      });
+    }
 
     const stop = $("fp-stop");
     if (stop) stop.addEventListener("click", async () => {
@@ -1319,6 +1852,7 @@
 
   window.stopFullPlayer = stopSession;
   window.fpDetectClientCodecs = detectClientCodecs;
+  window.StudioPlayerHdr = { choice: hdrTonemapChoice, contentType: hdrContentType };
 
   function initFullPlayer() {
     if (!$("fp-video")) return;

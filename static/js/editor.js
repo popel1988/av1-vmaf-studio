@@ -750,7 +750,96 @@
       abr,
       audio,
       subtitles: data.subtitles || [],
+      codec: data.codec || "",
+      width: Number(data.width) || 0,
+      height: Number(data.height) || 0,
     };
+  }
+
+  function showHoverThumb(clientX, clientY, path, timeSec, prefix) {
+    const box = $("ed-hover-thumb");
+    const img = $("ed-hover-thumb-img");
+    const lbl = $("ed-hover-thumb-lbl");
+    if (!box || !img || !lbl) return;
+    const a = path ? ed.assets[path] : null;
+    const dur = (a && a.duration) || (ed.src && ed.src.path === path && ed.src.duration) || 0;
+    const t = Math.max(0, Math.min(dur || Infinity, Number(timeSec) || 0));
+    lbl.textContent = `${prefix ? prefix + " · " : ""}${fmt(t)}`;
+    if (a && a.strip && dur > 0) {
+      const n = Math.max(1, Number(a.tiles) || 20);
+      const idx = Math.max(0, Math.min(n - 1, Math.floor((t / dur) * n)));
+      img.style.display = "";
+      img.style.backgroundImage = `url(${a.strip})`;
+      img.style.backgroundSize = `${n * 100}% 100%`;
+      img.style.backgroundPosition = n > 1 ? `${(idx / (n - 1)) * 100}% 0` : "0 0";
+    } else {
+      img.style.display = "none";
+    }
+    box.hidden = false;
+    const x = Math.max(85, Math.min(window.innerWidth - 85, clientX));
+    const y = Math.max(110, clientY);
+    box.style.left = `${x}px`;
+    box.style.top = `${y}px`;
+  }
+
+  function hideHoverThumb() {
+    const box = $("ed-hover-thumb");
+    if (box) box.hidden = true;
+  }
+
+  function renderMediaBin() {
+    const bin = $("ed-media-bin");
+    if (!bin) return;
+    const seen = new Map();
+    if (ed.src && ed.src.path) {
+      seen.set(ed.src.path, { path: ed.src.path, name: ed.src.name || ed.src.path, count: 0 });
+    }
+    ed.segments.forEach((s) => {
+      if (s.kind !== "media" || !s.path) return;
+      const cur = seen.get(s.path) || { path: s.path, name: s.name || s.path, count: 0 };
+      cur.count += 1;
+      seen.set(s.path, cur);
+    });
+    ed.overlays.forEach((ov) => {
+      if (!ov.path) return;
+      const cur = seen.get(ov.path) || { path: ov.path, name: ov.name || ov.path, count: 0 };
+      cur.count += 1;
+      seen.set(ov.path, cur);
+    });
+    if (seen.size <= 1 && ed.segments.length <= 1) {
+      bin.hidden = true;
+      bin.innerHTML = "";
+      return;
+    }
+    const specs = new Set();
+    seen.forEach((item) => {
+      const a = ed.assets[item.path] || (ed.src && ed.src.path === item.path ? ed.src : null);
+      if (a && a.codec && a.height) specs.add(`${String(a.codec).toLowerCase()}_${a.width}x${a.height}`);
+    });
+    const mixedNote = specs.size > 1
+      ? `<span class="warn" style="font-size:11.5px">⚠ Gemischte Codecs/Auflösungen erkannt – Export nutzt automatisch Re-Encode</span>`
+      : `<span class="muted" style="font-size:11.5px">${seen.size} Quelle(n) im Projekt</span>`;
+    const chips = [...seen.values()].map((item) => {
+      const a = ed.assets[item.path] || (ed.src && ed.src.path === item.path ? ed.src : {});
+      const meta = [a.codec ? String(a.codec).toUpperCase() : "", a.height ? `${a.height}p` : "", item.count ? `${item.count}×` : ""]
+        .filter(Boolean).join(" · ");
+      const isCur = ed.src && ed.src.path === item.path;
+      return `<span class="ed-media-chip"${isCur ? ' style="border-color:var(--accent)"' : ""}>`
+        + `<button type="button" class="btn btn-ghost btn-sm" data-bin-load="${escapeHtml(item.path)}" data-bin-name="${escapeHtml(item.name)}" title="In Quell-Monitor laden" style="padding:1px 6px">${escapeHtml(item.name)}</button>`
+        + (meta ? `<span class="muted">${escapeHtml(meta)}</span>` : "")
+        + `<button type="button" class="btn btn-ghost btn-sm" data-bin-append="${escapeHtml(item.path)}" data-bin-name="${escapeHtml(item.name)}" title="Ganze Quelle nochmals ans Timeline-Ende anhängen" style="padding:1px 6px">+</button>`
+        + `</span>`;
+    }).join("");
+    bin.hidden = false;
+    bin.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">`
+      + `<strong>🗂 Quellen-Pool (Multi-Source)</strong>${mixedNote}</div>`
+      + `<div class="ed-media-bin-list">${chips}</div>`;
+    bin.querySelectorAll("[data-bin-load]").forEach((b) => {
+      b.addEventListener("click", () => loadSource(b.dataset.binLoad, b.dataset.binName));
+    });
+    bin.querySelectorAll("[data-bin-append]").forEach((b) => {
+      b.addEventListener("click", () => appendSources([{ rel: b.dataset.binAppend, name: b.dataset.binName }]));
+    });
   }
 
   function renderSegList() {
@@ -1147,12 +1236,23 @@
         openClipMenu(ev.clientX, ev.clientY, s.id);
       });
       if ((dur / tot) * 100 * (ed.tlZoom || 1) < 7) block.classList.add("narrow");
+      if (s.kind === "media" && s.path) {
+        block.addEventListener("mousemove", (ev) => {
+          const r = block.getBoundingClientRect();
+          if (!(r.width > 0)) return;
+          const pct = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+          const srcT = s.start + pct * Math.max(0, s.end - s.start);
+          showHoverThumb(ev.clientX, r.top, s.path, srcT, clipLabel(s));
+        });
+        block.addEventListener("mouseleave", hideHoverThumb);
+      }
       track.appendChild(block);
     });
     renderTlRuler();
     markActive();
     renderTlPlayhead();
     loadStripsForClips();
+    renderMediaBin();
   }
 
   function renderV2Track(tot) {
@@ -1172,6 +1272,7 @@
       b.dataset.v2id = ov.id;
       b.style.left = `${leftPct}%`;
       b.style.width = `${widthPct}%`;
+      applyStripBackground(b, { kind: "media", path: ov.path, start: Number(ov.start) || 0, end: Number(ov.end) || dur });
       b.innerHTML = `<strong>V2.${idx + 1}</strong> <span>${escapeHtml(ov.title || ov.name)} (${fmt(dur)})</span>`;
       b.title = `V2: ${ov.title || ov.name}\nStart @ ${fmt(ov.tl_start)} · Dauer ${fmt(dur)}\nZiehen = verschieben, Ränder = Länge ändern`;
       ["left", "right"].forEach((side) => {
@@ -1762,6 +1863,12 @@
         paths.push(s.path);
       }
     });
+    ed.overlays.forEach((ov) => {
+      const a = ed.assets[ov.path];
+      if (ov.path && !(a && a.tried) && paths.indexOf(ov.path) < 0) {
+        paths.push(ov.path);
+      }
+    });
     paths.forEach(async (p) => {
       const prev = ed.assets[p] || { strip: "", duration: 0 };
       // tried verhindert Doppelanfragen bei jedem Neuzeichnen.
@@ -1770,6 +1877,7 @@
         const d = await (await fetch(`/api/editor/preview-assets?path=${encodeURIComponent(p)}`)).json();
         setAsset(p, {
           strip: d.filmstrip || "",
+          tiles: Number(d.tiles) || prev.tiles || 20,
           duration: Number(d.duration) || prev.duration || 0,
           tried: true,
         });
@@ -2014,10 +2122,12 @@
       const prev = ed.assets[path] || { strip: "", duration: 0 };
       setAsset(path, {
         strip: d.filmstrip || "",
+        tiles: Number(d.tiles) || prev.tiles || 20,
         duration: Number(d.duration) || prev.duration || 0,
         tried: true,
       });
       if (!prev.strip && d.filmstrip) renderTimeline();
+      renderMediaBin();
     } catch (e) { /* ignore */ }
   }
 
@@ -2368,6 +2478,9 @@
       added += 1;
     }
     renderSegList();
+    renderTimeline();
+    syncBadge();
+    syncModeUI();
     if (needFirst && added) {
       const first = ed.segments.find((s) => s.kind === "media" && s.path);
       if (first) await setActive(first.id);
@@ -2377,6 +2490,25 @@
       setStatus(`${msg} ${tt("Übersprungen")}: ${failed.join(", ")}`, true);
     } else {
       setStatus(msg);
+    }
+  }
+
+  async function appendFolder(folderRel) {
+    setStatus(`${tt("Lese Ordner")} ${folderRel || "/"} …`);
+    try {
+      const r = await fetch(`/api/browse?path=${encodeURIComponent(folderRel || "")}`);
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || "Ordner konnte nicht gelesen werden");
+      const files = (d.files || []).slice().sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true, sensitivity: "base" })
+      );
+      if (!files.length) {
+        setStatus(tt("Keine Videodateien in diesem Ordner gefunden."), true);
+        return;
+      }
+      await appendSources(files);
+    } catch (e) {
+      setStatus(String(e.message || e), true);
     }
   }
 
@@ -2915,6 +3047,39 @@
     if ([...sel.options].some((o) => o.value === saved)) sel.value = saved;
     else sel.value = "upload";
     ed.uploadDest = sel.value;
+  }
+
+  async function uploadFiles(fileList) {
+    const arr = Array.from(fileList || []).filter(Boolean);
+    if (!arr.length) return;
+    if (arr.length === 1 && !ed.segments.length) {
+      return uploadFile(arr[0]);
+    }
+    const dest = currentUploadDest();
+    rememberUploadDest(dest);
+    const st = $("ed-upload-status");
+    const uploaded = [];
+    for (let i = 0; i < arr.length; i++) {
+      const file = arr[i];
+      if (st) st.textContent = `${tt("Upload")} (${i + 1}/${arr.length}) → ${dest === "upload" ? "uploads" : dest} … ${file.name}`;
+      setStatus(`${tt("Upload läuft")} (${i + 1}/${arr.length}): ${file.name}`);
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      fd.append("dest", dest);
+      try {
+        const r = await fetch("/api/editor/upload", { method: "POST", body: fd });
+        const data = await r.json();
+        if (r.ok && !data.error && data.path) {
+          uploaded.push({ rel: data.path, name: data.name || file.name });
+        }
+      } catch (e) { /* einzelner Fehler wird übersprungen */ }
+    }
+    if (uploaded.length) {
+      await appendSources(uploaded);
+      if (st) st.textContent = `${uploaded.length} ${tt("Datei(en) hochgeladen & angehängt.")}`;
+    } else {
+      setStatus(tt("Upload fehlgeschlagen."), true);
+    }
   }
 
   async function uploadFile(file) {
@@ -4165,6 +4330,17 @@
       });
     }
 
+    const addFolderBtn = $("ed-add-folder");
+    if (addFolderBtn) {
+      addFolderBtn.addEventListener("click", () => {
+        if (typeof window.openFolderPickerModal !== "function") return;
+        window.openFolderPickerModal({
+          title: tt("Ordner wählen – alle enthaltenen Videos an Timeline anhängen"),
+          onPick: (rel) => appendFolder(rel),
+        });
+      });
+    }
+
     const destBrowse = $("ed-upload-dest-browse");
     if (destBrowse) {
       destBrowse.addEventListener("click", () => {
@@ -4193,9 +4369,9 @@
 
     const up = $("ed-upload");
     if (up) up.addEventListener("change", () => {
-      const f = up.files && up.files[0];
+      const files = up.files ? Array.from(up.files) : [];
       up.value = "";
-      if (f) uploadFile(f);
+      if (files.length) uploadFiles(files);
     });
 
     const markIn = $("ed-mark-in");
@@ -4429,6 +4605,14 @@
     const ruler = $("ed-src-ruler");
     if (ruler) {
       ruler.addEventListener("mousedown", beginSourceRulerDrag);
+      ruler.addEventListener("mousemove", (ev) => {
+        if (!ed.src || !(ed.src.duration > 0)) return;
+        const r = ruler.getBoundingClientRect();
+        if (!(r.width > 0)) return;
+        const pct = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+        showHoverThumb(ev.clientX, r.top, ed.src.path, pct * ed.src.duration, tt("Quelle"));
+      });
+      ruler.addEventListener("mouseleave", hideHoverThumb);
     }
 
     const v = $("ed-video");

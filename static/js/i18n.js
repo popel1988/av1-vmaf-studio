@@ -5858,7 +5858,13 @@
     "Ordner hinzufügen": ["Add folder", "Añadir carpeta", "Ajouter un dossier"],
     "Ordner oder Laufwerk dauerhaft als Medienquelle hinzufügen": ["Permanently add a folder or drive as a media source", "Añadir una carpeta o unidad como fuente multimedia permanente", "Ajouter durablement un dossier ou lecteur comme source multimédia"],
     "Öffnen mit registrieren": ["Register Open with", "Registrar Abrir con", "Enregistrer Ouvrir avec"],
-    "Öffnen mit entfernen": ["Remove Open with", "Quitar Abrir con", "Supprimer Ouvrir avec"]
+    "Öffnen mit entfernen": ["Remove Open with", "Quitar Abrir con", "Supprimer Ouvrir avec"],
+    "Tonemapping": ["Tone mapping", "Mapeo de tonos", "Mappage de tons"],
+    "Dieser Browser kann den HDR-Pfad abspielen. Tonemapping bleibt aus.": ["This browser can play the HDR path. Tone mapping stays off.", "Este navegador puede reproducir la ruta HDR. El mapeo de tonos permanece apagado.", "Ce navigateur peut lire le chemin HDR. Le mappage de tons reste désactivé."],
+    "Dieser Browser kann den HDR-Pfad nicht abspielen. Tonemapping ist an.": ["This browser cannot play the HDR path. Tone mapping is on.", "Este navegador no puede reproducir la ruta HDR. El mapeo de tonos está activado.", "Ce navigateur ne peut pas lire le chemin HDR. Le mappage de tons est activé."],
+    "Dolby Vision Profil 5 hat keine HDR10-Basis. Tonemapping ist nötig.": ["Dolby Vision profile 5 has no HDR10 base. Tone mapping is required.", "El perfil 5 de Dolby Vision no tiene base HDR10. El mapeo de tonos es necesario.", "Le profil 5 Dolby Vision n’a pas de base HDR10. Le mappage de tons est nécessaire."],
+    "Dieses HDR-Format kann der Browser nicht direkt abspielen. Tonemapping ist an.": ["The browser cannot play this HDR format directly. Tone mapping is on.", "El navegador no puede reproducir este formato HDR directamente. El mapeo de tonos está activado.", "Le navigateur ne peut pas lire directement ce format HDR. Le mappage de tons est activé."],
+    "H.264 kann diese HDR-Quelle nicht tragen. Tonemapping ist für den Transcode nötig.": ["H.264 cannot carry this HDR source. Tone mapping is required for the transcode.", "H.264 no puede transportar esta fuente HDR. El mapeo de tonos es necesario para la transcodificación.", "H.264 ne peut pas porter cette source HDR. Le mappage de tons est nécessaire pour le transcodage."]
   };
   Object.keys(WORKSPACE).forEach(function (key) {
     DICT[key] = WORKSPACE[key][0];

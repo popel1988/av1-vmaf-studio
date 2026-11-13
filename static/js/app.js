@@ -47,6 +47,8 @@
     splitRanges: [],    // Bereiche für Ausschnitt-Export
     remuxPick: null,    // aktueller Modus des Datei-Pickers (ext|att|merge|chapters)
     outPick: null,      // Zielordner-Picker (prefix/root/path)
+    customSampleRanges: [], // [{path, start, length}] vom Player gesetzte VMAF-Testszenen
+    customSampleFor: "",
   };
 
   if (window.StudioInsights) window.StudioInsights.connect({getState: () => state, openJob: (id) => openQueueDetails(id)});
@@ -321,11 +323,22 @@
     const recTxt = document.createElement("span");
     recTxt.textContent = "Unterordner";
     recWrap.append(rec, recTxt);
+    const addRootBtn = document.createElement("button");
+    addRootBtn.type = "button";
+    addRootBtn.className = "btn btn-ghost btn-sm browser-add-root";
+    addRootBtn.textContent = "+ Ordner";
+    addRootBtn.title = "Weiteren Ordner oder Laufwerk als Medienquelle hinzufügen";
+    addRootBtn.hidden = !(window.StudioDesktop && window.StudioDesktop.canSelectFolder && window.StudioDesktop.canSelectFolder());
+    addRootBtn.addEventListener("click", () => {
+      if (window.StudioDesktop && window.StudioDesktop.selectFolder) {
+        window.StudioDesktop.selectFolder();
+      }
+    });
     const count = document.createElement("span");
     count.className = "browser-count muted";
     bar.append(back, fwd, search);
     if (allowRecursive) bar.append(recWrap);
-    bar.append(count);
+    bar.append(addRootBtn, count);
     const anchor = crumbEl || listEl;
     anchor.parentNode.insertBefore(bar, anchor);
 
@@ -388,8 +401,11 @@
       if (!crumbEl) return;
       crumbEl.innerHTML = "";
       const root = document.createElement("a");
-      root.textContent = opts.rootLabel ||
-        ((window.APP_CONFIG && APP_CONFIG.multiMedia) ? "Medien" : "/media");
+      root.textContent = opts.rootLabel || defaultRootLabel();
+      const roots = (window.APP_CONFIG && APP_CONFIG.mediaRoots) || [];
+      if (!opts.rootLabel && roots.length === 1 && roots[0] && roots[0].path) {
+        root.title = roots[0].path;
+      }
       root.onclick = () => go("");
       crumbEl.appendChild(root);
       if (data.path) {
@@ -806,6 +822,94 @@
     return el && el.checked ? "bitrate" : "even";
   }
 
+  function activeCustomSampleRanges() {
+    if (!state.selected || state.selected.isBatch) return [];
+    if (state.customSampleFor && state.customSampleFor !== state.selected.path) return [];
+    return (state.customSampleRanges || [])
+      .map((r) => [Number(r.start), Number(r.length)])
+      .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= 0 && p[1] >= 3 && p[1] <= 120)
+      .slice(0, 5);
+  }
+
+  function renderCustomVmafScenes() {
+    const box = $("custom-vmaf-scenes");
+    if (!box) return;
+    const list = state.customSampleRanges || [];
+    if (!list.length || (state.selected && !state.selected.isBatch
+        && state.customSampleFor && state.customSampleFor !== state.selected.path)) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    const chips = list.map((r, i) => (
+      `<span class="custom-vmaf-chip">${fmtClock(r.start)} (${r.length} s)`
+      + `<button type="button" data-rm-scene="${i}" title="Szene entfernen">×</button></span>`
+    )).join("");
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span><strong>🎯 Gezielte VMAF-Testszenen (${list.length}/5):</strong> überschreibt die automatische Verteilung für diese Quelle.</span>
+        <div style="display:flex;gap:6px">
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-jump-vmaf-tab">Zum VMAF-Vergleich</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-clear-custom-scenes">Alle löschen</button>
+        </div>
+      </div>
+      <div class="custom-vmaf-scenes-list">${chips}</div>`;
+    box.querySelectorAll("[data-rm-scene]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = parseInt(btn.dataset.rmScene, 10);
+        if (!isNaN(idx)) state.customSampleRanges.splice(idx, 1);
+        if (!state.customSampleRanges.length) state.customSampleFor = "";
+        renderCustomVmafScenes();
+      });
+    });
+    const clr = $("btn-clear-custom-scenes");
+    if (clr) clr.addEventListener("click", () => {
+      state.customSampleRanges = [];
+      state.customSampleFor = "";
+      renderCustomVmafScenes();
+    });
+    const jmp = $("btn-jump-vmaf-tab");
+    if (jmp) jmp.addEventListener("click", () => {
+      if (typeof navTo === "function") navTo("vmaf");
+    });
+  }
+
+  window.addCustomVmafScene = function addCustomVmafScene(relPath, timeSec, probeInfo) {
+    if (!relPath) return { ok: false, error: tt("Keine Quelldatei angegeben.") };
+    const clipLen = Math.max(5, Math.min(120,
+      parseInt(($("vt-clip") && $("vt-clip").value) || ($("opt-vmaf-clip") && $("opt-vmaf-clip").value) || "20", 10) || 20));
+    const dur = Number((probeInfo && probeInfo.duration) || (state.currentInfo && state.currentInfo.duration) || 0);
+    let len = clipLen;
+    let start = Math.max(0, Number(timeSec) || 0);
+    if (dur > 0) {
+      if (dur < 3) return { ok: false, error: tt("Video ist kürzer als 3 Sekunden.") };
+      len = Math.min(len, Math.floor(dur));
+      if (start + len > dur) start = Math.max(0, dur - len - 0.05);
+    }
+    start = Math.round(start * 100) / 100;
+    if (state.customSampleFor !== relPath) {
+      state.customSampleRanges = [];
+      state.customSampleFor = relPath;
+    }
+    // Falls Datei noch nicht als Hauptquelle gewählt ist, direkt auswählen!
+    if (!state.selected || state.selected.path !== relPath) {
+      const name = String(relPath).split(/[\\/]/).pop();
+      selectFile({ rel: relPath, name });
+    }
+    if (state.customSampleRanges.some((r) => Math.abs(r.start - start) < 2)) {
+      renderCustomVmafScenes();
+      return { ok: true, start, length: len, count: state.customSampleRanges.length };
+    }
+    if (state.customSampleRanges.length >= 5) {
+      return { ok: false, error: tt("Maximal 5 gezielte VMAF-Testszenen pro Lauf möglich.") };
+    }
+    state.customSampleRanges.push({ path: relPath, start, length: len });
+    state.customSampleRanges.sort((a, b) => a.start - b.start);
+    renderCustomVmafScenes();
+    return { ok: true, start, length: len, count: state.customSampleRanges.length };
+  };
+
   function sceneMinPct() {
     const el = $("scene-min-pct");
     const n = el ? parseInt(el.value, 10) : 10;
@@ -1007,6 +1111,9 @@
     if (badge) badge.textContent = "Nichts ausgewählt";
     const info = $("selected-info");
     if (info) info.innerHTML = "";
+    state.customSampleRanges = [];
+    state.customSampleFor = "";
+    renderCustomVmafScenes();
     resetBitrateView();
     document.querySelectorAll("#browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
     ["btn-enqueue", "btn-vmaf-start", "btn-clear-selection"].forEach((id) => {
@@ -1022,7 +1129,16 @@
     window.StudioSourceContext.publish(state.selected, "encode");
     $("selection-badge").textContent = "Datei ausgewählt";
     enableActionButtons();
-    if (!sameSource) resetBitrateView(true);
+    if (!sameSource) {
+      if (state.customSampleFor && state.customSampleFor !== f.rel) {
+        state.customSampleRanges = [];
+        state.customSampleFor = "";
+      }
+      renderCustomVmafScenes();
+      resetBitrateView(true);
+    } else {
+      renderCustomVmafScenes();
+    }
     if (cached && cached.analyses.bitrate) {
       state.bitrateData = cached.analyses.bitrate;
       state.bitrateFor = f.rel;
@@ -1147,7 +1263,79 @@
     state.currentInfo = info || null;
     const dvSel = $("opt-dv-mode");
     if (dvSel) dvSel.dataset.userset = "";
+    const box = $("dv-l1-curve-box");
+    if (box) { box.style.display = "none"; box.innerHTML = ""; }
     syncDvOption();
+    updateSidecarSubtitleHint(info);
+  }
+
+  function updateSidecarSubtitleHint(info) {
+    const hint = $("opt-sidecar-hint");
+    if (!hint) return;
+    const sc = (info && Array.isArray(info.sidecar_subtitles)) ? info.sidecar_subtitles : [];
+    if (!sc.length) {
+      hint.style.display = "none";
+      hint.textContent = "";
+      return;
+    }
+    const names = sc.slice(0, 5).map((s) => {
+      const flags = [s.language || "und", s.forced ? "Forced" : "", s.sdh ? "SDH" : ""].filter(Boolean).join(", ");
+      return `${s.name} (${flags})`;
+    }).join(" · ");
+    hint.style.display = "";
+    hint.textContent = `📎 ${sc.length} externe Sidecar-Untertitel neben der Quelle erkannt: ${names}${sc.length > 5 ? " …" : ""}`;
+  }
+
+  async function loadDvL1Curve() {
+    const box = $("dv-l1-curve-box");
+    const btn = $("btn-dv-l1-curve");
+    const selPath = state.selected && !state.selected.isBatch ? state.selected.path : "";
+    if (!box || !selPath) return;
+    box.style.display = "";
+    box.innerHTML = `<span class="muted">Extrahiere Dolby-Vision-L1-Helligkeitsdaten (RPU) …</span>`;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`/api/dv-curve?path=${encodeURIComponent(selPath)}`);
+      const d = await r.json();
+      if (!d || !d.ok) {
+        box.innerHTML = `<span class="bad">${escapeHtml((d && d.error) || "Keine L1-Daten verfügbar.")}</span>`;
+        return;
+      }
+      const maxArr = d.series_max || [];
+      const avgArr = d.series_avg || [];
+      const W = 520, H = 130, pad = 22;
+      const topNits = Math.max(1000, ...maxArr);
+      const yOf = (v) => {
+        const l = Math.log10(Math.max(1, v)) / Math.log10(topNits);
+        return Math.round((H - pad) - l * (H - pad * 2));
+      };
+      const pts = (arr) => arr.map((v, i) => {
+        const x = pad + Math.round((i / Math.max(1, arr.length - 1)) * (W - pad * 1.5));
+        return `${x},${yOf(v)}`;
+      }).join(" ");
+      box.innerHTML = `
+        <div class="hint" style="margin-bottom:4px">
+          <strong>Dolby Vision L1 Dynamik</strong> · Peak: <strong>${d.peak_nits} nits</strong> ·
+          Ø MaxFALL: <strong>${d.mean_avg_nits} nits</strong> · Szenenwechsel: <strong>${d.scenes}</strong>
+          (${d.frames_analyzed} Frames analysiert)
+        </div>
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:560px;height:auto;background:rgba(0,0,0,0.22);border:1px solid var(--border);border-radius:6px">
+          <line x1="${pad}" y1="${yOf(100)}" x2="${W - 10}" y2="${yOf(100)}" stroke="rgba(255,255,255,0.12)" stroke-dasharray="3,3"/>
+          <text x="2" y="${yOf(100) + 3}" fill="var(--muted)" font-size="9">100</text>
+          <line x1="${pad}" y1="${yOf(1000)}" x2="${W - 10}" y2="${yOf(1000)}" stroke="rgba(255,255,255,0.16)" stroke-dasharray="3,3"/>
+          <text x="2" y="${yOf(1000) + 3}" fill="var(--muted)" font-size="9">1k</text>
+          <polyline fill="none" stroke="#f59e0b" stroke-width="1.6" points="${pts(maxArr)}" />
+          <polyline fill="none" stroke="#38bdf8" stroke-width="1.4" points="${pts(avgArr)}" />
+        </svg>
+        <div class="hint" style="font-size:11px;margin-top:2px">
+          <span style="color:#f59e0b">━ MaxCLL / L1-Max (nits)</span> &nbsp;·&nbsp;
+          <span style="color:#38bdf8">━ Frame-Average / L1-Avg (nits)</span>
+        </div>`;
+    } catch (e) {
+      box.innerHTML = `<span class="bad">Fehler: ${escapeHtml(String(e))}</span>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   // Steuert HDR- vs. DV-Behandlung: Bei Dolby-Vision-Quellen erscheint die
@@ -1198,7 +1386,7 @@
       }
       let conv = "";
       if (prof === 7) conv = ` Profil 7 wird zu ${targetProfile} konvertiert (Enhancement-Layer entfällt, HDR10-Basis bleibt).`;
-      else if (prof === 5) conv = ' Bei „Übernehmen" bleibt es Profil 5 (unverändert) – das braucht einen DV-fähigen Player und hat keinen HDR10-Fallback. Ohne solchen Player ist Tone-Mapping die sichere Wahl (Default).';
+      else if (prof === 5) conv = ' Bei „Übernehmen" bleibt es Profil 5 (DV-Player nötig). „HDR10 behalten / DV5 → HDR10" formt den IPTPQc2-Farbraum per libplacebo (Vulkan) nach Standard-HDR10 (BT.2020 PQ) um; Tone-Mapping wandelt nach SDR.';
       const fallback = prof === 5
         ? " Schlägt ein Schritt fehl, bleibt die (nur mit DV korrekt darstellbare) Basis erhalten."
         : " Schlägt ein Schritt fehl, bleibt die HDR10-Basis erhalten.";
@@ -1598,8 +1786,18 @@
     return list;
   }
 
+  function defaultRootLabel() {
+    const cfg = window.APP_CONFIG || {};
+    if (cfg.multiMedia) return "Medien";
+    const first = Array.isArray(cfg.mediaRoots) && cfg.mediaRoots[0];
+    if (first && first.path && first.path !== "/media") {
+      return first.name || first.path;
+    }
+    return "/media";
+  }
+
   function selectFolder(path, isRoot) {
-    const name = isRoot ? "/media (alle Unterordner)" : path.split("/").pop();
+    const name = isRoot ? `${defaultRootLabel()} (alle Unterordner)` : path.split("/").pop();
     state.selected = { path: path, name: name, isBatch: true };
     $("selection-badge").textContent = "Ordner ausgewählt (Batch)";
     enableActionButtons();
@@ -1684,6 +1882,8 @@
     if (dvSel) dvSel.addEventListener("change", () => {
       dvSel.dataset.userset = "1";  // bewusste Wahl nicht mehr automatisch überschreiben
     });
+    const dvCurveBtn = $("btn-dv-l1-curve");
+    if (dvCurveBtn) dvCurveBtn.addEventListener("click", loadDvL1Curve);
 
     const verifyCb = $("opt-verify-vmaf");
     if (verifyCb) {
@@ -2052,6 +2252,8 @@
         ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
       subtitle_per_track: subTracks !== null,
       subtitle_track_settings: subTracks || [],
+      subtitle_ocr: $("opt-sub-ocr") ? $("opt-sub-ocr").checked : false,
+      embed_sidecar_subs: $("opt-embed-sidecar-subs") ? $("opt-embed-sidecar-subs").checked : false,
       keep_chapters: $("opt-keep-chapters") ? $("opt-keep-chapters").checked : true,
       keep_metadata: $("opt-keep-metadata") ? $("opt-keep-metadata").checked : true,
       denoise: $("opt-denoise") ? $("opt-denoise").value : "off",
@@ -2064,6 +2266,7 @@
       nvenc_tune: $("opt-nvenc-tune") ? $("opt-nvenc-tune").value : "auto",
       keyint_sec: $("opt-keyint") ? (parseInt($("opt-keyint").value, 10) || 0) : 0,
       film_grain: $("opt-film-grain") ? parseInt($("opt-film-grain").value, 10) : 0,
+      film_grain_auto: $("opt-film-grain-auto") ? $("opt-film-grain-auto").checked : false,
       svt_look: $("opt-svt-look") ? $("opt-svt-look").value : "standard",
       two_pass: $("opt-two-pass") ? $("opt-two-pass").checked : false,
       mobile_copy: $("opt-mobile-copy") ? $("opt-mobile-copy").checked : false,
@@ -2077,9 +2280,17 @@
       audio_bitrate: parseInt($("opt-audio-bitrate").value, 10),
       audio_channels: parseInt($("opt-audio-channels").value, 10),
       audio_normalize: $("opt-audio-normalize").checked,
+      audio_normalize_2pass: $("opt-audio-norm-2pass") ? $("opt-audio-norm-2pass").checked : false,
+      audio_nightmode: $("opt-audio-nightmode") ? $("opt-audio-nightmode").checked : false,
       audio_tracks: gatherAudioTracks(),
       audio_per_track: perTrack !== null && $("opt-audio-mode").value !== "none",
       audio_track_settings: perTrack || [],
+      audio_languages: $("opt-audio-langs") ? $("opt-audio-langs").value.trim() : "",
+      audio_keep_original: $("opt-audio-keep-orig") ? $("opt-audio-keep-orig").checked : true,
+      audio_exclude_commentary: $("opt-audio-no-comm") ? $("opt-audio-no-comm").checked : false,
+      subtitle_languages: $("opt-sub-langs") ? $("opt-sub-langs").value.trim() : "",
+      sub_exclude_sdh: $("opt-sub-no-sdh") ? $("opt-sub-no-sdh").checked : false,
+      sub_keep_forced: $("opt-sub-keep-forced") ? $("opt-sub-keep-forced").checked : true,
       container: $("opt-container") ? $("opt-container").value : "auto",
       name_pattern: $("opt-name-pattern") ? ($("opt-name-pattern").value.trim() || "{stem}{suffix}") : "{stem}{suffix}",
       on_duplicate: $("opt-on-duplicate") ? $("opt-on-duplicate").value : "ask",
@@ -2585,6 +2796,7 @@
     if (enc.indexOf("libx") === 0) return "x264";
     if (enc.indexOf("nvenc") >= 0) return "nvenc";
     if (enc.indexOf("qsv") >= 0) return "qsv";
+    if (enc.indexOf("amf") >= 0) return "amf";
     return "none";
   }
   function speedPresetsFor(platform, codec) {
@@ -3308,6 +3520,7 @@
       chunked: vmaf ? false : ($("opt-chunked") ? $("opt-chunked").checked : false),
       chunk_seconds: $("opt-chunk-seconds") ? parseInt($("opt-chunk-seconds").value, 10) || 60 : 60,
       chunk_cq_range: $("opt-chunk-range") ? parseInt($("opt-chunk-range").value, 10) || 6 : 6,
+      chunk_scene_align: $("opt-chunk-scene") ? $("opt-chunk-scene").checked : true,
       sample_mode: "even",
       credits_at: creditsAtSeconds(),
     };
@@ -3317,7 +3530,13 @@
       out.samples = $("opt-vmaf-samples") ? parseInt($("opt-vmaf-samples").value, 10) || 1 : 1;
       out.ssimulacra2_frames = $("opt-s2-frames") ? parseInt($("opt-s2-frames").value, 10) : 3;
       out.test_values = encTestValues();
+      out.vmaf_search_mode = $("opt-vmaf-search") ? $("opt-vmaf-search").value : "grid";
+      out.vmaf_min_p5 = $("opt-vmaf-min-p5") ? (parseFloat($("opt-vmaf-min-p5").value) || 0) : 0;
+      out.vmaf_subsample = $("opt-vmaf-subsample") ? (parseInt($("opt-vmaf-subsample").value, 10) || 1) : 1;
+      out.vmaf_gpu = $("opt-vmaf-gpu") ? $("opt-vmaf-gpu").checked : false;
       out.generate_screenshots = $("opt-vmaf-shots") ? $("opt-vmaf-shots").checked : false;
+      const customRanges = activeCustomSampleRanges();
+      if (customRanges.length) out.sample_ranges = customRanges;
       if (rateMode !== "cq" && out.test_values[0]) out.quality = out.test_values[0];
     }
     return out;
@@ -3805,10 +4024,15 @@
       workflow: "compare_only",
       rate_mode: $("vt-rate-mode").value,
       test_values: vtGatherTestValues(),
+      vmaf_search_mode: $("vt-search-mode") ? $("vt-search-mode").value : "grid",
+      vmaf_min_p5: $("vt-min-p5") ? (parseFloat($("vt-min-p5").value) || 0) : 0,
+      vmaf_subsample: $("vt-subsample") ? (parseInt($("vt-subsample").value, 10) || 1) : 1,
+      vmaf_gpu: $("vt-gpu") ? $("vt-gpu").checked : false,
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
       ssimulacra2_frames: $("vt-s2-frames") ? parseInt($("vt-s2-frames").value, 10) : 3,
       sample_mode: sampleModeValue(),
+      ...(activeCustomSampleRanges().length ? { sample_ranges: activeCustomSampleRanges() } : {}),
       scene_min_pct: sceneMinPct(),
       credits_at: creditsAtSeconds(),
       two_pass: !!($("vt-two-pass") && $("vt-two-pass").checked
@@ -4093,8 +4317,26 @@
       if (g.mem_used != null && g.mem_total != null) {
         sub = `${Math.round(g.mem_used)}/${Math.round(g.mem_total)} MB`;
       }
+      if (g.enc_util != null && g.enc_util > 0) {
+        sub += (sub ? " · " : "") + `Enc ${Math.round(g.enc_util)}%`;
+      } else if (g.dec_util != null && g.dec_util > 0) {
+        sub += (sub ? " · " : "") + `Dec ${Math.round(g.dec_util)}%`;
+      }
       if (g.temperature != null) sub += ` · ${Math.round(g.temperature)}°C`;
-      $(`gpu-sub-${i}`).textContent = sub;
+      const subEl = $(`gpu-sub-${i}`);
+      subEl.textContent = sub;
+      const card = subEl.closest(".ring-card");
+      if (card) {
+        const tip = [g.name || g.vendor.toUpperCase()];
+        if (g.render_util != null) tip.push(`3D: ${Math.round(g.render_util)}%`);
+        if (g.enc_util != null) tip.push(`Encode: ${Math.round(g.enc_util)}%`);
+        if (g.dec_util != null) tip.push(`Decode: ${Math.round(g.dec_util)}%`);
+        if (g.mem_used != null && g.mem_total != null) {
+          tip.push(`VRAM: ${Math.round(g.mem_used)} / ${Math.round(g.mem_total)} MB`);
+        }
+        if (g.temperature != null) tip.push(`Temp: ${Math.round(g.temperature)} °C`);
+        card.title = tip.join(" · ");
+      }
     });
   }
 
@@ -4133,7 +4375,10 @@
     renderVmaf(q.items, q.active_id);
   }
 
-  function statusBadge(status) {
+  function statusBadge(status, suspended) {
+    if (suspended && (status === "in arbeit" || status === "vmaf-test")) {
+      return `<span class="badge badge-await" title="${tt("FFmpeg-Prozess angehalten")}">⏸ pausiert</span>`;
+    }
     const map = {
       "wartend": "badge-wait", "vmaf-test": "badge-run", "in arbeit": "badge-run",
       "auswahl": "badge-await", "fertig": "badge-done", "fehlgeschlagen": "badge-fail",
@@ -4236,12 +4481,18 @@
   }
 
   function orderQueueItems(items) {
-    // Neueste Aktivität oben: fertig nach Endzeit, laufend nach Start, wartend nach Anlage.
-    const stamp = (it) => it.finished_at || it.started_at || it.created_at || 0;
-    return items.map((it, i) => ({ it, i })).sort((a, b) => {
-      const d = stamp(b.it) - stamp(a.it);
-      return d || (b.i - a.i);
-    }).map((x) => x.it);
+    // Laufend & Auswahl oben, danach wartend in exakter Startreihenfolge, danach erledigt (neueste oben).
+    const running = [];
+    const waiting = [];
+    const done = [];
+    items.forEach((it, i) => {
+      if (["in arbeit", "vmaf-test", "auswahl"].includes(it.status)) running.push({ it, i });
+      else if (it.status === "wartend") waiting.push({ it, i });
+      else done.push({ it, i });
+    });
+    running.sort((a, b) => (b.it.started_at || b.it.created_at || 0) - (a.it.started_at || a.it.created_at || 0));
+    done.sort((a, b) => ((b.it.finished_at || b.it.created_at || 0) - (a.it.finished_at || a.it.created_at || 0)) || (b.i - a.i));
+    return [...running, ...waiting, ...done].map((x) => x.it);
   }
 
   function stepsHtml(steps) {
@@ -4311,16 +4562,27 @@
     }
     const expanded = new Set([...body.querySelectorAll("tr[data-details]")].filter(tr => tr.querySelector("details[open]")).map(tr => tr.dataset.details));
     const DONE = ["fertig", "fehlgeschlagen", "abgebrochen"];
+    const waitingIds = view.filter((x) => x.status === "wartend").map((x) => x.id);
     body.innerHTML = view.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
-      const canCancel = ["wartend", "auswahl"].includes(it.status) || active.has(it.id);
+      const isAct = active.has(it.id);
+      const canCancel = ["wartend", "auswahl"].includes(it.status) || isAct;
+      const suspendBtn = isAct
+        ? `<button class="btn btn-ghost btn-sm" data-suspend="${it.id}" title="${escapeHtml(it.suspended ? tt("Encode-Prozess fortsetzen") : tt("Laufenden FFmpeg-Prozess anhalten (CPU/GPU sofort freigeben)"))}">${it.suspended ? "▶ Fortsetzen" : "⏸ Prozess"}</button>`
+        : "";
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
       const requeueBtn = DONE.includes(it.status)
         ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Mit diesen Einstellungen öffnen">Erneut</button>` : "";
+      const editWaitBtn = it.status === "wartend"
+        ? `<button class="btn btn-ghost btn-sm iconbtn" data-edit-wait="${it.id}" title="${tt("Aus Warteschlange nehmen & Einstellungen bearbeiten")}">✎</button>` : "";
+      const topBtn = (it.status === "wartend" && waitingIds.length > 1 && waitingIds[0] !== it.id)
+        ? `<button class="btn btn-ghost btn-sm iconbtn" data-top="${it.id}" title="${tt("Als Nächstes starten (Top-Priorität)")}">⏫</button>` : "";
       const moveBtns = it.status === "wartend"
-        ? `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="${tt("Früher starten")}">↑</button>` +
+        ? `${topBtn}<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="-1" title="${tt("Früher starten")}">↑</button>` +
           `<button class="btn btn-ghost btn-sm iconbtn" data-move="${it.id}" data-dir="1" title="${tt("Später starten")}">↓</button>` : "";
+      const dragHandle = it.status === "wartend"
+        ? `<span class="drag-grip muted" title="${tt("Ziehen zum Umsortieren")}" style="cursor:grab;margin-right:6px;user-select:none">⋮⋮</span>` : "";
       const err = it.error
         ? `<div class="queue-err" title="${escapeHtml(it.error)}">${escapeHtml(it.error.slice(0, 200))}${it.error.length > 200 ? " …" : ""}</div>`
         : "";
@@ -4334,9 +4596,7 @@
         ? `<div class="muted" style="font-size:11px" title="${escapeHtml(it.extra_outputs.join("\n"))}">+ ${tt("Mobile-Fassung")}</div>`
         : (it.settings && it.settings.mobile_copy && !DONE.includes(it.status)
           ? `<div class="muted" style="font-size:11px">+ ${tt("Mobile-Fassung")} (${it.settings.mobile_height || 720}p)</div>` : "");
-      // Dauer: laufend (aktiv) oder final (abgeschlossen); wartend → Schätzung
-      // aus der Historie (Encode-Zeit ähnlicher Jobs, ohne VMAF-Analyse).
-      let dur = (active.has(it.id) || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
+      let dur = (isAct || DONE.includes(it.status)) ? (it.duration_human || "—") : "—";
       if (dur === "—" && it.eta_estimate && it.eta_estimate.human) {
         const e = it.eta_estimate;
         const tip = `${tt("Schätzung aus der Historie")}: ${e.speed_x}× ${tt("Echtzeit")} (${e.samples} ${tt("frühere Encodes")}${e.exact ? "" : ", " + tt("andere Auflösung/Speed")})${it.settings && it.settings.vmaf_check ? " · " + tt("ohne VMAF-Analyse") : ""}`;
@@ -4344,16 +4604,82 @@
       }
       const finished = DONE.includes(it.status) && it.finished_at
         ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
-      return `<tr class="queue-row" data-details="${it.id}" title="Details / ffprobe anzeigen">
-        <td><span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${dvBox}${extraOut}</td>
+      const dragAttr = it.status === "wartend" ? ` draggable="true" data-wait-row="${it.id}"` : "";
+      return `<tr class="queue-row" data-details="${it.id}"${dragAttr} title="Details / ffprobe anzeigen">
+        <td>${dragHandle}<span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${dvBox}${extraOut}</td>
         <td>${reso}</td>
-        <td class="status-cell">${statusBadge(it.status)}</td>
+        <td class="status-cell">${statusBadge(it.status, it.suspended)}</td>
         <td>${settingsLabel(it)}${window.StudioInsights ? window.StudioInsights.queueDetailsHtml(it) : ""}</td>
         <td>${dur}${finished}${stepsHtml(it.steps)}</td>
         <td class="good">${it.saved_human}</td>
-        <td class="row-actions">${moveBtns}${requeueBtn}${cancelBtn}${it.status === "fertig" ? resultActionsHtml(it.id) : ""}</td>
+        <td class="row-actions">${moveBtns}${editWaitBtn}${suspendBtn}${requeueBtn}${cancelBtn}${it.status === "fertig" ? resultActionsHtml(it.id) : ""}</td>
       </tr>`;
     }).join("");
+    body.querySelectorAll("[data-suspend]").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const r = await fetch(`/api/queue/${encodeURIComponent(b.dataset.suspend)}/suspend`, { method: "POST" });
+        const d = await r.json().catch(() => ({}));
+        if (d && d.error) alert(d.error);
+        fetchQueue();
+      });
+    });
+    body.querySelectorAll("[data-top]").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await fetch(`/api/queue/${encodeURIComponent(b.dataset.top)}/reorder`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to_top: true }),
+        });
+        fetchQueue();
+      });
+    });
+    body.querySelectorAll("[data-edit-wait]").forEach((b) => {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.editWait;
+        await reopenJobById(id);
+        await fetch(`/api/queue/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+        fetchQueue();
+      });
+    });
+    let dragSrcId = null;
+    body.querySelectorAll("tr[data-wait-row]").forEach((tr) => {
+      tr.addEventListener("dragstart", (e) => {
+        dragSrcId = tr.dataset.waitRow;
+        tr.style.opacity = "0.5";
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", dragSrcId);
+        }
+      });
+      tr.addEventListener("dragend", () => {
+        tr.style.opacity = "";
+        body.querySelectorAll("tr[data-wait-row]").forEach((r) => { r.style.boxShadow = ""; });
+      });
+      tr.addEventListener("dragover", (e) => {
+        if (!dragSrcId || dragSrcId === tr.dataset.waitRow) return;
+        e.preventDefault();
+        tr.style.boxShadow = "inset 0 2px 0 var(--accent, #58a6ff)";
+      });
+      tr.addEventListener("dragleave", () => {
+        tr.style.boxShadow = "";
+      });
+      tr.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        tr.style.boxShadow = "";
+        const targetId = tr.dataset.waitRow;
+        if (!dragSrcId || !targetId || dragSrcId === targetId) return;
+        await fetch(`/api/queue/${encodeURIComponent(dragSrcId)}/reorder`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ before_id: targetId }),
+        });
+        dragSrcId = null;
+        fetchQueue();
+      });
+    });
     body.querySelectorAll("[data-cancel]").forEach((b) => {
       b.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -4686,6 +5012,14 @@
     if (ana) parts.push(ana === 1 ? "1 VMAF-Analyse" : `${ana} VMAF-Analysen`);
     $("progress-count").textContent = parts.join(" + ") || "—";
     list.innerHTML = jobs.map(progressBlock).join("");
+    list.querySelectorAll("[data-prog-suspend]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const r = await fetch(`/api/queue/${encodeURIComponent(b.dataset.progSuspend)}/suspend`, { method: "POST" });
+        const d = await r.json().catch(() => ({}));
+        if (d && d.error) alert(d.error);
+        fetchQueue();
+      });
+    });
   }
 
   const VMAF_PHASE = {
@@ -4734,7 +5068,9 @@
       <div class="job-progress ${analyzing ? "analyzing" : ""}">
         <div class="job-progress-head">
           <span class="job-progress-title">${escapeHtml(job.title)}</span>
-          <span class="job-progress-stage">${escapeHtml(stage)}</span>
+          <span class="job-progress-stage">${job.suspended ? "⏸ " + escapeHtml(tt("Prozess pausiert")) : escapeHtml(stage)}
+            <button class="btn btn-ghost btn-sm" type="button" data-prog-suspend="${job.id}" style="margin-left:8px">${job.suspended ? "▶ Fortsetzen" : "⏸ Pausieren"}</button>
+          </span>
         </div>
         <div class="big-progress">
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
@@ -7347,6 +7683,14 @@
       const tip = courseTooltipOptions();
       opts.interaction = { mode: tip.mode, intersect: false };
       opts.plugins.tooltip = tip;
+      opts.onClick = (_evt, elements) => {
+        if (!elements || !elements.length) return;
+        const el = elements[0];
+        const ds = datasets[el.datasetIndex];
+        const pt = ds && ds.data && ds.data[el.index];
+        const secInClip = pt && typeof pt === "object" ? Number(pt.x) : 0;
+        jumpFromVmafChartToAb(vmaf, scene, secInClip, ds ? ds.label : "");
+      };
       state.vmafFrameChart = new Chart(ctx, {
         type: "line",
         data: { datasets },
@@ -7356,6 +7700,14 @@
     }
     const n = Math.max(...rows.map((r) => sceneEntry(r, scene).frames.length));
     opts.scales.x.ticks.autoSkip = false;
+    opts.onClick = (_evt, elements) => {
+      if (!elements || !elements.length) return;
+      const el = elements[0];
+      const ds = datasets[el.datasetIndex];
+      const frac = n > 1 ? el.index / (n - 1) : 0;
+      const secInClip = frac * (Number(vmaf.clip_seconds) || 0);
+      jumpFromVmafChartToAb(vmaf, scene, secInClip, ds ? ds.label : "");
+    };
     state.vmafFrameChart = new Chart(ctx, {
       type: "line",
       data: {
@@ -7754,6 +8106,16 @@
       };
     }
     opts.plugins.tooltip = tip;
+    opts.onClick = (_evt, elements) => {
+      if (!elements || !elements.length || !state.vmafShown) return;
+      const el = elements[0];
+      const ds = datasets[el.datasetIndex];
+      if (!ds || ds.floorLine) return;
+      const pt = ds.data && ds.data[el.index];
+      const frameNo = pt && typeof pt === "object" ? Number(pt.x) : 0;
+      const fSec = Number((series[0] && series[0].frame_sec) || (1 / 24));
+      jumpFromVmafChartToAb(state.vmafShown, nerdScene ?? 0, frameNo * fSec, ds.nerdKey || ds.label || "");
+    };
     state.vmafNerdChart = new Chart(ctx, {
       type: "line",
       data: { datasets },
@@ -7937,8 +8299,132 @@
     return keys.size > pcs.size;
   }
 
+  function renderBdRates(vmaf) {
+    const bar = $("vmaf-bdrate-bar");
+    if (!bar) return;
+    const list = (vmaf && vmaf.bd_rates) || [];
+    if (!list.length) {
+      bar.innerHTML = "";
+      return;
+    }
+    bar.innerHTML = list.map((b) => {
+      const v = Number(b.bd_rate_percent || 0);
+      const cls = v < -1 ? "good" : (v > 1 ? "bad" : "muted");
+      const sign = v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1);
+      return `<span class="badge" title="Bjøntegaard-Delta über VMAF ${(b.vmaf_overlap || []).join('–')} ggü. ${escapeHtml(b.reference)}">`
+        + `BD-Rate <strong>${escapeHtml(b.candidate)}</strong> vs. ${escapeHtml(b.reference)}: `
+        + `<strong class="${cls}">${sign} % Bitrate</strong></span>`;
+    }).join("");
+  }
+
+  function drawChartRdCurve(vmaf) {
+    const ctx = pageCanvas("vmaf-chart", "nerd-std-chart");
+    if (!ctx) return;
+    const col = chartColors();
+    const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
+    const groups = new Map();
+    rows.forEach((r) => {
+      const kbps = Number(r.video_kbps) || (r.predicted_size_bytes ? Math.round(r.predicted_size_bytes / 1024) : 0);
+      if (!kbps || !r.vmaf) return;
+      const gName = [r.codec_disp || r.codec, r.encoder_speed || "", r.b_frames && r.b_frames !== "auto" ? "BF:" + r.b_frames : "", r.two_pass ? "2-Pass" : ""]
+        .filter(Boolean).join(" · ");
+      if (!groups.has(gName)) groups.set(gName, []);
+      groups.get(gName).push({ x: kbps, y: Number(r.vmaf), r });
+    });
+    const datasets = [];
+    let gi = 0;
+    groups.forEach((pts, gName) => {
+      pts.sort((a, b) => a.x - b.x);
+      const color = CHART_PALETTE[gi % CHART_PALETTE.length];
+      gi += 1;
+      datasets.push({
+        label: gName,
+        data: pts,
+        borderColor: color,
+        backgroundColor: color,
+        pointRadius: pts.map((p) => (p.r.recommended ? 7 : 4.5)),
+        pointHoverRadius: 8,
+        borderWidth: 2.2,
+        tension: 0.25,
+        showLine: true,
+      });
+    });
+    if (state.vmafChart) state.vmafChart.destroy();
+    const xLabel = rows.some((r) => r.video_kbps) ? "Videobitrate (kbit/s)" : "Geschätzte Größe (KiB)";
+    state.vmafChart = new Chart(ctx, {
+      type: "scatter",
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+        plugins: {
+          legend: { labels: { color: col.text, font: { size: 12 } } },
+          tooltip: {
+            callbacks: {
+              label: (item) => {
+                const raw = item.raw || {};
+                const r = raw.r || {};
+                const p5 = r.vmaf_5pct != null ? ` · 5%-Low ${Number(r.vmaf_5pct).toFixed(1)}` : "";
+                const p1 = r.vmaf_1pct != null ? ` · 1%-Low ${Number(r.vmaf_1pct).toFixed(1)}` : "";
+                return `${r.label || item.dataset.label}: VMAF ${Number(raw.y).toFixed(2)} @ ${Math.round(raw.x)} kbit/s (${r.savings_percent > 0 ? "-" : "+"}${Math.abs(Number(r.savings_percent || 0)).toFixed(1)} %)${p1}${p5}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "linear",
+            title: { display: true, text: xLabel, color: col.muted },
+            grid: { color: col.grid }, ticks: { color: col.muted },
+          },
+          y: {
+            title: { display: true, text: "VMAF", color: col.muted },
+            suggestedMin: 85, suggestedMax: 100,
+            grid: { color: col.grid }, ticks: { color: col.muted },
+          },
+        },
+      },
+    });
+  }
+
+  function jumpFromVmafChartToAb(vmaf, scene, secInClip, labelHint) {
+    if (!vmaf) return;
+    const choices = nerdAbChoices(vmaf, scene);
+    if (choices.length < 2) {
+      toast("Für den Direktsprung müssen Testclips vorhanden sein (Option „Testclips behalten“ oder aktiv im Archiv).", "warn");
+      return;
+    }
+    const refChoice = choices.find((c) => c.id === "ref") || choices[0];
+    const cleanHint = String(labelHint || "").replace(/\s*·\s*Bitrate$/i, "").trim();
+    let encChoice = choices.find((c) => c.id !== refChoice.id && (c.label === cleanHint || cleanHint.includes(c.label)));
+    if (!encChoice) {
+      const recIdx = (vmaf.results || []).findIndex((r) => r.recommended);
+      if (recIdx >= 0) encChoice = choices.find((c) => c.id === "r" + recIdx);
+    }
+    if (!encChoice) encChoice = choices.find((c) => c.id !== refChoice.id);
+    if (!refChoice || !encChoice) return;
+    const toPick = (c) => ({
+      kind: c.kind, clip: c.clip || "", lead: Number(c.lead) || 0,
+      start: c.start, len: c.len, label: c.label,
+    });
+    openClipAb([toPick(refChoice), toPick(encChoice)], { offsetSec: Math.max(0, Number(secInClip) || 0) });
+  }
+
   function drawChart(vmaf) {
     if (typeof Chart === "undefined") return;
+    renderBdRates(vmaf);
+    const modeBar = $("vmaf-chart-mode-bar");
+    if (modeBar && !modeBar._bound) {
+      modeBar._bound = true;
+      modeBar.querySelectorAll("[data-vmaf-cmode]").forEach((b) => {
+        b.addEventListener("click", () => {
+          state.vmafChartMode = b.dataset.vmafCmode || "steps";
+          modeBar.querySelectorAll("[data-vmaf-cmode]").forEach((x) =>
+            x.classList.toggle("active", x === b));
+          if (state.vmafShown) drawChart(state.vmafShown);
+        });
+      });
+    }
+    if (state.vmafChartMode === "rd") return drawChartRdCurve(vmaf);
     if (vmaf.multi_codec || resultHasSettingVariants(vmaf.results)) return drawChartMultiCodec(vmaf);
 
     const ctx = pageCanvas("vmaf-chart", "nerd-std-chart");
@@ -8981,6 +9467,114 @@
         renderProfileOptions(name);
       });
     });
+
+    const expBtn = $("btn-profile-export");
+    if (expBtn) {
+      expBtn.addEventListener("click", async () => {
+        try {
+          const r = await fetch("/api/profiles/export?include_watch=1");
+          const bundle = await r.json();
+          const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          const day = new Date().toISOString().slice(0, 10);
+          a.href = url;
+          a.download = `av1studio_profiles_${day}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (e) {
+          alert("Profil-Export fehlgeschlagen: " + e);
+        }
+      });
+    }
+
+    const impBtn = $("btn-profile-import");
+    const impInp = $("profile-import-input");
+    if (impBtn && impInp) {
+      impBtn.addEventListener("click", () => { impInp.value = ""; impInp.click(); });
+      impInp.addEventListener("change", async () => {
+        const file = impInp.files && impInp.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const bundle = JSON.parse(text);
+          const r = await fetch("/api/profiles/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bundle, overwrite: true, import_watch: true }),
+          });
+          const d = await r.json();
+          if (!r.ok || d.error) {
+            alert("Profil-Import fehlgeschlagen: " + (d.error || r.statusText));
+            return;
+          }
+          state.profiles = d.profiles || [];
+          renderProfileOptions($("opt-profile") ? $("opt-profile").value : "");
+          const msg = `Import abgeschlossen: ${d.imported || 0} Profil(e)` +
+            (d.watch_imported ? `, ${d.watch_imported} Watchfolder-Regel(n)` : "") + " übernommen.";
+          alert(msg);
+        } catch (e) {
+          alert("Ungültige JSON-Datei: " + e);
+        }
+      });
+    }
+
+    const grainBtn = $("btn-film-grain-measure");
+    if (grainBtn) {
+      grainBtn.addEventListener("click", async () => {
+        const selPath = state.selected && !state.selected.isBatch ? state.selected.path : "";
+        const hint = $("film-grain-est-hint");
+        if (!selPath) {
+          if (hint) hint.textContent = "Bitte zuerst eine einzelne Videodatei auswählen, um das Filmkorn zu messen.";
+          return;
+        }
+        grainBtn.disabled = true;
+        if (hint) hint.textContent = "Messe Luma-Rauschen an bis zu 3 Stichproben …";
+        try {
+          const anime = !!($("opt-anime") && $("opt-anime").checked);
+          const r = await fetch("/api/film-grain/estimate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: selPath, anime }),
+          });
+          const d = await r.json();
+          if (!r.ok || d.error) {
+            if (hint) hint.textContent = "Messung fehlgeschlagen: " + (d.error || r.statusText);
+            return;
+          }
+          const fg = Number(d.film_grain || 0);
+          if ($("opt-film-grain")) {
+            $("opt-film-grain").value = String(fg);
+            $("opt-film-grain").dispatchEvent(new Event("input"));
+          }
+          if ($("film-grain-val")) $("film-grain-val").textContent = String(fg);
+          if (hint) {
+            hint.textContent = `Gemessen: film-grain = ${fg} · ${d.label || ""} (Luma-MSE ${Number(d.mse_y || 0).toFixed(2)}, ${d.samples_used || 1} Stichprobe(n))`;
+          }
+        } catch (e) {
+          if (hint) hint.textContent = "Messung fehlgeschlagen: " + e;
+        } finally {
+          grainBtn.disabled = false;
+        }
+      });
+    }
+
+    // Live-Status für VMAF GPU-Beschleunigung (Main ≥ 610 vs. Legacy ≥ 525) abrufen
+    fetch("/api/vmaf/gpu-status").then((r) => r.json()).then((st) => {
+      if (!st) return;
+      const chKey = st.image_channel || st.channel || "latest";
+      const ch = chKey === "legacy" ? "Legacy (FFmpeg 8.1 · Treiber ≥ 525)" : "Main (FFmpeg 9.0 · Treiber ≥ 610)";
+      const drv = st.driver_version ? `erkannt: ${st.driver_version}` : "kein NVIDIA-Treiber erkannt";
+      const txt = st.available
+        ? `Bereit (${st.mode === "libvmaf_cuda" ? "libvmaf_cuda" : "CUDA-HW-Decode + libvmaf"} · ${ch}, ${drv})`
+        : `${st.reason || "Nicht verfügbar"} (${ch}, ${drv}) – fällt automatisch auf CPU zurück.`;
+      ["opt-vmaf-gpu-hint", "vt-gpu-hint"].forEach((id) => {
+        const el = $(id);
+        if (el) el.textContent = txt;
+      });
+    }).catch(() => {});
   }
 
   async function refreshProfiles() {
@@ -9071,12 +9665,20 @@
       set("opt-keyint", String(s.keyint_sec));
     }
     set("opt-film-grain", s.film_grain);
+    if ($("film-grain-val") && $("opt-film-grain")) {
+      $("film-grain-val").textContent = $("opt-film-grain").value;
+    }
+    if (s.film_grain_auto !== undefined) set("opt-film-grain-auto", s.film_grain_auto);
     if (s.svt_look) set("opt-svt-look", s.svt_look, "change");
     set("opt-two-pass", s.two_pass);
     if (s.mobile_copy !== undefined) set("opt-mobile-copy", s.mobile_copy);
     if (s.mobile_height) set("opt-mobile-height", s.mobile_height);
     set("opt-anime", s.anime);
     set("opt-autocrop", s.autocrop);
+    if (s.chunked !== undefined) set("opt-chunked", s.chunked, "change");
+    if (s.chunk_seconds) set("opt-chunk-seconds", s.chunk_seconds);
+    if (s.chunk_cq_range !== undefined) set("opt-chunk-range", s.chunk_cq_range);
+    if (s.chunk_scene_align !== undefined) set("opt-chunk-scene", s.chunk_scene_align);
     set("opt-verify-vmaf", s.verify_vmaf, "change");
     set("opt-verify-min", s.verify_min);
     set("opt-verify-retry", s.verify_retry);
@@ -9089,6 +9691,20 @@
     set("opt-audio-bitrate", s.audio_bitrate);
     set("opt-audio-channels", s.audio_channels);
     set("opt-audio-normalize", s.audio_normalize);
+    if (s.audio_normalize_2pass !== undefined) set("opt-audio-norm-2pass", s.audio_normalize_2pass);
+    if (s.audio_nightmode !== undefined) set("opt-audio-nightmode", s.audio_nightmode);
+    if (s.subtitle_ocr !== undefined) set("opt-sub-ocr", s.subtitle_ocr);
+    if (s.embed_sidecar_subs !== undefined) set("opt-embed-sidecar-subs", s.embed_sidecar_subs);
+    if (s.audio_languages !== undefined) set("opt-audio-langs", s.audio_languages);
+    if (s.audio_keep_original !== undefined) set("opt-audio-keep-orig", s.audio_keep_original);
+    if (s.audio_exclude_commentary !== undefined) set("opt-audio-no-comm", s.audio_exclude_commentary);
+    if (s.subtitle_languages !== undefined) set("opt-sub-langs", s.subtitle_languages);
+    if (s.sub_exclude_sdh !== undefined) set("opt-sub-no-sdh", s.sub_exclude_sdh);
+    if (s.sub_keep_forced !== undefined) set("opt-sub-keep-forced", s.sub_keep_forced);
+    if (s.vmaf_search_mode !== undefined) set("opt-vmaf-search", s.vmaf_search_mode);
+    if (s.vmaf_min_p5 !== undefined) set("opt-vmaf-min-p5", s.vmaf_min_p5);
+    if (s.vmaf_subsample !== undefined) set("opt-vmaf-subsample", String(s.vmaf_subsample));
+    if (s.vmaf_gpu !== undefined) set("opt-vmaf-gpu", s.vmaf_gpu);
     if (s.name_pattern !== undefined) set("opt-name-pattern", s.name_pattern);
     if (s.on_duplicate !== undefined) set("opt-on-duplicate", s.on_duplicate);
     if (s.max_output_mb !== undefined) set("opt-max-output-mb", s.max_output_mb);
@@ -9153,13 +9769,15 @@
   function renderStats(st, recent) {
     const grid = $("stat-grid");
     if (grid) {
+      const rtFactor = st.realtime_factor ? `${st.realtime_factor}× Echtzeit` : "—";
       const cards = [
         ["Encodes fertig", st.count_done || 0],
         ["Gesamt eingespart", formatBytes(st.saved_bytes)],
         ["Ersparnis", `${st.saved_percent || 0}%`],
         ["Original → Ergebnis", `${formatBytes(st.original_bytes)} → ${formatBytes(st.output_bytes)}`],
         ["Ø VMAF", st.avg_vmaf != null ? st.avg_vmaf : "—"],
-        ["Encode-Zeit gesamt", formatDuration(st.encode_seconds)],
+        ["Medienlaufzeit verarbeitet", formatDuration(st.media_seconds || 0)],
+        ["Encode-Zeit · Tempo", `${formatDuration(st.encode_seconds)} · ${rtFactor}`],
         ["Fehlgeschlagen", st.count_failed || 0],
       ];
       grid.innerHTML = cards.map(([l, v]) =>
@@ -9174,6 +9792,80 @@
         return `<span class="codec-chip">${escapeHtml(label)}: ${c.count}× · ${formatBytes(c.saved_bytes)}</span>`;
       }).join("");
     }
+
+    // Monatsverlauf (Eingesparter Speicher)
+    const tlEl = $("stat-timeline");
+    if (tlEl) {
+      const tl = st.timeline || [];
+      if (!tl.length) {
+        tlEl.innerHTML = '<p class="muted">Noch keine monatlichen Verlaufsdaten.</p>';
+      } else {
+        const maxSaved = Math.max(1, ...tl.map((m) => Math.max(0, m.saved_bytes || 0)));
+        tlEl.innerHTML = tl.map((m) => {
+          const pct = Math.max(2, Math.round((Math.max(0, m.saved_bytes || 0) / maxSaved) * 100));
+          return `<div class="stat-bar-row">
+            <span class="stat-bar-lbl">${escapeHtml(m.month)}</span>
+            <div class="stat-bar-track"><div class="stat-bar-fill" style="width:${pct}%"></div></div>
+            <span class="stat-bar-val">${formatBytes(m.saved_bytes)} · ${m.count}×</span>
+          </div>`;
+        }).join("");
+      }
+    }
+
+    // Encoder-Leaderboard
+    const encEl = $("stat-encoders");
+    if (encEl) {
+      const encs = st.by_encoder || [];
+      if (!encs.length) {
+        encEl.innerHTML = '<p class="muted">Noch keine abgeschlossenen Encodes.</p>';
+      } else {
+        encEl.innerHTML = encs.map((e) => {
+          const spd = e.speed_x != null ? `${e.speed_x}× Echtzeit` : "—";
+          const vm = e.avg_vmaf != null ? `Ø VMAF ${e.avg_vmaf}` : "kein VMAF";
+          return `<div class="stat-list-row">
+            <strong>${escapeHtml((e.platform || "cpu").toUpperCase())} · ${escapeHtml((e.codec || "?").toUpperCase())}</strong>
+            <span class="muted">${e.count}× · ${spd} · ${vm} · −${formatBytes(e.saved_bytes)} (${e.saved_percent || 0}%)</span>
+          </div>`;
+        }).join("");
+      }
+    }
+
+    // Ersparnis nach Auflösung
+    const resEl = $("stat-resolutions");
+    if (resEl) {
+      const resList = st.by_resolution || [];
+      if (!resList.length) {
+        resEl.innerHTML = '<p class="muted">Noch keine Auflösungsdaten.</p>';
+      } else {
+        const maxRes = Math.max(1, ...resList.map((r) => Math.max(0, r.saved_bytes || 0)));
+        resEl.innerHTML = resList.map((r) => {
+          const pct = Math.max(2, Math.round((Math.max(0, r.saved_bytes || 0) / maxRes) * 100));
+          return `<div class="stat-bar-row">
+            <span class="stat-bar-lbl">${escapeHtml(r.resolution)}</span>
+            <div class="stat-bar-track"><div class="stat-bar-fill" style="width:${pct}%"></div></div>
+            <span class="stat-bar-val">${formatBytes(r.saved_bytes)} (${r.saved_percent || 0}%) · ${r.count}×</span>
+          </div>`;
+        }).join("");
+      }
+    }
+
+    // Top-Platzsparer
+    const topEl = $("stat-topsavers");
+    if (topEl) {
+      const tops = st.top_savers || [];
+      if (!tops.length) {
+        topEl.innerHTML = '<p class="muted">Noch keine Top-Einträge.</p>';
+      } else {
+        topEl.innerHTML = tops.slice(0, 6).map((t, idx) => {
+          const vm = t.vmaf != null ? ` · VMAF ${Number(t.vmaf).toFixed(1)}` : "";
+          return `<div class="stat-list-row">
+            <span title="${escapeHtml(t.title || "")}">${idx + 1}. ${escapeHtml((t.title || "").slice(0, 44))}</span>
+            <span class="good">−${formatBytes(t.saved_bytes)}${escapeHtml(vm)}</span>
+          </div>`;
+        }).join("");
+      }
+    }
+
     const body = $("stats-body");
     if (body) {
       body.innerHTML = recent.length ? recent.map((j) => {
@@ -9196,6 +9888,7 @@
             <button class="btn btn-ghost btn-sm stats-play" data-id="${id}" title="Details & Wiedergabe öffnen">▶</button>
             <button class="btn btn-ghost btn-sm stats-requeue" data-id="${id}" title="Mit diesen Einstellungen öffnen">Einstellungen übernehmen</button>
             ${j.status === "fertig" ? resultActionsHtml(j.id) : ""}
+            <button class="btn btn-ghost btn-sm bad-btn stats-del" data-id="${id}" title="Diesen Eintrag aus der Historie löschen">✕</button>
           </td>
         </tr>`; }).join("") :
         '<tr class="empty-row"><td colspan="11">Noch keine Jobs.</td></tr>';
@@ -9213,6 +9906,19 @@
           reopenJobById(el.dataset.id);
         });
       });
+      body.querySelectorAll(".stats-del").forEach((el) => {
+        el.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = el.dataset.id;
+          if (!id) return;
+          const r = await fetch(`/api/history/${encodeURIComponent(id)}`, { method: "DELETE" });
+          if (r.ok) {
+            const d = await r.json();
+            renderStats(d.stats || {}, d.recent || []);
+          }
+        });
+      });
       bindResultActions(body);
     }
   }
@@ -9223,7 +9929,7 @@
   function libBindLiveFilters() {
     const refresh = () => libRefreshView();
     ["lib-name", "lib-exclude", "lib-min-size", "lib-min-br", "lib-min-h",
-      "lib-codec-match", "lib-target-codec", "lib-skip-optimized", "lib-skip-processed"]
+      "lib-codec-match", "lib-target-codec", "lib-skip-optimized", "lib-skip-processed", "lib-only-dups"]
       .forEach((id) => {
         const el = $(id);
         if (!el) return;
@@ -9378,6 +10084,7 @@
       dynamic_filters: dyn,
       skip_optimized: $("lib-skip-optimized") ? $("lib-skip-optimized").checked : false,
       skip_processed: $("lib-skip-processed") ? $("lib-skip-processed").checked : false,
+      only_dups: $("lib-only-dups") ? $("lib-only-dups").checked : false,
     };
   }
 
@@ -9446,8 +10153,141 @@
     };
   }
 
+  function libIdentityKey(m) {
+    if (!m) return "";
+    const rawName = String(m.name || "").replace(/\.[^.]+$/, "");
+    const epMatch = rawName.match(/\bS(\d{1,2})[\s._-]*E(\d{1,3})\b/i);
+    const epTag = epMatch ? `s${String(parseInt(epMatch[1], 10)).padStart(2, "0")}e${String(parseInt(epMatch[2], 10)).padStart(2, "0")}` : "";
+    const nfo = libNfoOf(m);
+    const show = String(nfo.showtitle || "").trim().toLowerCase();
+    if (show && epTag) return `tv:${show}:${epTag}`;
+    const nfoTitle = String(nfo.title || nfo.originaltitle || "").trim().toLowerCase();
+    const yearMatch = rawName.match(/\b(19\d{2}|20\d{2})\b/);
+    const yr = libNfoYear(m) || (yearMatch ? parseInt(yearMatch[1], 10) : 0);
+    if (nfoTitle && !epTag) return `mov:${nfoTitle}:${yr || ""}`;
+    // Dateinamen von technischen Tags bereinigen
+    let clean = rawName
+      .replace(/\[[^\]]*\]/g, " ")
+      .replace(/\b(2160p|1080p|720p|576p|480p|4k|uhd|fhd|bluray|bdrip|brrip|remux|web[-.]?dl|webrip|hdtv|dvdrip)\b/gi, " ")
+      .replace(/\b(x264|x265|h\.?264|h\.?265|hevc|av1|avc|vp9|svt|nvenc|qsv|10bit|8bit|hdr10\+?|hdr|dv|dovi|dolby[\s._-]*vision|sdr|atmos|truehd|dts[-.]?hd|eac3|ac3|aac|opus|german|english|multi|dl|repack|proper)\b/gi, " ")
+      .replace(/[._-]+(?:av1|hevc|h265|h264|opt|encoded|remux)$/i, " ");
+    if (epMatch) {
+      const idx = clean.toLowerCase().indexOf(epMatch[0].toLowerCase());
+      if (idx > 0) clean = clean.slice(0, idx) + " " + epTag;
+    } else if (yearMatch) {
+      const idx = clean.indexOf(yearMatch[0]);
+      if (idx > 1) clean = clean.slice(0, idx) + " " + yearMatch[1];
+    }
+    clean = clean.toLowerCase().replace(/[^a-z0-9äöüß]+/g, " ").trim();
+    if (clean.length < 2) return "";
+    return `file:${clean}`;
+  }
+
+  function libComputeDuplicates(rows) {
+    const buckets = new Map();
+    (rows || []).forEach((m) => {
+      const k = libIdentityKey(m);
+      if (!k) return;
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(m);
+    });
+    const groups = [];
+    const dupPaths = new Set();
+    buckets.forEach((items, key) => {
+      if (items.length < 2) return;
+      // Nach kompatibler Dauer clustern (±6% oder ±45s), damit Trailer nicht als Film-Duplikat zählen
+      const clusters = [];
+      items.forEach((item) => {
+        const d = Number(item.duration) || 0;
+        const hit = clusters.find((cl) => {
+          const ref = Number(cl[0].duration) || 0;
+          if (!(d > 60 && ref > 60)) return true;
+          const diff = Math.abs(d - ref);
+          return diff <= Math.max(45, Math.max(d, ref) * 0.06);
+        });
+        if (hit) hit.push(item);
+        else clusters.push([item]);
+      });
+      clusters.forEach((cl) => {
+        if (cl.length < 2) return;
+        cl.sort((a, b) => (b.size_bytes || 0) - (a.size_bytes || 0));
+        cl.forEach((x) => dupPaths.add(x.path));
+        const totalBytes = cl.reduce((s, x) => s + (x.size_bytes || 0), 0);
+        const minBytes = Math.min(...cl.map((x) => x.size_bytes || 0));
+        const reclaimBytes = Math.max(0, totalBytes - minBytes);
+        const label = libNfoHeadline(cl[0]) || String(cl[0].name || "").replace(/\.[^.]+$/, "");
+        groups.push({ key, label, items: cl, totalBytes, reclaimBytes });
+      });
+    });
+    groups.sort((a, b) => b.reclaimBytes - a.reclaimBytes);
+    const totalReclaim = groups.reduce((s, g) => s + g.reclaimBytes, 0);
+    return { groups, dupPaths, totalReclaim };
+  }
+
+  function renderLibDuplicates(dupInfo) {
+    const panel = $("lib-dups-panel");
+    const sub = $("lib-dups-sub");
+    const body = $("lib-dups-body");
+    if (!panel || !body || !sub) return;
+    const groups = (dupInfo && dupInfo.groups) || [];
+    if (!groups.length) {
+      panel.style.display = "none";
+      body.innerHTML = "";
+      return;
+    }
+    panel.style.display = "";
+    sub.textContent = `${groups.length} Gruppe(n) · bis zu ${formatBytes(dupInfo.totalReclaim || 0)} mehrfach belegt`;
+    body.innerHTML = groups.slice(0, 30).map((g, gi) => {
+      const rows = g.items.map((it) => {
+        const meta = [(it.codec || "").toUpperCase(), it.resolution || (it.height ? `${it.height}p` : ""), it.video_bitrate_human || "", it.size_human || formatBytes(it.size_bytes || 0)]
+          .filter(Boolean).join(" · ");
+        return `<div class="lib-dup-item">`
+          + `<span title="${escapeHtml(it.path)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(it.path)}</span>`
+          + `<span style="white-space:nowrap;font-variant-numeric:tabular-nums">${escapeHtml(meta)}</span>`
+          + `</div>`;
+      }).join("");
+      const canAb = g.items.length >= 2;
+      return `<div class="lib-dup-group">`
+        + `<div class="lib-dup-head">`
+        + `<strong>${escapeHtml(g.label)} <span class="muted">(${g.items.length}× · Sparpotenzial ${formatBytes(g.reclaimBytes)})</span></strong>`
+        + `<div style="display:flex;gap:6px">`
+        + (canAb ? `<button type="button" class="btn btn-ghost btn-sm" data-dup-ab="${gi}" title="Größte Version (A) gegen kleinste Version (B) im A/B-Player öffnen">🎞 A/B-Vergleich</button>` : "")
+        + `<button type="button" class="btn btn-ghost btn-sm" data-dup-search="${escapeHtml(g.items[0].name.split(".")[0].slice(0, 24))}">In Tabelle filtern</button>`
+        + `</div></div>`
+        + `<div class="lib-dup-items">${rows}</div>`
+        + `</div>`;
+    }).join("");
+    body.querySelectorAll("[data-dup-ab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const g = groups[parseInt(btn.dataset.dupAb, 10)];
+        if (!g || g.items.length < 2) return;
+        const aItem = g.items[0];
+        const bItem = g.items[g.items.length - 1];
+        navTo("abcompare");
+        const sameBox = $("ab-same-source");
+        if (sameBox && sameBox.checked) { sameBox.checked = false; abSyncSourceUi(); }
+        if ($("ab-root-a")) $("ab-root-a").value = "media";
+        if ($("ab-root-b")) $("ab-root-b").value = "media";
+        if ($("ab-path-a")) $("ab-path-a").value = aItem.path;
+        if ($("ab-path-b")) $("ab-path-b").value = bItem.path;
+        const loadBtn = $("btn-ab-load");
+        if (loadBtn) setTimeout(() => loadBtn.click(), 60);
+      });
+    });
+    body.querySelectorAll("[data-dup-search]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sEl = $("lib-result-search");
+        if (sEl) {
+          sEl.value = btn.dataset.dupSearch || "";
+          renderLibrary();
+        }
+      });
+    });
+  }
+
   function libApplyLiveFilters(all) {
     const f = libFilters();
+    const dupSet = f.only_dups ? libComputeDuplicates(all).dupPaths : null;
     const name = (f.name_contains || "").toLowerCase();
     const excl = (f.name_exclude || []).map((t) => t.toLowerCase());
     const minSize = (f.min_size_mb || 0) * 1024 * 1024;
@@ -9458,6 +10298,7 @@
     const exts = (f.extensions || []).map((e) => String(e).toLowerCase().replace(/^\./, ""));
     const target = f.target_codec || "av1";
     return (all || []).map((m) => libEnrichRow(m, target)).filter((m) => {
+      if (dupSet && !dupSet.has(m.path)) return false;
       if (name && !(m.name || "").toLowerCase().includes(name)) return false;
       if (excl.length) {
         const pathLow = ((m.path || m.name || "")).toLowerCase();
@@ -9554,6 +10395,7 @@
       total_saved_human: formatBytes(saved),
     });
     renderLibDashboard(state.libStats, state.libRows.length);
+    renderLibDuplicates(libComputeDuplicates(state.libRows));
     libUpdateFormatCounts();
     const has = state.libRows.length > 0;
     ["btn-lib-add", "btn-lib-add-auto", "btn-lib-csv"].forEach((id) => {
@@ -10186,7 +11028,8 @@
 
   const LIB_PROBE_KEYS = [
     "probe_rev", "pix_fmt", "color_transfer", "color_primaries", "color_space", "color_range",
-    "level", "level_label", "hdr10_plus", "interlaced", "field_order",
+    "level", "level_label", "hdr_type", "is_hdr", "dolby_vision", "dv_profile", "hdr10_plus",
+    "interlaced", "field_order",
     "overall_bitrate", "overall_bitrate_human", "encoder", "muxer", "container_title",
     "sar", "dar", "anamorphic", "rotation", "frame_rate_mode", "fps_nominal", "video_start",
     "metadata_frames", "chapters", "chapter_count", "video_tracks", "attachments",
@@ -10527,7 +11370,7 @@
     const cached = state.libDetails && state.libDetails[path];
     const haveTracks = Array.isArray(row.audio) || (cached && Array.isArray(cached.audio));
     const haveNfo = !libNfoIsStub(row.nfo) || (cached && !libNfoIsStub(cached.nfo));
-    const haveFacts = row.probe_rev === 3 || (cached && cached.probe_rev === 3);
+    const haveFacts = row.probe_rev >= 4 || (cached && cached.probe_rev >= 4);
     if (!haveTracks || !haveNfo || !haveFacts) {
       if (!state.libDetails) state.libDetails = {};
       state.libDetails[path] = {
@@ -11522,6 +12365,8 @@
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.ssimulacra2_frames = $("st-s2-frames") ? parseInt($("st-s2-frames").value, 10) : 3;
       s.sample_mode = sampleModeValue("st-sample-mode");
+      const stCustom = activeCustomSampleRanges();
+      if (stCustom.length) s.sample_ranges = stCustom;
       s.scene_min_pct = sceneMinPct();
       s.credits_at = creditsAtSeconds();
       s.two_pass = !!($("st-two-pass") && $("st-two-pass").checked
@@ -11748,6 +12593,8 @@
       scope: $("audio-scope").value,
       min_bitrate_kbps: parseInt($("audio-min-br").value, 10) || 700,
       audio_normalize: $("audio-normalize").checked,
+      audio_normalize_2pass: $("audio-norm-2pass") ? $("audio-norm-2pass").checked : false,
+      audio_nightmode: $("audio-nightmode") ? $("audio-nightmode").checked : false,
       post_processing: $("audio-post").value,
     };
   }
@@ -11792,6 +12639,18 @@
     on("btn-remux-smart", remuxSmartDisposition);
     on("btn-remux-extract", remuxExtract);
     on("btn-remux-load-chapters", remuxLoadChapters);
+    on("btn-remux-add-chapter", remuxAddChapterRow);
+    on("btn-remux-auto-chapters", remuxGenerateAutoChapters);
+    on("btn-remux-sort-chapters", remuxSortChapters);
+    on("btn-remux-export-chapters", remuxExportChapters);
+    on("btn-remux-clear-chapters", () => {
+      state.remuxChapters = [];
+      remuxRenderChapterTable();
+    });
+    on("btn-remux-reset-chapters", () => {
+      state.remuxChapters = null;
+      remuxRenderChapterTable();
+    });
     on("btn-remux-import-chapters", () => remuxOpenPicker("chapters", "aux"));
     on("btn-remux-start", remuxStart);
     on("btn-remux-clear", remuxClearSelection);
@@ -11990,6 +12849,7 @@
     const badge = $("remux-badge"); if (badge) badge.textContent = "Keine Datei";
     const info = $("remux-start-info"); if (info) info.textContent = "";
     const cw = $("remux-chapters-wrap"); if (cw) cw.style.display = "none";
+    remuxRenderChapterTable();
     document.querySelectorAll("#remux-browser .row-item.selected").forEach((r) => r.classList.remove("selected"));
     ["btn-remux-start", "btn-split-start", "btn-remux-clear"].forEach((id) => {
       const b = $(id); if (b) b.disabled = true;
@@ -12033,6 +12893,7 @@
           && state.remuxSel.bluray.chapters.length) {
         state.remuxChapters = state.remuxSel.bluray.chapters.map((c) => ({ ...c }));
       }
+      remuxRenderChapterTable();
       $("remux-badge").textContent = f.name;
       $("remux-editor").style.display = "";
       remuxRenderEditor();
@@ -12040,6 +12901,78 @@
       $("remux-badge").textContent = `Analyse-Fehler: ${e}`;
     }
   }
+
+  window.openRemuxWithSyncOffsets = async function (opts) {
+    if (!opts || !opts.path) return;
+    const fileName = opts.name || String(opts.path).split(/[\\/]/).pop() || opts.path;
+    navTo("remux");
+    if (!state.remuxSel || state.remuxSel.path !== opts.path) {
+      await remuxSelectFile({ rel: opts.path, name: fileName });
+    }
+    const audIdx = Number.isFinite(Number(opts.audioIndex)) ? Number(opts.audioIndex) : -1;
+    const audMs = Math.round(Number(opts.audioDelayMs || 0));
+    const subIdx = Number.isFinite(Number(opts.subtitleIndex)) ? Number(opts.subtitleIndex) : -1;
+    const subMs = Math.round(Number(opts.subDelayMs || 0));
+
+    if (audIdx >= 0 && audMs !== 0) {
+      const aRows = [...document.querySelectorAll("#remux-audio-body tr[data-aindex]")];
+      const tr = aRows[audIdx] || document.querySelector(`#remux-audio-body tr[data-aindex="${audIdx}"]`);
+      const inp = tr && tr.querySelector(".rx-a-delay-ms");
+      if (inp) {
+        inp.value = String(audMs);
+        inp.style.outline = "2px solid var(--accent, #58a6ff)";
+        setTimeout(() => { inp.style.outline = ""; }, 2500);
+      }
+    }
+
+    if (opts.sidecarSub && opts.sidecarSub.path) {
+      const sc = opts.sidecarSub;
+      const delaySec = Math.round((subMs / 1000) * 1000) / 1000;
+      const exists = state.remuxExt.find((e) => e.type === "subtitle" && e.path === sc.path);
+      if (exists) {
+        exists.delay = delaySec;
+      } else {
+        state.remuxExt.push({
+          type: "subtitle",
+          path: sc.path,
+          name: sc.name || String(sc.path).split(/[\\/]/).pop(),
+          stream: 0,
+          language: sc.language || "und",
+          title: sc.title || "",
+          default: false,
+          forced: !!sc.forced,
+          delay: delaySec,
+        });
+      }
+      remuxRenderEditor();
+      // Audio-Versatz ggf. nach Neu-Rendern erneut setzen
+      if (audIdx >= 0 && audMs !== 0) {
+        const aRows = [...document.querySelectorAll("#remux-audio-body tr[data-aindex]")];
+        const tr = aRows[audIdx] || document.querySelector(`#remux-audio-body tr[data-aindex="${audIdx}"]`);
+        const inp = tr && tr.querySelector(".rx-a-delay-ms");
+        if (inp) inp.value = String(audMs);
+      }
+    } else if (subIdx >= 0 && subMs !== 0) {
+      const sRows = [...document.querySelectorAll("#remux-sub-body tr[data-sindex]")];
+      const tr = sRows[subIdx] || document.querySelector(`#remux-sub-body tr[data-sindex="${subIdx}"]`);
+      const inp = tr && tr.querySelector(".rx-s-delay-ms");
+      if (inp) {
+        inp.value = String(subMs);
+        inp.style.outline = "2px solid var(--accent, #58a6ff)";
+        setTimeout(() => { inp.style.outline = ""; }, 2500);
+      }
+    }
+
+    const badge = $("remux-badge");
+    if (badge) {
+      const parts = [];
+      if (audMs !== 0) parts.push(`Ton ${audMs > 0 ? "+" : ""}${audMs} ms`);
+      if (subMs !== 0 || (opts.sidecarSub && opts.sidecarSub.path)) {
+        parts.push(`UT ${subMs > 0 ? "+" : ""}${subMs} ms`);
+      }
+      if (parts.length) badge.textContent = `${fileName} · Versatz übernommen (${parts.join(", ")})`;
+    }
+  };
 
   function remuxOrderBtns() {
     return '<button class="btn btn-ghost btn-sm iconbtn rx-up" title="Nach oben">↑</button>' +
@@ -12161,7 +13094,12 @@
       tr.dataset.aindex = a.index;
       tr.innerHTML = `
         <td><input type="checkbox" class="rx-a-keep" checked></td>
-        <td>#${a.index} · ${escapeHtml(a.codec)} ${a.channels || "?"}ch · ${escapeHtml(a.language || "und")} · ${escapeHtml(a.bitrate_human || "—")}${a.title ? " · " + escapeHtml(a.title) : ""}</td>
+        <td>
+          <div>#${a.index} · ${escapeHtml(a.codec)} ${a.channels || "?"}ch · ${escapeHtml(a.language || "und")} · ${escapeHtml(a.bitrate_human || "—")}${a.title ? " · " + escapeHtml(a.title) : ""}</div>
+          <label class="muted" style="font-size:11px;display:inline-flex;align-items:center;gap:4px;margin-top:2px" title="Zeitversatz dieser internen Tonspur beim Remux per -itsoffset (+ = später, − = früher)">
+            Versatz <input type="number" class="rx-a-delay-ms" value="0" step="50" style="width:70px"> ms
+          </label>
+        </td>
         <td><input type="checkbox" class="rx-a-default"${a.default ? " checked" : ""}></td>
         <td><input type="checkbox" class="rx-a-forced"${a.forced ? " checked" : ""}></td>
         <td><input type="text" class="rx-a-lang" value="${escapeHtml(a.language || "")}" size="4"></td>
@@ -12183,7 +13121,12 @@
       tr.dataset.sindex = s.index;
       tr.innerHTML = `
         <td><input type="checkbox" class="rx-s-keep" checked></td>
-        <td>#${s.index} · ${escapeHtml(s.codec)} · ${escapeHtml(s.language || "und")}${s.title ? " · " + escapeHtml(s.title) : ""}</td>
+        <td>
+          <div>#${s.index} · ${escapeHtml(s.codec)} · ${escapeHtml(s.language || "und")}${s.title ? " · " + escapeHtml(s.title) : ""}</div>
+          <label class="muted" style="font-size:11px;display:inline-flex;align-items:center;gap:4px;margin-top:2px" title="Zeitversatz dieser internen Untertitelspur beim Remux per -itsoffset (+ = später, − = früher)">
+            Versatz <input type="number" class="rx-s-delay-ms" value="0" step="50" style="width:70px"> ms
+          </label>
+        </td>
         <td><input type="checkbox" class="rx-s-default"${s.default ? " checked" : ""}></td>
         <td><input type="checkbox" class="rx-s-forced"${s.forced ? " checked" : ""}></td>
         <td><input type="text" class="rx-s-lang" value="${escapeHtml(s.language || "")}" size="4"></td>
@@ -12383,24 +13326,213 @@
     }
   }
 
-  function remuxApplyChapters(chapters) {
-    state.remuxChapters = chapters || [];
+  function remuxFmtChapTime(sec) {
+    const v = Math.max(0, Number(sec) || 0);
+    const totalMs = Math.round(v * 1000);
+    const h = Math.floor(totalMs / 3600000);
+    const m = Math.floor((totalMs % 3600000) / 60000);
+    const s = Math.floor((totalMs % 60000) / 1000);
+    const ms = totalMs % 1000;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+  }
+
+  function remuxParseChapTime(raw, fallback) {
+    if (raw == null) return fallback;
+    const txt = String(raw).trim().replace(",", ".");
+    if (!txt) return fallback;
+    if (/^\d+(\.\d+)?$/.test(txt)) return Math.max(0, parseFloat(txt));
+    const parts = txt.split(":").map((p) => Number(p.trim()));
+    if (parts.some((x) => !Number.isFinite(x) || x < 0)) return fallback;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return fallback;
+  }
+
+  function remuxSyncChapterDomToState() {
+    if (!Array.isArray(state.remuxChapters)) return;
+    const rows = document.querySelectorAll("#remux-chapters-body tr[data-ch-idx]");
+    rows.forEach((tr) => {
+      const i = parseInt(tr.dataset.chIdx, 10);
+      if (isNaN(i) || !state.remuxChapters[i]) return;
+      const stEl = tr.querySelector(".rx-ch-start");
+      const enEl = tr.querySelector(".rx-ch-end");
+      const tiEl = tr.querySelector(".rx-ch-title");
+      if (stEl) state.remuxChapters[i].start = remuxParseChapTime(stEl.value, state.remuxChapters[i].start || 0);
+      if (enEl) {
+        const ev = String(enEl.value || "").trim();
+        state.remuxChapters[i].end = ev ? remuxParseChapTime(ev, 0) : 0;
+      }
+      if (tiEl) state.remuxChapters[i].title = tiEl.value;
+    });
+  }
+
+  function remuxSyncSplitChapterDropdown() {
+    const chSel = $("split-range-chapter");
+    if (!chSel) return;
+    const list = Array.isArray(state.remuxChapters) ? state.remuxChapters : [];
+    chSel.innerHTML = '<option value="">Kapitel als Bereich …</option>' +
+      list.map((c, i) =>
+        `<option value="${i}">${i + 1}. ${escapeHtml(c.title || fmtClock(c.start))}</option>`).join("");
+  }
+
+  function remuxRenderChapterTable() {
+    const wrap = $("remux-chapters-wrap");
     const body = $("remux-chapters-body");
-    body.innerHTML = "";
-    if (!state.remuxChapters.length) {
-      $("remux-chapters-info").textContent = tt("Keine Kapitel vorhanden.");
-      $("remux-chapters-wrap").style.display = "none";
-      state.remuxChapters = null;
+    const info = $("remux-chapters-info");
+    const showBtn = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
+    if (!wrap || !body || !info) return;
+
+    if (state.remuxChapters === null) {
+      wrap.style.display = "none";
+      body.innerHTML = "";
+      info.textContent = "";
+      showBtn("btn-remux-sort-chapters", false);
+      showBtn("btn-remux-export-chapters", false);
+      showBtn("btn-remux-clear-chapters", false);
+      showBtn("btn-remux-reset-chapters", false);
+      remuxSyncSplitChapterDropdown();
       return;
     }
+
+    showBtn("btn-remux-reset-chapters", true);
+    if (!state.remuxChapters.length) {
+      wrap.style.display = "none";
+      body.innerHTML = "";
+      info.innerHTML = `<span class="warn">${tt("Alle Kapitel werden beim Remux entfernt (-map_chapters -1). Mit „+ Kapitel hinzufügen“ neue anlegen.")}</span>`;
+      showBtn("btn-remux-sort-chapters", false);
+      showBtn("btn-remux-export-chapters", false);
+      showBtn("btn-remux-clear-chapters", false);
+      remuxSyncSplitChapterDropdown();
+      return;
+    }
+
+    showBtn("btn-remux-sort-chapters", state.remuxChapters.length > 1);
+    showBtn("btn-remux-export-chapters", true);
+    showBtn("btn-remux-clear-chapters", true);
+    wrap.style.display = "";
+    const dur = (state.remuxInfo && state.remuxInfo.duration) || 0;
+    body.innerHTML = "";
     state.remuxChapters.forEach((c, i) => {
+      const autoEnd = (i + 1 < state.remuxChapters.length && state.remuxChapters[i + 1].start > c.start)
+        ? state.remuxChapters[i + 1].start
+        : (dur > c.start ? dur : 0);
+      const endVal = c.end && c.end > c.start ? remuxFmtChapTime(c.end) : "";
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${i + 1}</td><td>${fmtClock(c.start)}</td>` +
-        `<td><input type="text" class="rx-ch-title" data-i="${i}" value="${escapeHtml(c.title || "")}" style="width:100%"></td>`;
+      tr.dataset.chIdx = String(i);
+      tr.innerHTML = `<td>${i + 1}</td>`
+        + `<td><input type="text" class="rx-ch-start" data-i="${i}" value="${escapeHtml(remuxFmtChapTime(c.start))}" placeholder="00:00:00.000" style="width:126px;font-variant-numeric:tabular-nums" /></td>`
+        + `<td><input type="text" class="rx-ch-end" data-i="${i}" value="${escapeHtml(endVal)}" placeholder="${autoEnd ? escapeHtml(remuxFmtChapTime(autoEnd)) : "auto"}" style="width:126px;font-variant-numeric:tabular-nums" /></td>`
+        + `<td><input type="text" class="rx-ch-title" data-i="${i}" value="${escapeHtml(c.title || "")}" placeholder="Kapitel ${i + 1}" style="width:100%" /></td>`
+        + `<td class="row-actions">`
+        + `<button type="button" class="btn btn-ghost btn-sm iconbtn rx-ch-up" data-i="${i}" title="Hoch">↑</button>`
+        + `<button type="button" class="btn btn-ghost btn-sm iconbtn rx-ch-down" data-i="${i}" title="Runter">↓</button>`
+        + `<button type="button" class="btn btn-ghost btn-sm bad-btn rx-ch-del" data-i="${i}" title="Kapitel löschen">✕</button>`
+        + `</td>`;
       body.appendChild(tr);
     });
-    $("remux-chapters-wrap").style.display = "";
-    $("remux-chapters-info").textContent = `${state.remuxChapters.length} ${tt("Kapitel – Titel bearbeitbar.")}`;
+    body.querySelectorAll(".rx-ch-start, .rx-ch-end, .rx-ch-title").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        remuxSyncChapterDomToState();
+        remuxSyncSplitChapterDropdown();
+      });
+    });
+    body.querySelectorAll(".rx-ch-del").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        remuxSyncChapterDomToState();
+        state.remuxChapters.splice(parseInt(btn.dataset.i, 10), 1);
+        remuxRenderChapterTable();
+      });
+    });
+    body.querySelectorAll(".rx-ch-up").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        remuxSyncChapterDomToState();
+        remuxArrMove(state.remuxChapters, parseInt(btn.dataset.i, 10), -1);
+        remuxRenderChapterTable();
+      });
+    });
+    body.querySelectorAll(".rx-ch-down").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        remuxSyncChapterDomToState();
+        remuxArrMove(state.remuxChapters, parseInt(btn.dataset.i, 10), 1);
+        remuxRenderChapterTable();
+      });
+    });
+    info.textContent = `${state.remuxChapters.length} ${tt("Kapitel aktiv – Zeiten & Titel frei bearbeitbar.")}`;
+    remuxSyncSplitChapterDropdown();
+  }
+
+  function remuxAddChapterRow() {
+    remuxSyncChapterDomToState();
+    if (!Array.isArray(state.remuxChapters)) state.remuxChapters = [];
+    const n = state.remuxChapters.length;
+    const dur = (state.remuxInfo && state.remuxInfo.duration) || 0;
+    let nextStart = 0;
+    if (n > 0) {
+      const prev = state.remuxChapters[n - 1];
+      nextStart = (prev.end && prev.end > prev.start) ? prev.end : (Number(prev.start) || 0) + 300;
+      if (dur > 0 && nextStart >= dur) nextStart = Math.max(0, dur - 10);
+    }
+    state.remuxChapters.push({ start: Math.round(nextStart * 1000) / 1000, end: 0, title: `Kapitel ${n + 1}` });
+    remuxRenderChapterTable();
+  }
+
+  function remuxGenerateAutoChapters() {
+    const mins = Math.max(1, Math.min(120, parseInt(($("remux-chap-interval") || {}).value, 10) || 5));
+    const step = mins * 60;
+    const dur = (state.remuxInfo && state.remuxInfo.duration) || 0;
+    if (!(dur > 5)) {
+      $("remux-chapters-info").innerHTML = `<span class="bad">${tt("Bitte zuerst eine Quelle mit bekannter Dauer wählen.")}</span>`;
+      return;
+    }
+    const list = [];
+    let idx = 1;
+    for (let t = 0; t < dur - 2; t += step) {
+      list.push({ start: t, end: Math.min(dur, t + step), title: `Kapitel ${idx}` });
+      idx += 1;
+    }
+    state.remuxChapters = list;
+    remuxRenderChapterTable();
+  }
+
+  function remuxSortChapters() {
+    remuxSyncChapterDomToState();
+    if (!Array.isArray(state.remuxChapters)) return;
+    state.remuxChapters.sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0));
+    remuxRenderChapterTable();
+  }
+
+  function remuxExportChapters() {
+    remuxSyncChapterDomToState();
+    if (!Array.isArray(state.remuxChapters) || !state.remuxChapters.length) return;
+    const lines = [];
+    state.remuxChapters.forEach((c, i) => {
+      const num = String(i + 1).padStart(2, "0");
+      lines.push(`CHAPTER${num}=${remuxFmtChapTime(c.start)}`);
+      lines.push(`CHAPTER${num}NAME=${String(c.title || `Kapitel ${i + 1}`).replace(/[\r\n]+/g, " ")}`);
+    });
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    const base = (state.remuxSel && state.remuxSel.name ? state.remuxSel.name.replace(/\.[^.]+$/, "") : "chapters");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${base}.chapters.txt`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  function remuxApplyChapters(chapters) {
+    if (!chapters || !chapters.length) {
+      state.remuxChapters = null;
+      remuxRenderChapterTable();
+      $("remux-chapters-info").textContent = tt("Keine Kapitel in der Quelle – mit „+ Kapitel hinzufügen“ oder „Auto-Intervall“ anlegen.");
+      return;
+    }
+    state.remuxChapters = chapters.map((c) => ({
+      start: Number(c.start) || 0,
+      end: Number(c.end) || 0,
+      title: c.title || "",
+    }));
+    remuxRenderChapterTable();
   }
 
   async function remuxImportChapters(path) {
@@ -12568,6 +13700,9 @@
       if (q("rx-a-tc")) q("rx-a-tc").checked = !!a.transcode;
       if (q("rx-a-codec") && a.codec) q("rx-a-codec").value = a.codec;
       if (q("rx-a-br") && a.bitrate) q("rx-a-br").value = a.bitrate;
+      if (q("rx-a-delay-ms") && (a.delay_ms != null || a.delay != null)) {
+        q("rx-a-delay-ms").value = String(a.delay_ms != null ? a.delay_ms : Math.round(Number(a.delay || 0) * 1000));
+      }
       if (q("rx-a-tc")) q("rx-a-tc").dispatchEvent(new Event("change"));
     };
     const applySubRow = (tr, s) => {
@@ -12577,6 +13712,9 @@
       if (q("rx-s-forced")) q("rx-s-forced").checked = !!s.forced;
       if (q("rx-s-lang") && s.language != null) q("rx-s-lang").value = s.language;
       if (q("rx-s-title") && s.title != null) q("rx-s-title").value = s.title;
+      if (q("rx-s-delay-ms") && (s.delay_ms != null || s.delay != null)) {
+        q("rx-s-delay-ms").value = String(s.delay_ms != null ? s.delay_ms : Math.round(Number(s.delay || 0) * 1000));
+      }
     };
 
     (spec.audio || []).forEach((a) => {
@@ -12671,7 +13809,8 @@
         return;
       }
       const q = (c) => tr.querySelector("." + c);
-      audio.push({
+      const aDelayMs = q("rx-a-delay-ms") ? (parseFloat(q("rx-a-delay-ms").value) || 0) : 0;
+      const aEntry = {
         index: parseInt(tr.dataset.aindex, 10),
         keep: q("rx-a-keep").checked,
         default: q("rx-a-default").checked,
@@ -12681,7 +13820,9 @@
         transcode: q("rx-a-tc").checked,
         codec: q("rx-a-codec").value,
         bitrate: parseInt(q("rx-a-br").value, 10) || 640,
-      });
+      };
+      if (aDelayMs) aEntry.delay_ms = aDelayMs;
+      audio.push(aEntry);
     });
     const subtitles = [];
     document.querySelectorAll("#remux-sub-body tr[data-sindex], #remux-sub-body tr[data-ext-i]").forEach((tr) => {
@@ -12706,14 +13847,17 @@
         return;
       }
       const q = (c) => tr.querySelector("." + c);
-      subtitles.push({
+      const sDelayMs = q("rx-s-delay-ms") ? (parseFloat(q("rx-s-delay-ms").value) || 0) : 0;
+      const sEntry = {
         index: parseInt(tr.dataset.sindex, 10),
         keep: q("rx-s-keep").checked,
         default: q("rx-s-default").checked,
         forced: q("rx-s-forced").checked,
         language: q("rx-s-lang").value.trim(),
         title: q("rx-s-title").value.trim(),
-      });
+      };
+      if (sDelayMs) sEntry.delay_ms = sDelayMs;
+      subtitles.push(sEntry);
     });
     const spec = {
       container: $("remux-container").value,
@@ -12727,12 +13871,21 @@
     const ts = parseFloat($("remux-trim-start").value) || 0;
     const te = parseFloat($("remux-trim-end").value) || 0;
     if (ts > 0 || te > 0) spec.trim = { start: ts, end: te };
-    // Kapitel nur mitsenden, wenn geladen/bearbeitet (sonst greift keep_chapters).
-    if (state.remuxChapters) {
-      spec.chapters = state.remuxChapters.map((c, i) => ({
-        start: c.start, end: c.end,
-        title: (document.querySelector(`.rx-ch-title[data-i="${i}"]`) || {}).value || c.title,
-      }));
+    // Kapitel mitsenden, wenn im Kapitel-Editor geladen/bearbeitet/gelöscht ([] = alle entfernen).
+    if (Array.isArray(state.remuxChapters)) {
+      remuxSyncChapterDomToState();
+      const dur = (state.remuxInfo && state.remuxInfo.duration) || 0;
+      const sorted = state.remuxChapters.slice().sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0));
+      spec.chapters = sorted.map((c, i) => {
+        const sVal = Math.max(0, Number(c.start) || 0);
+        let eVal = Number(c.end) || 0;
+        if (eVal <= sVal) {
+          if (i + 1 < sorted.length && sorted[i + 1].start > sVal) eVal = Number(sorted[i + 1].start);
+          else if (dur > sVal) eVal = dur;
+          else eVal = sVal + 1;
+        }
+        return { start: sVal, end: eVal, title: c.title || "" };
+      });
     }
     const disc = state.remuxSel && state.remuxSel.bluray;
     if (disc && disc.dvd_title) {
@@ -13401,6 +14554,7 @@
     state.abJob = "";
     const off = $("ab-offset");
     if (off) off.value = "0";
+    if ($("ab-offset-frames")) $("ab-offset-frames").textContent = "±0 Bilder";
     const pickedIds = idsForPicks(picks);
     if (pickedIds.length) state.clipPickIds = pickedIds;
     abApplyMode();
@@ -13408,11 +14562,13 @@
     if (badge) badge.textContent = tt("Lädt …");
     let ok;
     let masterT = 0;
+    const jumpOff = Math.max(0, Number(opts && opts.offsetSec) || 0);
     if (refs.length === 1) {
       const enc = encs[0];
       const start = enc.start || refs[0].start || 0;
-      masterT = start;
       const len = enc.len || refs[0].len || 0;
+      const relJump = len > 0 ? Math.min(Math.max(0, len - 0.2), jumpOff) : jumpOff;
+      masterT = start + relJump;
       ab.window = len > 0 ? { start, end: start + len } : null;
       sb.clipUrl = clipPlayUrl(enc.clip);
       sb.offset = start;
@@ -13422,22 +14578,24 @@
         sa.clipUrl = clipPlayUrl(refs[0].clip);
         sa.path = "";
         sa.offset = start - lead;
-        ok = await Promise.all([abStartSide(sa, lead), abStartSide(sb, 0)]);
+        ok = await Promise.all([abStartSide(sa, lead + relJump), abStartSide(sb, relJump)]);
       } else {
         sa.path = state.vmafSource.path;
         sa.root = "media";
         sa.offset = 0;
-        ok = await Promise.all([abStartSide(sa, start), abStartSide(sb, 0)]);
+        ok = await Promise.all([abStartSide(sa, start + relJump), abStartSide(sb, relJump)]);
       }
     } else {
       const len = encs[0].len || encs[1].len || 0;
+      const relJump = len > 0 ? Math.min(Math.max(0, len - 0.2), jumpOff) : jumpOff;
+      masterT = relJump;
       ab.window = len > 0 ? { start: 0, end: len } : null;
       sa.clipUrl = clipPlayUrl(encs[0].clip);
       sb.clipUrl = clipPlayUrl(encs[1].clip);
       sa.offset = 0;
       sb.offset = 0;
       abSetStatus(`${encs[0].label || "A"} · ${encs[1].label || "B"}`);
-      ok = await Promise.all([abStartSide(sa, 0), abStartSide(sb, 0)]);
+      ok = await Promise.all([abStartSide(sa, relJump), abStartSide(sb, relJump)]);
     }
     const current = () => !ab.closing && loadSeq === ab.loadSeq && seq === ab.controlSeq;
     if (!current()) return;
@@ -13471,6 +14629,12 @@
     settleSeq: 0,
     weak: null,         // Schwachstellen (vom Job)
     window: null,       // {start, end} in Filmzeit, solange ein Testclip das Ende setzt
+    rafId: 0,
+    bufA: null,
+    bufB: null,
+    statsOpen: false,
+    statsTimer: 0,
+    abx: { secret: "a", view: "x", correct: 0, total: 0, roundGuessed: false },
   };
 
   function abSwitchContext(page) {
@@ -13503,6 +14667,11 @@
     ab.wipe = restore ? restore.wipe : 50;
     abApplyMode();
     abApplyPlaybackRate();
+    const offLab = $("ab-offset-frames");
+    if (offLab) {
+      const sec = abOffsetB();
+      offLab.textContent = Math.abs(sec) < 0.0005 ? "±0 Bilder" : `${sec > 0 ? "+" : ""}${sec.toFixed(3)} s`;
+    }
   }
 
   function abMakeSide(key) {
@@ -13970,12 +15139,14 @@
     });
   }
 
-  async function abPlaceSide(side, filmT, valid) {
+  async function abPlaceSide(side, filmT, valid, stepExact = false) {
     const video = side && side.video;
     if (!video || !valid()) return false;
     const localT = Math.max(0, filmT - (side.offset || 0));
     const now = video.currentTime || 0;
-    if (side.clipUrl && localT > 0.02 && now + 0.02 < localT
+    // Bei Einzelbild-Stepping (< 24 fps -> 1 Frame ~ 17..42 ms) direkt auf localT
+    // setzen statt unsichtbar vorzuspulen, und Toleranz auf 4 ms verschärfen.
+    if (!stepExact && side.clipUrl && localT > 0.02 && now + 0.02 < localT
         && typeof video.requestVideoFrameCallback === "function") {
       if (side.alignedAt != null && Math.abs(now - localT) < 0.04
           && Math.abs(side.alignedAt - localT) < 0.04) return true;
@@ -13994,7 +15165,8 @@
         return true;
       }
     }
-    const close = () => Math.abs((video.currentTime || 0) - localT) < 0.02;
+    const tol = stepExact ? 0.004 : 0.02;
+    const close = () => Math.abs((video.currentTime || 0) - localT) < tol;
     const deadline = Date.now() + 8000;
     while (valid() && Date.now() < deadline) {
       if (!abBufferedCovers(video, localT)) {
@@ -14002,17 +15174,23 @@
         if (!covered || !valid()) return false;
       }
       if (!close() || video.seeking) abSetTime(side, filmT);
-      if (close() && !video.seeking) return true;
+      if (close() && !video.seeking) {
+        if (stepExact) side.alignedAt = video.currentTime || localT;
+        return true;
+      }
       const landed = await abWaitMediaReady(
         video, Math.max(200, deadline - Date.now()), 2, valid);
       if (!valid()) return false;
-      if (landed && close() && !video.seeking) return true;
+      if (landed && close() && !video.seeking) {
+        if (stepExact) side.alignedAt = video.currentTime || localT;
+        return true;
+      }
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return valid() && close() && !video.seeking;
   }
 
-  async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true) {
+  async function abAlignAndSettleBoth(masterT, keepPaused, valid = () => true, stepExact = false) {
     if (ab.closing) return false;
     const sa = ab.sides.a, sb = ab.sides.b;
     if (!sa || !sb) return false;
@@ -14029,7 +15207,7 @@
         abWaitMediaReady(side.video, 8000, 1, current)));
       if (!current() || !metadata.every(Boolean)) return false;
       const placed = await Promise.all(sides.map((side) => abPlaceSide(
-        side, Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0)), current)));
+        side, Math.max(0, masterT + (side.key === "b" ? abOffsetB() : 0)), current, stepExact)));
       if (!current() || !placed.every(Boolean)) return false;
       const ready = await Promise.all(sides.map((side) =>
         abWaitMediaReady(side.video, 8000, 3, current)));
@@ -14427,7 +15605,8 @@
 
   // Beide Seiten auf Filmzeit t setzen. Auch im Puffer bleiben beide pausiert,
   // bis BEIDE Seeks fertig sind; HLS außerhalb des Puffers startet neu ab t.
-  async function abSeekBoth(t, pauseAfter) {
+  async function abSeekBoth(t, pauseAfter, opts) {
+    const stepExact = !!(opts && opts.stepExact);
     if (ab.closing) return;
     const sa = ab.sides.a, sb = ab.sides.b;
     if (!sa || !sb) return;
@@ -14446,6 +15625,9 @@
       const jobs = [];
       const want = (side, target) => {
         if (!side.path || side.mode === "direct") return;
+        if (stepExact && side.encodePaused && abBufferedAhead(side) < 4) {
+          abSetEncodePaused(side, false);
+        }
         const inWin = target >= (side.offset || 0) - 0.01 && target <= abBufferedEnd(side) + 20;
         if (!side.ready || !inWin) jobs.push(abStartSide(side, Math.max(0, target)));
       };
@@ -14456,9 +15638,13 @@
         const ok = await Promise.all(jobs);
         if (!current() || !ok.every(Boolean)) return;
       }
-      settled = await abAlignAndSettleBoth(t, true, current);
+      settled = await abAlignAndSettleBoth(t, true, current, stepExact);
       if (!current()) return;
-      if (jobs.length) abUpdateStatusLine();
+      if (jobs.length && !stepExact) abUpdateStatusLine();
+      if (stepExact) {
+        abDrawDiffFrame();
+        abRenderNerdHud();
+      }
     } finally {
       if (current()) ab.seeking = false;
     }
@@ -14468,16 +15654,339 @@
     }
   }
 
+  function abHeatmapColor(norm) {
+    // norm in [0, 1]: Schwarz/Tiefblau -> Cyan -> Grün -> Gelb -> Rot -> Weiß
+    const t = Math.max(0, Math.min(1, norm));
+    if (t < 0.02) return [0, 0, Math.round(t * 1500)];
+    if (t < 0.25) {
+      const k = (t - 0.02) / 0.23;
+      return [0, Math.round(k * 220), Math.round(30 + k * 225)];
+    }
+    if (t < 0.5) {
+      const k = (t - 0.25) / 0.25;
+      return [Math.round(k * 60), 220 + Math.round(k * 35), Math.round(255 * (1 - k))];
+    }
+    if (t < 0.75) {
+      const k = (t - 0.5) / 0.25;
+      return [60 + Math.round(k * 195), 255 - Math.round(k * 55), 0];
+    }
+    const k = (t - 0.75) / 0.25;
+    return [255, Math.round(200 * (1 - k)), Math.round(k * 180)];
+  }
+
+  function abDrawDiffFrame() {
+    if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+    const canvas = $("ab-diff-canvas");
+    const hud = $("ab-diff-hud");
+    const va = ab.sides.a && ab.sides.a.video;
+    const vb = ab.sides.b && ab.sides.b.video;
+    if (!canvas || !va || !vb || !va.videoWidth || !vb.videoWidth
+        || va.readyState < 2 || vb.readyState < 2) {
+      if (hud) hud.textContent = tt("Warte auf dekodierte Bilder A & B …");
+      return;
+    }
+    // Arbeitsauflösung begrenzen (~960px Breite) für flüssige 60-fps-Berechnung
+    const maxW = 960;
+    const scale = Math.min(1, maxW / va.videoWidth);
+    const w = Math.max(16, Math.round(va.videoWidth * scale));
+    const h = Math.max(16, Math.round(va.videoHeight * scale));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    if (!ab.bufA) ab.bufA = document.createElement("canvas");
+    if (!ab.bufB) ab.bufB = document.createElement("canvas");
+    if (ab.bufA.width !== w || ab.bufA.height !== h) { ab.bufA.width = w; ab.bufA.height = h; }
+    if (ab.bufB.width !== w || ab.bufB.height !== h) { ab.bufB.width = w; ab.bufB.height = h; }
+    try {
+      const ctxA = ab.bufA.getContext("2d", { willReadFrequently: true });
+      const ctxB = ab.bufB.getContext("2d", { willReadFrequently: true });
+      ctxA.drawImage(va, 0, 0, w, h);
+      ctxB.drawImage(vb, 0, 0, w, h);
+      const imgA = ctxA.getImageData(0, 0, w, h);
+      const imgB = ctxB.getImageData(0, 0, w, h);
+      const dA = imgA.data;
+      const dB = imgB.data;
+      const ctxOut = canvas.getContext("2d");
+      const out = ctxOut.createImageData(w, h);
+      const dO = out.data;
+      const gain = Math.max(1, parseFloat(($("ab-diff-gain") && $("ab-diff-gain").value) || "8") || 8);
+      const isHeat = ab.mode === "heatmap";
+      let sumAbs = 0;
+      let sumSq = 0;
+      let maxDelta = 0;
+      const nPx = w * h;
+      for (let i = 0; i < dA.length; i += 4) {
+        const dr = Math.abs(dA[i] - dB[i]);
+        const dg = Math.abs(dA[i + 1] - dB[i + 1]);
+        const db = Math.abs(dA[i + 2] - dB[i + 2]);
+        const avgD = (dr + dg + db) / 3;
+        sumAbs += avgD;
+        sumSq += (dr * dr + dg * dg + db * db) / 3;
+        if (avgD > maxDelta) maxDelta = avgD;
+        if (isHeat) {
+          const dist = Math.sqrt((dr * dr + dg * dg + db * db) / 3);
+          const [r, g, b] = abHeatmapColor((dist * gain) / 255);
+          dO[i] = r; dO[i + 1] = g; dO[i + 2] = b; dO[i + 3] = 255;
+        } else {
+          dO[i] = Math.min(255, Math.round(dr * gain));
+          dO[i + 1] = Math.min(255, Math.round(dg * gain));
+          dO[i + 2] = Math.min(255, Math.round(db * gain));
+          dO[i + 3] = 255;
+        }
+      }
+      ctxOut.putImageData(out, 0, 0);
+      if (hud && nPx > 0) {
+        const mae = sumAbs / nPx;
+        const mse = sumSq / nPx;
+        const psnr = mse > 0.0001 ? `${(10 * Math.log10((255 * 255) / mse)).toFixed(1)} dB` : "∞ dB (identisch)";
+        hud.textContent = `${isHeat ? "Heatmap" : "Differenz"} (${gain}×) · Ø ΔRGB ${mae.toFixed(2)} · Max Δ ${Math.round(maxDelta)} · RGB-PSNR ~${psnr}`;
+      }
+    } catch (e) {
+      if (hud) hud.textContent = `${tt("Canvas-Analyse nicht möglich")}: ${e}`;
+    }
+  }
+
+  function abUpdateCanvasLoop() {
+    if (ab.rafId && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(ab.rafId);
+      ab.rafId = 0;
+    }
+    if (ab.mode !== "diff" && ab.mode !== "heatmap") return;
+    const tick = () => {
+      if (ab.mode !== "diff" && ab.mode !== "heatmap") { ab.rafId = 0; return; }
+      abDrawDiffFrame();
+      const va = ab.sides.a && ab.sides.a.video;
+      const vb = ab.sides.b && ab.sides.b.video;
+      if (((va && !va.paused) || (vb && !vb.paused)) && typeof requestAnimationFrame === "function") {
+        ab.rafId = requestAnimationFrame(tick);
+      } else {
+        ab.rafId = 0;
+      }
+    };
+    tick();
+  }
+
+  // Einseitiger exakter Binomialtest P(X >= k | n, p=0.5)
+  function abBinomialPValue(k, n) {
+    if (n <= 0 || k <= 0) return 1;
+    if (k > n) return 0;
+    let sum = 0;
+    let logFact = [0];
+    for (let i = 1; i <= n; i++) logFact[i] = logFact[i - 1] + Math.log(i);
+    const ln2n = n * Math.log(2);
+    for (let j = k; j <= n; j++) {
+      const logComb = logFact[n] - logFact[j] - logFact[n - j];
+      sum += Math.exp(logComb - ln2n);
+    }
+    return Math.min(1, Math.max(0, sum));
+  }
+
+  function abAbxNewRound(resetStats) {
+    if (resetStats) {
+      ab.abx.correct = 0;
+      ab.abx.total = 0;
+    }
+    ab.abx.secret = Math.random() < 0.5 ? "a" : "b";
+    ab.abx.roundGuessed = false;
+    ab.abx.view = "x";
+    abApplyAbxView();
+    abRenderAbxScore();
+  }
+
+  function abApplyAbxView() {
+    const paneA = $("ab-pane-a");
+    const paneB = $("ab-pane-b");
+    const tagA = $("ab-tag-a");
+    const tagB = $("ab-tag-b");
+    const bar = $("ab-abx-bar");
+    if (ab.mode !== "abx") {
+      if (paneA) paneA.style.display = "";
+      if (paneB) paneB.style.display = "";
+      abUpdateSideBadge("a");
+      abUpdateSideBadge("b");
+      return;
+    }
+    const target = ab.abx.view === "x" ? ab.abx.secret : ab.abx.view;
+    const label = ab.abx.view === "a" ? "Quelle A" : (ab.abx.view === "b" ? "Quelle B" : "Unbekannt X");
+    if (paneA) paneA.style.display = target === "a" ? "" : "none";
+    if (paneB) paneB.style.display = target === "b" ? "" : "none";
+    if (tagA) tagA.textContent = label;
+    if (tagB) tagB.textContent = label;
+    if (bar) {
+      bar.querySelectorAll("[data-abx-view]").forEach((btn) => {
+        const on = btn.dataset.abxView === ab.abx.view;
+        btn.classList.toggle("btn-primary", on);
+        btn.classList.toggle("btn-ghost", !on);
+      });
+    }
+  }
+
+  function abRenderAbxScore(lastFeedback) {
+    const el = $("ab-abx-score");
+    if (!el) return;
+    const { correct, total } = ab.abx;
+    if (total === 0) {
+      el.textContent = lastFeedback || tt("Noch kein Tipp abgegeben – vergleiche 1 (A), 2 (B) und 3 (X).");
+      return;
+    }
+    const pct = Math.round((correct / total) * 100);
+    const pVal = abBinomialPValue(correct, total);
+    const sig = total >= 5 && pVal < 0.05
+      ? " · Signifikant erkannt (p < 0,05)!"
+      : (total >= 5 ? " · Noch im Zufallsbereich" : " · Mind. 5 Runden für Statistik");
+    el.textContent = `${lastFeedback ? lastFeedback + " · " : ""}Treffer: ${correct}/${total} (${pct} %) · p = ${pVal.toFixed(3)}${sig}`;
+  }
+
+  function abAbxGuess(choice) {
+    if (ab.mode !== "abx") return;
+    const hit = choice === ab.abx.secret;
+    ab.abx.total += 1;
+    if (hit) ab.abx.correct += 1;
+    const truth = ab.abx.secret.toUpperCase();
+    const msg = hit ? `✓ Richtig (X war ${truth})` : `✗ Daneben (X war ${truth})`;
+    // Direkt nächste Zufallsrunde starten
+    ab.abx.secret = Math.random() < 0.5 ? "a" : "b";
+    ab.abx.view = "x";
+    abApplyAbxView();
+    abRenderAbxScore(msg);
+  }
+
+  function abRenderNerdHud() {
+    const hud = $("ab-nerd-hud");
+    if (!hud || !ab.statsOpen) return;
+    const fmtSide = (s) => {
+      if (!s || !s.video) return "—";
+      const v = s.video;
+      const q = typeof v.getVideoPlaybackQuality === "function" ? v.getVideoPlaybackQuality() : null;
+      const tot = q ? q.totalVideoFrames : (v.webkitDecodedFrameCount || 0);
+      const drp = q ? q.droppedVideoFrames : (v.webkitDroppedFrameCount || 0);
+      const res = v.videoWidth && v.videoHeight ? `${v.videoWidth}×${v.videoHeight}` : "—";
+      const buf = abBufferedAhead(s).toFixed(1);
+      const mode = ab.mode === "abx" ? "verdeckt (ABX)" : `${s.mode || "—"}${s.encodePaused ? " (pausiert)" : ""}`;
+      return `${s.key.toUpperCase()}: ${res} · ${mode} · Puffer ${buf}s · Drop ${drp}/${tot}`;
+    };
+    const sa = ab.sides.a, sb = ab.sides.b;
+    const ta = sa ? abTime(sa) : 0;
+    const tb = sb ? abTime(sb) : 0;
+    const driftMs = sb && sb.ready ? ((tb - (ta + abOffsetB())) * 1000).toFixed(1) : "0.0";
+    const fps = (ab.weak && ab.weak.fps) || (sa && sa.info && sa.info.fps) || 24;
+    const lines = [
+      `Position : A ${ta.toFixed(3)}s · B ${tb.toFixed(3)}s · Drift Δt ${driftMs} ms (~${fps} fps)`,
+      fmtSide(sa),
+      fmtSide(sb),
+      `Ansicht  : ${ab.mode} · Zoom ${($("ab-zoom") && $("ab-zoom").value) || "fit"} · Tempo ${($("ab-speed") && $("ab-speed").value) || "1"}×`,
+    ];
+    hud.textContent = lines.join("\n");
+  }
+
+  function abToggleNerdHud(force) {
+    const hud = $("ab-nerd-hud");
+    const btn = $("ab-stats-toggle");
+    ab.statsOpen = typeof force === "boolean" ? force : !ab.statsOpen;
+    if (hud) hud.style.display = ab.statsOpen ? "" : "none";
+    if (btn) btn.setAttribute("aria-pressed", ab.statsOpen ? "true" : "false");
+    if (ab.statsTimer) { clearInterval(ab.statsTimer); ab.statsTimer = 0; }
+    if (ab.statsOpen) {
+      abRenderNerdHud();
+      ab.statsTimer = setInterval(abRenderNerdHud, 350);
+    }
+  }
+
+  function abExportPngSnapshot() {
+    const sa = ab.sides.a, sb = ab.sides.b;
+    const va = sa && sa.video, vb = sb && sb.video;
+    if (!va || !va.videoWidth) {
+      abSetStatus(tt("Kein dekodiertes Videobild für PNG-Export vorhanden."), true);
+      return;
+    }
+    try {
+      const out = document.createElement("canvas");
+      const ctx = out.getContext("2d");
+      const t = abTime(sa);
+      const stamp = fmtClock(t).replace(/:/g, "-") + "." + String(Math.round((t % 1) * 1000)).padStart(3, "0");
+      if ((ab.mode === "diff" || ab.mode === "heatmap") && $("ab-diff-canvas")) {
+        abDrawDiffFrame();
+        const dc = $("ab-diff-canvas");
+        out.width = dc.width;
+        out.height = dc.height;
+        ctx.drawImage(dc, 0, 0);
+      } else if (ab.mode === "wipe" && vb && vb.videoWidth) {
+        const w = va.videoWidth, h = va.videoHeight;
+        out.width = w; out.height = h;
+        const splitX = Math.round((ab.wipe / 100) * w);
+        ctx.drawImage(va, 0, 0, w, h);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(splitX, 0, w - splitX, h);
+        ctx.clip();
+        ctx.drawImage(vb, 0, 0, w, h);
+        ctx.restore();
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.fillRect(splitX - 1, 0, 2, h);
+      } else if (vb && vb.videoWidth && ab.mode !== "abx") {
+        const w = va.videoWidth, h = va.videoHeight;
+        out.width = w * 2 + 8;
+        out.height = h;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, out.width, out.height);
+        ctx.drawImage(va, 0, 0, w, h);
+        ctx.drawImage(vb, w + 8, 0, w, h);
+        ctx.font = `bold ${Math.max(16, Math.round(h * 0.028))}px sans-serif`;
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
+        ctx.fillRect(12, 12, 46, Math.max(28, Math.round(h * 0.042)));
+        ctx.fillRect(w + 20, 12, 46, Math.max(28, Math.round(h * 0.042)));
+        ctx.fillStyle = "#fff";
+        ctx.fillText("A", 26, 12 + Math.max(21, Math.round(h * 0.032)));
+        ctx.fillText("B", w + 34, 12 + Math.max(21, Math.round(h * 0.032)));
+      } else {
+        out.width = va.videoWidth;
+        out.height = va.videoHeight;
+        ctx.drawImage(va, 0, 0);
+      }
+      out.toBlob((blob) => {
+        if (!blob) return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `ab_${ab.mode}_${stamp}.png`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        abSetStatus(`${tt("PNG-Vergleich gespeichert")}: ab_${ab.mode}_${stamp}.png`);
+      }, "image/png");
+    } catch (e) {
+      abSetStatus(`${tt("PNG-Export fehlgeschlagen")}: ${e}`, true);
+    }
+  }
+
   function abApplyMode() {
     const wrap = $("ab-videos");
     const handle = $("ab-wipe-handle");
+    const diffCanvas = $("ab-diff-canvas");
+    const diffHud = $("ab-diff-hud");
+    const gainField = $("ab-diff-gain-field");
+    const abxBar = $("ab-abx-bar");
+    const notes = $("ab-preview-notes");
     if (!wrap) return;
+    const prevMode = ab.mode;
     ab.mode = ($("ab-mode") || {}).value || "side";
     const wipe = ab.mode === "wipe";
+    const isCanvas = ab.mode === "diff" || ab.mode === "heatmap";
+    const isAbx = ab.mode === "abx";
     wrap.classList.toggle("ab-wipe", wipe);
+    wrap.classList.toggle("ab-canvas-mode", isCanvas);
+    wrap.classList.toggle("ab-abx-mode", isAbx);
     if (handle) handle.style.display = wipe ? "" : "none";
+    if (diffCanvas) diffCanvas.style.display = isCanvas ? "" : "none";
+    if (diffHud) diffHud.style.display = isCanvas ? "" : "none";
+    if (gainField) gainField.style.display = isCanvas ? "" : "none";
+    if (abxBar) abxBar.style.display = isAbx ? "" : "none";
+    if (notes) notes.style.visibility = isAbx ? "hidden" : "";
     wrap.style.setProperty("--ab-wipe", ab.wipe + "%");
+    if (isAbx && prevMode !== "abx") abAbxNewRound(false);
+    else abApplyAbxView();
     abApplyZoom();
+    abUpdateCanvasLoop();
   }
 
   // 1:1 und darüber: die Mitte füllt das Fenster in echten Pixeln (bzw. 2×/4×).
@@ -14499,17 +16008,22 @@
   function abApplyZoom() {
     const sel = $("ab-zoom");
     const zoomed = !!(sel && sel.value && sel.value !== "fit");
-    const wipe = ab.mode === "wipe";
+    const hideNative = ab.mode !== "side" || zoomed;
     Object.values(ab.sides).forEach((s) => {
       const video = s && s.video;
       if (!video) return;
-      video.controls = !wipe && !zoomed;
+      video.controls = !hideNative;
       if (!zoomed || !video.videoWidth) {
         if (!zoomed) video.style.transform = "";
         return;
       }
       video.style.transform = `scale(${abZoomFactor(video)})`;
     });
+    const dc = $("ab-diff-canvas");
+    const va = ab.sides.a && ab.sides.a.video;
+    if (dc) {
+      dc.style.transform = zoomed && va && va.videoWidth ? `scale(${abZoomFactor(va)})` : "";
+    }
   }
 
   async function abLoadWeakSpots() {
@@ -14778,14 +16292,134 @@
       if (ab.wantPlay || !va.paused) { abPauseBoth(); alignB(true); }
       else abPlayTogether();
     });
-    // Einzelbild vor/zurück (beide): Framedauer aus 24 fps angenommen, wenn unbekannt.
+    // Einzelbild vor/zurück (beide): Frame-Index exakt runden, damit kein Gleitkomma-Drift entsteht.
+    const abFps = () => {
+      const f = Number((ab.weak && ab.weak.fps)
+        || (ab.sides.a.info && ab.sides.a.info.fps)
+        || (ab.sides.b.info && ab.sides.b.info.fps));
+      return f > 1 && f <= 240 ? f : 24;
+    };
     const step = (dir) => {
-      const fps = (ab.weak && ab.weak.fps) || (ab.sides.a.info && ab.sides.a.info.fps) || 24;
-      abSeekBoth(Math.max(0, abTime(ab.sides.a) + dir / fps), true);
+      const sa = ab.sides.a;
+      if (!sa || (!sa.path && !sa.clipUrl)) return;
+      const fps = abFps();
+      const baseT = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+      const nextFrame = Math.max(0, Math.round(baseT * fps) + dir);
+      const win = ab.window;
+      let targetT = nextFrame / fps;
+      if (win && win.end > win.start) {
+        targetT = Math.max(win.start, Math.min(win.end - (1 / fps), targetT));
+      } else if (sa.duration > 0) {
+        targetT = Math.min(sa.duration, targetT);
+      }
+      ab.stepTargetT = targetT;
+      const shownFrame = Math.max(0, Math.round(targetT * fps));
+      const ms = String(Math.min(999, Math.round((targetT % 1) * 1000))).padStart(3, "0");
+      abSetStatus(`${tt("Einzelbild")} #${shownFrame} · ${fmtClock(Math.floor(targetT))}.${ms} (${fps.toFixed(3).replace(/\.?0+$/, "")} fps)`);
+      abSeekBoth(targetT, true, { stepExact: true }).finally(() => {
+        if (ab.stepTargetT === targetT) ab.stepTargetT = NaN;
+      });
     };
     const sbk = $("ab-step-back"), sfw = $("ab-step-fwd");
     if (sbk) sbk.addEventListener("click", () => step(-1));
     if (sfw) sfw.addEventListener("click", () => step(1));
+
+    const updateOffsetLabel = () => {
+      const lab = $("ab-offset-frames");
+      if (!lab) return;
+      const fps = abFps();
+      const sec = abOffsetB();
+      const frames = Math.round(sec * fps);
+      if (frames === 0 && Math.abs(sec) < 0.0005) {
+        lab.textContent = "±0 Bilder";
+      } else {
+        const sign = frames > 0 ? "+" : (frames === 0 && sec > 0 ? "+" : "");
+        const word = Math.abs(frames) === 1 ? "Bild" : "Bilder";
+        lab.textContent = `${sign}${frames} ${word}`;
+      }
+    };
+
+    const applyOffsetSync = (masterTarget) => {
+      updateOffsetLabel();
+      const sa = ab.sides.a, sb = ab.sides.b;
+      if (!sa || (!sa.path && !sa.clipUrl)) return;
+      const wasPlaying = ab.wantPlay || (va && !va.paused) || (vb && !vb.paused);
+      const tA = masterTarget != null ? masterTarget : abTime(sa);
+      abSeekBoth(tA, !wasPlaying, { stepExact: !wasPlaying });
+    };
+
+    // Einzelnes Video (A oder B) um `deltaFrames` verschieben und den Versatz dauerhaft speichern,
+    // damit auch anschließende gemeinsame Einzelschritte & Wiedergabe synchron bleiben.
+    const nudgeSingleSide = (sideKey, deltaFrames) => {
+      const sa = ab.sides.a, sb = ab.sides.b;
+      const fps = abFps();
+      const offEl = $("ab-offset");
+      // Wenn „Synchron" aktiv ist (Standard), wird der relative Versatz B dauerhaft angepasst:
+      // B um +1 Bild verschieben -> offsetB += 1/fps (A bleibt stehen, B rückt +1 Frame vor).
+      // A um +1 Bild verschieben -> A rückt +1 Frame vor, B bleibt stehen -> offsetB -= 1/fps.
+      if (abSynced() && offEl) {
+        const curOff = abOffsetB();
+        const curFrames = Math.round(curOff * fps);
+        if (sideKey === "b") {
+          const nextFrames = curFrames + deltaFrames;
+          const nextSec = Number((nextFrames / fps).toFixed(4));
+          offEl.value = String(nextSec === 0 ? 0 : nextSec);
+          const curA = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+          const sign = nextFrames > 0 ? "+" : "";
+          abSetStatus(`Video B ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextSec.toFixed(3)} s)`);
+          applyOffsetSync(curA);
+        } else {
+          const baseA = (ab.seeking && Number.isFinite(ab.stepTargetT)) ? ab.stepTargetT : abTime(sa);
+          const nextFrameA = Math.max(0, Math.round(baseA * fps) + deltaFrames);
+          let targetA = nextFrameA / fps;
+          if (ab.window && ab.window.end > ab.window.start) {
+            targetA = Math.max(ab.window.start, Math.min(ab.window.end - (1 / fps), targetA));
+          } else if (sa && sa.duration > 0) {
+            targetA = Math.min(sa.duration, targetA);
+          }
+          const actualDeltaA = targetA - baseA;
+          const nextOff = Number((curOff - actualDeltaA).toFixed(4));
+          offEl.value = String(Math.abs(nextOff) < 0.0002 ? 0 : nextOff);
+          const nextFrames = Math.round(nextOff * fps);
+          const sign = nextFrames > 0 ? "+" : "";
+          ab.stepTargetT = targetA;
+          abSetStatus(`Video A ${deltaFrames > 0 ? "+" : ""}${deltaFrames} ${Math.abs(deltaFrames) === 1 ? "Bild" : "Bilder"} verschoben · Versatz B: ${sign}${nextFrames} (${nextOff.toFixed(3)} s)`);
+          abSeekBoth(targetA, true, { stepExact: true }).finally(() => {
+            if (ab.stepTargetT === targetA) ab.stepTargetT = NaN;
+          });
+          updateOffsetLabel();
+        }
+        return;
+      }
+      // Falls „Synchron" deaktiviert ist: wirklich nur die gewählte Seite direkt um deltaFrames bewegen
+      const side = sideKey === "b" ? sb : sa;
+      if (!side || (!side.path && !side.clipUrl)) return;
+      abPauseMedia(side);
+      const nextT = Math.max(0, (Math.round(abTime(side) * fps) + deltaFrames) / fps);
+      abSetTime(side, nextT);
+      abDrawDiffFrame();
+      abRenderNerdHud();
+      abSetStatus(`Video ${sideKey.toUpperCase()} → #${Math.round(nextT * fps)} (${nextT.toFixed(3)} s · unsynchron)`);
+    };
+
+    const offInput = $("ab-offset");
+    if (offInput) {
+      offInput.addEventListener("change", () => applyOffsetSync(null));
+      offInput.addEventListener("input", updateOffsetLabel);
+    }
+    const nbBack = $("ab-nudge-b-back"), nbFwd = $("ab-nudge-b-fwd");
+    const naBack = $("ab-nudge-a-back"), naFwd = $("ab-nudge-a-fwd");
+    const offReset = $("ab-offset-reset");
+    if (nbBack) nbBack.addEventListener("click", (ev) => nudgeSingleSide("b", ev.shiftKey ? -5 : -1));
+    if (nbFwd) nbFwd.addEventListener("click", (ev) => nudgeSingleSide("b", ev.shiftKey ? 5 : 1));
+    if (naBack) naBack.addEventListener("click", (ev) => nudgeSingleSide("a", ev.shiftKey ? -5 : -1));
+    if (naFwd) naFwd.addEventListener("click", (ev) => nudgeSingleSide("a", ev.shiftKey ? 5 : 1));
+    if (offReset) offReset.addEventListener("click", () => {
+      if (offInput) offInput.value = "0";
+      abSetStatus(tt("Frame-Versatz auf 0 zurückgesetzt."));
+      applyOffsetSync(null);
+    });
+    updateOffsetLabel();
     const seekEl = $("ab-seek");
     seekEl.addEventListener("input", () => { ab.seeking = true; });
     seekEl.addEventListener("change", (e) => {
@@ -14801,12 +16435,92 @@
 
     const modeEl = $("ab-mode");
     if (modeEl) modeEl.addEventListener("change", abApplyMode);
+    const gainEl = $("ab-diff-gain");
+    if (gainEl) gainEl.addEventListener("change", abDrawDiffFrame);
     const zoomEl = $("ab-zoom");
     if (zoomEl) zoomEl.addEventListener("change", abApplyZoom);
     [va, vb].forEach((video) => {
-      video.addEventListener("loadedmetadata", abApplyZoom);
+      video.addEventListener("loadedmetadata", () => { abApplyZoom(); abDrawDiffFrame(); });
+      video.addEventListener("loadeddata", abDrawDiffFrame);
+      video.addEventListener("seeked", abDrawDiffFrame);
+      video.addEventListener("play", abUpdateCanvasLoop);
+      video.addEventListener("pause", abDrawDiffFrame);
       video.addEventListener("resize", abApplyZoom);
     });
+    const abxBar = $("ab-abx-bar");
+    if (abxBar) {
+      abxBar.querySelectorAll("[data-abx-view]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          ab.abx.view = btn.dataset.abxView || "x";
+          abApplyAbxView();
+        });
+      });
+      abxBar.querySelectorAll("[data-abx-guess]").forEach((btn) => {
+        btn.addEventListener("click", () => abAbxGuess(btn.dataset.abxGuess));
+      });
+    }
+    const abxNext = $("ab-abx-next");
+    if (abxNext) abxNext.addEventListener("click", () => abAbxNewRound(false));
+    const abxReset = $("ab-abx-reset");
+    if (abxReset) abxReset.addEventListener("click", () => abAbxNewRound(true));
+    const abSnap = $("ab-snapshot");
+    if (abSnap) abSnap.addEventListener("click", abExportPngSnapshot);
+    const abStats = $("ab-stats-toggle");
+    if (abStats) abStats.addEventListener("click", () => abToggleNerdHud());
+    const abVmafScene = $("ab-use-vmaf-scene");
+    if (abVmafScene) abVmafScene.addEventListener("click", () => {
+      const sa = ab.sides.a;
+      const rel = (sa && sa.root === "media" && sa.path)
+        || ($("ab-path-a") && $("ab-path-a").value.trim())
+        || (state.selected && !state.selected.isBatch && state.selected.path) || "";
+      if (!rel) {
+        abSetStatus(tt("Keine Medienbibliothek-Quelldatei auf Seite A aktiv."), true);
+        return;
+      }
+      const res = window.addCustomVmafScene(rel, abTime(sa), sa && sa.info);
+      if (res && res.ok) {
+        abSetStatus(`${tt("Als gezielte VMAF-Testszene übernommen")}: ${fmtClock(res.start)} (${res.length} s · ${res.count}/5)`);
+      } else if (res && res.error) {
+        abSetStatus(res.error, true);
+      }
+    });
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener("keydown", (ev) => {
+        if (state.currentPage !== "abcompare" && state.currentPage !== "vmafnerd") return;
+        const card = $("ab-card");
+        if (!card || card.hidden || card.style.display === "none") return;
+        const tag = (ev.target && ev.target.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select" || (ev.target && ev.target.isContentEditable)) return;
+        if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+        if (ev.key === ",") { ev.preventDefault(); step(-1); }
+        else if (ev.key === ".") { ev.preventDefault(); step(1); }
+        else if (ev.key === "[" || ev.key === "{") { ev.preventDefault(); nudgeSingleSide("b", ev.shiftKey || ev.key === "{" ? -5 : -1); }
+        else if (ev.key === "]" || ev.key === "}") { ev.preventDefault(); nudgeSingleSide("b", ev.shiftKey || ev.key === "}" ? 5 : 1); }
+        else if (ev.key === "ArrowLeft") {
+          ev.preventDefault();
+          const paused = (!va || va.paused) && (!vb || vb.paused) && !ab.wantPlay;
+          if (ev.shiftKey) step(-10);
+          else if (paused) step(-1);
+          else abSeekBoth(Math.max(0, abTime(ab.sides.a) - 5), false);
+        } else if (ev.key === "ArrowRight") {
+          ev.preventDefault();
+          const paused = (!va || va.paused) && (!vb || vb.paused) && !ab.wantPlay;
+          if (ev.shiftKey) step(10);
+          else if (paused) step(1);
+          else abSeekBoth(Math.max(0, abTime(ab.sides.a) + 5), false);
+        }
+        else if (ev.key === " ") {
+          if (tag !== "button") { ev.preventDefault(); $("ab-play").click(); }
+        }
+        else if (ev.key === "i" || ev.key === "I") { ev.preventDefault(); abToggleNerdHud(); }
+        else if (ev.key === "s" || ev.key === "S") { ev.preventDefault(); abExportPngSnapshot(); }
+        else if (ab.mode === "abx" && (ev.key === "1" || ev.key === "2" || ev.key === "3")) {
+          ev.preventDefault();
+          ab.abx.view = ev.key === "1" ? "a" : (ev.key === "2" ? "b" : "x");
+          abApplyAbxView();
+        }
+      });
+    }
     if (typeof ResizeObserver !== "undefined") {
       const panes = $("ab-videos");
       if (panes) new ResizeObserver(() => abApplyZoom()).observe(panes);
@@ -14825,8 +16539,8 @@
       window.addEventListener("mouseup", () => { drag = false; });
       wrap.addEventListener("touchstart", (ev) => { if (ab.mode === "wipe") setWipe(ev); }, { passive: true });
       wrap.addEventListener("touchmove", (ev) => { if (ab.mode === "wipe") setWipe(ev); }, { passive: true });
-      // Doppelklick im Wipe: Play/Pause (die nativen Controls sind dort aus).
-      wrap.addEventListener("dblclick", () => { if (ab.mode === "wipe") $("ab-play").click(); });
+      // Doppelklick außerhalb Nebeneinander (Wipe/Diff/Heatmap/ABX): Play/Pause.
+      wrap.addEventListener("dblclick", () => { if (ab.mode !== "side") $("ab-play").click(); });
     }
     const pb = $("ab-playback");
     if (pb) pb.addEventListener("change", () => {
@@ -15158,12 +16872,15 @@
         $("sched-end").value = d.end_hour;
         $("sched-throttle").checked = !!d.throttle_enabled;
         $("sched-maxcpu").value = d.max_cpu_percent;
+        if ($("sched-disk-guard")) $("sched-disk-guard").checked = d.disk_guard_enabled !== false;
+        if ($("sched-minfree")) $("sched-minfree").value = d.min_free_gb != null ? d.min_free_gb : 5;
         const badge = $("sched-badge");
-        if (badge) badge.textContent = d.enabled ? (d.active_now ? "Aktiv" : "Wartet") : "Aus";
+        const anyGuard = !!(d.enabled || d.disk_guard_enabled !== false);
+        if (badge) badge.textContent = anyGuard ? (d.active_now ? "Aktiv" : "Wartet") : "Aus";
         const st = $("sched-status");
-        if (st) st.textContent = d.enabled
-          ? (d.active_now ? "Encodes sind aktuell freigegeben." : `Pausiert: ${d.reason || "—"}`)
-          : "Zeitplan deaktiviert – Encodes laufen jederzeit.";
+        if (st) st.textContent = !d.active_now
+          ? `Pausiert: ${d.reason || "—"}`
+          : (d.enabled ? "Encodes sind aktuell freigegeben." : "Zeitplan deaktiviert – Speicherplatz-Wächter schützt aktiv.");
       } catch (e) { /* ignorieren */ }
     };
     await load();
@@ -15178,6 +16895,8 @@
           end_hour: parseInt($("sched-end").value, 10) || 0,
           throttle_enabled: $("sched-throttle").checked,
           max_cpu_percent: parseInt($("sched-maxcpu").value, 10) || 85,
+          disk_guard_enabled: $("sched-disk-guard") ? $("sched-disk-guard").checked : true,
+          min_free_gb: $("sched-minfree") ? (parseFloat($("sched-minfree").value) || 5) : 5,
         }),
       });
       await load();
@@ -15187,13 +16906,75 @@
 
   async function initWatch() {
     if (!$("btn-watch-save")) return;
-    // Profile-Dropdown befüllen (teilt sich die Liste mit den Encode-Profilen).
-    const fillProfiles = (sel) => {
-      const cur = $("wf-profile").value;
-      $("wf-profile").innerHTML = '<option value="">Standard-Einstellungen</option>' +
+    let watchRules = [];
+    const profileOptionsHtml = (selected) => {
+      const sel = selected || "";
+      return `<option value="">${tt("Standard-Einstellungen")}</option>` +
         (state.profiles || []).map((p) =>
-          `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
-      $("wf-profile").value = sel || cur || "";
+          `<option value="${escapeHtml(p.name)}"${p.name === sel ? " selected" : ""}>${escapeHtml(p.name)}</option>`
+        ).join("");
+    };
+    const parseHour = (v) => String(v ?? "").trim() === "" ? null : Math.max(0, Math.min(23, parseInt(v, 10)));
+    const syncRulesFromDom = () => {
+      const box = $("wf-rules-list");
+      if (!box) return;
+      watchRules = [...box.querySelectorAll("[data-wf-rule]")].map((row, idx) => ({
+        id: row.dataset.wfRule || `rule_${idx + 1}`,
+        enabled: !!row.querySelector(".wf-r-enabled")?.checked,
+        folder: (row.querySelector(".wf-r-folder")?.value || "").trim(),
+        profile: row.querySelector(".wf-r-profile")?.value || "",
+        active_start: parseHour(row.querySelector(".wf-r-start")?.value),
+        active_end: parseHour(row.querySelector(".wf-r-end")?.value),
+      }));
+    };
+    const renderRules = () => {
+      const box = $("wf-rules-list");
+      if (!box) return;
+      if (!watchRules.length) {
+        watchRules = [{ id: "default", enabled: true, folder: "", profile: "", active_start: null, active_end: null }];
+      }
+      box.innerHTML = watchRules.map((r, i) => `
+        <div class="subcard" data-wf-rule="${escapeHtml(r.id || `rule_${i + 1}`)}" style="padding:8px 10px;border:1px solid var(--border,rgba(255,255,255,.08));border-radius:8px">
+          <div class="field-row" style="align-items:center;gap:6px">
+            <label class="check" style="margin:0"><input type="checkbox" class="wf-r-enabled" ${r.enabled !== false ? "checked" : ""} /><span>#${i + 1}</span></label>
+            <input type="text" class="wf-r-folder" value="${escapeHtml(r.folder || "")}" placeholder="${tt("Ordner (leer = gesamter Eingabeordner)")}" style="flex:1" />
+            <button class="btn btn-ghost btn-sm wf-r-browse" type="button">${tt("Durchsuchen …")}</button>
+            ${watchRules.length > 1 ? `<button class="btn btn-ghost btn-sm bad-btn wf-r-del" type="button" title="${tt("Regel entfernen")}">✕</button>` : ""}
+          </div>
+          <div class="field-row" style="margin-top:6px;gap:8px">
+            <div class="field" style="margin:0;flex:2">
+              <label style="font-size:11px">${tt("Profil")}</label>
+              <select class="wf-r-profile">${profileOptionsHtml(r.profile)}</select>
+            </div>
+            <div class="field" style="margin:0;flex:1">
+              <label style="font-size:11px">${tt("Ab Std.")}</label>
+              <input type="number" class="wf-r-start" min="0" max="23" placeholder="immer" value="${r.active_start == null ? "" : r.active_start}" />
+            </div>
+            <div class="field" style="margin:0;flex:1">
+              <label style="font-size:11px">${tt("Bis Std.")}</label>
+              <input type="number" class="wf-r-end" min="0" max="23" placeholder="immer" value="${r.active_end == null ? "" : r.active_end}" />
+            </div>
+          </div>
+        </div>`).join("");
+      box.querySelectorAll("[data-wf-rule]").forEach((row, idx) => {
+        const browseBtn = row.querySelector(".wf-r-browse");
+        const folderInp = row.querySelector(".wf-r-folder");
+        if (browseBtn && folderInp) {
+          browseBtn.addEventListener("click", () => openFolderPickerModal({
+            title: "Watch-Ordner wählen", kind: "video",
+            start: (folderInp.value || "").trim(),
+            onPick: (p) => { folderInp.value = p; syncRulesFromDom(); },
+          }));
+        }
+        const delBtn = row.querySelector(".wf-r-del");
+        if (delBtn) {
+          delBtn.addEventListener("click", () => {
+            syncRulesFromDom();
+            watchRules.splice(idx, 1);
+            renderRules();
+          });
+        }
+      });
     };
 
     const load = async () => {
@@ -15204,13 +16985,21 @@
         }
         const d = await (await fetch("/api/watch")).json();
         $("wf-enabled").checked = !!d.enabled;
-        $("wf-folder").value = d.folder || "";
         $("wf-interval").value = d.interval_min || 15;
-        $("wf-start").value = (d.active_start === null || d.active_start === undefined) ? "" : d.active_start;
-        $("wf-end").value = (d.active_end === null || d.active_end === undefined) ? "" : d.active_end;
-        fillProfiles(d.profile || "");
+        watchRules = Array.isArray(d.rules) && d.rules.length
+          ? d.rules
+          : [{
+            id: "default",
+            enabled: true,
+            folder: d.folder || "",
+            profile: d.profile || "",
+            active_start: d.active_start ?? null,
+            active_end: d.active_end ?? null,
+          }];
+        renderRules();
         const badge = $("watch-badge");
-        if (badge) badge.textContent = d.enabled ? "Aktiv" : "Aus";
+        const activeCount = watchRules.filter((r) => r.enabled !== false).length;
+        if (badge) badge.textContent = d.enabled ? `${activeCount} aktiv` : "Aus";
         const st = $("wf-status");
         if (st) {
           const last = d.last_run ? new Date(d.last_run * 1000).toLocaleString() : "noch nie";
@@ -15220,26 +17009,38 @@
     };
     await load();
 
-    const parseHour = (v) => v.trim() === "" ? null : parseInt(v, 10);
+    const addBtn = $("btn-wf-add-rule");
+    if (addBtn) {
+      addBtn.addEventListener("click", () => {
+        syncRulesFromDom();
+        watchRules.push({
+          id: `rule_${Date.now().toString(36)}`,
+          enabled: true,
+          folder: "",
+          profile: "",
+          active_start: null,
+          active_end: null,
+        });
+        renderRules();
+      });
+    }
+
     const save = async () => {
+      syncRulesFromDom();
+      const first = watchRules[0] || { folder: "", profile: "", active_start: null, active_end: null };
       await fetch("/api/watch", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           enabled: $("wf-enabled").checked,
-          folder: $("wf-folder").value.trim(),
           interval_min: parseInt($("wf-interval").value, 10) || 15,
-          profile: $("wf-profile").value,
-          active_start: parseHour($("wf-start").value),
-          active_end: parseHour($("wf-end").value),
+          folder: first.folder,
+          profile: first.profile,
+          active_start: first.active_start,
+          active_end: first.active_end,
+          rules: watchRules,
         }),
       });
     };
-    const browse = $("btn-wf-browse");
-    if (browse) browse.addEventListener("click", () => openFolderPickerModal({
-      title: "Watch-Ordner wählen", kind: "video",
-      start: ($("wf-folder").value || "").trim(),
-      onPick: (p) => { $("wf-folder").value = p; },
-    }));
     $("btn-watch-save").addEventListener("click", async () => { await save(); await load(); });
     $("btn-watch-scan").addEventListener("click", async () => {
       const b = $("btn-watch-scan"); const t = b.textContent; b.textContent = "Prüfe …";

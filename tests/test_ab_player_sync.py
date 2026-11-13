@@ -111,7 +111,9 @@ class Video extends Element {
 }
 const elements = {};
 for (const id of ["btn-ab-load", "btn-ab-unload", "ab-play", "ab-seek", "ab-sync",
-                 "ab-offset", "ab-card", "ab-badge", "ab-status", "ab-speed",
+                 "ab-offset", "ab-offset-frames", "ab-offset-reset",
+                 "ab-nudge-b-back", "ab-nudge-b-fwd", "ab-nudge-a-back", "ab-nudge-a-fwd",
+                 "ab-card", "ab-badge", "ab-status", "ab-speed",
                  "ab-step-back", "ab-step-fwd", "ab-path-a", "ab-path-b",
                  "ab-root-a", "ab-root-b", "ab-same-source", "ab-mode", "ab-zoom",
                  "ab-playback", "ab-weak"]) {
@@ -804,6 +806,29 @@ class AbPlayerSyncTests(unittest.TestCase):
         self.assertEqual(self.value("fetchCalls.map(c => c.url)"),
                          ["/api/player/session/encoder/pause", "/api/player/session/encoder/resume"])
         self.assertFalse(self.value("a.encodePaused"))
+
+    def test_nudge_single_side_shifts_offset_and_persists_across_joint_steps(self):
+        self.evaluate("""
+          a.info = { fps: 25 }; b.info = { fps: 25 };
+          a.video._time = 10.0; b.video._time = 10.0;
+          $('ab-nudge-b-fwd').click();
+        """)
+        self.assertAlmostEqual(self.value("Number($('ab-offset').value)"), 0.04, places=4)
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 10.0, places=3)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 10.04, places=3)
+        self.assertEqual(self.value("$('ab-offset-frames').textContent"), "+1 Bild")
+
+        # Jetzt gemeinsames +1 Bild: beide rücken +0.04s vor, Versatz bleibt +1 Bild erhalten!
+        self.evaluate("$('ab-step-fwd').click();")
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 10.04, places=3)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 10.08, places=3)
+
+        # Nur Video A um +1 Bild vor -> A auf 10.08, B bleibt auf 10.08 -> Versatz wieder 0!
+        self.evaluate("$('ab-nudge-a-fwd').click();")
+        self.assertAlmostEqual(self.value("Number($('ab-offset').value)"), 0.0, places=4)
+        self.assertAlmostEqual(self.value("a.video.currentTime"), 10.08, places=3)
+        self.assertAlmostEqual(self.value("b.video.currentTime"), 10.08, places=3)
+        self.assertEqual(self.value("$('ab-offset-frames').textContent"), "±0 Bilder")
 
 
 if __name__ == "__main__":

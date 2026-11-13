@@ -165,8 +165,9 @@ def tonemap_engine_for(engine: str, platform: str) -> str:
         return "cpu"
     if engine == "cuda" and platform != "nvidia":
         return "cpu"
-    if engine == "vaapi" and not (
-            platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi())):
+    if engine == "vaapi" and (
+            os.name == "nt" or not (
+                platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()))):
         return "cpu"
     needed = _JELLYFIN_FILTER.get(engine)
     if needed and needed not in jellyfin_filters():
@@ -200,13 +201,23 @@ def normalize_svt_look(value: str) -> str:
     return v if v in _SVT_LOOKS else "standard"
 
 
-def tonemap_placebo(algo: str) -> str:
+def tonemap_placebo(algo: str, *, apply_dv: bool = False) -> str:
     """HDR nach SDR auf Vulkan. Peak kommt aus den Metadaten, Bild für Bild."""
     curve = _PLACEBO_CURVE[normalize_tonemap_algo(algo)]
+    dv_arg = ":apply_dolbyvision=1" if apply_dv else ""
     return (
         f"libplacebo=tonemapping={curve}:colorspace=bt709"
         ":color_primaries=bt709:color_trc=bt709:range=limited"
-        ":format=yuv420p:peak_detect=1"
+        f"{dv_arg}:format=yuv420p:peak_detect=1"
+    )
+
+
+def dv5_to_hdr10_placebo() -> str:
+    """Dolby Vision Profil 5 (IPTPQc2) auf Vulkan per RPU-Reshaping nach
+    Standard-HDR10 (BT.2020 PQ 10-bit) konvertieren."""
+    return (
+        "libplacebo=colorspace=bt2020nc:color_primaries=bt2020"
+        ":color_trc=smpte2084:range=limited:apply_dolbyvision=1:format=p010le"
     )
 
 
@@ -487,6 +498,7 @@ def build_video_filters(
     tonemap_engine: str = "cpu",
     deband: str = "off",
     cuda_surface: bool = False,
+    dv5_reshape: bool = False,
 ) -> Optional[str]:
     """Baut die `-vf`-Kette: Tonemapping -> Downscale -> HW-Upload/Format.
 
@@ -502,7 +514,7 @@ def build_video_filters(
     want_10bit = keep_hdr or force_10bit
 
     # --- Reine NVIDIA-GPU-Pipeline (kein Tonemap) --------------------------
-    if platform == "nvidia" and nvidia_cuda_frames:
+    if platform == "nvidia" and nvidia_cuda_frames and not dv5_reshape:
         # Immer mit definiertem Zielformat durch scale_cuda leiten. Geht die
         # rohe CUDA-Surface ohne Formatnormalisierung direkt an NVENC, entstehen
         # bei manchen Quellen/Treibern komplett grüne Ausgaben. p010le = 10-bit
@@ -522,10 +534,13 @@ def build_video_filters(
         filters.append(f"crop={crop}")
 
     engine = tonemap_engine_for(tonemap_engine, platform)
+    is_dv5 = bool(getattr(info, "dolby_vision", False) and int(getattr(info, "dv_profile", 0) or 0) == 5)
     cuda_out = bool(cuda_surface and engine == "cuda")
-    if tonemap and info.is_hdr:
+    if dv5_reshape and is_dv5:
+        filters.append(dv5_to_hdr10_placebo())
+    elif tonemap and info.is_hdr:
         if engine == "libplacebo":
-            filters.append(tonemap_placebo(tonemap_algo))
+            filters.append(tonemap_placebo(tonemap_algo, apply_dv=is_dv5))
         elif engine == "cuda":
             if not cuda_surface:
                 filters += ["format=p010le", "hwupload_cuda"]
@@ -578,11 +593,14 @@ def build_video_filters(
             filters.append(f"scale=-2:{target_height}:flags=lanczos")
 
         # Plattformspezifischer Upload/Pixelformat-Schritt.
-        # AMD/Intel benötigen Frames auf einer HW-Surface.
+        # AMD-VAAPI (Linux) und Intel benötigen Frames auf einer HW-Surface.
+        # AMD-AMF unter Windows lädt System-Frames (nv12 / p010le) direkt hoch.
         # Für 10-bit (HDR-Erhalt ODER Anime-Modus) p010le, sonst nv12 (8-bit).
         hw_fmt = "p010le" if want_10bit else "nv12"
-        if platform == "amd" or (platform == "intel" and ff.intel_uses_vaapi()):
+        if (platform == "amd" and os.name != "nt") or (platform == "intel" and ff.intel_uses_vaapi()):
             filters.append(f"format={hw_fmt},hwupload")
+        elif platform == "amd" and os.name == "nt":
+            filters.append(f"format={hw_fmt}")
         elif platform == "intel":
             filters.append(f"format={hw_fmt},hwupload=extra_hw_frames=64")
         elif force_10bit and not keep_hdr:
@@ -707,7 +725,7 @@ def _ten_bit_output_args(codec: str, enc: str) -> list[str]:
         return ["-pix_fmt", "yuv420p10le"]
     if "nvenc" in enc and codec == "hevc":
         return ["-profile:v", "main10"]
-    if ("qsv" in enc or "vaapi" in enc) and codec == "hevc":
+    if ("qsv" in enc or "vaapi" in enc or "amf" in enc) and codec == "hevc":
         return ["-profile:v", "main10"]
     # AV1 (NVENC/QSV/VAAPI) führt 10-bit über das p010-Surface – kein Profil-Flag.
     return []
@@ -766,6 +784,10 @@ def build_encode_cmd(
     deband: str = "off",
     svt_look: str = "standard",
     overwrite: bool = True,
+    loudnorm_stats: Optional[dict] = None,
+    audio_nightmode: bool = False,
+    ocr_subtitles: Optional[list[dict]] = None,
+    external_subtitles: Optional[list[dict]] = None,
 ) -> list[str]:
     """Erzeugt das vollständige FFmpeg-Kommando für einen Encode.
 
@@ -774,8 +796,15 @@ def build_encode_cmd(
     hängen am selben Input; FFmpeg dekodiert einmal und bedient beide Encoder.
     """
     from . import config
+    is_dv5 = bool(getattr(info, "dolby_vision", False) and int(getattr(info, "dv_profile", 0) or 0) == 5)
+    keep_hdr = bool(preserve_hdr and info.is_hdr)
+    dv5_reshape = bool(is_dv5 and keep_hdr and not preserve_dv and platform in ("cpu", "nvidia"))
+    eff_tonemap_engine = tonemap_engine
+    if is_dv5 and tonemap and normalize_tonemap_engine(tonemap_engine) == "cpu" and platform in ("cpu", "nvidia"):
+        # zscale unterstützt IPTPQc2 (DV Profil 5) nicht nativ; libplacebo formt es exakt um.
+        eff_tonemap_engine = "libplacebo"
     engine = effective_tonemap_engine(
-        tonemap_engine, platform, preserve_dv=bool(preserve_dv))
+        eff_tonemap_engine, platform, preserve_dv=bool(preserve_dv))
     do_tone = bool(tonemap and info.is_hdr)
     mobile_tone = bool(mobile) and info.is_hdr
     binary = ffmpeg_binary_for(engine) if (do_tone or mobile_tone) else config.FFMPEG
@@ -784,7 +813,6 @@ def build_encode_cmd(
         raise ValueError("Dieser Encoder unterstützt keinen exakten Dolby-Vision-Erhalt.")
     cmd: list[str] = [binary, "-y" if overwrite or pass_num == 1 else "-n", "-hide_banner"]
 
-    keep_hdr = bool(preserve_hdr and info.is_hdr)
     downscale = bool(target_height and info.height and target_height < info.height)
     # 10-bit erzwingen (Anime-Modus) nur, wenn der Encoder das kann; sonst 8-bit.
     ten_bit = bool(force_10bit) and _codec_supports_10bit(platform, codec)
@@ -796,7 +824,7 @@ def build_encode_cmd(
     # Frames im RAM; eine reine CUDA-Pipeline kommt dann nicht in Frage.
     deband_on = normalize_deband(deband) in _DEBAND
     software_filters = (denoise_on or sharpen_on or grain_on or deint_on
-                        or bool(crop) or bool(mobile) or deband_on)
+                        or bool(crop) or bool(mobile) or deband_on or dv5_reshape)
     pre_sw = bool(crop) or deint_on
     post_sw = denoise_on or sharpen_on or grain_on or deband_on or bool(mobile)
     enc = ff.encoder_name(platform, codec)
@@ -841,7 +869,7 @@ def build_encode_cmd(
                     "-init_hw_device", "qsv=qs@va",
                     "-filter_hw_device", "qs"]
 
-    if engine == "libplacebo" and info.is_hdr and (do_tone or mobile_tone):
+    if (engine == "libplacebo" and info.is_hdr and (do_tone or mobile_tone)) or dv5_reshape:
         cmd += ["-init_hw_device", "vulkan"]
     elif engine == "opencl" and (do_tone or mobile_tone) and platform in ("nvidia", "cpu"):
         # Intel/AMD lassen das VAAPI-/QSV-Device stehen. tonemap_opencl leitet
@@ -853,6 +881,33 @@ def build_encode_cmd(
 
     cmd += ["-i", str(info.path)]
 
+    valid_ocr_subs = [
+        o for o in (ocr_subtitles or [])
+        if o.get("path") and Path(o["path"]).is_file() and pass_num != 1
+    ]
+    _BITMAP_SUB_EXTS = {".sup", ".pgs", ".idx", ".sub"}
+    valid_ext_subs = []
+    for ext_s in (external_subtitles or []):
+        if pass_num == 1 or not ext_s.get("path"):
+            continue
+        ep = Path(ext_s["path"])
+        if not ep.is_file():
+            continue
+        sfx = ep.suffix.lower()
+        # Bei VobSub (.idx/.sub) nur die .idx-Steuerdatei als Input übergeben;
+        # .sub alleine nur aufnehmen, falls keine passende .idx daneben liegt.
+        if sfx == ".sub" and ep.with_suffix(".idx").is_file():
+            continue
+        # MP4 unterstützt keine Bitmap-Untertitel (PGS/VobSub).
+        if container == "mp4" and sfx in _BITMAP_SUB_EXTS:
+            continue
+        valid_ext_subs.append(ext_s)
+
+    for o in valid_ocr_subs:
+        cmd += ["-i", str(o["path"])]
+    for ext_s in valid_ext_subs:
+        cmd += ["-i", str(ext_s["path"])]
+
     if duration_limit is not None:
         cmd += ["-t", str(duration_limit)]
 
@@ -863,10 +918,15 @@ def build_encode_cmd(
                              force_10bit=ten_bit, crop=crop,
                              tonemap_algo=tonemap_algo, tonemap_desat=tonemap_desat,
                              tonemap_peak=tonemap_peak, tonemap_engine=engine,
-                             deband=deband, cuda_surface=cuda_surface)
+                             deband=deband, cuda_surface=cuda_surface,
+                             dv5_reshape=dv5_reshape)
     tonemapped = bool(tonemap and info.is_hdr and not keep_hdr)
     av1_dv = bool(
         enc == "libsvtav1" and preserve_dv and info.dolby_vision
+        and not tonemap and not downscale and not software_filters
+    )
+    av1_hdr10plus = bool(
+        enc == "libsvtav1" and keep_hdr and bool(getattr(info, "hdr10_plus", False))
         and not tonemap and not downscale and not software_filters
     )
     if preserve_dv and info.dolby_vision and codec == "av1" and not av1_dv:
@@ -874,11 +934,11 @@ def build_encode_cmd(
     # setparams ändert keine Helligkeit, schreibt die Kennung aber in den Frame.
     # NVENC liest die oft von dort und setzt sonst video_full_range_flag.
     # Auf einer reinen CUDA-Surface gibt es keinen Software-Filter.
-    # WICHTIG für AV1-Dolby-Vision: Sobald FFmpeg einen Filtergraph anlegt,
-    # übernimmt es beim Öffnen des Encoders nur globale Frame-Side-Data;
-    # AV_FRAME_DATA_DOVI_METADATA fällt dabei weg und libsvtav1 schaltet
-    # Dolby Vision stumm ab. Ohne Filtergraph bleibt die RPU erhalten.
-    if not nvidia_cuda_frames and not cuda_surface and not av1_dv:
+    # WICHTIG für AV1-Dolby-Vision & AV1-HDR10+: Sobald FFmpeg einen Filtergraph
+    # anlegt, verwirft es beim Öffnen des Encoders Frame-spezifische Side-Data
+    # (AV_FRAME_DATA_DOVI_METADATA / AV_FRAME_DATA_DYNAMIC_HDR_PLUS). Ohne
+    # Filtergraph schreibt libsvtav1 DV-RPUs bzw. HDR10+ direkt als ITU-T T.35-OBU.
+    if not nvidia_cuda_frames and not cuda_surface and not av1_dv and not av1_hdr10plus:
         prim, trc, space, rng = _color_tuple(
             info, tonemapped=tonemapped, keep_hdr=keep_hdr)
         sp = _setparams(prim, trc, space, rng)
@@ -942,7 +1002,7 @@ def build_encode_cmd(
             multipass="fullres" if two_pass else None,
             b_frames=b_frames, rate_mode=rate_mode,
             tune=nvenc_tune)
-    elif "qsv" in enc:
+    elif "qsv" in enc or "amf" in enc:
         cmd += ff.encoder_preset_args(enc, encoder_speed)
 
     # Echtes Zwei-Pass (zwei Durchläufe) nur für CPU-Encoder im Bitraten-Modus.
@@ -963,27 +1023,134 @@ def build_encode_cmd(
     elif audio_per_track:
         # Jede Tonspur einzeln konfiguriert (Auswahl + Codec/Bitrate/… pro Spur).
         # Leere Liste => keine Tonspur behalten.
-        cmd += ff.audio_track_args(audio_track_settings or [])
+        tracks_list = list(audio_track_settings or [])
+        cmd += ff.audio_track_args(tracks_list, loudnorm_stats=loudnorm_stats)
+        if audio_nightmode and tracks_list and (info.audio or []):
+            src_map = {int(t.get("index", 0)): t for t in (info.audio or [])}
+            cand = next(
+                (src_map[int(t["index"])] for t in tracks_list
+                 if int(t.get("index", 0)) in src_map
+                 and int(src_map[int(t["index"])].get("channels") or 0) >= 6),
+                src_map.get(int(tracks_list[0].get("index", 0)), (info.audio or [])[0]),
+            )
+            cmd += ff.nightmode_extra_track_args(len(tracks_list), cand, codec="aac", bitrate_kbps=192)
     else:
+        src_audio = list(info.audio or [])
         if audio_tracks:
             # Nur ausgewählte Tonspuren übernehmen ("?" = fehlende ignorieren,
             # wichtig für Batch-Dateien mit abweichender Spurzahl).
-            for idx in audio_tracks:
-                cmd += ["-map", f"0:a:{int(idx)}?"]
+            mapped_indices = [int(idx) for idx in audio_tracks]
+            for idx in mapped_indices:
+                cmd += ["-map", f"0:a:{idx}?"]
+        elif audio_nightmode and src_audio:
+            mapped_indices = [int(t.get("index", i)) for i, t in enumerate(src_audio)]
+            for idx in mapped_indices:
+                cmd += ["-map", f"0:a:{idx}?"]
         else:
+            mapped_indices = [int(t.get("index", i)) for i, t in enumerate(src_audio)]
             cmd += ["-map", "0:a?"]
+        out_a_count = len(mapped_indices) if (audio_nightmode and mapped_indices) else 1
+        remapped_ln = None
+        if isinstance(loudnorm_stats, dict):
+            if "input_i" in loudnorm_stats:
+                remapped_ln = loudnorm_stats
+            elif mapped_indices:
+                remapped_ln = {
+                    out_i: loudnorm_stats[src_i]
+                    for out_i, src_i in enumerate(mapped_indices)
+                    if src_i in loudnorm_stats
+                }
+                if len(mapped_indices) == 1 and 0 in remapped_ln:
+                    remapped_ln = remapped_ln[0]
         cmd += ff.audio_args(
             audio_mode, audio_codec, audio_bitrate_kbps, audio_channels, audio_normalize,
+            loudnorm_stats=remapped_ln, out_count=out_a_count,
         )
+        if audio_nightmode and src_audio and mapped_indices:
+            src_map = {int(t.get("index", i)): t for i, t in enumerate(src_audio)}
+            cand = next(
+                (src_map[idx] for idx in mapped_indices
+                 if idx in src_map and int(src_map[idx].get("channels") or 0) >= 6),
+                src_map.get(mapped_indices[0], src_audio[0]),
+            )
+            cmd += ff.nightmode_extra_track_args(len(mapped_indices), cand, codec="aac", bitrate_kbps=192)
 
     # Untertitel/Kapitel/Metadaten aus der Quelle übernehmen (optional).
+    ocr_replaced = {int(o["sub_index"]) for o in valid_ocr_subs if "sub_index" in o}
+    base_sub_args: list[str] = []
     if subtitle_per_track:
-        # Gezielte Spurauswahl inkl. Default/Forced-Flags (Einzeldatei).
-        # Leere Liste => keine Untertitel.
-        cmd += ff.subtitle_track_args(subtitle_track_settings or [], info, container)
+        filtered_sub_tracks = [
+            t for t in (subtitle_track_settings or [])
+            if int(t.get("index", -1)) not in ocr_replaced
+        ]
+        base_sub_args = ff.subtitle_track_args(filtered_sub_tracks, info, container)
     elif keep_subtitles:
-        # Container-abhängig: MKV -> srt/copy, MP4 -> mov_text (Bild-Subs entfallen).
-        cmd += ff.subtitle_copy_args(info, 0, container)
+        has_extra_subs = bool(valid_ocr_subs or valid_ext_subs)
+        known_subs = getattr(info, "subtitles", None)
+        if has_extra_subs and isinstance(known_subs, list) and len(known_subs) == 0:
+            base_sub_args = []
+        elif ocr_replaced and known_subs:
+            rem_tracks = [
+                {"index": int(s.get("index", 0)), "default": bool(s.get("default")), "forced": bool(s.get("forced"))}
+                for s in (known_subs or [])
+                if int(s.get("index", -1)) not in ocr_replaced
+            ]
+            base_sub_args = ff.subtitle_track_args(rem_tracks, info, container)
+        else:
+            base_sub_args = ff.subtitle_copy_args(info, 0, container)
+    cmd += base_sub_args
+
+    existing_sub_maps = sum(1 for i, tok in enumerate(base_sub_args[:-1])
+                            if tok == "-map" and ":s" in base_sub_args[i + 1])
+    next_inp_idx = 1
+    next_out_s_idx = existing_sub_maps
+
+    if valid_ocr_subs:
+        ocr_codec = "mov_text" if container == "mp4" else "srt"
+        for o in valid_ocr_subs:
+            cmd += ["-map", f"{next_inp_idx}:s:0", f"-c:s:{next_out_s_idx}", ocr_codec]
+            flags = []
+            if o.get("default"):
+                flags.append("default")
+            if o.get("forced"):
+                flags.append("forced")
+            cmd += [f"-disposition:s:{next_out_s_idx}", "+".join(flags) if flags else "0"]
+            lang = (o.get("language") or "").strip()
+            title = (o.get("title") or "").strip()
+            if lang and lang.lower() != "und":
+                cmd += [f"-metadata:s:s:{next_out_s_idx}", f"language={lang}"]
+            if title:
+                cmd += [f"-metadata:s:s:{next_out_s_idx}", f"title={title}"]
+            next_inp_idx += 1
+            next_out_s_idx += 1
+
+    if valid_ext_subs:
+        for ext_s in valid_ext_subs:
+            sfx = Path(ext_s["path"]).suffix.lower()
+            if container == "mp4":
+                sc_codec = "mov_text"
+            elif sfx == ".vtt":
+                sc_codec = "srt"
+            else:
+                sc_codec = "copy"
+            cmd += ["-map", f"{next_inp_idx}:s:0", f"-c:s:{next_out_s_idx}", sc_codec]
+            flags = []
+            if ext_s.get("default"):
+                flags.append("default")
+            if ext_s.get("forced"):
+                flags.append("forced")
+            if ext_s.get("hearing_impaired"):
+                flags.append("hearing_impaired")
+            cmd += [f"-disposition:s:{next_out_s_idx}", "+".join(flags) if flags else "0"]
+            lang = (ext_s.get("language") or "").strip()
+            title = (ext_s.get("title") or "").strip()
+            if lang and lang.lower() != "und":
+                cmd += [f"-metadata:s:s:{next_out_s_idx}", f"language={lang}"]
+            if title:
+                cmd += [f"-metadata:s:s:{next_out_s_idx}", f"title={title}"]
+            next_inp_idx += 1
+            next_out_s_idx += 1
+
     if not keep_chapters:
         cmd += ["-map_chapters", "-1"]
     if not keep_metadata:
@@ -1126,6 +1293,35 @@ class EncodeProgress:
 _SPEED_RE = re.compile(r"([\d.]+)x")
 
 
+def suspend_process_tree(pid: int, suspend: bool) -> bool:
+    """Pausiert (True) oder setzt (False) einen FFmpeg-Prozessbaum fort."""
+    if pid <= 0:
+        return False
+    try:
+        import psutil
+        parent = psutil.Process(pid)
+        procs = parent.children(recursive=True) + [parent]
+        for p in procs:
+            try:
+                if suspend:
+                    p.suspend()
+                else:
+                    p.resume()
+            except psutil.NoSuchProcess:
+                pass
+        return True
+    except Exception:
+        import signal as _sig
+        sig = getattr(_sig, "SIGSTOP" if suspend else "SIGCONT", None)
+        if sig is not None:
+            try:
+                os.kill(pid, sig)
+                return True
+            except OSError:
+                return False
+        return False
+
+
 class EncodeRunner:
     """Führt ein FFmpeg-Encode aus und meldet den Fortschritt per Callback."""
 
@@ -1135,10 +1331,20 @@ class EncodeRunner:
         self.on_command = on_command
         self.proc: Optional[subprocess.Popen] = None
         self._cancel = False
+        self.suspended = False
+
+    def set_suspended(self, suspend: bool) -> bool:
+        self.suspended = bool(suspend)
+        if self.proc and self.proc.poll() is None:
+            return suspend_process_tree(int(self.proc.pid), self.suspended)
+        return True
 
     def cancel(self) -> None:
         self._cancel = True
         if self.proc and self.proc.poll() is None:
+            if self.suspended:
+                suspend_process_tree(int(self.proc.pid), False)
+                self.suspended = False
             try:
                 self.proc.terminate()
             except OSError:
@@ -1166,6 +1372,8 @@ class EncodeRunner:
             errors="replace",  # Latin-1-Metadaten dürfen das Lesen nicht killen
             bufsize=1,
         )
+        if self.suspended and self.proc.poll() is None:
+            suspend_process_tree(int(self.proc.pid), True)
         prog = EncodeProgress()
         stderr_lines: list[str] = []
 

@@ -466,7 +466,7 @@ def estimate_eta(source: dict, settings) -> Optional[dict]:
 
 
 def stats() -> dict:
-    """Aggregierte Kennzahlen über alle gespeicherten Jobs."""
+    """Aggregierte Kennzahlen über alle gespeicherten Jobs inkl. Encoder-Vergleich & Monatsverlauf."""
     if _conn is None:
         return _empty_stats()
     try:
@@ -481,7 +481,7 @@ def stats() -> dict:
                 "SELECT COUNT(*) c FROM jobs WHERE status='fehlgeschlagen'"
             ).fetchone()["c"]
             by_codec = _conn.execute(
-                "SELECT codec, COUNT(*) c, COALESCE(SUM(saved_bytes),0) s "
+                "SELECT codec, COUNT(*) c, COALESCE(SUM(saved_bytes),0) s, AVG(vmaf) v "
                 "FROM jobs WHERE status='fertig' AND output_size > 0 "
                 "GROUP BY codec ORDER BY c DESC"
             ).fetchall()
@@ -489,6 +489,12 @@ def stats() -> dict:
                 "SELECT AVG(duration) a FROM jobs "
                 "WHERE status='fertig' AND output_size > 0 AND duration > 0 LIMIT 1"
             ).fetchone()
+            enc_rows = _conn.execute(
+                "SELECT id, title, platform, codec, vmaf, original_size, output_size, "
+                "saved_bytes, duration, encode_seconds, finished, source_json "
+                "FROM jobs WHERE status='fertig' AND output_size > 0 "
+                "ORDER BY finished DESC"
+            ).fetchall()
     except sqlite3.Error as e:
         logger.warning("Statistik konnte nicht gelesen werden: %s", e)
         return _empty_stats()
@@ -496,6 +502,134 @@ def stats() -> dict:
     orig = int(done["o"] or 0)
     saved = int(done["s"] or 0)
     ratio = (saved / orig * 100.0) if orig else 0.0
+
+    # --- Encoder-Leaderboard, Auflösungen, Monatsverlauf & Top-Platzsparer ----
+    enc_agg: dict[tuple[str, str], dict] = {}
+    res_agg: dict[str, dict] = {}
+    month_agg: dict[str, dict] = {}
+    total_media_sec = 0.0
+    total_enc_for_media = 0.0
+
+    for r in enc_rows:
+        plat = str(r["platform"] or "cpu").lower()
+        cod = str(r["codec"] or "av1").lower()
+        o_sz = int(r["original_size"] or 0)
+        n_sz = int(r["output_size"] or 0)
+        s_sz = int(r["saved_bytes"] or 0)
+        v_val = float(r["vmaf"]) if r["vmaf"] is not None else None
+        enc_sec = float(r["encode_seconds"] or r["duration"] or 0.0)
+        fin = float(r["finished"] or 0.0)
+        try:
+            src = json.loads(r["source_json"] or "{}") or {}
+        except (TypeError, ValueError):
+            src = {}
+        media_dur = float(src.get("duration") or 0.0)
+        if media_dur > 0:
+            total_media_sec += media_dur
+            if enc_sec > 0:
+                total_enc_for_media += enc_sec
+        h_val = int(src.get("height") or 0)
+        if h_val >= 1800:
+            res_key = "4K / UHD"
+        elif h_val >= 960:
+            res_key = "1080p FullHD"
+        elif h_val >= 650:
+            res_key = "720p HD"
+        elif h_val > 0:
+            res_key = "SD / DVD"
+        else:
+            res_key = "Unbekannt"
+
+        # Nur echte Video-Encodes ins Encoder-Speed-Ranking aufnehmen
+        if cod not in ("remux", "audio-opt", "concat", "split"):
+            ek = (plat, cod)
+            eb = enc_agg.setdefault(ek, {
+                "platform": plat, "codec": cod, "count": 0,
+                "orig": 0, "saved": 0, "vmafs": [], "speeds": [],
+            })
+            eb["count"] += 1
+            eb["orig"] += o_sz
+            eb["saved"] += s_sz
+            if v_val is not None and v_val > 0:
+                eb["vmafs"].append(v_val)
+            if media_dur > 0 and enc_sec > 0:
+                eb["speeds"].append(media_dur / enc_sec)
+
+        rb = res_agg.setdefault(res_key, {
+            "resolution": res_key, "count": 0, "orig": 0, "saved": 0, "vmafs": [],
+        })
+        rb["count"] += 1
+        rb["orig"] += o_sz
+        rb["saved"] += s_sz
+        if v_val is not None and v_val > 0:
+            rb["vmafs"].append(v_val)
+
+        if fin > 0:
+            ym = time.strftime("%Y-%m", time.localtime(fin))
+            mb = month_agg.setdefault(ym, {"month": ym, "count": 0, "saved_bytes": 0, "original_bytes": 0})
+            mb["count"] += 1
+            mb["saved_bytes"] += s_sz
+            mb["original_bytes"] += o_sz
+
+    by_encoder: list[dict] = []
+    for (plat, cod), eb in enc_agg.items():
+        avg_sp = round(sum(eb["speeds"]) / len(eb["speeds"]), 2) if eb["speeds"] else None
+        avg_v = round(sum(eb["vmafs"]) / len(eb["vmafs"]), 2) if eb["vmafs"] else None
+        sv_pct = round(eb["saved"] / eb["orig"] * 100.0, 1) if eb["orig"] > 0 else 0.0
+        by_encoder.append({
+            "platform": plat,
+            "codec": cod,
+            "label": f"{plat.upper()} · {cod.upper()}",
+            "count": eb["count"],
+            "saved_bytes": eb["saved"],
+            "saved_percent": sv_pct,
+            "avg_vmaf": avg_v,
+            "avg_speed_x": avg_sp,
+            "speed_x": avg_sp,
+        })
+    by_encoder.sort(key=lambda x: (-x["count"], -x["saved_bytes"]))
+
+    fastest = max(
+        (e for e in by_encoder if e.get("avg_speed_x") is not None),
+        key=lambda e: e["avg_speed_x"],
+        default=None,
+    )
+    most_efficient = max(
+        (e for e in by_encoder if e.get("saved_percent", 0) > 0),
+        key=lambda e: e["saved_percent"],
+        default=None,
+    )
+
+    by_resolution = [
+        {
+            "resolution": rb["resolution"],
+            "count": rb["count"],
+            "saved_bytes": rb["saved"],
+            "saved_percent": round(rb["saved"] / rb["orig"] * 100.0, 1) if rb["orig"] > 0 else 0.0,
+            "avg_vmaf": round(sum(rb["vmafs"]) / len(rb["vmafs"]), 2) if rb["vmafs"] else None,
+        }
+        for rb in sorted(res_agg.values(), key=lambda x: -x["saved"])
+    ]
+
+    timeline = [month_agg[k] for k in sorted(month_agg.keys())[-12:]]
+
+    top_savers = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "codec": r["codec"],
+            "platform": r["platform"],
+            "original_size": int(r["original_size"] or 0),
+            "output_size": int(r["output_size"] or 0),
+            "saved_bytes": int(r["saved_bytes"] or 0),
+            "vmaf": round(float(r["vmaf"]), 2) if r["vmaf"] is not None else None,
+        }
+        for r in sorted(enc_rows, key=lambda x: int(x["saved_bytes"] or 0), reverse=True)
+        if int(r["saved_bytes"] or 0) > 0
+    ][:5]
+
+    realtime_factor = round(total_media_sec / total_enc_for_media, 2) if total_enc_for_media > 0 else None
+
     return {
         "count_done": int(done["c"] or 0),
         "count_failed": int(failed or 0),
@@ -504,12 +638,25 @@ def stats() -> dict:
         "saved_bytes": saved,
         "saved_percent": round(ratio, 1),
         "encode_seconds": int(done["d"] or 0),
+        "media_seconds": round(total_media_sec, 1),
+        "realtime_factor": realtime_factor,
         "avg_vmaf": round(done["v"], 2) if done["v"] is not None else None,
         "avg_duration": float(avg_dur["a"] or 0) if avg_dur else 0.0,
         "by_codec": [
-            {"codec": r["codec"], "count": r["c"], "saved_bytes": int(r["s"] or 0)}
+            {
+                "codec": r["codec"],
+                "count": r["c"],
+                "saved_bytes": int(r["s"] or 0),
+                "avg_vmaf": round(float(r["v"]), 2) if r["v"] is not None else None,
+            }
             for r in by_codec
         ],
+        "by_encoder": by_encoder,
+        "fastest_encoder": fastest,
+        "most_efficient_encoder": most_efficient,
+        "by_resolution": by_resolution,
+        "timeline": timeline,
+        "top_savers": top_savers,
     }
 
 
@@ -618,6 +765,16 @@ def is_processed(path: str) -> bool:
         return False
 
 
+def delete_job(job_id: str) -> bool:
+    """Löscht einen einzelnen Historien-Eintrag nach ID."""
+    if _conn is None or not job_id:
+        return False
+    with _lock:
+        cur = _conn.execute("DELETE FROM jobs WHERE id=?", (str(job_id),))
+        _conn.commit()
+        return cur.rowcount > 0
+
+
 def clear() -> int:
     """Gesamte Historie löschen. Gibt Anzahl gelöschter Zeilen zurück."""
     if _conn is None:
@@ -632,5 +789,8 @@ def _empty_stats() -> dict:
     return {
         "count_done": 0, "count_failed": 0, "original_bytes": 0,
         "output_bytes": 0, "saved_bytes": 0, "saved_percent": 0.0,
-        "encode_seconds": 0, "avg_vmaf": None, "avg_duration": 0.0, "by_codec": [],
+        "encode_seconds": 0, "media_seconds": 0.0, "realtime_factor": None, "avg_vmaf": None,
+        "avg_duration": 0.0, "by_codec": [], "by_encoder": [],
+        "fastest_encoder": None, "most_efficient_encoder": None,
+        "by_resolution": [], "timeline": [], "top_savers": [],
     }

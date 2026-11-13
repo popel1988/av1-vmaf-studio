@@ -94,22 +94,27 @@ def estimate_savings(info: VideoInfo, settings: dict) -> int:
 
 
 def has_candidates(info: VideoInfo, settings: dict) -> bool:
+    if settings.get("audio_nightmode") and (info.audio or []):
+        return True
     return any(p["transcode"] for p in plan_tracks(info, settings))
 
 
-def build_remux_cmd(info: VideoInfo, output: Path, settings: dict) -> list[str]:
+def build_remux_cmd(info: VideoInfo, output: Path, settings: dict,
+                    loudnorm_stats: Optional[dict] = None) -> list[str]:
     """FFmpeg-Kommando: Video/Untertitel/Kapitel kopieren, Tonspuren optimieren."""
     codec = settings.get("audio_codec", "eac3")
     enc = ff.AUDIO_ENCODERS.get(codec, "eac3")
     ch_out = int(settings.get("audio_channels") or 0)
     normalize = bool(settings.get("audio_normalize"))
+    nightmode = bool(settings.get("audio_nightmode"))
     plan = plan_tracks(info, settings)
 
     cmd = [config.FFMPEG, "-y", "-hide_banner", "-i", str(info.path),
            "-map", "0:v", "-c:v", "copy"]
 
     for out_idx, p in enumerate(plan):
-        cmd += ["-map", f"0:a:{int(p['index'])}?"]
+        src_idx = int(p["index"])
+        cmd += ["-map", f"0:a:{src_idx}?"]
         if not p["transcode"]:
             cmd += [f"-c:a:{out_idx}", "copy"]
             continue
@@ -121,7 +126,16 @@ def build_remux_cmd(info: VideoInfo, output: Path, settings: dict) -> list[str]:
         if ch_out in (1, 2, 6, 8):
             cmd += [f"-ac:a:{out_idx}", str(ch_out)]
         if normalize:
-            cmd += [f"-filter:a:{out_idx}", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+            m = (loudnorm_stats or {}).get(src_idx) if isinstance(loudnorm_stats, dict) else None
+            cmd += [f"-filter:a:{out_idx}", ff.loudnorm_filter(m)]
+
+    if nightmode and (info.audio or []):
+        # Bevorzugt die erste Mehrkanal-Spur (>=6 Kanäle), sonst Spur 0
+        src_tr = next(
+            (t for t in (info.audio or []) if int(t.get("channels") or 0) >= 6),
+            (info.audio or [])[0],
+        )
+        cmd += ff.nightmode_extra_track_args(len(plan), src_tr, codec="aac", bitrate_kbps=192)
 
     # Untertitel/Kapitel/Metadaten. In MP4 sind Bild-Untertitel und Attachments
     # nicht möglich – Text-Untertitel werden nach mov_text gewandelt.

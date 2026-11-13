@@ -207,6 +207,15 @@ def inspect(path, settings, *, info=None, reservations=(), protected_sources=())
         issue(warnings, "hdr_loss", "HDR wird in SDR umgewandelt." if settings.tonemap else "HDR wird nicht erhalten.")
     if media.get("hdr10_plus") and not settings.preserve_hdr and settings.video_mode == "encode":
         issue(warnings, "hdr10plus_loss", "HDR10+-Metadaten entfallen.")
+    elif media.get("hdr10_plus") and settings.preserve_hdr and settings.video_mode == "encode" and settings.codec == "av1":
+        filters = (settings.mobile_copy or settings.autocrop or
+                   (settings.target_height and settings.target_height < media.get("height", 0)) or
+                   any(getattr(settings, attr) != "off" for attr in ("denoise", "sharpen", "grain", "deband")) or
+                   settings.deinterlace == "on" or (settings.deinterlace == "auto" and media.get("interlaced")))
+        if settings.platform != "cpu":
+            issue(warnings, "hdr10plus_loss", "AV1-HDR10+ wird nur mit CPU/SVT-AV1 nativ übernommen (HDR10 bleibt).")
+        elif filters:
+            issue(warnings, "hdr10plus_loss", "Aktive Videofilter verwerfen dynamische AV1-HDR10+-Metadaten (HDR10 bleibt).")
     for index, track in enumerate(media.get("audio") or []):
         index = track.get("index", index)
         cfg = next((x for x in settings.audio_track_settings if x.get("index") == index), {})

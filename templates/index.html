@@ -199,6 +199,7 @@
                 Auswahl aufheben
               </button>
               <div class="selected-info" id="selected-info"></div>
+              <div id="custom-vmaf-scenes" class="custom-vmaf-scenes" hidden></div>
               <div id="bitrate-panel" class="bitrate-panel" hidden>
                 <div class="lib-actions">
                   <button type="button" class="btn btn-ghost btn-sm" id="btn-bitrate">Bitrate-Verlauf</button>
@@ -240,6 +241,9 @@
                   <select id="opt-profile"><option value="">— kein Profil —</option></select>
                   <button class="btn btn-ghost btn-sm" id="btn-profile-save" title="Aktuelle Einstellungen als Profil speichern">Speichern</button>
                   <button class="btn btn-ghost btn-sm bad-btn" id="btn-profile-delete" title="Gewähltes Profil löschen">Löschen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-profile-export" title="Eigene Profile &amp; Watchfolder-Regeln als JSON-Bundle exportieren">Export (JSON)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="btn-profile-import" title="Profile &amp; Watchfolder-Regeln aus einer JSON-Datei importieren">Import (JSON)</button>
+                  <input type="file" id="profile-import-input" accept=".json,application/json" style="display:none" />
                 </div>
                 <div class="preset-chips" id="opt-preset-chips" style="margin-top:8px">
                   <span class="muted" style="font-size:12px;margin-right:6px">Medientyp:</span>
@@ -297,13 +301,17 @@
                     <p class="hint">Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein. <a href="#faq-hdr" class="faq-jump">FAQ: Dynamik</a></p>
                   </div>
                   <div id="dv-mode-wrap" style="display:none">
-                    <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. NVIDIA-AV1 kann DV nicht mitnehmen (Fallback HDR10). Profil 5 ohne HDR10-Fallback – ohne DV-Player lieber Tone-Mapping.">Dolby-Vision-Behandlung</label>
+                    <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. Profil 5 → HDR10 konvertiert IPTPQc2 per libplacebo (Vulkan) nach BT.2020 PQ.">Dolby-Vision-Behandlung</label>
                     <select id="opt-dv-mode">
                       <option value="preserve">Dolby Vision übernehmen (RPU)</option>
-                      <option value="hdr10">Nur HDR10-Basis behalten (DV verwerfen)</option>
+                      <option value="hdr10">HDR10 behalten / DV5 &rarr; HDR10 konvertieren</option>
                       <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
                     </select>
                     <p class="hint" id="dv-mode-hint"></p>
+                    <div style="margin-top:6px">
+                      <button type="button" class="btn btn-ghost btn-sm" id="btn-dv-l1-curve">📈 DV-L1-Helligkeitskurve laden</button>
+                    </div>
+                    <div id="dv-l1-curve-box" style="display:none;margin-top:8px"></div>
                   </div>
                 </div>
                 <div class="tonemap-opts" id="tonemap-opts" hidden>
@@ -445,9 +453,16 @@
                   <p class="hint">Kurz setzt öfter ein volles Bild, das Springen wird feiner und die Datei etwas größer. Lang lässt den Encoder länger vorhersagen. Automatisch ist bei SVT etwa 5 Sekunden, bei x264 etwa 10. <a href="#faq-keyint" class="faq-jump">FAQ</a></p>
                 </div>
                 <div class="field">
-                  <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn, damit der Encoder weniger „echtes“ Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
-                  <input type="range" id="opt-film-grain" min="0" max="30" value="0" />
-                  <p class="hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
+                  <label data-tip="Nur AV1 auf der CPU (SVT). Synthetisches Korn (0–50), damit der Encoder weniger echtes Rauschen teuer speichern muss. 0 = aus.">Film-Grain-Synthese: <strong id="film-grain-val">0</strong></label>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <input type="range" id="opt-film-grain" min="0" max="50" value="0" style="flex:1" />
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-film-grain-measure" title="Natürliches Filmkorn der gewählten Quelle an Stichproben messen">Messen</button>
+                  </div>
+                  <label class="check" style="margin-top:4px;min-height:0">
+                    <input type="checkbox" id="opt-film-grain-auto" />
+                    <span data-tip="Misst vor jedem SVT-AV1-Encode automatisch das zeitliche Luma-Rauschen der Quelle und setzt film-grain (0–50) passend je Datei.">Auto-Filmkorn vor Encode messen</span>
+                  </label>
+                  <p class="hint" id="film-grain-est-hint">Nur AV1 (CPU/SVT). 0 = aus. Spart Bits bei körnigem Material.</p>
                 </div>
                 <div class="field">
                   <label data-tip="Nur AV1 auf der CPU. Detail hebt feine Strukturen an. Der Encoder bleibt das mitgelieferte SVT, nicht der SVT-AV1-HDR-Fork.">SVT-Look</label>
@@ -472,6 +487,33 @@
                       <option value="abr">Average Bitrate (VBR-Ziel)</option>
                       <option value="bitrate">Festbitrate (CBR)</option>
                     </select>
+                  </div>
+                  <div class="field">
+                    <label data-tip="Binärsuche testet adaptiv den gesamten CQ-Bereich (z. B. 16–40) in ~5 Schritten auf 1-CQ-Präzision statt nur 4 starre Stufen.">Suchverfahren (Auto-CRF)</label>
+                    <select id="opt-vmaf-search">
+                      <option value="grid">Feste Stufen + Zwischenwert</option>
+                      <option value="binary">Adaptive Binärsuche (exakt auf 1 CQ)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-tip="Verwirft CQ-Stufen, deren schlechteste 5 % Frames (5%-Low) in einer Szene unter diesen Wert fallen (0 = aus). Schützt dunkle/komplexe Szenen.">5%-Perzentil-Minimum (0 = aus)</label>
+                    <input type="number" id="opt-vmaf-min-p5" value="0" min="0" max="99" step="1" />
+                  </div>
+                  <div class="field">
+                    <label data-tip="Standardmäßig (1) wird jedes einzelne Frame exakt gemessen. Optional kann jedes 2./3./5. Frame gemessen werden, um die VMAF-Analyse deutlich zu beschleunigen.">VMAF-Subsampling (optional)</label>
+                    <select id="opt-vmaf-subsample">
+                      <option value="1" selected>Aus – jedes Frame messen (Standard)</option>
+                      <option value="2">Jedes 2. Frame (n_subsample=2 · ~2× schneller)</option>
+                      <option value="3">Jedes 3. Frame (n_subsample=3 · ~3× schneller)</option>
+                      <option value="5">Jedes 5. Frame (n_subsample=5 · Schnelltest)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label class="check" style="min-height:0;margin-top:6px">
+                      <input type="checkbox" id="opt-vmaf-gpu" />
+                      <span data-tip="Nutzt libvmaf_cuda bzw. CUDA-HW-Decode abhängig von Image-Variante (Main: FFmpeg 9.0 / NVIDIA-Treiber ≥ 610 · Legacy: FFmpeg 8.1 / Treiber ≥ 525). Fällt bei inkompatiblem Treiber automatisch auf CPU zurück.">VMAF GPU-Beschleunigung (CUDA)</span>
+                    </label>
+                    <p class="hint" id="opt-vmaf-gpu-hint">Main (≥ 610) / Legacy (≥ 525) – bei Bedarf automatischer CPU-Fallback.</p>
                   </div>
                   <div class="field">
                     <label>Stichproben (Szenen)</label>
@@ -521,6 +563,14 @@
                   <span>Untertitel übernehmen</span>
                 </label>
                 <label class="check">
+                  <input type="checkbox" id="opt-sub-ocr" />
+                  <span data-tip="Extrahiert Bild-Untertitel (Blu-ray PGS / VobSub) mit adaptiver Paletten-Vorfilterung &amp; 2×-Upscaling und wandelt sie via Tesseract/SubtitleEdit in Text-SRT.">Bild-UT per OCR &rarr; SRT</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="opt-embed-sidecar-subs" />
+                  <span data-tip="Sucht neben der Videodatei automatisch nach externen Untertiteln (.srt, .ass, .sup, .vtt, .sub) inkl. Sprach-/Forced-/SDH-Erkennung und muxed sie in den Container ein.">Sidecar-Untertitel neben Quelle einbetten</span>
+                </label>
+                <label class="check">
                   <input type="checkbox" id="opt-keep-chapters" checked />
                   <span>Kapitelmarken</span>
                 </label>
@@ -568,8 +618,12 @@
                     <input type="number" id="opt-chunk-range" min="0" max="12" value="6" />
                   </div>
                 </div>
+                <label class="check" style="margin-top:6px">
+                  <input type="checkbox" id="opt-chunk-scene" checked />
+                  <span>Schnitte an echten Keyframes/Szenenwechseln ausrichten &amp; Segmente absturzsicher zwischenspeichern (Resume)</span>
+                </label>
                 <p class="hint">Aufwändige Szenen erhalten bessere Qualität (niedrigerer CQ), ruhige
-                  Szenen werden kleiner. Der eingestellte CQ ist der Mittelwert.</p>
+                  Szenen werden kleiner. Fertige Segmente bleiben bei Abbruch/Neustart erhalten und werden beim Fortsetzen übersprungen.</p>
               </div>
               <div id="verify-config" style="display:none">
                 <div class="settings-grid" style="margin-top:10px">
@@ -630,6 +684,47 @@
                   <label class="check">
                     <input type="checkbox" id="opt-audio-normalize" />
                     <span>Lautstärke normalisieren (EBU R128, −16 LUFS)</span>
+                  </label>
+                  <label class="check">
+                    <input type="checkbox" id="opt-audio-norm-2pass" />
+                    <span data-tip="Misst vor dem Encode die exakte Lautheit (Pass 1) und wendet eine lineare Korrektur ohne Pumpen an (Pass 2).">2-Pass EBU-R128 linear (exakte Vorab-Messung)</span>
+                  </label>
+                </div>
+                <div class="field" style="grid-column:1 / -1">
+                  <label class="check">
+                    <input type="checkbox" id="opt-audio-nightmode" />
+                    <span data-tip="Behält die Haupttonspuren unverändert (auch bei Original kopieren) und hängt zusätzlich eine Stereo-AAC-Spur mit Center-Sprachanhebung und sanfter Dynamikkompression an.">Zusatzspur anlegen: Stereo Dialog-Boost / Nachtmodus (Center-Anhebung)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="opt-section">
+              <h4 class="subsection">Spur-Automatik (Batches, Serien &amp; Watchfolder)</h4>
+              <p class="hint" id="opt-sidecar-hint" style="margin-bottom:8px;display:none"></p>
+              <div class="settings-grid">
+                <div class="field">
+                  <label data-tip="Kommaliste gewünschter Ton-Sprachen (ISO-Code oder Name, z. B. de, en, ja). Leer = alle Tonspuren behalten. Fällt automatisch auf die erste Spur zurück, falls keine Sprache passt.">Ton-Sprachen (Whitelist)</label>
+                  <input type="text" id="opt-audio-langs" placeholder="z. B. de, en (leer = alle)" />
+                  <label class="check" style="margin-top:6px;min-height:0">
+                    <input type="checkbox" id="opt-audio-keep-orig" checked />
+                    <span data-tip="Behält die erste/Original-Tonspur immer bei, auch wenn ihre Sprache nicht in der Whitelist steht (z. B. Japanisch/Französisch im Originalton).">Original-/Haupttonspur immer behalten</span>
+                  </label>
+                  <label class="check" style="margin-top:4px;min-height:0">
+                    <input type="checkbox" id="opt-audio-no-comm" />
+                    <span data-tip="Erkennt Regie- und Audiokommentare anhand des Spurtitels (Commentary / Kommentar) und wählt sie automatisch ab.">Regie-/Audiokommentare abwählen</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label data-tip="Kommaliste gewünschter Untertitel-Sprachen (z. B. de, en). Gilt sowohl für interne Spuren als auch für eingebettete Sidecar-Untertitel. Leer = alle behalten.">Untertitel-Sprachen (Whitelist)</label>
+                  <input type="text" id="opt-sub-langs" placeholder="z. B. de, en (leer = alle)" />
+                  <label class="check" style="margin-top:6px;min-height:0">
+                    <input type="checkbox" id="opt-sub-no-sdh" />
+                    <span data-tip="Filtert Hörgeschädigten-Untertitel (SDH / CC / HoH) automatisch heraus.">Hörgeschädigten-UT (SDH / CC) abwählen</span>
+                  </label>
+                  <label class="check" style="margin-top:4px;min-height:0">
+                    <input type="checkbox" id="opt-sub-keep-forced" checked />
+                    <span data-tip="Behält Forced-Untertitel (Schilder / Fremdsprachen-Passagen) immer bei.">Forced-Untertitel immer behalten</span>
                   </label>
                 </div>
               </div>
@@ -770,6 +865,33 @@
                 <div class="field">
                   <label>Vergleichsclip-Länge: <strong id="vt-clip-val">30</strong> Sek.</label>
                   <input type="range" id="vt-clip" min="5" max="120" value="30" step="5" />
+                </div>
+                <div class="field">
+                  <label data-tip="Feste Stufen vergleicht genau die eingetragenen Werte (ideal für RD-Kurven). Adaptive Binärsuche sucht den exakten Ziel-CQ.">Suchverfahren</label>
+                  <select id="vt-search-mode">
+                    <option value="grid">Feste Testwerte (Raster / RD-Kurve)</option>
+                    <option value="binary">Adaptive Auto-CRF-Binärsuche</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-tip="Mindestwert für das 5%-Perzentil (5%-Low) der schwächsten Szene (0 = aus).">5%-Perzentil-Minimum (0 = aus)</label>
+                  <input type="number" id="vt-min-p5" value="0" min="0" max="99" step="1" />
+                </div>
+                <div class="field">
+                  <label data-tip="Standardmäßig (1) wird jedes Bild exakt gemessen. Optional beschleunigt Subsampling die Messung auf jedes N-te Frame.">VMAF-Subsampling (optional)</label>
+                  <select id="vt-subsample">
+                    <option value="1" selected>Aus – jedes Frame messen (Standard)</option>
+                    <option value="2">Jedes 2. Frame (n_subsample=2)</option>
+                    <option value="3">Jedes 3. Frame (n_subsample=3)</option>
+                    <option value="5">Jedes 5. Frame (n_subsample=5)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="check" style="min-height:0;margin-top:6px">
+                    <input type="checkbox" id="vt-gpu" />
+                    <span data-tip="Nutzt libvmaf_cuda bzw. CUDA-HW-Decode abhängig von Main (Treiber ≥ 610) / Legacy (Treiber ≥ 525) mit automatischem CPU-Fallback.">VMAF GPU-Beschleunigung (CUDA)</span>
+                  </label>
+                  <p class="hint" id="vt-gpu-hint">Main (≥ 610) / Legacy (≥ 525) – automatischer CPU-Fallback.</p>
                 </div>
                 <div class="tonemap-opts" id="vt-tonemap-opts" hidden>
                   <div class="field">
@@ -938,12 +1060,19 @@
               <div id="vmaf-frame-wrap" class="vmaf-subchart vmaf-scene-wide" hidden>
                 <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
-                  <canvas id="vmaf-frame-chart"></canvas>
+                  <canvas id="vmaf-frame-chart" style="cursor:pointer" title="Klick auf einen Punkt springt im A/B-Player direkt an diese Stelle"></canvas>
                 </div>
-                <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. Hohe Zähne sind Referenzbilder, die kleinen dazwischen B-Frames. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
+                <p class="hint vmaf-curve-hint">Die gestrichelte Linie ist die Datenmenge je Bild. <strong>Tipp:</strong> Klick auf einen Kurvenpunkt öffnet genau diese Stelle im A/B-Player. <a href="#faq-curves" class="faq-jump">FAQ: Kurven</a></p>
               </div>
             </div>
             <div class="vmaf-side-main">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                <div class="btn-group" id="vmaf-chart-mode-bar">
+                  <button type="button" class="btn btn-ghost btn-sm active" data-vmaf-cmode="steps">Stufen-Ansicht</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-vmaf-cmode="rd">Rate-Distortion-Kurve (Bitrate ↔ VMAF)</button>
+                </div>
+                <div id="vmaf-bdrate-bar" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+              </div>
               <div class="vmaf-graph-pair">
                 <div>
                   <div class="vmaf-chart-wrap">
@@ -1146,6 +1275,24 @@
           <div class="card-body">
             <div class="stat-grid" id="stat-grid"></div>
             <div class="stat-codecs" id="stat-codecs"></div>
+            <div class="stat-dashboard-grid" id="stat-dashboard">
+              <div class="stat-panel">
+                <h4 class="subhead" style="margin-top:0">Monatsverlauf · Eingesparter Speicher</h4>
+                <div id="stat-timeline" class="stat-bars"><p class="muted">Noch keine Verlaufsdaten.</p></div>
+              </div>
+              <div class="stat-panel">
+                <h4 class="subhead" style="margin-top:0">Encoder-Leaderboard (Geschwindigkeit &amp; Qualität)</h4>
+                <div id="stat-encoders" class="stat-list"><p class="muted">Noch keine abgeschlossenen Encodes.</p></div>
+              </div>
+              <div class="stat-panel">
+                <h4 class="subhead" style="margin-top:0">Ersparnis nach Auflösung</h4>
+                <div id="stat-resolutions" class="stat-bars"><p class="muted">Noch keine Daten.</p></div>
+              </div>
+              <div class="stat-panel">
+                <h4 class="subhead" style="margin-top:0">Top-Platzsparer</h4>
+                <div id="stat-topsavers" class="stat-list"><p class="muted">Noch keine Daten.</p></div>
+              </div>
+            </div>
             <h4 class="subhead">Letzte Jobs</h4>
             <div class="data-table-wrap">
               <table class="data-table">
@@ -1211,6 +1358,13 @@
                 <ol id="lib-dash-hogs" class="lib-dash-hogs"></ol>
               </div>
             </div>
+            <details class="lib-dups-panel" id="lib-dups-panel" style="display:none">
+              <summary class="lib-dups-summary">
+                <span id="lib-dups-title">🔁 Mögliche Duplikate &amp; Mehrfach-Versionen</span>
+                <span class="muted" id="lib-dups-sub" style="font-size:11.5px"></span>
+              </summary>
+              <div id="lib-dups-body" class="lib-dups-body"></div>
+            </details>
 
             <!-- 3) Live-Filter auf dem letzten Scan -->
             <h4 class="sub-head" style="margin-top:14px">Filter <span class="muted" style="font-size:11px;text-transform:none">(live auf letzten Scan)</span></h4>
@@ -1249,6 +1403,7 @@
             <div class="lib-checks">
               <label class="check"><input type="checkbox" id="lib-skip-optimized" /><span data-tip="Blendet Dateien aus, die schon AV1 sind oder deren Videobitrate nah am Ziel liegt.">Bereits effiziente Dateien ausblenden</span></label>
               <label class="check"><input type="checkbox" id="lib-skip-processed" /><span data-tip="Blendet Dateien aus, die in der Historie schon erfolgreich encodiert wurden.">Bereits verarbeitete Dateien ausblenden</span></label>
+              <label class="check"><input type="checkbox" id="lib-only-dups" /><span data-tip="Zeigt nur Filme/Episoden an, die mehrfach im aktuellen Bibliotheks-Scan vorhanden sind (z. B. 1080p + 2160p oder H.264 + AV1).">Nur mögliche Duplikate</span></label>
             </div>
 
             <!-- 4) Liste + Aktionen -->
@@ -2009,6 +2164,12 @@
               <label>Keine neuen Jobs über CPU-Auslastung (%)</label>
               <input type="number" id="sched-maxcpu" min="10" max="100" value="85" />
             </div>
+            <div class="divider"></div>
+            <label class="check"><input type="checkbox" id="sched-disk-guard" checked /><span>Speicherplatz-Wächter aktiv (gilt immer)</span></label>
+            <div class="field">
+              <label>Mindestens frei halten (GB auf Arbeits-/Ziellaufwerk)</label>
+              <input type="number" id="sched-minfree" min="0.5" max="1000" step="0.5" value="5" />
+            </div>
             <p class="hint" id="sched-status"></p>
             <div class="lib-actions">
               <button class="btn btn-primary btn-sm" id="btn-sched-save">Speichern</button>
@@ -2047,34 +2208,24 @@
             <span class="badge" id="watch-badge">Aus</span>
           </div>
           <div class="card-body">
-            <p class="hint">Überwacht einen Unterordner des Eingabeordners und legt neue Videos automatisch in die Warteschlange – optional nur in einem Zeitfenster.</p>
-            <label class="check"><input type="checkbox" id="wf-enabled" /><span>Watch-Ordner aktiv</span></label>
-            <div class="field">
-              <label>Ordner (relativ zum Eingabeordner)</label>
-              <div class="field-row">
-                <input type="text" id="wf-folder" placeholder="leer = gesamter Eingabeordner" />
-                <button class="btn btn-ghost btn-sm" id="btn-wf-browse" type="button">Durchsuchen …</button>
-              </div>
-            </div>
-            <div class="field-row">
-              <div class="field">
-                <label>Prüfintervall (Minuten)</label>
+            <p class="hint">Überwacht einen oder mehrere Ordner mit jeweils eigenem Profil und legt neue Videos automatisch in die Warteschlange.</p>
+            <div class="field-row" style="align-items:center">
+              <label class="check" style="margin:0"><input type="checkbox" id="wf-enabled" /><span>Watch-Ordner aktiv</span></label>
+              <div class="field" style="margin:0;max-width:180px">
+                <label>Prüfintervall (Min.)</label>
                 <input type="number" id="wf-interval" min="1" max="1440" value="15" />
               </div>
-              <div class="field">
-                <label>Profil anwenden</label>
-                <select id="wf-profile"><option value="">Standard-Einstellungen</option></select>
-              </div>
             </div>
-            <div class="field-row">
-              <div class="field">
-                <label>Aktiv ab Stunde</label>
-                <input type="number" id="wf-start" min="0" max="23" placeholder="immer" />
-              </div>
-              <div class="field">
-                <label>Aktiv bis Stunde</label>
-                <input type="number" id="wf-end" min="0" max="23" placeholder="immer" />
-              </div>
+            <div id="wf-rules-list" style="display:flex;flex-direction:column;gap:8px;margin:10px 0"></div>
+            <div style="margin-bottom:8px">
+              <button class="btn btn-ghost btn-sm" id="btn-wf-add-rule" type="button">+ Ordner-Regel hinzufügen</button>
+            </div>
+            <!-- Verborgene Legacy-Felder für Rückwärtskompatibilität -->
+            <div hidden>
+              <input type="text" id="wf-folder" />
+              <select id="wf-profile"><option value="">Standard-Einstellungen</option></select>
+              <input type="number" id="wf-start" />
+              <input type="number" id="wf-end" />
             </div>
             <p class="hint" id="wf-status"></p>
             <div class="lib-actions">
@@ -2145,6 +2296,8 @@
                   <p class="hint">Verlustfreie Codecs (TrueHD/DTS-HD/PCM/FLAC) gelten immer als aufgebläht.</p>
                 </div>
                 <label class="check"><input type="checkbox" id="audio-normalize" /><span>Lautheit normalisieren (EBU R128)</span></label>
+                <label class="check"><input type="checkbox" id="audio-norm-2pass" /><span>2-Pass EBU-R128 linear (Vorab-Messung)</span></label>
+                <label class="check"><input type="checkbox" id="audio-nightmode" /><span>Zusatzspur: Stereo Dialog-Boost / Nachtmodus anlegen</span></label>
                 <div class="field">
                   <label>Nach Erfolg</label>
                   <select id="audio-post">
@@ -2311,15 +2464,24 @@
               </div>
               <div id="remux-att-list" class="hint" style="display:none"></div>
 
-              <h4 class="sub-head">Kapitel</h4>
-              <div class="lib-actions">
-                <button class="btn btn-ghost btn-sm" id="btn-remux-load-chapters">Kapitel laden/bearbeiten</button>
-                <button class="btn btn-ghost btn-sm" id="btn-remux-import-chapters">Kapitel aus NFO/Datei importieren</button>
+              <h4 class="sub-head">Kapitel-Editor</h4>
+              <div class="lib-actions" style="flex-wrap:wrap;gap:6px">
+                <button class="btn btn-ghost btn-sm" id="btn-remux-load-chapters" type="button">Kapitel aus Quelle laden</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-add-chapter" type="button">+ Kapitel hinzufügen</button>
+                <span style="display:inline-flex;align-items:center;gap:4px">
+                  <input type="number" id="remux-chap-interval" min="1" max="120" value="5" style="width:58px" title="Intervall in Minuten" />
+                  <button class="btn btn-ghost btn-sm" id="btn-remux-auto-chapters" type="button" title="Kapitelmarken im festen Minutenabstand über die Quelldauer erzeugen">Auto-Intervall (Min.)</button>
+                </span>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-import-chapters" type="button">Aus NFO/Datei importieren</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-sort-chapters" type="button" style="display:none">Nach Zeit sortieren</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-export-chapters" type="button" style="display:none">Export (.chapters.txt)</button>
+                <button class="btn btn-ghost btn-sm bad-btn" id="btn-remux-clear-chapters" type="button" style="display:none" title="Alle Kapitel beim Remux entfernen">Alle entfernen</button>
+                <button class="btn btn-ghost btn-sm" id="btn-remux-reset-chapters" type="button" style="display:none" title="Änderungen verwerfen (Originalverhalten)">Zurücksetzen</button>
                 <span id="remux-chapters-info" class="muted"></span>
               </div>
               <div class="table-wrap" id="remux-chapters-wrap" style="display:none">
                 <table class="queue-table">
-                  <thead><tr><th>#</th><th>Start</th><th>Titel</th></tr></thead>
+                  <thead><tr><th style="width:42px">#</th><th style="width:140px">Start (hh:mm:ss.mmm)</th><th style="width:140px">Ende (optional)</th><th>Titel</th><th style="width:90px">Aktionen</th></tr></thead>
                   <tbody id="remux-chapters-body"></tbody>
                 </table>
               </div>
@@ -2498,9 +2660,11 @@
                             title="Datei in den Quell-Monitor laden">📂 Quelle laden</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-add-source"
                             title="Mehrere Dateien anhaken und direkt an die Timeline anhängen">+ Quellen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-add-folder"
+                            title="Alle Videos eines Ordners alphabetisch sortiert an die Timeline anhängen">+ Ordner</button>
                     <label class="btn btn-ghost btn-sm ed-upload-btn"
-                           title="Lokale Datei hochladen und in die Vorschau laden">⬆ Upload
-                      <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" hidden />
+                           title="Eine oder mehrere lokale Dateien hochladen und anhängen">⬆ Upload
+                      <input type="file" id="ed-upload" accept="video/*,.mkv,.m2ts,.ts,.avi" multiple hidden />
                     </label>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-unload" disabled
                             title="Quelle aus dem Monitor nehmen – die Clips auf der Timeline bleiben">⏏</button>
@@ -2713,7 +2877,12 @@
               </div>
             </div>
 
-            <!-- Gesamt-Timeline über die volle Breite -->
+            <!-- Quellen-Pool (Multi-Source-Übersicht) + Gesamt-Timeline -->
+            <div class="ed-media-bin" id="ed-media-bin" hidden></div>
+            <div class="ed-hover-thumb" id="ed-hover-thumb" hidden>
+              <div class="ed-hover-thumb-img" id="ed-hover-thumb-img"></div>
+              <div class="ed-hover-thumb-lbl" id="ed-hover-thumb-lbl">0:00</div>
+            </div>
             <div class="ed-tl-wrap">
               <div class="ed-tl-head">
                 <strong>Timeline</strong>
@@ -3118,7 +3287,12 @@
             </div>
             <p class="muted" id="fp-hw-info"></p>
             <div class="fp-look" id="fp-look" hidden>
-              <p class="hint" id="fp-look-hint">Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Bei HDR gilt die Kurve, sonst Deband, Denoise, Schärfen und Korn. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.</p>
+              <p class="hint" id="fp-look-hint">Jede Änderung startet die Vorschau neu an der aktuellen Stelle. CUDA, OpenCL, VAAPI und tonemapx laufen über Jellyfin-FFmpeg, CPU und libplacebo über BtbN. Tonemapping bleibt aus, solange der Browser den HDR-Pfad abspielen kann. Direct-Play und Remux zeigen die Datei unverändert; eine Änderung schaltet dafür auf Automatisch.</p>
+              <label class="check" id="fp-tonemap-toggle" hidden>
+                <input type="checkbox" id="fp-tonemap" />
+                <span>Tonemapping</span>
+              </label>
+              <p class="hint" id="fp-tonemap-reason" hidden></p>
               <div class="field-row field-row-inline" id="fp-tonemap-opts" hidden>
                 <div class="field">
                   <label data-tip="CPU ist die Vorgabe: zscale und tonemap. libplacebo rechnet auf Vulkan, Peak und Entsättigung gelten dann nicht. CUDA nur mit NVIDIA, VAAPI nur mit AMD und Intel im VAAPI-Modus. OpenCL und tonemapx laufen auf allen Plattformen. CUDA, OpenCL, VAAPI und tonemapx kommen aus Jellyfin-FFmpeg.">Tonemap-Engine</label>
@@ -3196,15 +3370,21 @@
                 <div class="fp-playback">
                 <div class="fp-stage">
                   <video id="fp-video" playsinline></video>
+                  <div class="fp-stats-hud" id="fp-stats-hud" hidden></div>
                   <div class="fp-overlay" id="fp-overlay">
                     <button type="button" class="fp-big-play" id="fp-big-play" title="Abspielen">▶</button>
                   </div>
                 </div>
                 <div class="fp-controls">
-                  <button type="button" class="btn btn-ghost btn-sm" id="fp-play" title="Play/Pause">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-play" title="Play/Pause (Leertaste)">▶</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-step-back" title="Einzelbild zurück (, oder ← im Pause-Modus · Shift+← = −10 Bilder)">−1 Bild</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-step-fwd" title="Einzelbild vor (. oder → im Pause-Modus · Shift+→ = +10 Bilder)">+1 Bild</button>
                   <input type="range" id="fp-seek" min="0" max="1000" value="0" step="1" />
                   <span class="muted fp-time" id="fp-time">0:00:00 / 0:00:00</span>
                   <input type="range" id="fp-vol" min="0" max="100" value="90" title="Lautstärke" style="width:90px" />
+                  <button type="button" class="btn btn-ghost btn-sm iconbtn" id="fp-snapshot" title="Aktuelles Einzelbild als PNG speichern (S)">📷</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-use-vmaf-scene" title="Aktuelle Stelle als gezielte VMAF-Testszene übernehmen">🎯 VMAF-Szene</button>
+                  <button type="button" class="btn btn-ghost btn-sm iconbtn" id="fp-stats-toggle" title="Live-Statistiken / Stats for Nerds einblenden (I)" aria-pressed="false">ℹ</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="fp-fs" title="Vollbild (Esc zum Beenden)">⛶</button>
                 </div>
                 </div>
@@ -3227,6 +3407,25 @@
                     <span data-tip="PGS/DVD/DVB-Untertitel sind Bilder, kein Text. Einbrennen erzwingt Video-Transcode.">Bild-UT einbrennen</span>
                   </label>
                   <button type="button" class="btn btn-ghost btn-sm" id="fp-stop" title="Wiedergabe stoppen (Datei bleibt geladen)">Stoppen</button>
+                </div>
+                <div class="fp-sync-bar" id="fp-sync-bar">
+                  <div class="fp-sync-group">
+                    <span class="fp-sync-label" data-tip="Positiver Wert verzögert den Ton sofort live (WebAudio). Negativer Wert zieht den Ton per FFmpeg -itsoffset vor.">Ton-Versatz:</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-aud-delay-minus" title="Ton 100 ms früher">−100</button>
+                    <input type="number" id="fp-aud-delay" value="0" step="50" min="-15000" max="5000" style="width:76px" title="Audio-Versatz in Millisekunden" />
+                    <span class="muted" style="font-size:11px">ms</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-aud-delay-plus" title="Ton 100 ms später">+100</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-aud-delay-zero" title="Audio-Versatz zurücksetzen">0</button>
+                  </div>
+                  <div class="fp-sync-group">
+                    <span class="fp-sync-label" data-tip="Verschiebt eingeblendete Text-/Sidecar-Untertitel sofort live ohne Nachladen.">UT-Versatz:</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-sub-delay-minus" title="Untertitel 100 ms früher">−100</button>
+                    <input type="number" id="fp-sub-delay" value="0" step="50" min="-15000" max="15000" style="width:76px" title="Untertitel-Versatz in Millisekunden" />
+                    <span class="muted" style="font-size:11px">ms</span>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-sub-delay-plus" title="Untertitel 100 ms später">+100</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="fp-sub-delay-zero" title="Untertitel-Versatz zurücksetzen">0</button>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-sm" id="fp-sync-to-remux" title="Getesteten Ton- und Untertitel-Versatz direkt in Remux &amp; Bearbeiten für diese Datei eintragen">✂ In Remux übernehmen</button>
                 </div>
               </div>
               <aside class="fp-side">
@@ -3397,24 +3596,53 @@
               </div>
               {% endfor %}
             </div>
-            <div class="ab-preview-notes"><div id="ab-provenance-a"></div><div id="ab-provenance-b"></div></div>
+            <div class="ab-preview-notes" id="ab-preview-notes"><div id="ab-provenance-a"></div><div id="ab-provenance-b"></div></div>
             <div class="ab-videos" id="ab-videos">
-              <div class="ab-pane"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
-              <div class="ab-pane"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
+              <div class="ab-pane" id="ab-pane-a"><span class="ab-tag" id="ab-tag-a">A</span><video id="ab-video-a" controls preload="auto" playsinline></video></div>
+              <div class="ab-pane" id="ab-pane-b"><span class="ab-tag" id="ab-tag-b">B</span><video id="ab-video-b" controls preload="auto" playsinline></video></div>
+              <canvas id="ab-diff-canvas" class="ab-diff-canvas" style="display:none"></canvas>
+              <div class="ab-diff-hud" id="ab-diff-hud" style="display:none"></div>
+              <div class="ab-nerd-hud" id="ab-nerd-hud" style="display:none"></div>
               <div class="ab-wipe-handle" id="ab-wipe-handle" style="display:none"><span>A ◂ ▸ B</span></div>
             </div>
+            <div id="ab-abx-bar" class="ab-abx-bar" style="display:none">
+              <div class="ab-abx-views">
+                <span class="muted" style="font-size:12px">Quelle zeigen:</span>
+                <button type="button" class="btn btn-ghost btn-sm" data-abx-view="a">1 · Quelle A</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-abx-view="b">2 · Quelle B</button>
+                <button type="button" class="btn btn-primary btn-sm" data-abx-view="x">3 · Unbekannt X</button>
+              </div>
+              <div class="ab-abx-guess">
+                <span class="muted" style="font-size:12px">Tipp abgeben:</span>
+                <button type="button" class="btn btn-ghost btn-sm" data-abx-guess="a">X = A</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-abx-guess="b">X = B</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ab-abx-next" title="X neu zufällig zuweisen">Neue Runde</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="ab-abx-reset" title="Blindtest-Zähler zurücksetzen">Reset</button>
+              </div>
+              <div class="ab-abx-score" id="ab-abx-score">Noch kein Tipp abgegeben</div>
+            </div>
             <div class="ab-controls">
-              <button class="btn btn-primary btn-sm" id="ab-play">▶ / ⏸ (beide)</button>
-              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-back" title="Ein Bild zurück (beide)">⏮</button>
-              <button class="btn btn-ghost btn-sm iconbtn" id="ab-step-fwd" title="Ein Bild vor (beide)">⏭</button>
+              <button class="btn btn-primary btn-sm" id="ab-play" title="Play/Pause (Leertaste)">▶ / ⏸ (beide)</button>
+              <button class="btn btn-ghost btn-sm" id="ab-step-back" title="Einzelbild zurück (, oder ← im Pause-Modus · Shift+← = −10 Bilder)">−1 Bild</button>
+              <button class="btn btn-ghost btn-sm" id="ab-step-fwd" title="Einzelbild vor (. oder → im Pause-Modus · Shift+→ = +10 Bilder)">+1 Bild</button>
               <input type="range" id="ab-seek" min="0" max="1000" value="0" style="flex:1" />
               <span id="ab-time" class="muted">0:00</span>
+              <button type="button" class="btn btn-ghost btn-sm iconbtn" id="ab-snapshot" title="Aktuellen Vergleich als PNG exportieren (S)">📷</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="ab-use-vmaf-scene" title="Aktuelle Stelle als gezielte VMAF-Testszene übernehmen">🎯 VMAF-Szene</button>
+              <button type="button" class="btn btn-ghost btn-sm iconbtn" id="ab-stats-toggle" title="Live-Statistiken / Stats for Nerds einblenden (I)" aria-pressed="false">ℹ</button>
             </div>
             <div class="lib-actions ab-bottom-bar">
               <label class="check" style="margin:0"><input type="checkbox" id="ab-sync" checked /><span>Synchron</span></label>
               <div class="field" style="margin:0">
-                <label style="font-size:11px">Versatz B (s)</label>
-                <input type="number" id="ab-offset" value="0" step="0.1" style="width:90px" />
+                <label style="font-size:11px" data-tip="Verschiebt Video B dauerhaft relativ zu Video A (in Sekunden oder framegenau per A/B-Buttons), falls ein Schnitt/Intro leicht abweicht.">Versatz B (s) · <span id="ab-offset-frames" class="muted">±0 Bilder</span></label>
+                <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+                  <input type="number" id="ab-offset" value="0" step="0.001" style="width:86px" title="Zeitversatz von Video B gegenüber A in Sekunden" />
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-b-back" title="Nur Video B 1 Bild zurück ([) · Shift+[ = −5 Bilder">B −1</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-b-fwd" title="Nur Video B 1 Bild vor (]) · Shift+] = +5 Bilder">B +1</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-a-back" title="Nur Video A 1 Bild zurück · verschiebt A gegenüber B">A −1</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ab-nudge-a-fwd" title="Nur Video A 1 Bild vor · verschiebt A gegenüber B">A +1</button>
+                  <button type="button" class="btn btn-ghost btn-sm iconbtn" id="ab-offset-reset" title="Frame-Versatz zwischen A und B auf 0 zurücksetzen">0</button>
+                </div>
               </div>
               <div class="field" style="margin:0">
                 <label for="ab-speed" style="font-size:11px" data-tip="Wiedergabetempo für beide Videos, auch im Wipe. Verlangsamt nur die Wiedergabe im Browser; es wird kein neuer Encode gestartet.">Tempo (beide)</label>
@@ -3425,10 +3653,22 @@
                 </select>
               </div>
               <div class="field" style="margin:0">
-                <label style="font-size:11px">Ansicht</label>
+                <label style="font-size:11px" data-tip="Nebeneinander, interaktiver Wipe, verstärkte Pixel-Differenz |A−B|, Fehler-Heatmap (Blau→Rot) oder doppelblinder ABX-Test.">Ansicht</label>
                 <select id="ab-mode" style="width:auto">
                   <option value="side">Nebeneinander</option>
                   <option value="wipe">Wipe (geteiltes Bild)</option>
+                  <option value="diff">Pixel-Differenz</option>
+                  <option value="heatmap">Fehler-Heatmap</option>
+                  <option value="abx">Blindtest (ABX)</option>
+                </select>
+              </div>
+              <div class="field" id="ab-diff-gain-field" style="margin:0;display:none">
+                <label style="font-size:11px" data-tip="Verstärkungsfaktor für subtile Kompressionsartefakte in Differenz &amp; Heatmap.">Verstärkung</label>
+                <select id="ab-diff-gain" style="width:auto">
+                  <option value="2">2× dezent</option>
+                  <option value="4">4× mittel</option>
+                  <option value="8" selected>8× stark</option>
+                  <option value="16">16× extrem</option>
                 </select>
               </div>
               <div class="field" style="margin:0">
@@ -3898,7 +4138,7 @@
             <details class="faq-item" id="faq-player-auto">
               <summary>Wie entscheidet der Player bei „Automatisch“ (warum H.264, Auflösung, Transcode oder Jellyfin)?</summary>
               <div class="faq-body">
-                <p><strong>1. Wann Direct-Play, wann Remux, wann Transcode?</strong> Direct-Play reicht die Datei unverändert an den Browser durch (geht nur bei MP4/WebM mit browserfähigem Video und Ton und ohne aktive Filter). Remux (Video-Copy) verpackt das Video ohne Neucodierung in fMP4-HLS um und wandelt bei Bedarf nur den Ton (z. B. TrueHD/DTS → Stereo-AAC). Sobald aber Bildfilter (Denoise, Deband, Schärfen, Korn) oder bei einer HDR-Quelle die Live-Tonemap-Vorschau aktiv sind, muss jedes Einzelbild berechnet werden – „Automatisch“ schaltet dann auf Transcode. Willst du die Datei garantiert ohne Filter als Stream-Copy sehen, wählst du oben „Remux HLS“ oder „Direct-Play“.</p>
+                <p><strong>1. Wann Direct-Play, wann Remux, wann Transcode?</strong> Direct-Play reicht die Datei unverändert an den Browser durch (geht nur bei MP4/WebM mit browserfähigem Video und Ton und ohne aktive Filter). Remux (Video-Copy) verpackt das Video ohne Neucodierung in fMP4-HLS um und wandelt bei Bedarf nur den Ton (z. B. TrueHD/DTS → Stereo-AAC). Nach dem Laden prüft der Player, ob dieser Browser den HDR-Pfad dekodieren kann. Nur wenn das nicht geht, oder bei Dolby Vision Profil 5, schaltet er Tonemapping ein. Bildfilter und ein selbst eingeschaltetes Tonemapping erzwingen ebenfalls einen Transcode. Den Schalter kannst du danach von Hand umlegen.</p>
                 <p><strong>2. Warum im Transcode standardmäßig H.264, die Auflösung aber die der Quelle?</strong> Der Zielcodec im Player ist nur das Transportformat zum Browser, nicht dein späterer Archiv-Encode. H.264 (`h264_nvenc` / `libx264`) hat die geringste Start-Latenz beim Spulen und beim Live-Umschalten der Regler und läuft in jedem Browser stabil. „Automatisch“ behält beim Transcode die Quellauflösung, auch bei 4K, mit 8000 kbit/s als Vorgabe. Eine kleinere Stufe wählst du über 1080p, 720p, 480p oder Benutzerdefiniert. Bilduntertitel einbrennen nutzt in der Automatik weiterhin 720p.</p>
                 <p><strong>3. Wann läuft Standard-FFmpeg (BtbN) und wann Jellyfin-FFmpeg?</strong> Steht die Tonemap-Engine auf CPU (`zscale + tonemap`) oder `libplacebo` (Vulkan), nutzt der Player BtbN-FFmpeg. Sobald du auf CUDA, OpenCL, VAAPI oder `tonemapx` umschaltest, startet die Session an derselben Filmsekunde mit `/usr/local/bin/ffmpeg-jellyfin` neu.</p>
                 <p><strong>4. Welche Kurve geht mit welcher Engine?</strong> Der klassische CPU-Filter kennt kein BT.2390 (dort wird es ausgeblendet). `libplacebo`, CUDA, OpenCL und `tonemapx` unterstützen alle 7 Kurven inkl. BT.2390; bei `libplacebo` entfallen Quell-Peak und Entsättigung. VAAPI nutzt die feste Kurve des Grafiktreibers.</p>

@@ -1308,8 +1308,8 @@ def ensure_preview_assets(rel: str) -> dict:
             parts = []
             for i in range(n):
                 parts.append(
-                    f"[{i}:v:0]trim=end_frame=1,scale=80:45:force_original_aspect_ratio=decrease,"
-                    f"pad=80:45:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+                    f"[{i}:v:0]trim=end_frame=1,scale=128:72:force_original_aspect_ratio=decrease,"
+                    f"pad=128:72:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
                 )
                 pads.append(f"[v{i}]")
             parts.append("".join(pads) + f"hstack=inputs={n}[out]")
@@ -1319,8 +1319,8 @@ def ensure_preview_assets(rel: str) -> dict:
             cmd = [
                 config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(target),
-                "-vf", f"fps={fps:.5f},scale=80:45:force_original_aspect_ratio=decrease,"
-                       f"pad=80:45:(ow-iw)/2:(oh-ih)/2,tile={n}x1",
+                "-vf", f"fps={fps:.5f},scale=128:72:force_original_aspect_ratio=decrease,"
+                       f"pad=128:72:(ow-iw)/2:(oh-ih)/2,tile={n}x1",
                 "-frames:v", "1", str(strip),
             ]
         try:

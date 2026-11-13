@@ -69,7 +69,8 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertTrue(info.audio[1]["hearing_impaired"])
         self.assertEqual(info.subtitles[0]["kind"], "image")
         self.assertEqual(info.attachments[0]["filename"], "Font.ttf")
-        self.assertEqual(ff.extra_probe_fields(info)["probe_rev"], 3)
+        self.assertIs(info.dolby_vision, False)
+        self.assertEqual(ff.extra_probe_fields(info)["probe_rev"], 4)
 
     def test_cover_does_not_replace_the_real_picture(self):
         info, err = ff.info_from_probe({"streams": [
@@ -146,7 +147,8 @@ class ProbeMediaTests(unittest.TestCase):
                                      Path("movie.mkv"), 20)
         with patch.object(library.ff, "probe_with_error", return_value=(info, None)):
             details = library.file_details(Path("movie.mkv"), probe=True)
-        self.assertEqual(details["probe_rev"], 3)
+        self.assertEqual(details["probe_rev"], 4)
+        self.assertIs(details["dolby_vision"], False)
         self.assertTrue(details["interlaced"])
         self.assertEqual(details["field_order"], "bb")
         self.assertEqual(details["level_label"], "5.1")
@@ -265,6 +267,62 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertTrue(library._dynamic_match(profile_10, ["dv10.1"]))
         self.assertFalse(library._dynamic_match(profile_10, ["dv8"]))
         self.assertFalse(library._dynamic_match(profile_8_1, ["dv7"]))
+
+    def test_1080p_sdr_is_never_false_positive_dolby_vision(self):
+        info, err = ff.info_from_probe({"streams": [_video(
+            codec_name="h264", width=1920, height=1080, pix_fmt="yuv420p",
+            color_transfer="bt709", color_primaries="bt709", color_space="bt709",
+        )], "format": {"format_name": "matroska"}}, Path("fhd_sdr.mkv"), 10)
+        self.assertIsNone(err)
+        self.assertIs(info.dolby_vision, False)
+        self.assertFalse(info.is_hdr)
+        self.assertEqual(info.hdr_type, "SDR")
+        self.assertEqual(info.dv_profile, 0)
+        as_dict = info.to_dict()
+        self.assertIs(as_dict["dolby_vision"], False)
+        self.assertIs(as_dict["is_hdr"], False)
+
+    def test_empty_or_zeroed_dovi_side_data_is_ignored_on_sdr(self):
+        info, err = ff.info_from_probe({"streams": [_video(
+            codec_name="hevc", width=1920, height=1080, pix_fmt="yuv420p10le",
+            color_transfer="bt709", color_primaries="bt709", color_space="bt709",
+            side_data_list=[{
+                "side_data_type": "DOVI configuration record",
+                "dv_version_major": 1, "dv_version_minor": 0,
+                "dv_profile": 0, "dv_level": 0,
+                "rpu_present_flag": 0, "el_present_flag": 0, "bl_present_flag": 1,
+            }],
+        )], "format": {}}, Path("dummy_dovi.mkv"), 10)
+        self.assertIsNone(err)
+        self.assertIs(info.dolby_vision, False)
+        self.assertFalse(info.is_hdr)
+        self.assertEqual(info.hdr_type, "SDR")
+
+    def test_sanitize_cached_matched_repairs_legacy_dict_dolby_vision(self):
+        legacy = [{
+            "path": "Movie.1080p.mkv",
+            "name": "Movie.1080p.mkv",
+            "codec": "h264",
+            "height": 1080,
+            "color_transfer": "bt709",
+            "hdr_type": "SDR",
+            "is_hdr": True,
+            "dolby_vision": {
+                "present": False, "profile": 0, "level": None, "version": "",
+                "rpu": None, "el": None, "bl": None, "compatibility": None,
+                "compatibility_label": "", "profile_label": "",
+            },
+            "dv_profile": 0,
+            "hdr10_plus": False,
+            "suggest": {"codec": "av1", "dv_mode": "preserve", "label": "AV1 · DV übernehmen"},
+        }]
+        cleaned = library._sanitize_cached_matched(legacy)
+        self.assertEqual(len(cleaned), 1)
+        self.assertIs(cleaned[0]["dolby_vision"], False)
+        self.assertIs(cleaned[0]["is_hdr"], False)
+        self.assertEqual(cleaned[0]["hdr_type"], "SDR")
+        self.assertEqual(cleaned[0]["suggest"]["dv_mode"], "")
+        self.assertEqual(cleaned[0]["suggest"]["label"], "AV1 · SDR")
 
 
 if __name__ == "__main__":

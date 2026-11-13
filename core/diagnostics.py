@@ -110,6 +110,17 @@ def _tools_section() -> dict:
             checks.append(_check("dovi_tool (Dolby Vision)", "warn", str(e)))
 
     try:
+        from . import vmaf as vmaf_mod
+        vg = vmaf_mod.vmaf_gpu_status()
+        checks.append(_check(
+            "VMAF GPU-Beschleunigung",
+            "ok" if vg.get("available") else "warn",
+            str(vg.get("reason") or "CPU-Fallback"),
+        ))
+    except Exception as e:  # pragma: no cover
+        checks.append(_check("VMAF GPU-Beschleunigung", "warn", str(e)))
+
+    try:
         from . import hdr10plus
         if hdr10plus.available():
             try:
@@ -120,10 +131,13 @@ def _tools_section() -> dict:
                 detail = hver[0] if hver else config.HDR10PLUS_TOOL
             except (OSError, subprocess.SubprocessError):
                 detail = config.HDR10PLUS_TOOL
-            checks.append(_check("hdr10plus_tool (HDR10+)", "ok", detail + " · nur HEVC"))
+            checks.append(_check(
+                "hdr10plus_tool (HDR10+)", "ok",
+                detail + " · HEVC + SVT-AV1 (ITU-T T.35)"))
         else:
-            checks.append(_check("hdr10plus_tool (HDR10+)", "warn",
-                                 "nicht gefunden – HDR10+ bleibt statisches HDR10"))
+            checks.append(_check(
+                "hdr10plus_tool (HDR10+)", "warn",
+                "nicht gefunden – HEVC-HDR10+ bleibt HDR10 (SVT-AV1 T.35 nativ möglich)"))
     except Exception as e:  # pragma: no cover
         checks.append(_check("hdr10plus_tool (HDR10+)", "warn", str(e)))
 
@@ -174,11 +188,18 @@ def _test_encode(platform: str, codec: str, timeout: int = 40) -> tuple[bool, st
                 "-f", "lavfi", "-i", src, "-frames:v", "5"]
         vf = "format=nv12,hwupload"
     elif backend == "qsv":
-        # QSV über VAAPI initialisieren (wie im Encoder-Pfad des Projekts).
-        cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
-                "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs",
-                "-f", "lavfi", "-i", src, "-frames:v", "5"]
+        if os.name == "nt":
+            cmd += ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs",
+                    "-f", "lavfi", "-i", src, "-frames:v", "5"]
+        else:
+            # QSV über VAAPI initialisieren (wie im Linux-Encoder-Pfad des Projekts).
+            cmd += ["-init_hw_device", f"vaapi=va:{config.VAAPI_DEVICE}",
+                    "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs",
+                    "-f", "lavfi", "-i", src, "-frames:v", "5"]
         vf = "format=nv12,hwupload=extra_hw_frames=64"
+    elif backend == "amf":
+        cmd += ["-f", "lavfi", "-i", src, "-frames:v", "5"]
+        vf = "format=nv12"
     else:  # nvenc (lädt Systemframes selbst hoch) / cpu
         cmd += ["-f", "lavfi", "-i", src, "-frames:v", "5"]
     if vf:
@@ -252,6 +273,8 @@ def _test_decode(platform: str, codec: str, timeout: int = 45) -> tuple[bool, st
         elif backend == "qsv":
             dec = ff.decoder_name(platform, codec)
             cmd += ["-hwaccel", "qsv", "-c:v", dec]
+        elif backend == "amf":
+            cmd += ["-hwaccel", "d3d11va"]
         elif backend == "vaapi":
             cmd += ["-hwaccel", "vaapi", "-hwaccel_device", config.VAAPI_DEVICE]
         else:

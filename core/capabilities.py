@@ -121,10 +121,12 @@ def compute(monitor, platforms: Optional[list] = None) -> dict:
                 ok_d, _ = diag._test_decode(p, c)
                 decode[key] = bool(ok_d)
 
+    from . import vmaf as vmaf_mod
     data = {
         "generated_at": time.time(),
         "results": results,
         "decode": decode,
+        "vmaf_gpu": vmaf_mod.vmaf_gpu_status(),
     }
     _persist(data)
     logger.info(

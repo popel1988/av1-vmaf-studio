@@ -22,10 +22,13 @@ import psutil
 class GpuMetric:
     vendor: str  # "nvidia" | "intel" | "amd"
     name: str
-    util: Optional[float] = None  # Auslastung in %
+    util: Optional[float] = None  # Auslastung in % (max. aus 3D / Video-Engine)
     mem_used: Optional[float] = None  # MB
     mem_total: Optional[float] = None  # MB
     temperature: Optional[float] = None  # °C
+    enc_util: Optional[float] = None  # Video-Encoder-Auslastung in %
+    dec_util: Optional[float] = None  # Video-Decoder-Auslastung in %
+    render_util: Optional[float] = None  # Reine 3D-/Shader-Auslastung in %
 
 
 @dataclass
@@ -115,8 +118,18 @@ class HardwareMonitor:
     _HISTORY_MAX = 160
 
     def __init__(self) -> None:
+        from .win_gpu import NvmlReader, PdhGpuMonitor, discover_dxgi_adapters
+        self._nvml = NvmlReader()
         self._nvidia_smi = self._find_nvidia_smi()
-        self._has_nvidia = self._nvidia_smi is not None
+        self._dxgi_adapters = discover_dxgi_adapters()
+        self._pdh = PdhGpuMonitor() if any(
+            a["vendor"] in ("amd", "intel") for a in self._dxgi_adapters
+        ) else None
+        self._has_nvidia = (
+            self._nvml.available
+            or self._nvidia_smi is not None
+            or any(a["vendor"] == "nvidia" for a in self._dxgi_adapters)
+        )
         self._has_radeontop = shutil.which("radeontop") is not None
         self._has_intel_gpu_top = shutil.which("intel_gpu_top") is not None
         self._drm_cards = self._discover_drm_cards()
@@ -164,11 +177,35 @@ class HardwareMonitor:
         return None
 
     def _nvidia(self) -> list[GpuMetric]:
+        if getattr(self, "_nvml", None) is not None and self._nvml.available:
+            nvml_gpus = self._nvml.read_gpus()
+            if nvml_gpus:
+                return [
+                    GpuMetric(
+                        vendor="nvidia",
+                        name=g["name"],
+                        util=g.get("util"),
+                        mem_used=g.get("mem_used"),
+                        mem_total=g.get("mem_total"),
+                        temperature=g.get("temperature"),
+                        enc_util=g.get("enc_util"),
+                        dec_util=g.get("dec_util"),
+                        render_util=g.get("render_util"),
+                    )
+                    for g in nvml_gpus
+                ]
         out = _run([
             self._nvidia_smi or "nvidia-smi",
-            "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+            "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,utilization.encoder,utilization.decoder",
             "--format=csv,noheader,nounits",
         ])
+        if not out:
+            # Fallback auf 5-Spalten-Abfrage bei sehr alten nvidia-smi-Versionen
+            out = _run([
+                self._nvidia_smi or "nvidia-smi",
+                "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ])
         gpus: list[GpuMetric] = []
         if not out:
             return gpus
@@ -177,17 +214,53 @@ class HardwareMonitor:
             if len(parts) < 5:
                 continue
             name, util, mused, mtot, temp = parts[:5]
+            render_u = _to_float(util)
+            enc_u = _to_float(parts[5]) if len(parts) >= 6 else None
+            dec_u = _to_float(parts[6]) if len(parts) >= 7 else None
+            cands = [v for v in (render_u, enc_u, dec_u) if v is not None]
+            eff_util = max(cands) if cands else None
             gpus.append(
                 GpuMetric(
                     vendor="nvidia",
                     name=name,
-                    util=_to_float(util),
+                    util=eff_util,
                     mem_used=_to_float(mused),
                     mem_total=_to_float(mtot),
                     temperature=_to_float(temp),
+                    enc_util=enc_u,
+                    dec_util=dec_u,
+                    render_util=render_u,
                 )
             )
         return gpus
+
+    def _windows_non_nvidia(self) -> list[GpuMetric]:
+        """Liest AMD- und Intel-GPUs unter Windows via DXGI + PDH."""
+        adapters = [
+            a for a in (getattr(self, "_dxgi_adapters", None) or [])
+            if a.get("vendor") in ("amd", "intel")
+        ]
+        if not adapters:
+            return []
+        pdh_mon = getattr(self, "_pdh", None)
+        by_luid = pdh_mon.sample_by_luid() if pdh_mon is not None else {}
+        out: list[GpuMetric] = []
+        for ad in adapters:
+            sample = by_luid.get(ad.get("luid") or "", {})
+            out.append(
+                GpuMetric(
+                    vendor=ad["vendor"],
+                    name=ad["name"],
+                    util=sample.get("util"),
+                    mem_used=sample.get("mem_used"),
+                    mem_total=ad.get("vram_mb"),
+                    temperature=None,
+                    enc_util=sample.get("enc_util"),
+                    dec_util=sample.get("dec_util"),
+                    render_util=sample.get("render_util"),
+                )
+            )
+        return out
 
     # ---------------------------------------------------------- AMD (sysfs)
     @staticmethod
@@ -250,11 +323,14 @@ class HardwareMonitor:
         gpus: list[GpuMetric] = []
         if self._has_nvidia:
             gpus.extend(self._nvidia())
-        for card in self._drm_cards:
-            if card["vendor"] == "amd":
-                gpus.append(self._amd_sysfs(card["path"]))
-            elif card["vendor"] == "intel":
-                gpus.append(self._intel(card["path"]))
+        if self._drm_cards:
+            for card in self._drm_cards:
+                if card["vendor"] == "amd":
+                    gpus.append(self._amd_sysfs(card["path"]))
+                elif card["vendor"] == "intel":
+                    gpus.append(self._intel(card["path"]))
+        else:
+            gpus.extend(self._windows_non_nvidia())
 
         snap.gpus = [asdict(g) for g in gpus]
 
@@ -273,25 +349,99 @@ class HardwareMonitor:
 
     def available_platforms(self) -> list[str]:
         """Welche Encode-Plattformen sind aufgrund der HW vermutlich nutzbar?"""
-        platforms = ["cpu"]
-        if self._has_nvidia:
-            platforms.insert(0, "nvidia")
-        vendors = {c["vendor"] for c in self._drm_cards}
+        vendors = {c["vendor"] for c in self._drm_cards} | {
+            a["vendor"] for a in (getattr(self, "_dxgi_adapters", None) or [])
+        }
+        platforms: list[str] = []
+        if self._has_nvidia or "nvidia" in vendors:
+            platforms.append("nvidia")
         if "intel" in vendors:
-            platforms.insert(0, "intel")
+            platforms.append("intel")
         if "amd" in vendors:
-            platforms.insert(0, "amd")
+            platforms.append("amd")
+        platforms.append("cpu")
         return platforms
 
     # ---------------------------------------------------- Encoder-Kapazität
     def _nvidia_names(self) -> list[str]:
+        if getattr(self, "_nvml", None) is not None and self._nvml.available:
+            names = self._nvml.device_names()
+            if names:
+                return names
         out = _run([
             self._nvidia_smi or "nvidia-smi",
             "--query-gpu=name", "--format=csv,noheader",
         ])
-        if not out:
-            return []
-        return [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        if out:
+            return [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        dxgi_names = [
+            a["name"] for a in (getattr(self, "_dxgi_adapters", None) or [])
+            if a.get("vendor") == "nvidia" and a.get("name")
+        ]
+        return dxgi_names
+
+    @classmethod
+    def nvidia_driver_info(cls) -> dict:
+        """Ermittelt die installierte NVIDIA-Treiberversion und prüft die FFmpeg-Linien-Vorgabe.
+
+        Linie `latest` (main, FFmpeg 9.0 / CUDA 13.x / NVENC 13.1) verlangt Host-Treiber >= 610.
+        Linie `legacy` (`latest-legacy`, FFmpeg 8.1) funktioniert auch mit älteren Treibern (< 610, ab ~525).
+        """
+        from . import config
+        from .win_gpu import NvmlReader
+        channel = str(getattr(config, "IMAGE_CHANNEL", "latest") or "latest").strip().lower()
+        min_major = 525 if channel == "legacy" else 610
+        smi = cls._find_nvidia_smi()
+        raw = ""
+        present = bool(smi)
+        if smi:
+            out = _run([smi, "--query-gpu=driver_version", "--format=csv,noheader"])
+            raw = ((out or "").strip().splitlines() or [""])[0].strip()
+        if not raw:
+            nvml = NvmlReader()
+            if nvml.available:
+                present = True
+                raw = nvml.driver_version()
+        if not present:
+            return {
+                "present": False,
+                "driver_version": "",
+                "driver_major": 0,
+                "image_channel": channel,
+                "required_major": min_major,
+                "channel_compatible": False,
+                "reason": "Keine NVIDIA-GPU / nvidia-smi nicht gefunden",
+            }
+        major = 0
+        if raw:
+            head = raw.split(".", 1)[0].strip()
+            try:
+                major = int(head)
+            except ValueError:
+                major = 0
+        # Auf Windows-Treiber-Nummern (z. B. 572.xx / 580.xx / 610.xx) gilt dieselbe Hauptversion.
+        compatible = bool(major >= min_major) if major > 0 else False
+        if not raw:
+            reason = "NVIDIA-Treiberversion konnte nicht gelesen werden"
+        elif compatible:
+            reason = f"NVIDIA-Treiber {raw} kompatibel mit Linie '{channel}' (Mindestvorgabe ≥ {min_major})"
+        elif channel != "legacy":
+            reason = (
+                f"NVIDIA-Treiber {raw} ist älter als {min_major} – "
+                f"FFmpeg auf Linie '{channel}' (9.0) benötigt Treiber ≥ {min_major}. "
+                f"Für ältere Treiber das Image 'latest-legacy' nutzen."
+            )
+        else:
+            reason = f"NVIDIA-Treiber {raw} unterschreitet Mindestvorgabe ≥ {min_major} für Linie 'legacy'"
+        return {
+            "present": True,
+            "driver_version": raw,
+            "driver_major": major,
+            "image_channel": channel,
+            "required_major": min_major,
+            "channel_compatible": compatible,
+            "reason": reason,
+        }
 
     def encode_capacity(self) -> dict:
         """Best-effort-Schätzung, wie viele Encodes parallel sinnvoll sind.
@@ -300,6 +450,7 @@ class HardwareMonitor:
         gemeldet; wir schätzen sie über den GPU-Namen und erlauben dem Nutzer,
         den Wert im UI zu überschreiben.
         """
+        import os as _os
         gpus: list[dict] = []
         nvenc_engines = 0
         if self._has_nvidia:
@@ -308,13 +459,20 @@ class HardwareMonitor:
                 eng = _nvenc_engines(name)
                 nvenc_engines += eng
                 gpus.append({"vendor": "nvidia", "name": name, "encoders": eng})
-        for card in self._drm_cards:
-            if card["vendor"] == "intel":
-                from . import ffmpeg_utils as _ff
-                label = "Intel GPU (%s)" % ("VAAPI" if _ff.intel_uses_vaapi() else "QSV")
-            else:
-                label = "AMD GPU (VAAPI)"
-            gpus.append({"vendor": card["vendor"], "name": label, "encoders": 1})
+        if self._drm_cards:
+            for card in self._drm_cards:
+                if card["vendor"] == "intel":
+                    from . import ffmpeg_utils as _ff
+                    label = "Intel GPU (%s)" % ("VAAPI" if _ff.intel_uses_vaapi() else "QSV")
+                else:
+                    label = "AMD GPU (%s)" % ("AMF" if _os.name == "nt" else "VAAPI")
+                gpus.append({"vendor": card["vendor"], "name": label, "encoders": 1})
+        else:
+            for ad in (getattr(self, "_dxgi_adapters", None) or []):
+                if ad.get("vendor") == "intel":
+                    gpus.append({"vendor": "intel", "name": f"{ad['name']} (QSV)", "encoders": 1})
+                elif ad.get("vendor") == "amd":
+                    gpus.append({"vendor": "amd", "name": f"{ad['name']} (AMF)", "encoders": 1})
 
         cpu_threads = psutil.cpu_count(logical=True) or 2
 
@@ -323,7 +481,7 @@ class HardwareMonitor:
             # ist ein praxistauglicher Durchsatz-Sweetspot.
             suggested = min(6, max(2, nvenc_engines * 2))
         elif gpus:
-            # QSV/VAAPI: eine feste Engine -> parallele Encodes bringen kaum etwas.
+            # QSV/VAAPI/AMF: eine feste Engine -> parallele Encodes bringen kaum etwas.
             suggested = 1
         else:
             # Reines CPU-Encoding: grob an Threads koppeln.
@@ -343,13 +501,19 @@ class HardwareMonitor:
 # Multi-GPU-Boards (z. B. A16) listet nvidia-smi ohnehin je GPU einzeln,
 # daher nur Engines pro Einzel-GPU. Fallback = 1.
 _NVENC_MULTI = (
-    (("A100",), 0), (("H100",), 0),        # reine Rechen-GPUs ohne NVENC
+    (("A100",), 0), (("H100",), 0), (("B200",), 0), (("H200",), 0),  # reine Rechen-GPUs ohne NVENC
+    (("RTX", "PRO", "6000"), 4),           # Blackwell Workstation
+    (("RTX", "5090"), 3),                  # Blackwell Flaggschiff (3× 9th-Gen NVENC)
     (("L40",), 3), (("L20",), 3),          # Ada Datacenter
+    (("RTX", "5080"), 2),                  # Blackwell (2× NVENC)
+    (("RTX", "5070", "TI"), 2),            # Blackwell AD/GB203 (2× NVENC)
     (("RTX", "6000", "ADA"), 2),
     (("RTX", "5000", "ADA"), 2),
     (("RTX", "4500", "ADA"), 2),
     (("RTX", "4000", "ADA"), 2),           # inkl. RTX 4000 SFF Ada
     (("RTX", "4090"), 2),
+    (("RTX", "4080"), 2),
+    (("RTX", "4070", "TI"), 2),
 )
 
 

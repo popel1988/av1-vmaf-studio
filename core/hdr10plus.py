@@ -38,8 +38,12 @@ def available() -> bool:
 
 
 def applicable(*, target_codec: str, source_codec: str, preserve_hdr: bool,
-               tonemap: bool, hdr10_plus: bool) -> Optional[str]:
-    """None, wenn die Reinjektion laufen soll, sonst der Grund zum Überspringen.
+               tonemap: bool, hdr10_plus: bool,
+               platform: str = "cpu",
+               av1_passthrough_blocked: bool = False) -> Optional[str]:
+    """None, wenn die HEVC-Reinjektion laufen soll, ``"nativ_av1"`` wenn SVT-AV1
+    die dynamischen HDR10+-Metadaten direkt als ITU-T T.35-OBU übernimmt,
+    sonst der Grund zum Überspringen.
 
     ``keine Quelle`` und ``nicht beibehalten`` sind stille Gründe. Die übrigen
     Gründe soll der Aufrufer als Warnung an den Job hängen.
@@ -48,8 +52,15 @@ def applicable(*, target_codec: str, source_codec: str, preserve_hdr: bool,
         return "keine Quelle"
     if tonemap or not preserve_hdr:
         return "nicht beibehalten"
-    if (target_codec or "").lower() != "hevc":
-        return "nur HEVC-Ziel"
+    t_codec = (target_codec or "").lower()
+    if t_codec == "av1":
+        if (platform or "cpu").lower() != "cpu":
+            return "AV1-HDR10+ nur mit CPU (SVT-AV1), nicht per Hardware-Encoder"
+        if av1_passthrough_blocked:
+            return "AV1-HDR10+ entfällt bei aktiven Videofiltern/Skalierung"
+        return "nativ_av1"
+    if t_codec != "hevc":
+        return "nur HEVC- oder SVT-AV1-Ziel"
     if (source_codec or "").lower() not in _HEVC:
         return "Quelle ist kein HEVC"
     return None

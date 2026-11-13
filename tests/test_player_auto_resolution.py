@@ -38,6 +38,17 @@ class AutoResolutionTests(unittest.TestCase):
         self.assertEqual(plan["height"], 1080)
         self.assertEqual(plan["v_bitrate"], 6000)
 
+    def test_auto_copies_hdr_video_when_tonemap_is_off(self):
+        plan = plan_playback(
+            _info(2160), profile="auto", audio_codec="truehd",
+            client_codecs=["h264", "hevc", "av1"],
+            look={"apply": True, "tonemap": False, "platform": "cpu"},
+        )
+        self.assertEqual(plan["strategy"], "remux_audio_xcode")
+        self.assertTrue(plan["use_video_copy"])
+        self.assertFalse(plan["need_encode"])
+        self.assertEqual(plan["height"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

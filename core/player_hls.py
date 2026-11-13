@@ -402,10 +402,12 @@ def list_platforms() -> list[dict]:
             })
             continue
         codecs = [c for c in ("h264", "hevc", "av1") if _cap_ok(p, c)]
+        amd_label = "AMD AMF" if os.name == "nt" else "AMD VAAPI"
+        intel_label = "Intel QSV" if os.name == "nt" else "Intel QSV/VAAPI"
         out.append({
             "id": p,
-            "label": {"nvidia": "NVIDIA NVENC", "intel": "Intel QSV/VAAPI",
-                      "amd": "AMD VAAPI", "cpu": "CPU (x264/x265/SVT)"}[p],
+            "label": {"nvidia": "NVIDIA NVENC", "intel": intel_label,
+                      "amd": amd_label, "cpu": "CPU (x264/x265/SVT)"}[p],
             "codecs": codecs or (["h264"] if p == "cpu" else []),
             "available": bool(codecs) or p == "cpu",
             "encoders": {c: (ff.encoder_name(p, c) or _CPU_ENC.get(c, ""))
@@ -458,6 +460,7 @@ def plan_playback(
     height: int = 0,
     v_bitrate: int = 0,
     audio_copy: bool = False,
+    audio_delay_ms: int = 0,
     look: Optional[dict] = None,
 ) -> dict:
     """Datei × Browser × Server → bester Wiedergabepfad.
@@ -610,7 +613,7 @@ def plan_playback(
     can_dp = bool(info) and can_direct_play(info)
     video_ok = browser_info["video_ok"]
     audio_direct = browser_info["audio_direct_ok"] or audio_index < 0 or not ac
-    seek_blocks = bool(start_sec and start_sec > 0)
+    seek_blocks = bool(start_sec and start_sec > 0) or int(audio_delay_ms or 0) < 0
     if (
         can_dp and client_direct_ok and video_ok and audio_direct
         and not seek_blocks and not want_audio_copy
@@ -692,6 +695,7 @@ def plan_for_path(
     height: int = 0,
     v_bitrate: int = 0,
     audio_copy: bool = False,
+    audio_delay_ms: int = 0,
     start_sec: float = 0.0,
     look: Optional[dict] = None,
 ) -> dict:
@@ -724,6 +728,7 @@ def plan_for_path(
         height=height,
         v_bitrate=v_bitrate,
         audio_copy=audio_copy,
+        audio_delay_ms=audio_delay_ms,
         look=look,
     )
     return {
@@ -894,7 +899,8 @@ def can_direct_play(info) -> bool:
 def _audio_args(audio_index: int, audio_codec: str,
                 force_copy: bool = False,
                 with_video_reencode: bool = False,
-                start_sec: float = 0.0) -> list[str]:
+                start_sec: float = 0.0,
+                input_idx: int = 0) -> list[str]:
     """Ton-Args für HLS (Jellyfin-Modell: keine eigene PTS-Nullung).
 
     Zeitstempel bleiben über ``-copyts -start_at_zero`` an Video gekoppelt.
@@ -905,7 +911,7 @@ def _audio_args(audio_index: int, audio_codec: str,
     """
     if audio_index < 0:
         return ["-an"]
-    args = ["-map", f"0:a:{int(audio_index)}?"]
+    args = ["-map", f"{int(input_idx)}:a:{int(audio_index)}?"]
     ac = (audio_codec or "").lower()
     if force_copy or _audio_hls_copy_ok(ac):
         args += ["-c:a", "copy"]
@@ -956,6 +962,8 @@ def _hwaccel_decode_args(platform: str, source_codec: str = "") -> list[str]:
         return ["-hwaccel", "cuda"]
     if backend == "qsv":
         return ["-hwaccel", "qsv"]
+    if backend == "amf":
+        return ["-hwaccel", "d3d11va"]
     if backend == "vaapi":
         return ["-hwaccel", "vaapi", "-hwaccel_device", _vaapi_device()]
     return []
@@ -1123,8 +1131,11 @@ def _build_video_filter(
             if backend == "vaapi":
                 pre += ["-vaapi_device", _vaapi_device()]
             elif backend == "qsv":
-                pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
-                        "-filter_hw_device", "hw"]
+                if os.name == "nt":
+                    pre += ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]
+                else:
+                    pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
+                            "-filter_hw_device", "hw"]
         else:
             fc += "[vout]"
         return pre, ["-filter_complex", fc, "-map", "[vout]"], binary
@@ -1142,8 +1153,11 @@ def _build_video_filter(
         if backend == "vaapi":
             pre += ["-vaapi_device", _vaapi_device()]
         elif backend == "qsv":
-            pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
-                    "-filter_hw_device", "hw"]
+            if os.name == "nt":
+                pre += ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]
+            else:
+                pre += ["-init_hw_device", f"qsv=hw:{_vaapi_device()}",
+                        "-filter_hw_device", "hw"]
         return pre, ["-vf", vf, "-map", "0:v:0?"], binary
 
     if parts:
@@ -1161,6 +1175,9 @@ def _encoder_rate_args(encoder: str, codec: str, v_bitrate: int) -> list[str]:
     if "qsv" in encoder:
         return ["-global_quality", "23", "-b:v", f"{br}k",
                 "-maxrate", f"{int(br * 1.5)}k"]
+    if "amf" in encoder:
+        return ["-quality", "speed", "-rc", "vbr_peak",
+                "-b:v", f"{br}k", "-maxrate", f"{int(br * 1.5)}k"]
     if "vaapi" in encoder:
         return ["-b:v", f"{br}k", "-maxrate", f"{int(br * 1.5)}k"]
     if encoder == "libsvtav1":
@@ -1202,6 +1219,7 @@ def _build_hls_cmd(
     video_copy: bool = False,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
+    audio_delay_ms: int = 0,
     source_codec: str = "",
     is_hdr: bool = False,
     look: Optional[dict] = None,
@@ -1268,6 +1286,19 @@ def _build_hls_cmd(
         if video_copy:
             cmd += ["-noaccurate_seek"]
     cmd += ["-i", str(path)]
+
+    audio_in_idx = 0
+    delay_ms = max(-15000, min(15000, int(audio_delay_ms or 0)))
+    if delay_ms != 0 and audio_index >= 0:
+        audio_in_idx = 1
+        cmd += ["-itsoffset", f"{delay_ms / 1000.0:.3f}"]
+        if start_sec and start_sec > 0:
+            ss_a = float(start_sec) + (0.5 if video_copy else 0.0)
+            cmd += ["-ss", f"{ss_a:.3f}"]
+            if video_copy:
+                cmd += ["-noaccurate_seek"]
+        cmd += ["-i", str(path)]
+
     cmd += ["-map_metadata", "-1", "-map_chapters", "-1"]
 
     if video_copy:
@@ -1301,6 +1332,7 @@ def _build_hls_cmd(
         force_copy=bool(audio_copy),
         with_video_reencode=not bool(video_copy),
         start_sec=float(start_sec or 0),
+        input_idx=audio_in_idx,
     )
 
     queue = "8192" if (video_copy and will_xcode_a) else "2048"
@@ -1465,6 +1497,7 @@ def start_session(
     client_codecs: Optional[list[str]] = None,
     lookahead_sec: float = _DEFAULT_LOOKAHEAD_SEC,
     audio_copy: bool = False,
+    audio_delay_ms: int = 0,
     look: Optional[dict] = None,
     client_token: str = "",
     owner: str = "player",
@@ -1510,6 +1543,7 @@ def start_session(
         height=height,
         v_bitrate=v_bitrate,
         audio_copy=want_audio_copy,
+        audio_delay_ms=audio_delay_ms,
         look=preview,
     )
 
@@ -1632,6 +1666,7 @@ def start_session(
             "plan": plan,
         }
 
+    neg_audio_delay = int(audio_delay_ms or 0) if int(audio_delay_ms or 0) < 0 else 0
     if use_video_copy:
         cmd = _build_hls_cmd(
             target, work,
@@ -1642,6 +1677,7 @@ def start_session(
             height=0, v_bitrate=0, burn_sub_index=-1, video_copy=True,
             lookahead_sec=la,
             audio_copy=want_audio_copy and not drop_audio,
+            audio_delay_ms=neg_audio_delay,
             source_codec=source_vcodec,
             is_hdr=is_hdr,
         )
@@ -1663,6 +1699,7 @@ def start_session(
             video_copy=False,
             lookahead_sec=la,
             audio_copy=want_audio_copy and not drop_audio,
+            audio_delay_ms=neg_audio_delay,
             source_codec=source_vcodec,
             is_hdr=is_hdr,
             look=preview,
@@ -1749,6 +1786,7 @@ def start_session(
                     burn_sub_index=subtitle_index if want_burn else -1,
                     lookahead_sec=la,
                     audio_copy=want_audio_copy and not drop_audio,
+                    audio_delay_ms=neg_audio_delay,
                     source_codec=source_vcodec,
                     is_hdr=is_hdr,
                     look=preview,

@@ -19,6 +19,13 @@ from . import ffmpeg_utils as ff
 logger = logging.getLogger("vcompress.notify")
 
 _lock = threading.RLock()
+_desktop_notifier = None
+
+
+def register_desktop_notifier(callback) -> None:
+    """Registriert einen lokalen Desktop-Benachrichtigungs-Handler ``callback(title, message)``."""
+    global _desktop_notifier
+    _desktop_notifier = callback
 
 
 def _path():
@@ -31,6 +38,7 @@ def _defaults() -> dict:
         "discord_url": os.getenv("DISCORD_WEBHOOK_URL", ""),
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
         "telegram_chat": os.getenv("TELEGRAM_CHAT_ID", ""),
+        "desktop_toast": True,
         "on_done": True,
         "on_failed": True,
     }
@@ -92,9 +100,21 @@ def _send_all(cfg: dict, title: str, message: str) -> None:
 def send(title: str, message: str) -> None:
     """Nachricht an alle konfigurierten Kanäle senden (nicht blockierend)."""
     cfg = load()
+    local_cb = _desktop_notifier if cfg.get("desktop_toast", True) else None
+    if local_cb is not None:
+        threading.Thread(
+            target=_safe_desktop_notify, args=(local_cb, title, message), daemon=True
+        ).start()
     if not any(cfg.get(k) for k in ("webhook_url", "discord_url", "telegram_token")):
         return
     threading.Thread(target=_send_all, args=(cfg, title, message), daemon=True).start()
+
+
+def _safe_desktop_notify(cb, title: str, message: str) -> None:
+    try:
+        cb(title, message)
+    except Exception as e:  # pragma: no cover
+        logger.debug("Desktop-Toast fehlgeschlagen: %s", e)
 
 
 def notify_job(item) -> None:

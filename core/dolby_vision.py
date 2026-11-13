@@ -179,3 +179,122 @@ def reinject(source: Path, encoded: Path, work_dir: Path, *,
                 f.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _pq_to_nits(pq_12bit: float) -> float:
+    """Wandelt 12-bit SMPTE ST.2084 PQ-Codewert (0..4095) in cd/m² (Nits) um."""
+    v = max(0.0, min(1.0, float(pq_12bit) / 4095.0))
+    if v <= 0.0:
+        return 0.0
+    m1 = 2610.0 / 16384.0
+    m2 = 2523.0 / 32.0
+    c1 = 3424.0 / 4096.0
+    c2 = 2413.0 / 128.0
+    c3 = 2392.0 / 128.0
+    vp = v ** (1.0 / m2)
+    num = max(0.0, vp - c1)
+    den = c2 - c3 * vp
+    if den <= 1e-9:
+        return 10000.0
+    return round(min(10000.0, 10000.0 * ((num / den) ** (1.0 / m1))), 1)
+
+
+def extract_l1_curve(source: Path, *, source_codec: str = "hevc",
+                     max_points: int = 240,
+                     duration_limit: Optional[float] = 600.0) -> dict:
+    """Extrahiert Dolby-Vision-L1-Helligkeitsmetadaten (Max/Avg/Min Nits pro Frame/Szene)
+    für die interaktive Kurven-Ansicht.
+
+    Standardmäßig werden bis zu `duration_limit` Sekunden analysiert (für schnelle UI-Antwort).
+    """
+    import json
+    import tempfile
+
+    if not available():
+        return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
+    if (source_codec or "").lower() not in ("hevc", "h265", "av1"):
+        return {"ok": False, "error": f"Codec {source_codec} wird von dovi_tool nicht unterstützt."}
+
+    with tempfile.TemporaryDirectory(prefix="vc_dvl1_") as tmp:
+        tmp_dir = Path(tmp)
+        rpu = tmp_dir / "rpu.bin"
+        exp_json = tmp_dir / "rpu_export.json"
+        if not _extract_rpu(source, "av1" if source_codec == "av1" else "hevc",
+                            rpu, mode=0, duration_limit=duration_limit):
+            return {"ok": False, "error": "RPU konnte nicht aus der Quelle extrahiert werden."}
+
+        res = subprocess.run(
+            [config.DOVI_TOOL, "export", "-i", str(rpu), "-d", f"all={exp_json}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60, check=False,
+        )
+        if res.returncode != 0 or not exp_json.is_file():
+            return {"ok": False, "error": "RPU-JSON-Export fehlgeschlagen."}
+
+        try:
+            raw = json.loads(exp_json.read_text(encoding="utf-8", errors="replace"))
+        except ValueError as e:
+            return {"ok": False, "error": f"Ungültiges RPU-JSON: {e}"}
+
+    if not isinstance(raw, list) or not raw:
+        return {"ok": False, "error": "Keine RPU-Frames gefunden."}
+
+    max_list: list[float] = []
+    avg_list: list[float] = []
+    min_list: list[float] = []
+    scene_cuts: list[int] = []
+    profile = 0
+
+    for idx, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            continue
+        hdr = entry.get("header") or {}
+        if not profile and hdr.get("guessed_profile"):
+            profile = int(hdr.get("guessed_profile") or 0)
+        vdr_dm = entry.get("vdr_dm_data") or {}
+        if vdr_dm.get("scene_refresh_flag") == 1:
+            scene_cuts.append(idx)
+        # L1 kann direkt unter cmv29_metadata / cmv40_metadata oder blocks liegen
+        blocks = []
+        for container_key in ("cmv29_metadata", "cmv40_metadata"):
+            cm = vdr_dm.get(container_key)
+            if isinstance(cm, dict) and isinstance(cm.get("ext_metadata_blocks"), list):
+                blocks.extend(cm["ext_metadata_blocks"])
+        if not blocks and isinstance(vdr_dm.get("ext_metadata_blocks"), list):
+            blocks = vdr_dm["ext_metadata_blocks"]
+
+        l1 = None
+        for b in blocks:
+            if isinstance(b, dict) and "Level1" in b:
+                l1 = b["Level1"]
+                break
+        if l1:
+            max_pq = float(l1.get("max_pq", 0) or 0)
+            avg_pq = float(l1.get("avg_pq", 0) or 0)
+            min_pq = float(l1.get("min_pq", 0) or 0)
+            max_list.append(_pq_to_nits(max_pq))
+            avg_list.append(_pq_to_nits(avg_pq))
+            min_list.append(_pq_to_nits(min_pq))
+
+    total_frames = len(max_list)
+    if total_frames == 0:
+        return {"ok": False, "error": "Keine Level-1-Helligkeitsdaten in der RPU enthalten."}
+
+    step = max(1, total_frames // max(20, int(max_points)))
+    sampled_max = [round(max(max_list[i:i + step]), 1) for i in range(0, total_frames, step)]
+    sampled_avg = [round(sum(avg_list[i:i + step]) / len(avg_list[i:i + step]), 1) for i in range(0, total_frames, step)]
+    sampled_min = [round(min(min_list[i:i + step]), 3) for i in range(0, total_frames, step)]
+
+    return {
+        "ok": True,
+        "profile": profile,
+        "frames_analyzed": total_frames,
+        "scenes": len(scene_cuts),
+        "peak_nits": round(max(max_list), 1),
+        "max_avg_nits": round(max(avg_list), 1),
+        "mean_avg_nits": round(sum(avg_list) / total_frames, 1),
+        "series_max": sampled_max,
+        "series_avg": sampled_avg,
+        "series_min": sampled_min,
+    }
+

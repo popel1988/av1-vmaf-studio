@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 from datetime import datetime
+from pathlib import Path
+from typing import Iterable, Optional
 
 import psutil
 
@@ -35,6 +38,8 @@ def _defaults() -> dict:
         "end_hour": 6,             # exklusive (Wrap über Mitternacht erlaubt)
         "throttle_enabled": False,
         "max_cpu_percent": 85,     # neue Jobs pausieren, wenn CPU darüber
+        "disk_guard_enabled": True,
+        "min_free_gb": 5.0,        # Mindest-Freiplatz auf Arbeits-/Ziellaufwerk
     }
 
 
@@ -59,6 +64,11 @@ def save(cfg: dict) -> dict:
     cur["start_hour"] = max(0, min(23, int(cur["start_hour"])))
     cur["end_hour"] = max(0, min(24, int(cur["end_hour"])))
     cur["max_cpu_percent"] = max(10, min(100, int(cur["max_cpu_percent"])))
+    cur["disk_guard_enabled"] = bool(cur.get("disk_guard_enabled", True))
+    try:
+        cur["min_free_gb"] = round(max(0.5, min(1000.0, float(cur.get("min_free_gb", 5.0)))), 1)
+    except (TypeError, ValueError):
+        cur["min_free_gb"] = 5.0
     with _lock:
         try:
             config.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,9 +88,63 @@ def _in_window(hour: int, start: int, end: int) -> bool:
     return hour >= start or hour < end
 
 
-def gate() -> tuple[bool, str]:
+def _existing_dir(p: Path) -> Optional[Path]:
+    cur = Path(p)
+    for cand in [cur, *cur.parents]:
+        try:
+            if cand.exists():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def check_disk_space(extra_paths: Optional[Iterable[Path]] = None,
+                     min_free_gb: Optional[float] = None) -> tuple[bool, str]:
+    """Prüft freien Speicher auf WORK_DIR, Standard-Ausgabe und optionalen Zielpfaden."""
+    cfg = load()
+    if min_free_gb is None:
+        if not cfg.get("disk_guard_enabled", True):
+            return True, ""
+        limit_gb = float(cfg.get("min_free_gb") or 0.0)
+    else:
+        limit_gb = float(min_free_gb)
+    if limit_gb <= 0:
+        return True, ""
+    limit_bytes = int(limit_gb * (1024 ** 3))
+    candidates: list[Path] = [config.WORK_DIR, config.default_output_path()]
+    if extra_paths:
+        candidates.extend(Path(x) for x in extra_paths if x)
+    seen: set[str] = set()
+    for raw in candidates:
+        existing = _existing_dir(raw)
+        if existing is None:
+            continue
+        key = str(existing.resolve()) if existing.exists() else str(existing)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            free = shutil.disk_usage(existing).free
+        except OSError:
+            continue
+        if free < limit_bytes:
+            free_gb = free / (1024 ** 3)
+            return (
+                False,
+                f"Speicherplatz-Wächter: nur {free_gb:.1f} GB frei auf {existing} "
+                f"(Minimum {limit_gb:g} GB)",
+            )
+    return True, ""
+
+
+def gate(extra_paths: Optional[Iterable[Path]] = None) -> tuple[bool, str]:
     """(darf_starten, Grund). Wird vom Queue-Dispatcher aufgerufen."""
     cfg = load()
+    if cfg.get("disk_guard_enabled", True):
+        ok_disk, disk_reason = check_disk_space(extra_paths, float(cfg.get("min_free_gb") or 0.0))
+        if not ok_disk:
+            return False, disk_reason
     if not cfg["enabled"]:
         return True, ""
     now = datetime.now()

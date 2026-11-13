@@ -307,6 +307,61 @@ def _save_cache() -> None:
         logger.debug("Library-Cache schreiben fehlgeschlagen: %s", e)
 
 
+def _sanitize_cached_matched(items: list) -> list[dict]:
+    """Repariert gecachte Einträge aus älteren Scans (z. B. als ``dolby_vision``
+    fälschlich ein nicht-leeres Konfigurations-Dict statt ``bool`` war)."""
+    from types import SimpleNamespace
+    out: list[dict] = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        m = dict(raw)
+        dv_val = m.get("dolby_vision")
+        recompute = False
+        if isinstance(dv_val, dict):
+            prof = int(dv_val.get("profile") or m.get("dv_profile") or 0)
+            rpu = dv_val.get("rpu")
+            el = dv_val.get("el")
+            is_dv = bool(dv_val.get("present")) and not (rpu is False and not el) and (
+                prof > 0 or rpu is True or el is True
+            )
+            m["dolby_vision"] = is_dv
+            m["dv_profile"] = prof if is_dv else 0
+            recompute = True
+        else:
+            prof = int(m.get("dv_profile") or 0)
+            rpu = m.get("dv_rpu")
+            el = m.get("dv_el")
+            if dv_val and ((rpu is False and not el) or (prof <= 0 and rpu is not True and el is not True and not m.get("dv_version"))):
+                m["dolby_vision"] = False
+                m["dv_profile"] = 0
+                recompute = True
+        if recompute:
+            tr = str(m.get("color_transfer") or "").lower()
+            hdr_tr = tr in ff.HDR_TRANSFERS
+            h10p = bool(m.get("hdr10_plus"))
+            m["is_hdr"] = bool(hdr_tr or h10p or m["dolby_vision"])
+            if not m["dolby_vision"]:
+                if tr in ("smpte2084", "smptest2084"):
+                    m["hdr_type"] = "HDR10+" if h10p else "HDR10"
+                elif tr == "arib-std-b67":
+                    m["hdr_type"] = "HLG"
+                elif h10p:
+                    m["hdr_type"] = "HDR10+"
+                else:
+                    m["hdr_type"] = "SDR"
+                m["dv_profile_label"] = ""
+            sug_in = SimpleNamespace(
+                dolby_vision=bool(m["dolby_vision"]),
+                dv_profile=int(m.get("dv_profile") or 0),
+                is_hdr=bool(m["is_hdr"]),
+            )
+            prev_sug = m.get("suggest") if isinstance(m.get("suggest"), dict) else {}
+            m["suggest"] = suggest_encode(sug_in, str(prev_sug.get("codec") or "av1"))
+        out.append(m)
+    return out
+
+
 def _load_cache_file() -> None:
     """Cache-Datei in ``_by_root`` laden (Aufrufer hält ``_lock``)."""
     global _by_root
@@ -327,7 +382,7 @@ def _load_cache_file() -> None:
                     continue
                 root = _norm_root(str(v.get("root") if v.get("root") is not None else k))
                 by_root[root] = {
-                    "matched": list(v.get("matched") or []),
+                    "matched": _sanitize_cached_matched(list(v.get("matched") or [])),
                     "total": int(v.get("total") or 0),
                     "scanned": int(v.get("scanned") or 0),
                     "total_size_bytes": int(v.get("total_size_bytes") or 0),
@@ -341,7 +396,7 @@ def _load_cache_file() -> None:
         # v1: einzelner Scan
         root = _norm_root(str(data.get("root") or ""))
         by_root[root] = {
-            "matched": list(data.get("matched") or []),
+            "matched": _sanitize_cached_matched(list(data.get("matched") or [])),
             "total": int(data.get("total") or 0),
             "scanned": int(data.get("scanned") or 0),
             "total_size_bytes": int(data.get("total_size_bytes") or 0),
@@ -626,6 +681,10 @@ def file_details(video: Path, probe: bool = True) -> dict:
         "profile": info.profile or "",
         "codec": info.codec,
         "resolution": f"{info.width}x{info.height}",
+        "hdr_type": info.hdr_type,
+        "is_hdr": info.is_hdr,
+        "dolby_vision": info.dolby_vision,
+        "dv_profile": info.dv_profile,
         **ff.extra_probe_fields(info),
         **extras,
     }
@@ -793,20 +852,87 @@ def copy_nfo_beside(src_video: Path, dst_video: Path) -> Optional[Path]:
     return dest
 
 
-def _sidecar_subs(video: Path) -> list[dict]:
+def _parse_sidecar_sub_meta(video_stem: str, sub_path: Path) -> dict:
+    """Extrahiert Sprache, Forced- und SDH-Flags aus Dateinamen wie `Film.de.forced.srt`."""
+    raw_tail = sub_path.stem[len(video_stem):].strip("._- ")
+    tokens = [t.strip().lower() for t in re.split(r"[._\-\s\[\]()]+", raw_tail) if t.strip()]
+    lang = "und"
+    forced = False
+    sdh = False
+    extra_parts: list[str] = []
+    for tok in tokens:
+        if tok in ("forced", "erzwungen", "signs"):
+            forced = True
+        elif tok in ("sdh", "cc", "hi", "hoergeschaedigt", "hörgeschädigt"):
+            sdh = True
+        elif lang == "und" and ff.canon_lang(tok) in ff._CANON_TO_ISO3 and ff.canon_lang(tok) != "und":
+            lang = ff.lang_to_iso3(tok)
+        else:
+            extra_parts.append(tok)
+    title_bits = []
+    if forced:
+        title_bits.append("Forced")
+    if sdh:
+        title_bits.append("SDH")
+    if extra_parts:
+        title_bits.append(" ".join(extra_parts))
+    ext = sub_path.suffix.lower().lstrip(".")
+    return {
+        "path": str(sub_path),
+        "name": sub_path.name,
+        "ext": ext,
+        "language": lang,
+        "forced": forced,
+        "sdh": sdh,
+        "hearing_impaired": sdh,
+        "bitmap": ext in {"sup", "idx", "sub"},
+        "default": False,
+        "title": " · ".join(title_bits),
+    }
+
+
+def find_sidecar_subtitles(video: Path) -> list[dict]:
+    """Findet alle Sidecar-Untertitel neben `video` inkl. Sprach-/Forced-/SDH-Erkennung."""
+    video = Path(video)
     stem_l = video.stem.lower()
     out: list[dict] = []
     try:
-        for p in video.parent.iterdir():
-            if not p.is_file() or p.suffix.lower() not in _SIDECAR_SUB:
-                continue
-            if not p.name.lower().startswith(stem_l):
-                continue
-            out.append({"name": p.name, "ext": p.suffix.lower().lstrip(".")})
+        entries = list(video.parent.iterdir())
     except OSError:
         return []
+    idx_names = {
+        p.stem.lower() for p in entries
+        if p.is_file() and p.suffix.lower() == ".idx"
+    }
+    for p in entries:
+        if not p.is_file() or p.suffix.lower() not in _SIDECAR_SUB:
+            continue
+        name_l = p.name.lower()
+        if not name_l.startswith(stem_l):
+            continue
+        # Sicherstellen, dass nach `stem` ein Trennzeichen (. _ - Leerzeichen) folgt
+        # (damit `Film1.srt` nicht fälschlich zu `Film10.mkv` oder umgekehrt passt).
+        rest = p.stem[len(video.stem):]
+        if rest and rest[0] not in "._- ([":
+            continue
+        if p.suffix.lower() == ".sub" and p.stem.lower() in idx_names:
+            continue  # VobSub-Paar (.idx/.sub): nur .idx einbinden
+        out.append(_parse_sidecar_sub_meta(video.stem, p))
     out.sort(key=lambda x: x["name"].lower())
     return out
+
+
+def _sidecar_subs(video: Path) -> list[dict]:
+    return [
+        {
+            "name": s["name"],
+            "ext": s["ext"],
+            "language": s.get("language", "und"),
+            "forced": bool(s.get("forced")),
+            "hearing_impaired": bool(s.get("hearing_impaired")),
+        }
+        for s in find_sidecar_subtitles(video)
+    ]
 
 
 def parse_nfo(path: Path, include_text: bool = False) -> Optional[dict]:

@@ -186,22 +186,38 @@ def _count_attachments(path: Path) -> int:
         return 0
 
 
-def write_chapter_meta(chapters: list, work_dir: Path) -> Optional[Path]:
+def write_chapter_meta(chapters: list, work_dir: Path, duration: float = 0.0) -> Optional[Path]:
     """FFMETADATA-Datei aus Kapiteln (Start/Ende in Sekunden + Titel) schreiben."""
     if not chapters:
         return None
+    parsed = []
+    for ch in chapters:
+        try:
+            s_val = max(0.0, float(ch.get("start") or 0))
+            e_raw = ch.get("end")
+            e_val = float(e_raw) if e_raw is not None and e_raw != "" else 0.0
+        except (TypeError, ValueError):
+            continue
+        parsed.append({"start": s_val, "end": e_val, "title": str(ch.get("title") or "")})
+    if not parsed:
+        return None
+    parsed.sort(key=lambda x: x["start"])
     work_dir.mkdir(parents=True, exist_ok=True)
     path = work_dir / f"chapters_{uuid.uuid4().hex[:8]}.txt"
     lines = [";FFMETADATA1"]
-    for ch in chapters:
-        try:
-            start = int(round(float(ch.get("start") or 0) * 1000))
-            end = int(round(float(ch.get("end") or 0) * 1000))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            end = start + 1
-        title = str(ch.get("title") or "").replace("\n", " ").replace("=", "\\=")
+    for idx, ch in enumerate(parsed):
+        start_s = ch["start"]
+        end_s = ch["end"]
+        if end_s <= start_s:
+            if idx + 1 < len(parsed) and parsed[idx + 1]["start"] > start_s:
+                end_s = parsed[idx + 1]["start"]
+            elif duration > start_s:
+                end_s = duration
+            else:
+                end_s = start_s + 1.0
+        start = int(round(start_s * 1000))
+        end = max(start + 1, int(round(end_s * 1000)))
+        title = ch["title"].replace("\n", " ").replace("=", "\\=")
         lines += ["[CHAPTER]", "TIMEBASE=1/1000",
                   f"START={start}", f"END={end}", f"title={title}"]
     try:
@@ -270,6 +286,19 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         inputs = ["-f", "concat", "-safe", "0", "-i", str(concat)]
     else:
         inputs = ["-i", str(info.path)]
+    def _entry_delay_sec(entry: dict) -> float:
+        if entry.get("delay_ms") not in (None, ""):
+            try:
+                v = round(float(entry["delay_ms"]) / 1000.0, 4)
+                return 0.0 if abs(v) < 0.0005 else v
+            except (TypeError, ValueError):
+                pass
+        try:
+            v = round(float(entry.get("delay") or 0.0), 4)
+            return 0.0 if abs(v) < 0.0005 else v
+        except (TypeError, ValueError):
+            return 0.0
+
     externals: list[dict] = []
     input_map: dict[tuple[str, float], int] = {}
     for e in spec.get("external", []) or []:
@@ -278,12 +307,12 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         target = _abs_external(e.get("path", ""))
         if target is None:
             return [], f"Externe Datei nicht gefunden: {e.get('path','?')}"
-        delay = float(e.get("delay") or 0.0)
+        delay = _entry_delay_sec(e)
         key = (str(target), delay)
         idx = input_map.get(key)
         if idx is None:
             if delay:
-                inputs += ["-itsoffset", str(delay)]
+                inputs += ["-itsoffset", f"{delay:g}"]
             inputs += ["-i", str(target)]
             idx = 1 + len(input_map)  # Input-Index (0 = Quelle)
             input_map[key] = idx
@@ -292,6 +321,21 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         e["_kind"] = e.get("type") or external_kind(e.get("path", ""))
         e["_stream"] = int(e.get("stream", 0) or 0)  # relativer Stream in der Datei
         externals.append(e)
+
+    # Interne Ton-/Untertitelspuren mit Versatz (`delay` / `delay_ms`) erhalten
+    # deduplizierte Zusatz-Inputs derselben Quelldatei mit `-itsoffset` (verlustfrei!).
+    if not dvd_title and len(playlist) <= 1:
+        for coll_key in ("audio", "subtitles"):
+            for tr in (spec.get(coll_key, []) or []):
+                if tr.get("keep") is False or bool(tr.get("external") or tr.get("path")):
+                    continue
+                dsec = _entry_delay_sec(tr)
+                if not dsec:
+                    continue
+                key = (str(info.path), dsec)
+                if key not in input_map:
+                    inputs += ["-itsoffset", f"{dsec:g}", "-i", str(info.path)]
+                    input_map[key] = 1 + len(input_map)
 
     # Kapitel-Quelle: eigene ffmetadata (umbenannt) oder externe Kapiteldatei.
     chapter_input: Optional[int] = None
@@ -305,7 +349,7 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         chapter_input = 1 + len(input_map)
         input_map[("__chapters__", 0.0)] = chapter_input
     elif chap_list:
-        meta = write_chapter_meta(chap_list, config.WORK_DIR)
+        meta = write_chapter_meta(chap_list, config.WORK_DIR, duration=float(info.duration or 0))
         if meta is not None:
             inputs += ["-i", str(meta)]
             chapter_input = 1 + len(input_map)
@@ -334,7 +378,9 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
         transcode = bool(a.get("transcode"))
         if is_mp4 and not transcode and not _codec_ok_in_container(codec, "mp4", "audio"):
             transcode = True
-        args = ["-map", f"0:a:{idx}?"]
+        dsec = _entry_delay_sec(a)
+        src_inp = input_map.get((str(info.path), dsec), 0) if dsec else 0
+        args = ["-map", f"{src_inp}:a:{idx}?"]
         if transcode:
             tgt = (a.get("codec") or ("aac" if is_mp4 else "eac3")).lower()
             enc = ff.AUDIO_ENCODERS.get(tgt, "aac" if is_mp4 else "eac3")
@@ -443,7 +489,9 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
             codec = (src.get("codec") or "").lower()
             if is_mp4 and codec in _IMAGE_SUBS:
                 continue  # Bild-Untertitel in MP4 nicht möglich → auslassen
-            cmd += ["-map", f"0:s:{idx}?", f"-c:s:{out_s}", sub_codec]
+            dsec = _entry_delay_sec(s)
+            src_inp = input_map.get((str(info.path), dsec), 0) if dsec else 0
+            cmd += ["-map", f"{src_inp}:s:{idx}?", f"-c:s:{out_s}", sub_codec]
             cmd += _disp("s", out_s, s)
             cmd += _meta("s", out_s, s)
             out_s += 1
@@ -477,6 +525,8 @@ def build_edit_cmd(info: VideoInfo, output: Path, spec: dict) -> tuple[list[str]
     # --- Kapitel ---------------------------------------------------------------
     if chapter_input is not None:
         cmd += ["-map_chapters", str(chapter_input)]
+    elif isinstance(chap_list, list) and len(chap_list) == 0:
+        cmd += ["-map_chapters", "-1"]
     elif spec.get("keep_chapters", True):
         cmd += ["-map_chapters", "0"]
     else:
@@ -664,6 +714,9 @@ def build_concat_reencode_cmd(files: list, output: Path, platform: str,
         cmd += ff.nvenc_archive_args(enc, multipass="qres")
     elif backend == "qsv":
         cmd += ["-global_quality", str(cq)]
+        cmd += ff.encoder_preset_args(enc, "balanced")
+    elif backend == "amf":
+        cmd += ff.quality_args(platform, cq)
         cmd += ff.encoder_preset_args(enc, "balanced")
     elif backend == "vaapi":
         cmd += ["-rc_mode", "CQP", "-qp", str(cq)]

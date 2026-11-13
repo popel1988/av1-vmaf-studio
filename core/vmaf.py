@@ -75,6 +75,14 @@ class VmafOptions:
     # Optional je Zeile: rate_mode, test_values, two_pass. Fehlen sie, gilt
     # die gemeinsame Steuerung des Laufs.
     rows: list = field(default_factory=list)
+    # "grid" = feste Stufen, "binary" = adaptive Auto-CRF-Binärsuche bis 1-CQ-Präzision
+    search_mode: str = "grid"
+    # Optionaler Mindestwert für das 5%-Perzentil (Schutz dunkler/komplexer Szenen, 0 = aus)
+    min_p5: float = 0.0
+    # Optionales Frame-Subsampling für libvmaf (1 = Standard / jedes Bild, >1 = nur jedes n-te Bild)
+    subsample: int = 1
+    # Optionale GPU-Beschleunigung (libvmaf_cuda bzw. CUDA-HW-Decode unter Beachtung der FFmpeg-Linie)
+    gpu_accel: bool = False
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -264,6 +272,7 @@ class VmafResult:
     # Zusatzmetriken (Mittel über alle Stichproben; 0 = nicht gemessen).
     vmaf_hmean: float = 0.0   # harmonisches Mittel (straft Ausreißer stärker)
     vmaf_1pct: float = 0.0    # Mittel der schlechtesten 1 % Frames ("1%-Low")
+    vmaf_5pct: float = 0.0    # Mittel der schlechtesten 5 % Frames ("5%-Low")
     psnr: float = 0.0
     ssim: float = 0.0
     xpsnr: float = 0.0        # XPSNR (dB, 4:1:1 über Y/U/V gewichtet), FFmpeg ≥ 7.1
@@ -313,6 +322,8 @@ class VmafResult:
             d["vmaf_hmean"] = round(self.vmaf_hmean, 2)
         if self.vmaf_1pct:
             d["vmaf_1pct"] = round(self.vmaf_1pct, 2)
+        if self.vmaf_5pct:
+            d["vmaf_5pct"] = round(self.vmaf_5pct, 2)
         if self.psnr:
             d["psnr"] = round(self.psnr, 2)
         if self.ssim:
@@ -361,7 +372,7 @@ class VmafResult:
                 if s.get("start") is not None:
                     item["start"] = round(float(s.get("start") or 0.0), 3)
                     item["length"] = round(float(s.get("length") or 0.0), 3)
-                for key, nd in (("hmean", 2), ("p1", 2), ("psnr", 2), ("ssim", 4),
+                for key, nd in (("hmean", 2), ("p1", 2), ("p5", 2), ("psnr", 2), ("ssim", 4),
                                 ("xpsnr", 2), ("xpsnr_min", 2)):
                     raw = s.get(key)
                     if raw:
@@ -451,6 +462,7 @@ class VmafAnalysis:
     target_lo: float = 0.0     # Mittelwert-Ziel, mit dem die Empfehlung gerechnet wurde
     target_gap: float = 0.0    # 1%-Low-Abstand dazu (0 = Floor aus)
     target_anchor: str = ""    # both | target | mean
+    min_p5: float = 0.0        # optionales 5%-Perzentil-Minimum (0 = aus)
     sample_windows: list = field(default_factory=list)
     sample_starts: list = field(default_factory=list)  # [(start, länge)] je Szene
     source_clips: list = field(default_factory=list)  # Remux je Szene: file, lead, length
@@ -460,16 +472,19 @@ class VmafAnalysis:
 
     def to_dict(self) -> dict:
         rec = self.recommended_value
+        res_dicts = [r.to_dict() if hasattr(r, "to_dict") else dict(r) for r in self.results]
+        bd = compute_bd_rates(res_dicts)
         data = {
             **({"sample_starts": [[round(float(s), 3), round(float(l), 3)]
                                   for s, l in self.sample_starts]}
                if self.sample_starts else {}),
-            "results": [r.to_dict() for r in self.results],
+            "results": res_dicts,
+            **({"bd_rates": bd} if bd else {}),
             "recommended_value": rec,
             "recommended_quality": rec,
             "recommended_codec": self.recommended_codec,
             "recommended_platform": self.recommended_platform,
-            "multi_codec": len({(r.platform, r.codec) for r in self.results}) > 1,
+            "multi_codec": len({(r.get("platform"), r.get("codec")) for r in res_dicts}) > 1,
             "model": self.model,
             "rate_mode": self.rate_mode,
             "clip_seconds": self.clip_seconds,
@@ -478,7 +493,8 @@ class VmafAnalysis:
             "pick_warning": self.pick_warning,
             "visual_only": self.visual_only,
             **({"target_lo": self.target_lo, "target_gap": self.target_gap,
-                 "target_anchor": self.target_anchor}
+                 "target_anchor": self.target_anchor,
+                 **({"min_p5": self.min_p5} if self.min_p5 else {})}
                if self.target_lo else {}),
             **({"sample_windows": self.sample_windows} if self.sample_windows else {}),
             **({"source_clips": self.source_clips} if self.source_clips else {}),
@@ -487,6 +503,113 @@ class VmafAnalysis:
         }
         data["coverage"] = provenance_api.analysis_coverage(data, self.source_duration)
         return data
+
+
+def _pchip_eval(xs: list[float], ys: list[float], xq: float) -> float:
+    """Monotone stückweise kubische Hermite-Interpolation (PCHIP) für BD-Rate."""
+    n = len(xs)
+    if xq <= xs[0]:
+        return ys[0]
+    if xq >= xs[-1]:
+        return ys[-1]
+    hs = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    ds = [(ys[i + 1] - ys[i]) / hs[i] for i in range(n - 1)]
+    if n == 2:
+        t = (xq - xs[0]) / hs[0]
+        return ys[0] + t * (ys[1] - ys[0])
+    ms = [0.0] * n
+    ms[0] = ds[0]
+    ms[-1] = ds[-1]
+    for i in range(1, n - 1):
+        if ds[i - 1] * ds[i] <= 0:
+            ms[i] = 0.0
+        else:
+            w1 = 2 * hs[i] + hs[i - 1]
+            w2 = hs[i] + 2 * hs[i - 1]
+            ms[i] = (w1 + w2) / (w1 / ds[i - 1] + w2 / ds[i])
+    idx = 0
+    for i in range(n - 1):
+        if xs[i] <= xq <= xs[i + 1]:
+            idx = i
+            break
+    h = hs[idx]
+    t = (xq - xs[idx]) / h
+    h00 = (1 + 2 * t) * ((1 - t) ** 2)
+    h10 = t * ((1 - t) ** 2)
+    h01 = (t ** 2) * (3 - 2 * t)
+    h11 = (t ** 2) * (t - 1)
+    return h00 * ys[idx] + h10 * h * ms[idx] + h01 * ys[idx + 1] + h11 * h * ms[idx + 1]
+
+
+def compute_bd_rates(result_dicts: list[dict]) -> list[dict]:
+    """Berechnet Bjøntegaard-Delta-Bitrate (BD-Rate %) zwischen Encoder-Kurven
+    über dem gemeinsamen VMAF-Überlappungsbereich (negativ = spart Bitrate)."""
+    import math as _math
+    curves: dict[str, list[tuple[float, float]]] = {}
+    labels: dict[str, str] = {}
+    for r in result_dicts or []:
+        vmaf = float(r.get("vmaf") or 0)
+        kbps = float(r.get("video_kbps") or 0)
+        if not kbps and r.get("predicted_size_bytes"):
+            kbps = float(r["predicted_size_bytes"]) / 1024.0
+        if vmaf <= 0 or kbps <= 0:
+            continue
+        grp_parts = [
+            _codec_disp(r.get("platform", ""), r.get("codec", "")),
+            str(r.get("encoder_speed") or ""),
+            str(r.get("b_frames") or ""),
+        ]
+        if r.get("two_pass"):
+            grp_parts.append("2pass")
+        gkey = "|".join(grp_parts)
+        disp = str(r.get("label") or "").split("·")[0].strip() or _codec_disp(r.get("platform", ""), r.get("codec", ""))
+        labels.setdefault(gkey, disp)
+        curves.setdefault(gkey, []).append((vmaf, _math.log10(kbps)))
+
+    valid_keys = []
+    cleaned: dict[str, tuple[list[float], list[float]]] = {}
+    for k, pts in curves.items():
+        pts_sorted = sorted(pts, key=lambda x: x[0])
+        # Streng monoton steigende VMAF-Stützstellen erzwingen
+        dedup_x: list[float] = []
+        dedup_y: list[float] = []
+        for vx, ly in pts_sorted:
+            if dedup_x and abs(vx - dedup_x[-1]) < 0.05:
+                dedup_y[-1] = (dedup_y[-1] + ly) / 2.0
+            elif not dedup_x or vx > dedup_x[-1]:
+                dedup_x.append(vx)
+                dedup_y.append(ly)
+        if len(dedup_x) >= 2:
+            cleaned[k] = (dedup_x, dedup_y)
+            valid_keys.append(k)
+
+    if len(valid_keys) < 2:
+        return []
+
+    ref_key = valid_keys[0]
+    rx, ry = cleaned[ref_key]
+    out: list[dict] = []
+    for k in valid_keys[1:]:
+        tx, ty = cleaned[k]
+        lo = max(rx[0], tx[0])
+        hi = min(rx[-1], tx[-1])
+        if hi - lo < 0.4:
+            continue
+        steps = 40
+        diff_sum = 0.0
+        for s in range(steps + 1):
+            vq = lo + (hi - lo) * (s / steps)
+            w = 0.5 if s in (0, steps) else 1.0
+            diff_sum += w * (_pchip_eval(tx, ty, vq) - _pchip_eval(rx, ry, vq))
+        avg_log_diff = diff_sum / steps
+        bd_pct = (10.0 ** avg_log_diff - 1.0) * 100.0
+        out.append({
+            "reference": labels[ref_key],
+            "candidate": labels[k],
+            "bd_rate_percent": round(bd_pct, 1),
+            "vmaf_overlap": [round(lo, 1), round(hi, 1)],
+        })
+    return out
 
 
 StatusCb = Optional[Callable[[str], None]]
@@ -809,6 +932,95 @@ def _score_chain(duration: float, prefix: str = "") -> str:
 
 
 _xpsnr_ok: Optional[bool] = None
+_libvmaf_cuda_ok: Optional[bool] = None
+
+
+def normalize_vmaf_subsample(value: int | str | None) -> int:
+    """Subsampling-Faktor für libvmaf: Standard ist IMMER 1 (jedes Bild)."""
+    try:
+        n = int(value or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(30, n))
+
+
+def libvmaf_cuda_available() -> bool:
+    """Prüft einmalig, ob der aktive FFmpeg-Build den `libvmaf_cuda`-Filter enthält."""
+    global _libvmaf_cuda_ok
+    if _libvmaf_cuda_ok is None:
+        try:
+            proc = subprocess.run(
+                [config.FFMPEG, "-hide_banner", "-h", "filter=libvmaf_cuda"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            )
+            _libvmaf_cuda_ok = (
+                proc.returncode == 0
+                and "libvmaf_cuda" in (proc.stdout or "").lower()
+                and "unknown filter" not in (proc.stdout or "").lower()
+            )
+        except (OSError, subprocess.SubprocessError):
+            _libvmaf_cuda_ok = False
+    return bool(_libvmaf_cuda_ok)
+
+
+def vmaf_gpu_status() -> dict:
+    """Prüft die Nutzbarkeit der GPU-Beschleunigung für VMAF unter Beachtung von `latest` vs `legacy`.
+
+    Wichtig:
+    - Auf Linie `latest` (main, FFmpeg 9.0 / CUDA 13.x) verlangt FFmpeg NVIDIA-Treiber >= 610.
+    - Auf Linie `legacy` (`latest-legacy`, FFmpeg 8.1) funktioniert CUDA bereits mit älteren Treibern (< 610, ab ~525).
+    - Steckt `libvmaf_cuda` im Build und passt der Treiber zur Linie -> Modus `libvmaf_cuda`.
+    - Fehlt `libvmaf_cuda` (Standard-BtbN-Build), aber Treiber + CUDA-Decode passen zur Linie -> Modus `cuda_decode` (NVDEC entlastet 4K-Decode für libvmaf).
+    - Sonst -> sauberer Fallback auf `cpu`.
+    """
+    from .hardware import HardwareMonitor
+    drv = HardwareMonitor.nvidia_driver_info()
+    has_cuda_filter = libvmaf_cuda_available()
+    channel = drv["image_channel"]
+
+    if not drv["present"]:
+        return {
+            "available": False,
+            "mode": "cpu",
+            "libvmaf_cuda": has_cuda_filter,
+            "image_channel": channel,
+            "channel": channel,
+            "driver_version": "",
+            "required_driver_major": drv["required_major"],
+            "min_driver": drv["required_major"],
+            "reason": drv["reason"],
+        }
+
+    if not drv["channel_compatible"]:
+        return {
+            "available": False,
+            "mode": "cpu",
+            "libvmaf_cuda": has_cuda_filter,
+            "image_channel": channel,
+            "channel": channel,
+            "driver_version": drv["driver_version"],
+            "required_driver_major": drv["required_major"],
+            "min_driver": drv["required_major"],
+            "reason": drv["reason"],
+        }
+
+    mode = "libvmaf_cuda" if has_cuda_filter else "cuda_decode"
+    detail = (
+        f"libvmaf_cuda aktiv ({channel}, Treiber {drv['driver_version']})"
+        if has_cuda_filter
+        else f"CUDA-Hardware-Decode + libvmaf ({channel}, Treiber {drv['driver_version']} ≥ {drv['required_major']})"
+    )
+    return {
+        "available": True,
+        "mode": mode,
+        "libvmaf_cuda": has_cuda_filter,
+        "image_channel": channel,
+        "channel": channel,
+        "driver_version": drv["driver_version"],
+        "required_driver_major": drv["required_major"],
+        "min_driver": drv["required_major"],
+        "reason": detail,
+    }
 
 
 def xpsnr_available() -> bool:
@@ -868,11 +1080,15 @@ def _run_libvmaf(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool, dims: Optional[tuple[int, int]], features: str,
     clip_len: float = 0.0, with_xpsnr: bool = False,
+    subsample: int = 1, gpu_accel: bool = False,
 ) -> Optional[dict]:
     """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None.
 
     with_xpsnr: XPSNR im selben Lauf über ``split`` mitrechnen (kein zweiter
     Decode). Das Ergebnis landet unter ``data["xpsnr"]``.
+    subsample: 1 = Standard (jedes Bild), >1 = optionales Frame-Subsampling (`n_subsample`).
+    gpu_accel: nutzt `libvmaf_cuda` (falls im Build) bzw. CUDA-HW-Decode unter Beachtung
+               der FFmpeg-Treibervorgaben (`latest` >= 610 vs. `legacy` >= 525), mit CPU-Fallback.
     """
     _, model_path = _model_for(info, neg)
     log = work / f"vmaf_{key}.json"
@@ -883,28 +1099,68 @@ def _run_libvmaf(
     ref_dur = ff._probe_duration(reference) or float(clip_len or 0)
     mpath = _esc_filter_path(model_path)
     lpath = _esc_filter_path(log)
-    vmaf_filter = (
-        f"libvmaf=model='path={mpath}':"
-        f"{features}log_fmt=json:log_path='{lpath}':shortest=1:n_threads={_vmaf_threads()}"
-    )
-    if with_xpsnr:
-        xpath = _esc_filter_path(xlog)
-        fc = (
-            f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
-            f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
-            f"[d1][r1]{vmaf_filter};"
-            f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
+    sub_n = normalize_vmaf_subsample(subsample)
+    sub_opt = f":n_subsample={sub_n}" if sub_n > 1 else ""
+
+    gpu_mode = "cpu"
+    if gpu_accel:
+        gstat = vmaf_gpu_status()
+        if gstat.get("available"):
+            gpu_mode = str(gstat.get("mode") or "cpu")
+        else:
+            logger.info("VMAF GPU-Beschleunigung übersprungen (%s) -> CPU-Modus.", gstat.get("reason"))
+
+    def _build_cmd(mode: str) -> list[str]:
+        if mode == "libvmaf_cuda":
+            pix = "p010le" if int(getattr(info, "bit_depth", 8) or 8) > 8 else "nv12"
+            cuda_vmaf = (
+                f"libvmaf_cuda=model='path={mpath}':"
+                f"{features}log_fmt=json:log_path='{lpath}':shortest=1{sub_opt}"
+            )
+            fc_gpu = (
+                f"[0:v]{_score_chain(dist_dur, scale)},format={pix},hwupload_cuda[dist];"
+                f"[1:v]{_score_chain(ref_dur)},format={pix},hwupload_cuda[ref];"
+                f"[dist][ref]{cuda_vmaf}"
+            )
+            return [
+                config.FFMPEG, "-y", "-hide_banner",
+                "-init_hw_device", "cuda=cu", "-filter_hw_device", "cu",
+                "-hwaccel", "cuda", "-i", str(distorted),
+                "-i", str(reference),
+                "-filter_complex", fc_gpu, "-f", "null", "-",
+            ]
+
+        vmaf_filter = (
+            f"libvmaf=model='path={mpath}':"
+            f"{features}log_fmt=json:log_path='{lpath}':shortest=1:n_threads={_vmaf_threads()}{sub_opt}"
         )
-    else:
-        fc = (
-            f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
-            f"[1:v]{_score_chain(ref_dur)}[ref];"
-            f"[dist][ref]{vmaf_filter}"
-        )
-    cmd = [config.FFMPEG, "-y", "-hide_banner",
-           "-i", str(distorted), "-i", str(reference),
-           "-filter_complex", fc, "-f", "null", "-"]
-    _run_logged(cmd, f"VMAF-Vergleich {key}")
+        if with_xpsnr:
+            xpath = _esc_filter_path(xlog)
+            fc_cpu = (
+                f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
+                f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
+                f"[d1][r1]{vmaf_filter};"
+                f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
+            )
+        else:
+            fc_cpu = (
+                f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
+                f"[1:v]{_score_chain(ref_dur)}[ref];"
+                f"[dist][ref]{vmaf_filter}"
+            )
+        head = [config.FFMPEG, "-y", "-hide_banner"]
+        if mode == "cuda_decode":
+            head += ["-hwaccel", "cuda"]
+        return head + ["-i", str(distorted), "-i", str(reference),
+                       "-filter_complex", fc_cpu, "-f", "null", "-"]
+
+    log.unlink(missing_ok=True)
+    cmd = _build_cmd(gpu_mode)
+    _run_logged(cmd, f"VMAF-Vergleich {key}" + (f" [{gpu_mode}]" if gpu_mode != "cpu" else ""))
+    if not log.exists() and gpu_mode != "cpu":
+        logger.warning("VMAF im GPU-Modus (%s) fehlgeschlagen – automatischer Fallback auf CPU.", gpu_mode)
+        cmd_cpu = _build_cmd("cpu")
+        _run_logged(cmd_cpu, f"VMAF-Vergleich {key} [cpu-fallback]")
     if not log.exists():
         return None
     try:
@@ -937,11 +1193,14 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         mean = sum(vals) / len(vals) if vals else None
     if mean is None:
         return None
-    # 1%-Low = Mittel der schlechtesten 1 % Frames (mind. 1 Frame).
+    # 1%-Low & 5%-Low = Mittel der schlechtesten 1 % bzw. 5 % Frames (mind. 1 Frame).
     p1 = 0.0
+    p5 = 0.0
     if vals:
         k = max(1, int(len(vals) * 0.01))
         p1 = sum(vals[:k]) / k
+        k5 = max(1, int(len(vals) * 0.05))
+        p5 = sum(vals[:k5]) / k5
     psnr = (pooled.get("psnr_y", {}) or pooled.get("psnr", {}) or {}).get("mean") or 0.0
     ssim = (pooled.get("float_ssim", {}) or pooled.get("ssim", {}) or {}).get("mean") or 0.0
     series = [
@@ -954,6 +1213,7 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "hmean": float(vm.get("harmonic_mean") or 0.0),
         "min": float(vm.get("min") or 0.0),
         "p1": float(p1),
+        "p5": float(p5),
         "frame_count": len(vals),
         "p1_count": max(1, int(len(vals) * 0.01)) if vals else 0,
         "scored_seconds": float(data.get("scored_seconds") or 0),
@@ -992,7 +1252,7 @@ def _downsample_vmaf(vals: list[float], n: int = 80) -> list[float]:
 def _vmaf_metrics(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
-    clip_len: float = 0.0,
+    clip_len: float = 0.0, subsample: int = 1, gpu_accel: bool = False,
 ) -> Optional[dict]:
     """Vollständige Metriken (VMAF + PSNR + SSIM + CAMBI + XPSNR + 1%-Low) für einen Vergleich.
 
@@ -1005,23 +1265,28 @@ def _vmaf_metrics(
     data = None
     if xpsnr_available():
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features_cambi, clip_len=clip_len, with_xpsnr=True)
+                            features=features_cambi, clip_len=clip_len, with_xpsnr=True,
+                            subsample=subsample, gpu_accel=gpu_accel)
     metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features_cambi, clip_len=clip_len)
+                            features=features_cambi, clip_len=clip_len,
+                            subsample=subsample, gpu_accel=gpu_accel)
         metrics = _metrics_from_json(data) if data else None
     if metrics is None and xpsnr_available():
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features, clip_len=clip_len, with_xpsnr=True)
+                            features=features, clip_len=clip_len, with_xpsnr=True,
+                            subsample=subsample, gpu_accel=gpu_accel)
         metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features, clip_len=clip_len)
+                            features=features, clip_len=clip_len,
+                            subsample=subsample, gpu_accel=gpu_accel)
         metrics = _metrics_from_json(data) if data else None
     if metrics is None:
         data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features="", clip_len=clip_len)
+                            features="", clip_len=clip_len,
+                            subsample=subsample, gpu_accel=gpu_accel)
         metrics = _metrics_from_json(data) if data else None
     return metrics
 
@@ -1029,9 +1294,11 @@ def _vmaf_metrics(
 def _vmaf_compare(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
+    subsample: int = 1, gpu_accel: bool = False,
 ) -> Optional[float]:
     """Rückwärtskompatibel: nur der VMAF-Mittelwert."""
-    m = _vmaf_metrics(distorted, reference, info, work, key, neg, dims)
+    m = _vmaf_metrics(distorted, reference, info, work, key, neg, dims,
+                      subsample=subsample, gpu_accel=gpu_accel)
     return m["vmaf"] if m else None
 
 
@@ -1226,6 +1493,8 @@ def measure_output_vmaf(
     tonemap_peak: float = 0.0,
     tonemap_engine: str = "cpu",
     platform: str = "cpu",
+    subsample: int = 1,
+    gpu_accel: bool = False,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> Optional[float]:
     """Misst den echten VMAF der fertigen Ausgabedatei gegen die Quelle.
@@ -1265,7 +1534,8 @@ def measure_output_vmaf(
             if not dist.exists():
                 continue
             score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}",
-                                  neg=True, dims=dims)
+                                  neg=True, dims=dims,
+                                  subsample=subsample, gpu_accel=gpu_accel)
             if score is not None:
                 scores.append(score)
         return round(sum(scores) / len(scores), 2) if scores else None
@@ -1472,6 +1742,7 @@ def analyze(
         scores: list[float] = []
         hmeans: list[float] = []
         p1s: list[float] = []
+        p5s: list[float] = []
         psnrs: list[float] = []
         ssims: list[float] = []
         xpsnrs: list[float] = []
@@ -1571,8 +1842,12 @@ def analyze(
                 if status:
                     status(f"VMAF-Vergleich {shown} @ {rate_lbl}{smp} …")
                 emit("vmaf")
-                metrics = _vmaf_metrics(test_file, reference, info, work, skey,
-                                        neg=True, dims=dims, clip_len=clip_len)
+                metrics = _vmaf_metrics(
+                    test_file, reference, info, work, skey,
+                    neg=True, dims=dims, clip_len=clip_len,
+                    subsample=normalize_vmaf_subsample(getattr(opts, "subsample", 1)),
+                    gpu_accel=bool(getattr(opts, "gpu_accel", False)),
+                )
                 prog["done"] += 1
                 emit("vmaf")
                 if metrics is None:
@@ -1583,6 +1858,8 @@ def analyze(
                     hmeans.append(metrics["hmean"])
                 if metrics.get("p1"):
                     p1s.append(metrics["p1"])
+                if metrics.get("p5"):
+                    p5s.append(metrics["p5"])
                 if metrics.get("psnr"):
                     psnrs.append(metrics["psnr"])
                 if metrics.get("ssim"):
@@ -1613,6 +1890,7 @@ def analyze(
                 "vmaf": score,
                 "hmean": (metrics or {}).get("hmean") or 0.0,
                 "p1": (metrics or {}).get("p1") or 0.0,
+                "p5": (metrics or {}).get("p5") or 0.0,
                 "psnr": (metrics or {}).get("psnr") or 0.0,
                 "ssim": (metrics or {}).get("ssim") or 0.0,
                 "xpsnr": (metrics or {}).get("xpsnr") or 0.0,
@@ -1696,6 +1974,7 @@ def analyze(
             vmaf=avg_score,
             vmaf_hmean=_avg(hmeans),
             vmaf_1pct=_avg(p1s),
+            vmaf_5pct=_avg(p5s),
             psnr=_avg(psnrs),
             ssim=_avg(ssims),
             xpsnr=_avg(xpsnrs),
@@ -1770,6 +2049,10 @@ def analyze(
         analysis.source_clips = source_clips
 
         base_pc = (runs[0][0], runs[0][1])
+        use_binary = (
+            str(getattr(opts, "search_mode", "grid") or "grid").lower() == "binary"
+            and not opts.visual_only
+        )
         for run in runs:
             p, c, sp, bf, aq, ki, tune, tag = run[:8]
             mode = _mode_of(run)
@@ -1778,20 +2061,62 @@ def analyze(
             own_vals = bool((run[8] if len(run) > 8 else "") and (run[9] if len(run) > 9 else None))
             offset = 0 if (point_br or own_vals) else _cq_offset(base_pc, (p, c))
             mark_two = len(two_groups.get((*run[:7], mode), ())) > 1
-            for base_val in _vals_of(run):
-                if cancelled():
-                    break
-                val = base_val if point_br else max(1, min(63, base_val + offset))
-                run_value(p, c, val, sp, bf, tag, aq=aq, ki=ki, tune=tune,
-                          rate_mode=mode, row_two=_two_of(run), mark_two=mark_two)
+            raw_vals = list(_vals_of(run))
+
+            if use_binary and not point_br:
+                from . import app_settings
+                lo_target = _target_lo(opts.target_vmaf)
+                gap_val = app_settings.vmaf_p1_gap()
+                cq_bounds = [max(1, min(63, int(v) + offset)) for v in raw_vals] if len(raw_vals) >= 2 else []
+                lo_cq = min(cq_bounds) if cq_bounds else max(10, 16 + offset)
+                hi_cq = max(cq_bounds) if cq_bounds else min(51, 40 + offset)
+                tested: dict[int, VmafResult] = {}
+
+                def _eval_cq(cq_val: int) -> Optional[VmafResult]:
+                    if cq_val in tested:
+                        return tested[cq_val]
+                    before = len(analysis.results)
+                    run_value(p, c, cq_val, sp, bf, tag, aq=aq, ki=ki, tune=tune,
+                              rate_mode=mode, row_two=_two_of(run), mark_two=mark_two)
+                    if len(analysis.results) > before:
+                        res_obj = analysis.results[-1]
+                        tested[cq_val] = res_obj
+                        return res_obj
+                    return None
+
+                # Adaptive Binärsuche: höchstes CQ finden, das Ziel-VMAF + Perzentil-Schutz hält
+                low, high = lo_cq, hi_cq
+                for _step in range(6):
+                    if cancelled() or low > high:
+                        break
+                    mid = (low + high + 1) // 2 if low < high else low
+                    if mid in tested:
+                        break
+                    r_mid = _eval_cq(mid)
+                    if r_mid is None:
+                        break
+                    if _result_solid(r_mid, lo_target, gap_val, min_p5=opts.min_p5):
+                        if low == mid:
+                            break
+                        low = mid
+                    else:
+                        if high == mid:
+                            break
+                        high = mid - 1
+            else:
+                for base_val in raw_vals:
+                    if cancelled():
+                        break
+                    val = base_val if point_br else max(1, min(63, base_val + offset))
+                    run_value(p, c, val, sp, bf, tag, aq=aq, ki=ki, tune=tune,
+                              rate_mode=mode, row_two=_two_of(run), mark_two=mark_two)
             if cancelled():
                 break
 
         # Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag.
-        # Nur wenn der Lauf eine Stufe zum Encoden sucht. Ein reiner Vergleich
-        # bleibt bei den eingetragenen Werten.
-        if opts.refine_midpoint and not cancelled() and analysis.results:
-            extras = _midpoint_jobs(analysis, opts.target_vmaf)
+        # Nur wenn der Lauf eine Stufe zum Encoden sucht (und nicht schon per Binärsuche lief).
+        if opts.refine_midpoint and not use_binary and not cancelled() and analysis.results:
+            extras = _midpoint_jobs(analysis, opts.target_vmaf, min_p5=opts.min_p5)
             if extras:
                 budget["steps"] += len(extras)
                 budget["units"] += len(extras) * n_samples * 2
@@ -1818,7 +2143,7 @@ def analyze(
             analysis.recommended_value = None
             analysis.recommended_quality = None
         else:
-            _pick_recommended(analysis, opts.target_vmaf)
+            _pick_recommended(analysis, opts.target_vmaf, min_p5=opts.min_p5)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
                           source_path=opts.source_path or str(info.path), params=opts.params)
@@ -2911,6 +3236,7 @@ def apply_idle_scenes(results) -> set[int]:
         ("vmaf", "vmaf"),
         ("hmean", "vmaf_hmean"),
         ("p1", "vmaf_1pct"),
+        ("p5", "vmaf_5pct"),
         ("psnr", "psnr"),
         ("ssim", "ssim"),
         ("xpsnr", "xpsnr"),
@@ -2998,16 +3324,36 @@ def _p1_floors(mean: float, lo: float, gap: float, anchor: str) -> list[float]:
     return floors
 
 
-def _result_solid(r: VmafResult, lo: float, gap: float) -> bool:
+def floor_p5(scene_scores, overall: float = 0.0, mean: float = 0.0) -> float:
+    """5%-Low für den Perzentil-Schutz: schwächste aktive Szene."""
+    lows = []
+    for s in scene_scores or []:
+        if not isinstance(s, dict) or s.get("idle"):
+            continue
+        raw = s.get("p5")
+        if raw:
+            lows.append(float(raw))
+    if lows:
+        return min(lows)
+    if overall:
+        return float(overall)
+    return float(mean or 0)
+
+
+def _result_solid(r: VmafResult, lo: float, gap: float, min_p5: float = 0.0) -> bool:
     if r.vmaf < lo:
         return False
+    if min_p5 and min_p5 > 0:
+        p5 = floor_p5(r.scene_scores, getattr(r, "vmaf_5pct", 0.0), r.vmaf)
+        if p5 + 1e-9 < float(min_p5):
+            return False
     from . import app_settings
     p1 = floor_p1(r.scene_scores, r.vmaf_1pct, r.vmaf)
     return all(p1 + 1e-9 >= lim for lim in _p1_floors(
         r.vmaf, lo, gap, app_settings.vmaf_p1_anchor()))
 
 
-def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple]:
+def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float, min_p5: float = 0.0) -> list[tuple]:
     """Ein Zwischenwert je Encoder zwischen letztem Treffer und erstem Fehlschlag."""
     from . import app_settings
     lo = _target_lo(target_vmaf)
@@ -3026,7 +3372,7 @@ def _midpoint_jobs(analysis: VmafAnalysis, target_vmaf: float) -> list[tuple]:
         seen = {int(r.value) for r in rows}
         pair = None
         for a, b in zip(rows, rows[1:]):
-            if _result_solid(a, lo, gap) and not _result_solid(b, lo, gap):
+            if _result_solid(a, lo, gap, min_p5=min_p5) and not _result_solid(b, lo, gap, min_p5=min_p5):
                 pair = (int(a.value), int(b.value))
                 break
         if not pair:
@@ -3121,7 +3467,7 @@ def _savings_pick_warning(best: VmafResult, lo: float, gap: float,
     return " ".join(bits)
 
 
-def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
+def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0, min_p5: float = 0.0) -> None:
     if not analysis.results:
         return
     # Ziel-VMAF (Slider / Super-Tool) bleibt der Mittelwert – so wie angegeben.
@@ -3133,13 +3479,14 @@ def _pick_recommended(analysis: VmafAnalysis, target_vmaf: float = 0.0) -> None:
     analysis.target_lo = float(lo)
     analysis.target_gap = float(gap)
     analysis.target_anchor = app_settings.vmaf_p1_anchor()
+    analysis.min_p5 = float(min_p5 or 0.0)
     min_sav = app_settings.vmaf_min_savings()
 
     def _most_savings(rows: list) -> VmafResult:
         return min(rows, key=lambda r: (r.predicted_size_bytes, -_p1_of(r)))
 
     mean_ok = [r for r in analysis.results if r.vmaf >= lo]
-    solid = [r for r in analysis.results if _result_solid(r, lo, gap)]
+    solid = [r for r in analysis.results if _result_solid(r, lo, gap, min_p5=min_p5)]
 
     def _saving_ok(rows: list) -> list:
         if min_sav is None:

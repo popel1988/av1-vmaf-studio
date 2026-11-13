@@ -4,6 +4,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -232,13 +233,13 @@ def info_from_probe(data: dict, path: Path,
 
     pix_fmt = video.get("pix_fmt", "?") or "?"
     transfer = (video.get("color_transfer", "") or "").lower()
-    hdr_type, dovi, dv_profile, hdr10_plus = _detect_hdr(transfer, video)
+    dovi = _dovi_config(video)
+    hdr_type, dovi_present, dv_profile, hdr10_plus = _detect_hdr(transfer, video, dovi=dovi)
     field_order = str(video.get("field_order") or "").lower()
     interlaced = field_order in {"tt", "bb", "tb", "bt"}
     fps, frame_mode, fps_nominal = _frame_rates(video)
     sar, dar, anamorphic = _aspects(video)
     light = _hdr_light(video)
-    dovi = _dovi_config(video)
     codec = str(video.get("codec_name") or "?")
     level = str(video.get("level") or "")
     chapters = _chapters(data.get("chapters") or [])
@@ -268,7 +269,7 @@ def info_from_probe(data: dict, path: Path,
         fps=fps,
         bit_depth=_bit_depth(pix_fmt, video),
         hdr_type=hdr_type,
-        dolby_vision=dovi,
+        dolby_vision=bool(dovi_present),
         dv_profile=dv_profile,
         hdr10_plus=hdr10_plus,
         field_order=field_order,
@@ -314,7 +315,7 @@ def info_from_probe(data: dict, path: Path,
 def extra_probe_fields(info: VideoInfo) -> dict:
     """Felder, die der Bibliotheksscan zusätzlich zum bisherigen Eintrag speichert."""
     return {
-        "probe_rev": 3,
+        "probe_rev": 4,
         "pix_fmt": info.pix_fmt,
         "color_transfer": info.color_transfer,
         "color_primaries": info.color_primaries,
@@ -506,7 +507,7 @@ def _video_track(stream: dict, index: int, primary_index: int) -> dict:
     """Eine Videospur mit eigener HDR-/Dolby-Vision-Konfiguration."""
     dovi = _dovi_config(stream)
     transfer = (stream.get("color_transfer") or "").lower()
-    hdr_type, _present, _profile, hdr10_plus = _detect_hdr(transfer, stream)
+    hdr_type, _present, _profile, hdr10_plus = _detect_hdr(transfer, stream, dovi=dovi)
     light = _hdr_light(stream)
     pix = str(stream.get("pix_fmt") or "")
     bitrate = _stream_bitrate(stream, stream.get("tags") or {}, _f(stream.get("duration")) or 0.0)
@@ -640,7 +641,12 @@ def _dv_profile_label(profile: int, compatibility: Optional[int]) -> str:
 
 
 def _dovi_config(video: dict) -> dict:
-    """Dolby-Vision-Konfiguration einer Spur. Fehlende Flags bleiben None."""
+    """Dolby-Vision-Konfiguration einer Spur. Fehlende Flags bleiben None.
+
+    Leere/genullte DOVI-Side-Data-Einträge (z. B. ``dv_profile == 0`` und
+    ``rpu_present_flag == 0`` ohne EL/BL) werden als ungültig verworfen, damit
+    SDR- oder reine HDR10-Dateien nicht fälschlich als Dolby Vision gelten.
+    """
     empty = {"present": False, "profile": 0, "level": None, "version": "",
              "rpu": None, "el": None, "bl": None, "compatibility": None,
              "compatibility_label": "", "profile_label": ""}
@@ -653,15 +659,22 @@ def _dovi_config(video: dict) -> dict:
         profile = _int_or_none(side.get("dv_profile")) or 0
         major = _int_or_none(side.get("dv_version_major"))
         minor = _int_or_none(side.get("dv_version_minor"))
+        rpu = _flag_or_none(side, "rpu_present_flag")
+        el = _flag_or_none(side, "el_present_flag")
+        bl = _flag_or_none(side, "bl_present_flag")
+        if rpu is False and not el:
+            continue
+        if profile <= 0 and rpu is not True and el is not True and (major or 0) <= 0:
+            continue
         compatibility = _int_or_none(side.get("dv_bl_signal_compatibility_id"))
         return {
             "present": True,
             "profile": profile,
             "level": _int_or_none(side.get("dv_level")),
             "version": f"{major}.{minor}" if major is not None and minor is not None else "",
-            "rpu": _flag_or_none(side, "rpu_present_flag"),
-            "el": _flag_or_none(side, "el_present_flag"),
-            "bl": _flag_or_none(side, "bl_present_flag"),
+            "rpu": rpu,
+            "el": el,
+            "bl": bl,
             "compatibility": compatibility,
             "compatibility_label": _DV_COMPAT_LABEL.get(compatibility if compatibility is not None else -1, ""),
             "profile_label": _dv_profile_label(profile, compatibility),
@@ -679,9 +692,10 @@ def _has_hdr10_plus(video: dict) -> bool:
     return False
 
 
-def _detect_hdr(transfer: str, video: dict) -> tuple[str, bool, int, bool]:
+def _detect_hdr(transfer: str, video: dict, *, dovi: Optional[dict] = None) -> tuple[str, bool, int, bool]:
     """Bestimmt HDR-Typ, Dolby Vision, DV-Profil und ob HDR10+ vorliegt."""
-    dovi = _dovi_config(video)
+    if dovi is None:
+        dovi = _dovi_config(video)
     hdr10_plus = _has_hdr10_plus(video)
     if transfer in ("smpte2084", "smptest2084"):
         base = "HDR10+" if hdr10_plus else "HDR10"
@@ -1046,13 +1060,13 @@ def available_decoders() -> frozenset:
 
 
 def decoder_available(platform: str, codec: str) -> bool:
-    """True, wenn der Decoder im Build steckt (VAAPI: generischer Codec reicht)."""
+    """True, wenn der Decoder im Build steckt (VAAPI/D3D11VA: generischer Codec reicht)."""
     backend = encoder_backend(platform)
     avail = available_decoders()
     if not avail:
         return True
-    if backend == "vaapi" or platform == "cpu":
-        # Generische Decoder (h264/hevc/av1) + hwaccel
+    if backend in ("vaapi", "amf") or platform == "cpu":
+        # Generische Decoder (h264/hevc/av1) + hwaccel (vaapi bzw. d3d11va)
         return codec in avail or decoder_name(platform, codec) in avail
     return decoder_name(platform, codec) in avail
 
@@ -1063,6 +1077,7 @@ def quality_args(platform: str, value: int) -> list[str]:
     - NVENC: -cq
     - QSV:   -global_quality
     - VAAPI (AMD und Intel-VAAPI): -rc_mode CQP -qp
+    - AMF (AMD Windows): -rc cqp -qp_i/-qp_p (AV1: 4× Skala 0–255)
     - CPU:   -crf
     """
     backend = encoder_backend(platform)
@@ -1072,6 +1087,8 @@ def quality_args(platform: str, value: int) -> list[str]:
         return ["-global_quality", str(value)]
     if backend == "vaapi":
         return ["-rc_mode", "CQP", "-qp", str(value)]
+    if backend == "amf":
+        return ["-rc", "cqp", "-qp_i", str(value), "-qp_p", str(value)]
     return ["-crf", str(value)]
 
 
@@ -1096,6 +1113,11 @@ _PRESET_QSV = {
     "fastest": "veryfast", "fast": "fast", "balanced": "slower",
     "slow": "slow", "slowest": "veryslow",
 }
+_PRESET_AMF = {
+    "fastest": "speed", "fast": "speed", "balanced": "balanced",
+    "slow": "quality", "slowest": "quality",
+}
+_AMF_NATIVES = ("speed", "balanced", "quality")
 _X264_NATIVES = (
     "ultrafast", "superfast", "veryfast", "faster", "fast",
     "medium", "slow", "slower", "veryslow", "placebo",
@@ -1110,7 +1132,7 @@ _PRESET_VP9 = {
     "fastest": "5", "fast": "4", "balanced": "2", "slow": "1", "slowest": "0",
 }
 _ALL_NATIVES = (set(_SVT_NATIVES) | set(_X264_NATIVES) | set(_NVENC_NATIVES)
-                | set(_QSV_NATIVES) | set(_VP9_NATIVES))
+                | set(_QSV_NATIVES) | set(_VP9_NATIVES) | set(_AMF_NATIVES))
 
 
 def _preset_family(enc: str) -> str:
@@ -1123,6 +1145,8 @@ def _preset_family(enc: str) -> str:
         return "nvenc"
     if "qsv" in name:
         return "qsv"
+    if "amf" in name:
+        return "amf"
     if name == "libvpx-vp9":
         return "vp9"
     return ""
@@ -1132,7 +1156,8 @@ def _alias_map(enc: str) -> dict[str, str]:
     fam = _preset_family(enc)
     return {
         "svt": _PRESET_SVT, "x264": _PRESET_X264,
-        "nvenc": _PRESET_NVENC, "qsv": _PRESET_QSV, "vp9": _PRESET_VP9,
+        "nvenc": _PRESET_NVENC, "qsv": _PRESET_QSV,
+        "amf": _PRESET_AMF, "vp9": _PRESET_VP9,
     }.get(fam, {})
 
 
@@ -1158,6 +1183,9 @@ def native_speed_presets(enc: str) -> list[dict]:
     elif fam == "qsv":
         values = list(_QSV_NATIVES)
         labels = {n: n for n in values}
+    elif fam == "amf":
+        values = list(_AMF_NATIVES)
+        labels = {"speed": "speed · schnellste", "balanced": "balanced", "quality": "quality · beste"}
     elif fam == "vp9":
         values = list(_VP9_NATIVES)
         labels = {n: n for n in values}
@@ -1188,6 +1216,7 @@ def speed_preset_catalog() -> dict[str, list[dict]]:
         "x264": native_speed_presets("libx264"),
         "nvenc": native_speed_presets("h264_nvenc"),
         "qsv": native_speed_presets("av1_qsv"),
+        "amf": native_speed_presets("av1_amf"),
         "vp9": native_speed_presets("libvpx-vp9"),
         "none": [],
     }
@@ -1237,12 +1266,15 @@ def normalize_encoder_speed(value) -> str:
 
 
 def encoder_preset_args(enc: str, speed: str = "balanced") -> list[str]:
-    """FFmpeg ``-preset`` für den Encoder; leer, wenn der Encoder keins hat (VAAPI, VP9)."""
+    """FFmpeg ``-preset`` (bzw. ``-quality`` bei AMF) für den Encoder; leer bei VAAPI/VP9."""
     if enc == "libvpx-vp9":
         return []
+    fam = _preset_family(enc)
     native = alias_to_native(enc, speed)
-    if not native or not _preset_family(enc):
+    if not native or not fam:
         return []
+    if fam == "amf":
+        return ["-quality", native]
     return ["-preset", native]
 
 
@@ -1591,12 +1623,111 @@ AUDIO_ENCODERS = {
 }
 
 
+def loudnorm_filter(measured: Optional[dict] = None) -> str:
+    """Baut den EBU-R128-loudnorm-Filter (2-Pass linear falls Messwerte vorliegen,
+    sonst 1-Pass dynamisch)."""
+    if measured:
+        try:
+            i_val = float(measured["input_i"])
+            tp_val = float(measured["input_tp"])
+            lra_val = float(measured["input_lra"])
+            thr_val = float(measured["input_thresh"])
+            off_val = float(measured.get("target_offset", 0.0))
+            if math.isfinite(i_val) and math.isfinite(tp_val) and i_val > -70.0:
+                return (
+                    f"loudnorm=I=-16:TP=-1.5:LRA=11"
+                    f":measured_I={i_val:.2f}:measured_TP={tp_val:.2f}"
+                    f":measured_LRA={lra_val:.2f}:measured_thresh={thr_val:.2f}"
+                    f":offset={off_val:.2f}:linear=true"
+                )
+        except (KeyError, TypeError, ValueError):
+            pass
+    return "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def measure_loudnorm(
+    source: Path,
+    track_idx: int = 0,
+    *,
+    start_at: Optional[float] = None,
+    duration_limit: Optional[float] = None,
+) -> Optional[dict]:
+    """Misst EBU-R128-Parameter einer Tonspur (Pass 1 für lineares 2-Pass-Loudnorm)."""
+    from . import config
+    cmd = [config.FFMPEG, "-hide_banner", "-nostats"]
+    if start_at is not None and start_at > 0:
+        cmd += ["-ss", f"{float(start_at):.3f}"]
+    cmd += ["-i", str(source)]
+    if duration_limit is not None and duration_limit > 0:
+        cmd += ["-t", f"{float(duration_limit):.3f}"]
+    cmd += [
+        "-map", f"0:a:{int(track_idx)}",
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+        "-vn", "-sn", "-dn", "-f", "null", os.devnull,
+    ]
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=900, check=False,
+        )
+        stderr = res.stderr or ""
+        # JSON-Block am Ende des loudnorm-Outputs extrahieren
+        m = re.search(r"\{\s*\"input_i\"\s*:[\s\S]*?\}", stderr)
+        if not m:
+            return None
+        data = json.loads(m.group(0))
+        if "input_i" in data and "input_tp" in data:
+            return data
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return None
+
+
+def nightmode_filter(channels: int = 6) -> str:
+    """Dialog-Boost / Nachtmodus-Filter: hebt Center-Sprache deutlich an,
+    komprimiert laute Effekte sanft und normalisiert auf -16 LUFS."""
+    if int(channels or 0) >= 6:
+        # 5.1 / 7.1 Downmix mit starkem Center-Anteil (FC = 0.85) und reduziertem LFE/Surround
+        downmix = "pan=stereo|c0=0.45*FL+0.85*FC+0.30*SL+0.30*BL|c1=0.45*FR+0.85*FC+0.30*SR+0.30*BR"
+        return f"{downmix},acompressor=threshold=-20dB:ratio=3:attack=15:release=250,loudnorm=I=-16:TP=-1.5:LRA=7"
+    return "acompressor=threshold=-20dB:ratio=3:attack=15:release=250,loudnorm=I=-16:TP=-1.5:LRA=7"
+
+
+def nightmode_extra_track_args(
+    out_idx: int,
+    src_track: dict,
+    *,
+    codec: str = "aac",
+    bitrate_kbps: int = 192,
+) -> list[str]:
+    """Erzeugt Mapping + Filter + Metadaten für eine zusätzliche Nachtmodus-/Dialog-Boost-Spur."""
+    src_idx = int(src_track.get("index", 0) or 0)
+    ch = int(src_track.get("channels", 6) or 6)
+    lang = (src_track.get("language") or "").strip()
+    enc = AUDIO_ENCODERS.get(codec if codec in ("aac", "opus", "ac3", "eac3") else "aac", "aac")
+    args = [
+        "-map", f"0:a:{src_idx}?",
+        f"-c:a:{out_idx}", enc,
+        f"-b:a:{out_idx}", f"{max(96, int(bitrate_kbps))}k",
+        f"-ac:a:{out_idx}", "2",
+        f"-filter:a:{out_idx}", nightmode_filter(ch),
+        f"-disposition:a:{out_idx}", "0",
+        f"-metadata:s:a:{out_idx}", "title=Stereo (Dialog-Boost / Nachtmodus)",
+    ]
+    if lang and lang.lower() != "und":
+        args += [f"-metadata:s:a:{out_idx}", f"language={lang}"]
+    return args
+
+
 def audio_args(
     mode: str = "copy",
     codec: str = "aac",
     bitrate_kbps: int = 160,
     channels: int = 0,
     normalize: bool = False,
+    *,
+    loudnorm_stats: Optional[dict] = None,
+    out_count: int = 1,
 ) -> list[str]:
     """Baut die Audio-Argumente.
 
@@ -1605,26 +1736,45 @@ def audio_args(
     bitrate:   kbit/s pro Stream (bei verlustbehafteten Codecs)
     channels:  0 = Original behalten, 1 = Mono, 2 = Stereo (Downmix)
     normalize: EBU-R128-Lautheitsnormalisierung (loudnorm)
+    loudnorm_stats: optionale {src_idx: measured_dict} oder direktes Mess-Dict für 2-Pass
     """
     if mode == "none":
         return ["-an"]
     # Direktes Kopieren nur möglich, wenn keine Umwandlung nötig ist.
     if mode == "copy" and channels == 0 and not normalize:
+        if out_count > 1:
+            args: list[str] = []
+            for idx in range(out_count):
+                args += [f"-c:a:{idx}", "copy"]
+            return args
         return ["-c:a", "copy"]
 
     enc = AUDIO_ENCODERS.get(codec, "aac")
+    if out_count > 1 or (loudnorm_stats and isinstance(loudnorm_stats, dict) and "input_i" not in loudnorm_stats):
+        args = []
+        for idx in range(max(1, out_count)):
+            args += [f"-c:a:{idx}", enc]
+            if enc != "flac":
+                args += [f"-b:a:{idx}", f"{max(32, int(bitrate_kbps))}k"]
+            if channels in (1, 2):
+                args += [f"-ac:a:{idx}", str(channels)]
+            if normalize:
+                m = loudnorm_stats.get(idx) if isinstance(loudnorm_stats, dict) else None
+                args += [f"-filter:a:{idx}", loudnorm_filter(m)]
+        return args
+
     args = ["-c:a", enc]
     if enc != "flac":
         args += ["-b:a", f"{max(32, int(bitrate_kbps))}k"]
     if channels in (1, 2):
         args += ["-ac", str(channels)]
     if normalize:
-        # Zielwerte nach Streaming-Standard (EBU R128).
-        args += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+        m = loudnorm_stats if (isinstance(loudnorm_stats, dict) and "input_i" in loudnorm_stats) else None
+        args += ["-af", loudnorm_filter(m)]
     return args
 
 
-def audio_track_args(tracks: list) -> list[str]:
+def audio_track_args(tracks: list, *, loudnorm_stats: Optional[dict] = None) -> list[str]:
     """Mapping + Codec-Argumente pro einzelner Ausgabe-Tonspur.
 
     `tracks`: geordnete Liste ausgewählter Spuren, je Eintrag ein Dict mit
@@ -1638,6 +1788,7 @@ def audio_track_args(tracks: list) -> list[str]:
     for t in tracks:
         args += ["-map", f"0:a:{int(t.get('index', 0))}?"]
     for out_idx, t in enumerate(tracks):
+        src_idx = int(t.get("index", 0) or 0)
         mode = t.get("mode", "copy")
         ch = int(t.get("channels", 0) or 0)
         norm = bool(t.get("normalize"))
@@ -1651,7 +1802,8 @@ def audio_track_args(tracks: list) -> list[str]:
         if ch in (1, 2):
             args += [f"-ac:a:{out_idx}", str(ch)]
         if norm:
-            args += [f"-filter:a:{out_idx}", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+            m = (loudnorm_stats or {}).get(src_idx) if isinstance(loudnorm_stats, dict) else None
+            args += [f"-filter:a:{out_idx}", loudnorm_filter(m)]
     return args
 
 
@@ -1796,7 +1948,11 @@ def hwaccel_input_args(platform: str) -> list[str]:
     if platform == "nvidia":
         return ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
     if backend == "qsv":
+        if os.name == "nt":
+            return ["-hwaccel", "qsv"]
         return ["-hwaccel", "qsv", "-qsv_device", config.VAAPI_DEVICE]
+    if backend == "amf":
+        return ["-hwaccel", "d3d11va"]
     if backend == "vaapi":
         return ["-hwaccel", "vaapi", "-vaapi_device", config.VAAPI_DEVICE]
     return []
@@ -2004,3 +2160,368 @@ def crop_dims(crop: str) -> Optional[tuple[int, int]]:
         return int(parts[0]), int(parts[1])
     except ValueError:
         return None
+
+
+# ------------------------------------------------------- Auto Film-Grain Probe
+_PSNR_MSE_RE = re.compile(r"mse_y:([0-9]+(?:\.[0-9]+)?).*?psnr_y:([0-9]+(?:\.[0-9]+)?|inf)", re.I)
+
+
+def grain_mse_to_svt_level(mse_y: float, *, anime: bool = False) -> tuple[int, str, str]:
+    """Mappt gemessene temporale Rausch-/Korn-Varianz (8-Bit Luma-MSE) auf SVT-AV1 film-grain (0..50).
+
+    Rückgabe: (film_grain_wert, kategorie_key, beschreibung_de).
+    """
+    if anime:
+        return 0, "anime", "Anime/Animation – Filmkorn deaktiviert (0)"
+    m = max(0.0, float(mse_y or 0.0))
+    if m < 0.35:
+        return 0, "none", "Kein relevantes Filmkorn erkannt (0)"
+    if m < 0.90:
+        val = int(round(4 + (m - 0.35) / 0.55 * 2))  # 4..6
+        return max(4, min(6, val)), "minimal", f"Minimales Sensorrauschen ({val})"
+    if m < 2.40:
+        val = int(round(7 + (m - 0.90) / 1.50 * 6))  # 7..13
+        return max(7, min(13, val)), "light", f"Leichtes Filmkorn ({val})"
+    if m < 6.50:
+        val = int(round(14 + (m - 2.40) / 4.10 * 10))  # 14..24
+        return max(14, min(24, val)), "medium", f"Mittleres 35mm-Filmkorn ({val})"
+    if m < 15.0:
+        val = int(round(25 + (m - 6.50) / 8.50 * 10))  # 25..35
+        return max(25, min(35, val)), "strong", f"Kräftiges Filmkorn ({val})"
+    val = int(round(36 + min(1.0, (m - 15.0) / 20.0) * 8))  # 36..44
+    return max(36, min(44, val)), "heavy", f"Starkes Analog-/16mm-Korn ({val})"
+
+
+def estimate_film_grain(
+    info_or_path: "VideoInfo | Path | str",
+    *,
+    samples: int = 3,
+    frames_per_sample: int = 12,
+    anime: bool = False,
+) -> dict:
+    """Misst das natürliche Filmkorn/Rauschen der Quelle und schlägt SVT-AV1 `film-grain` (0–50) vor.
+
+    Methode: Bis zu `samples` kurze Ausschnitte (20 %, 50 %, 75 % der Laufzeit) werden im
+    zentralen Bildausschnitt (60 % Fläche, ignoriert Letterbox-Balken) auf 8-Bit-Luma normiert
+    und gegen einen bewegungskompensierten Temporal-Denoiser (`atadenoise`, Fallback `hqdn3d`)
+    per `psnr` verglichen. Der Median der Luma-MSE trennt echtes Filmkorn zuverlässig von Kanten.
+    """
+    from . import config
+
+    if isinstance(info_or_path, VideoInfo):
+        info: Optional[VideoInfo] = info_or_path
+        src_path = Path(info.path)
+    else:
+        src_path = Path(info_or_path)
+        info = probe_video(src_path) if src_path.exists() else None
+
+    if anime:
+        lvl, cat, label = grain_mse_to_svt_level(0.0, anime=True)
+        return {
+            "film_grain": lvl, "mse_y": 0.0, "psnr_y": 99.0,
+            "category": cat, "label": label, "samples": 0,
+        }
+
+    if not src_path.exists():
+        return {
+            "film_grain": 0, "mse_y": 0.0, "psnr_y": 99.0,
+            "category": "none", "label": "Quelle nicht gefunden (0)", "samples": 0,
+        }
+
+    dur = float(getattr(info, "duration", 0.0) or 0.0)
+    n_samp = max(1, min(5, int(samples or 3)))
+    if dur >= 15.0:
+        fracs = [0.20, 0.50, 0.75, 0.35, 0.65][:n_samp]
+        starts = [max(0.0, dur * f) for f in fracs]
+    else:
+        starts = [0.0]
+
+    n_frames = max(6, min(30, int(frames_per_sample or 12)))
+    denoise_chains = (
+        "atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04:2a=0.02:2b=0.04",
+        "hqdn3d=3.0:2.0:4.0:3.0",
+    )
+    mse_samples: list[float] = []
+    psnr_samples: list[float] = []
+
+    for st in starts:
+        measured = False
+        for dn in denoise_chains:
+            vf = (
+                "crop=trunc(iw*0.6/2)*2:trunc(ih*0.6/2)*2,"
+                "format=yuv420p,split[orig][ clean_in ];"
+                f"[ clean_in ]{dn}[clean];"
+                "[orig][clean]psnr"
+            )
+            cmd = [config.FFMPEG, "-hide_banner"]
+            if st > 0.0:
+                cmd += ["-ss", f"{st:.2f}"]
+            cmd += [
+                "-i", str(src_path),
+                "-frames:v", str(n_frames),
+                "-an", "-sn",
+                "-lavfi", vf,
+                "-f", "null", "-",
+            ]
+            try:
+                res = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=25, check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            matches = list(_PSNR_MSE_RE.finditer(res.stderr or ""))
+            if matches:
+                m = matches[-1]
+                try:
+                    mse_val = float(m.group(1))
+                    psnr_raw = m.group(2).lower()
+                    psnr_val = 99.0 if psnr_raw == "inf" else float(psnr_raw)
+                except ValueError:
+                    continue
+                mse_samples.append(mse_val)
+                psnr_samples.append(psnr_val)
+                measured = True
+                break
+        if not measured and mse_samples:
+            continue
+
+    if not mse_samples:
+        return {
+            "film_grain": 0, "mse_y": 0.0, "psnr_y": 99.0,
+            "category": "none", "label": "Keine Messung möglich (0)", "samples": 0,
+        }
+
+    mse_sorted = sorted(mse_samples)
+    psnr_sorted = sorted(psnr_samples)
+    mid = len(mse_sorted) // 2
+    med_mse = mse_sorted[mid]
+    med_psnr = psnr_sorted[mid]
+    grain_val, cat, label = grain_mse_to_svt_level(med_mse, anime=False)
+    return {
+        "film_grain": grain_val,
+        "mse_y": round(med_mse, 3),
+        "psnr_y": round(med_psnr, 2),
+        "category": cat,
+        "label": label,
+        "samples": len(mse_samples),
+    }
+
+
+# ------------------------------------------- Regelbasierte Spur- & Sprachwahl
+_TRACK_LANG_ALIASES: dict[str, tuple[str, set[str]]] = {
+    "de": ("deu", {"de", "deu", "ger", "german", "deutsch"}),
+    "en": ("eng", {"en", "eng", "english", "englisch"}),
+    "fr": ("fra", {"fr", "fra", "fre", "french", "französisch", "francais"}),
+    "es": ("spa", {"es", "spa", "spanish", "espanol", "español", "castellano"}),
+    "it": ("ita", {"it", "ita", "italian", "italiano"}),
+    "pt": ("por", {"pt", "por", "portuguese", "portugues", "português"}),
+    "nl": ("nld", {"nl", "nld", "dut", "dutch", "nederlands"}),
+    "ru": ("rus", {"ru", "rus", "russian"}),
+    "ja": ("jpn", {"ja", "jpn", "japanese", "japanisch"}),
+    "zh": ("zho", {"zh", "zho", "chi", "chinese", "mandarin"}),
+    "ko": ("kor", {"ko", "kor", "korean", "koreanisch"}),
+    "pl": ("pol", {"pl", "pol", "polish", "polnisch"}),
+    "sv": ("swe", {"sv", "swe", "swedish"}),
+    "da": ("dan", {"da", "dan", "danish"}),
+    "no": ("nor", {"no", "nor", "norwegian"}),
+    "fi": ("fin", {"fi", "fin", "finnish"}),
+    "cs": ("ces", {"cs", "cze", "ces", "czech"}),
+    "hu": ("hun", {"hu", "hun", "hungarian"}),
+    "tr": ("tur", {"tr", "tur", "turkish", "türkisch"}),
+    "ar": ("ara", {"ar", "ara", "arabic"}),
+    "hi": ("hin", {"hi", "hin", "hindi"}),
+    "und": ("und", {"und", "undetermined", "unknown"}),
+}
+_FORM_TO_CANON: dict[str, str] = {}
+_CANON_TO_ISO3: dict[str, str] = {}
+for _canon_key, (_iso3_code, _lang_forms) in _TRACK_LANG_ALIASES.items():
+    _CANON_TO_ISO3[_canon_key] = _iso3_code
+    for _lang_form in _lang_forms:
+        _FORM_TO_CANON[_lang_form] = _canon_key
+
+
+def canon_lang(raw: str | None) -> str:
+    t = str(raw or "").strip().lower()
+    return _FORM_TO_CANON.get(t, t)
+
+
+def lang_to_iso3(raw: str | None) -> str:
+    c = canon_lang(raw)
+    if not c:
+        return "und"
+    return _CANON_TO_ISO3.get(c, c if len(c) == 3 else "und")
+
+
+def parse_lang_whitelist(val) -> set[str]:
+    if isinstance(val, str):
+        parts = val.replace(";", ",").split(",")
+    elif isinstance(val, (list, tuple, set)):
+        parts = list(val)
+    else:
+        parts = []
+    return {canon_lang(p) for p in parts if str(p).strip()}
+
+
+_COMMENTARY_RE = re.compile(
+    r"\b(commentary|director'?s?\s*comment|kommentar|regiekommentar|audiokommentar)\b",
+    re.I,
+)
+_SDH_RE = re.compile(
+    r"(\bsdh\b|\bcc\b|hearing[\s_-]*impaired|hörgeschädigt|hoergeschaedigt|untertitel\s*für\s*hörgeschädigte)",
+    re.I,
+)
+_FORCED_RE = re.compile(r"\b(forced|erzwungen|signs?\s*(?:&|and)\s*songs?)\b", re.I)
+
+
+def is_commentary_track(track: dict) -> bool:
+    if bool(track.get("comment")) or bool((track.get("disposition") or {}).get("comment")):
+        return True
+    title = str(track.get("title") or "")
+    return bool(_COMMENTARY_RE.search(title))
+
+
+def is_sdh_track(track: dict) -> bool:
+    if (
+        bool(track.get("hearing_impaired"))
+        or bool(track.get("sdh"))
+        or bool((track.get("disposition") or {}).get("hearing_impaired"))
+    ):
+        return True
+    title = str(track.get("title") or "")
+    return bool(_SDH_RE.search(title))
+
+
+def is_forced_track(track: dict) -> bool:
+    if bool(track.get("forced")) or bool((track.get("disposition") or {}).get("forced")):
+        return True
+    title = str(track.get("title") or "")
+    return bool(_FORCED_RE.search(title))
+
+
+def apply_track_rules(
+    info: "VideoInfo | dict | None",
+    settings,
+    sidecars: Optional[list[dict]] = None,
+) -> dict:
+    """Wendet speicherbare Sprach-/Filterregeln auf Ton-, Untertitel- und Sidecar-Spuren an.
+
+    Regeln aus `settings` (Dict oder JobSettings):
+    - `audio_languages`: Kommagetrennte Sprachen (z. B. "de, en"); leer = alle behalten.
+    - `audio_keep_original`: Behält zusätzlich die Original-/Haupttonspur (Spur 0 bzw. Default),
+      selbst wenn ihre Sprache (z. B. `jpn` oder `fra`) nicht in `audio_languages` steht.
+    - `audio_exclude_commentary`: Entfernt Regie-/Audiokommentarspuren.
+    - `subtitle_languages`: Kommagetrennte Sprachen für Untertitel; leer = alle behalten.
+    - `sub_exclude_sdh`: Entfernt Hörgeschädigten-Untertitel (SDH / CC).
+    - `sub_keep_forced`: Behält Forced-Untertitel passend zu den behaltenen Ton-/UT-Sprachen automatisch.
+
+    Sicherheitsnetz: Würden durch Regeln 0 Tonspuren übrigbleiben, bleibt immer Spur 0 erhalten.
+    """
+    g = settings.get if isinstance(settings, dict) else (lambda k, d=None: getattr(settings, k, d))
+    ig = info.get if isinstance(info, dict) else (lambda k, d=None: getattr(info, k, d))
+
+    audio_list = list((ig("audio") if info is not None else None) or [])
+    sub_list = list((ig("subtitles") if info is not None else None) or [])
+    ext_subs = [dict(x) for x in (sidecars or [])]
+
+    a_langs = parse_lang_whitelist(g("audio_languages", ""))
+    keep_orig = bool(g("audio_keep_original", True))
+    no_comm = bool(g("audio_exclude_commentary", False))
+
+    s_langs = parse_lang_whitelist(g("subtitle_languages", ""))
+    no_sdh = bool(g("sub_exclude_sdh", False))
+    keep_forced = bool(g("sub_keep_forced", True))
+
+    audio_rules_active = bool(a_langs or no_comm)
+    sub_rules_active = bool(s_langs or no_sdh)
+
+    # --- 1) Audio-Spuren ------------------------------------------------------
+    kept_audio_indices: Optional[list[int]] = None
+    kept_audio_langs: set[str] = set()
+    if audio_rules_active and audio_list:
+        # Originalspur = erste Nicht-Kommentar-Spur mit default=True, sonst Spur 0
+        orig_idx: Optional[int] = None
+        if keep_orig and a_langs:
+            def_cand = next(
+                (int(t.get("index", 0)) for t in audio_list
+                 if t.get("default") and not is_commentary_track(t)),
+                None,
+            )
+            if def_cand is None:
+                def_cand = next(
+                    (int(t.get("index", 0)) for t in audio_list if not is_commentary_track(t)),
+                    int(audio_list[0].get("index", 0)),
+                )
+            orig_idx = def_cand
+
+        picked_a: list[int] = []
+        for t in audio_list:
+            idx = int(t.get("index", 0))
+            if no_comm and is_commentary_track(t):
+                continue
+            c_lang = canon_lang(t.get("language"))
+            if not a_langs or c_lang in a_langs or (orig_idx is not None and idx == orig_idx):
+                picked_a.append(idx)
+                if c_lang:
+                    kept_audio_langs.add(c_lang)
+
+        # Sicherheitsnetz: niemals stumm encodieren, solange überhaupt Ton vorhanden ist
+        if not picked_a and audio_list:
+            fallback_t = next((t for t in audio_list if not is_commentary_track(t)), audio_list[0])
+            picked_a = [int(fallback_t.get("index", 0))]
+            if canon_lang(fallback_t.get("language")):
+                kept_audio_langs.add(canon_lang(fallback_t.get("language")))
+        kept_audio_indices = picked_a
+    else:
+        for t in audio_list:
+            c_lang = canon_lang(t.get("language"))
+            if c_lang:
+                kept_audio_langs.add(c_lang)
+
+    # --- 2) Interne Untertitel ------------------------------------------------
+    kept_sub_settings: Optional[list[dict]] = None
+    allowed_forced_langs = (s_langs | a_langs | kept_audio_langs) if (s_langs or a_langs) else set()
+    if sub_rules_active:
+        picked_s: list[dict] = []
+        for s in sub_list:
+            idx = int(s.get("index", 0))
+            forced = is_forced_track(s)
+            sdh = is_sdh_track(s)
+            c_lang = canon_lang(s.get("language"))
+
+            if no_sdh and sdh and not forced:
+                continue
+            if s_langs:
+                lang_ok = c_lang in s_langs
+                forced_ok = bool(keep_forced and forced and (not allowed_forced_langs or c_lang in allowed_forced_langs))
+                if not (lang_ok or forced_ok):
+                    continue
+            picked_s.append({
+                "index": idx,
+                "default": bool(s.get("default")),
+                "forced": bool(s.get("forced") or forced),
+            })
+        kept_sub_settings = picked_s
+
+    # --- 3) Externe Sidecar-Untertitel ----------------------------------------
+    filtered_sidecars: list[dict] = []
+    for sc in ext_subs:
+        forced = is_forced_track(sc)
+        sdh = is_sdh_track(sc)
+        c_lang = canon_lang(sc.get("language"))
+        if no_sdh and sdh and not forced:
+            continue
+        if s_langs and c_lang not in ("", "und"):
+            lang_ok = c_lang in s_langs
+            forced_ok = bool(keep_forced and forced and (not allowed_forced_langs or c_lang in allowed_forced_langs))
+            if not (lang_ok or forced_ok):
+                continue
+        filtered_sidecars.append(sc)
+
+    return {
+        "audio_rules_active": audio_rules_active,
+        "sub_rules_active": sub_rules_active,
+        "audio_tracks": kept_audio_indices,
+        "subtitle_track_settings": kept_sub_settings,
+        "sidecars": filtered_sidecars,
+    }

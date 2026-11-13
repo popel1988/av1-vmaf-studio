@@ -6,10 +6,22 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from collections import deque
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlsplit
+
+from core.desktop_win32 import (
+    Win32SleepGuard,
+    Win32Taskbar,
+    compute_taskbar_status,
+    execute_power_action,
+    normalize_post_action,
+    should_prevent_sleep,
+    unblock_zone_identifiers,
+)
 
 LOG = logging.getLogger(__name__)
 EVENT_PATHS = "studio:open-paths"
@@ -18,6 +30,10 @@ EVENT_CAPABILITIES = "studio:desktop-capabilities"
 
 def load_webview():
     if os.name == "nt":
+        import sys as _sys
+        app_root = (Path(_sys.executable) if getattr(_sys, "frozen", False)
+                    else Path(__file__).resolve().parent.parent).resolve().parent if getattr(_sys, "frozen", False) else Path(__file__).resolve().parent.parent
+        unblock_zone_identifiers(app_root)
         # Select the supported runtime explicitly before importing clr/webview.
         # Never load a stray Python.Runtime.dll from cwd or the executable root.
         import pythonnet
@@ -77,13 +93,24 @@ class DesktopBridge:
         self._stopping = False
         self._prompting = False
         self._reopen_callback = None
+        self._prevent_sleep = True
+        self._post_queue_action = "none"
+        self._had_active_work = False
+        self._power_countdown = None  # {"action": str, "seconds": int}
+        self._monitor_stop = threading.Event()
+        self._monitor_thread = None
+        self._sleep_guard = Win32SleepGuard()
+        self._taskbar = Win32Taskbar()
         self._capabilities = {
             "mode": "starting", "native_host": False, "native_drop": False,
             "file_dialog": False, "single_instance": True, "open_paths": True,
-            "folder_dialog": False,
+            "folder_dialog": False, "folder_management": False,
             "tray": False, "close_confirmation": False,
             "open_with_registration": os.name == "nt", "upload_required": False,
             "open_folder": os.name == "nt",
+            "taskbar_progress": os.name == "nt",
+            "sleep_prevention": os.name == "nt",
+            "post_queue_actions": os.name == "nt",
         }
 
     def capabilities(self):
@@ -120,6 +147,60 @@ class DesktopBridge:
         result = self._folders.add_selected(str(selected[0]))
         self._dispatch("studio:media-roots-changed", result)
         return result
+
+    def list_folders(self):
+        self._check_origin()
+        if self._folders is None:
+            return {"ok": True, "folders": [], "media_roots": []}
+        return {
+            "ok": True,
+            "folders": self._folders.list_folders(),
+            "media_roots": self._folders.config.media_roots_public(),
+        }
+
+    def remove_folder(self, path: str):
+        self._check_origin()
+        if self._folders is None:
+            return {"ok": False, "error": "Ordnerverwaltung nicht verfügbar."}
+        result = self._folders.remove_selected(str(path))
+        self._dispatch("studio:media-roots-changed", result)
+        return result
+
+    def get_power_settings(self):
+        self._check_origin()
+        with self._lock:
+            cd = dict(self._power_countdown) if self._power_countdown else None
+            return {
+                "ok": True,
+                "prevent_sleep": bool(self._prevent_sleep),
+                "sleep_blocking": bool(self._sleep_guard.blocking),
+                "post_queue_action": self._post_queue_action,
+                "countdown": cd,
+            }
+
+    def set_prevent_sleep(self, enabled: bool):
+        self._check_origin()
+        with self._lock:
+            self._prevent_sleep = bool(enabled)
+        return self.get_power_settings()
+
+    def set_post_queue_action(self, action: str):
+        self._check_origin()
+        norm = normalize_post_action(action)
+        with self._lock:
+            self._post_queue_action = norm
+            if norm == "none":
+                self._power_countdown = None
+        self._dispatch("studio:desktop-power", self.get_power_settings())
+        return self.get_power_settings()
+
+    def cancel_post_queue_action(self):
+        self._check_origin()
+        with self._lock:
+            self._post_queue_action = "none"
+            self._power_countdown = None
+        self._dispatch("studio:desktop-power", self.get_power_settings())
+        return self.get_power_settings()
 
     def register_open_with(self):
         self._check_origin()
@@ -241,12 +322,30 @@ class DesktopBridge:
             from PIL import Image, ImageDraw
             image = Image.new("RGB", (64, 64), "#192b45")
             ImageDraw.Draw(image).text((12, 22), "AV1", fill="white")
+
+            def _post_item(label, key):
+                return pystray.MenuItem(
+                    label,
+                    lambda icon, item: self._set_post_action_internal(key),
+                    checked=lambda item: self._post_queue_action == key,
+                    radio=True,
+                )
+
             self._tray = pystray.Icon(
                 "AV1-VMAF-Studio", image, "AV1 / VMAF Studio",
                 pystray.Menu(
                     pystray.MenuItem("Fenster öffnen", lambda icon, item: self._reopen(), default=True),
                     pystray.MenuItem(lambda item: f"Aktive Aufträge: {self.status()['active']}",
                                      lambda icon, item: None, enabled=False),
+                    pystray.MenuItem(
+                        "Nach Warteschlange",
+                        pystray.Menu(
+                            _post_item("Nichts tun", "none"),
+                            _post_item("Energie sparen", "sleep"),
+                            _post_item("Ruhezustand", "hibernate"),
+                            _post_item("Herunterfahren", "shutdown"),
+                        ),
+                    ),
                     pystray.MenuItem("Beenden …", lambda icon, item: self._request_close(False)),
                 ),
             )
@@ -255,6 +354,149 @@ class DesktopBridge:
         except Exception:
             LOG.exception("Tray nicht verfügbar; Hintergrundmodus deaktiviert")
             self._tray = None
+
+    def _set_post_action_internal(self, action: str):
+        norm = normalize_post_action(action)
+        with self._lock:
+            self._post_queue_action = norm
+            if norm == "none":
+                self._power_countdown = None
+        if self._ready:
+            self._dispatch("studio:desktop-power", {
+                "ok": True,
+                "prevent_sleep": bool(self._prevent_sleep),
+                "sleep_blocking": bool(self._sleep_guard.blocking),
+                "post_queue_action": self._post_queue_action,
+                "countdown": dict(self._power_countdown) if self._power_countdown else None,
+            })
+
+    def _notify_local(self, title: str, message: str) -> None:
+        clean_title = str(title or "AV1 / VMAF Studio").replace("\n", " ").strip()[:60]
+        clean_msg = str(message or "").strip()[:240]
+        if self._tray is not None:
+            try:
+                self._tray.notify(clean_msg or clean_title, clean_title)
+            except Exception:
+                LOG.debug("Tray-Benachrichtigung nicht verfügbar", exc_info=True)
+        if self._ready:
+            self._dispatch("studio:desktop-toast", {"title": clean_title, "message": clean_msg})
+
+    def _get_hwnd(self) -> int:
+        win = self._window
+        if win is None:
+            return 0
+        try:
+            native = getattr(win, "native", None)
+            handle = getattr(native, "Handle", None)
+            if handle is not None:
+                if hasattr(handle, "ToInt64"):
+                    return int(handle.ToInt64())
+                return int(handle)
+        except Exception:
+            pass
+        return 0
+
+    def _monitor_tick(self, dt_sec: float = 2.0) -> Optional[str]:
+        """Einzelner Überwachungsschritt (Standby, Taskleiste, Post-Queue-Countdown).
+
+        Gibt eine auszuführende Energieaktion zurück, falls der Countdown abgelaufen ist.
+        """
+        if self._queue is None:
+            return None
+        try:
+            qstate = self._queue.state() or {}
+        except Exception:
+            return None
+
+        # 1. Standby-Schutz auf demselben Thread aktualisieren
+        prevent = should_prevent_sleep(qstate, enabled=self._prevent_sleep)
+        self._sleep_guard.update(prevent)
+
+        # 2. Taskleisten-Fortschritt (Grün / Gelb / Rot)
+        hwnd = self._get_hwnd()
+        if hwnd:
+            tbp_state, comp, tot = compute_taskbar_status(qstate)
+            self._taskbar.apply(hwnd, tbp_state, comp, tot)
+
+        # 3. Nach-Warteschlange-Aktion prüfen
+        counts = qstate.get("counts") or {}
+        busy = (
+            bool(qstate.get("active_ids"))
+            or int(counts.get("waiting") or 0) > 0
+            or int(counts.get("awaiting") or 0) > 0
+        )
+        trigger_action: Optional[str] = None
+        dispatch_power = False
+        toast_payload: Optional[tuple[str, str]] = None
+
+        with self._lock:
+            if busy:
+                self._had_active_work = True
+                if self._power_countdown is not None:
+                    self._power_countdown = None
+                    dispatch_power = True
+            elif not qstate.get("paused") and self._had_active_work:
+                self._had_active_work = False
+                if self._post_queue_action != "none":
+                    act = self._post_queue_action
+                    self._post_queue_action = "none"
+                    self._power_countdown = {"action": act, "seconds": 30}
+                    dispatch_power = True
+                    labels = {
+                        "sleep": "Energie sparen",
+                        "hibernate": "Ruhezustand",
+                        "shutdown": "Herunterfahren",
+                    }
+                    toast_payload = (
+                        "Warteschlange abgeschlossen",
+                        f"{labels.get(act, act)} in 30 Sekunden (in der App abbrechbar).",
+                    )
+            elif self._power_countdown is not None:
+                rem = max(0, int(round(self._power_countdown["seconds"] - dt_sec)))
+                self._power_countdown["seconds"] = rem
+                dispatch_power = True
+                if rem <= 0:
+                    trigger_action = self._power_countdown["action"]
+                    self._power_countdown = None
+
+            power_snapshot = {
+                "ok": True,
+                "prevent_sleep": bool(self._prevent_sleep),
+                "sleep_blocking": bool(self._sleep_guard.blocking),
+                "post_queue_action": self._post_queue_action,
+                "countdown": dict(self._power_countdown) if self._power_countdown else None,
+            }
+
+        if toast_payload:
+            self._notify_local(*toast_payload)
+        if dispatch_power and self._ready:
+            self._dispatch("studio:desktop-power", power_snapshot)
+        return trigger_action
+
+    def _start_runtime_monitor(self) -> None:
+        if self._monitor_thread is not None or self._queue is None:
+            return
+        self._monitor_stop.clear()
+
+        def loop():
+            last = time.monotonic()
+            try:
+                while not self._monitor_stop.wait(1.5):
+                    now = time.monotonic()
+                    dt = max(1.0, now - last)
+                    last = now
+                    act = self._monitor_tick(dt_sec=dt)
+                    if act:
+                        self._sleep_guard.clear()
+                        execute_power_action(act)
+            finally:
+                self._sleep_guard.clear()
+                self._taskbar.close()
+
+        self._monitor_thread = threading.Thread(
+            target=loop, name="desktop-runtime-monitor", daemon=True
+        )
+        self._monitor_thread.start()
 
     def _request_close(self, allow_background=True):
         if self._allow_close:
@@ -310,10 +552,12 @@ class DesktopBridge:
         )
         self._capabilities.update(mode="webview", native_host=True, file_dialog=True,
                                   folder_dialog=self._folders is not None,
+                                  folder_management=self._folders is not None,
                                   close_confirmation=True)
         self._window.events.loaded += self._loaded
         self._window.events.closing += self._request_close
         self._start_tray()
+        self._start_runtime_monitor()
 
         def watchdog():
             if not self._page_loaded.wait(35):
@@ -329,9 +573,11 @@ class DesktopBridge:
         self._ready = False
         self._reopen_callback = reopen
         self._capabilities.update(mode=mode, native_host=False, native_drop=False,
-                                  file_dialog=False, folder_dialog=False, close_confirmation=False,
-                                  open_with_registration=False)
+                                  file_dialog=False, folder_dialog=False,
+                                  folder_management=False, close_confirmation=False,
+                                  open_with_registration=False, taskbar_progress=False)
         self._start_tray()
+        self._start_runtime_monitor()
 
     def _open_folder(self, value):
         # Called only with a completed job's existing output parent by app.py.
@@ -342,6 +588,11 @@ class DesktopBridge:
 
     def _dispose(self):
         self._page_loaded.set()
+        self._monitor_stop.set()
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=2.0)
+        self._sleep_guard.clear()
+        self._taskbar.close()
         if self._tray is not None:
             self._tray.stop()
 

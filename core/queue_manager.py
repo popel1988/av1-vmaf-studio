@@ -43,6 +43,7 @@ STATUS_CANCELLED = "abgebrochen"
 
 _PHASE_KEYS = {
     "Quelle prüfen": "source.probe", "Auto-Crop": "source.crop",
+    "Filmkorn-Messung": "analysis.film_grain",
     "Bitrate-Verlauf": "analysis.bitrate", "DV-Vorabtest": "hdr.dv_preflight",
     "Zwei-Pass · Analyse": "encode.pass1", "Zwei-Pass · Encode": "encode.pass2",
     "Qualitätsprüfung": "verify.vmaf", "Integritäts-Check": "verify.integrity",
@@ -141,12 +142,15 @@ def _queue_runner(item: "QueueItem", on_progress=None, output=None) -> EncodeRun
             item.details.setdefault("errors", []).append(
                 {"key": "command.capture_failed", "error": str(exc)[-500:]})
             logger.exception("Command details failed: %s", item.title)
-    return EncodeRunner(on_progress=on_progress, on_command=capture)
+    runner = EncodeRunner(on_progress=on_progress, on_command=capture)
+    if getattr(item, "suspended", False):
+        runner.suspended = True
+    return runner
 
 
 def _chunk_status(item: "QueueItem", message: str) -> None:
     item.message = message
-    match = re.search(r"Segment (\d+)/(\d+) \(CQ (\d+)\)", message)
+    match = re.search(r"Segment (\d+)/(\d+) \(CQ (\d+)", message)
     if match:
         _begin_step(item, message, "chunk.encode", chunk=int(match[1]),
                     chunks=int(match[2]), quality=int(match[3]))
@@ -227,9 +231,12 @@ class JobSettings:
     keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
     subtitle_per_track: bool = False # Untertitel pro Spur konfiguriert
     subtitle_track_settings: list = field(default_factory=list)  # je Spur: index/default/forced
+    subtitle_ocr: bool = False       # Bild-Untertitel (PGS/VobSub) per OCR nach SRT wandeln
+    embed_sidecar_subs: bool = False # Externe Untertitel (.srt/.ass/.sup/…) neben der Quelle einbetten
     keep_chapters: bool = True       # Kapitelmarken übernehmen
     keep_metadata: bool = True       # Container-/Stream-Metadaten übernehmen
     film_grain: int = 0              # AV1 (SVT) Film-Grain-Synthese 0=aus..50
+    film_grain_auto: bool = False    # AV1 (SVT) Film-Grain vor dem Encode automatisch aus der Quelle messen
     denoise: str = "off"             # off | light | medium | strong
     sharpen: str = "off"             # off | light | medium | strong
     grain: str = "off"               # sichtbares Korn, off | light | medium | strong
@@ -254,6 +261,8 @@ class JobSettings:
     chunked: bool = False
     chunk_seconds: int = 60
     chunk_cq_range: int = 6
+    chunk_scene_align: bool = True
+    chunk_resume: bool = True
     # Qualitäts-Guardrail: echten VMAF nach dem Encode messen und optional
     # bei Unterschreiten des Ziels automatisch mit höherer Qualität neu encoden.
     verify_vmaf: bool = False
@@ -278,6 +287,10 @@ class JobSettings:
     # Volle Zusatzzeilen des VMAF-Vergleichs.
     compare_rows: list = field(default_factory=list)
     test_values: list = field(default_factory=lambda: [20, 24, 28, 32])
+    vmaf_search_mode: str = "grid" # grid | binary (adaptive Auto-CRF-Binärsuche)
+    vmaf_min_p5: float = 0.0       # 0 = aus, sonst Mindestwert für das 5%-Perzentil
+    vmaf_subsample: int = 1        # 1 = jedes Frame (Standard), >1 = optionales Subsampling (jedes N-te Frame)
+    vmaf_gpu: bool = False         # VMAF per GPU (libvmaf_cuda / CUDA-HW-Decode, abhängig von Treiber & Build)
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     ssimulacra2_frames: int = 3    # Standbilder je Stichprobe für SSIMULACRA2
@@ -308,9 +321,18 @@ class JobSettings:
     audio_bitrate: int = 160       # kbit/s pro Stream
     audio_channels: int = 0        # 0 = Original, 1 = Mono, 2 = Stereo
     audio_normalize: bool = False
+    audio_normalize_2pass: bool = False  # EBU-R128 2-Pass linear
+    audio_nightmode: bool = False        # Zusatzspur: Stereo Dialog-Boost / Nachtmodus
     audio_tracks: list = field(default_factory=list)  # leer = alle Spuren
     audio_per_track: bool = False                      # Audio pro Spur konfiguriert
     audio_track_settings: list = field(default_factory=list)  # je Spur ein Dict
+    # Regelbasierte Spur-Vorauswahl (Serien / Batches / Watchfolder)
+    audio_languages: str = ""            # Kommaliste z. B. "de,en" (leer = alle behalten)
+    audio_keep_original: bool = True     # Erste/Original-Tonspur immer behalten
+    audio_exclude_commentary: bool = False  # Regie-/Audiokommentar-Spuren automatisch abwählen
+    subtitle_languages: str = ""         # Kommaliste z. B. "de,en" (leer = alle behalten)
+    sub_exclude_sdh: bool = False        # Hörgeschädigten-UT (SDH/CC) automatisch abwählen
+    sub_keep_forced: bool = True         # Forced-Untertitel immer behalten
     selected_result_index: Optional[int] = None
     batch_id: str = ""             # Super-Tool-Stapelkennung (Dashboard-Filter)
     # Remux-/Bearbeiten-Modus (video_mode="edit"): Spuren entfernen/umsortieren,
@@ -356,6 +378,7 @@ class QueueItem:
     vmaf_warning: str = ""               # 1%-Low verfehlt, Ersparnis-Vorrang
     dv_prompt: Optional[dict] = None     # Rückfrage nach fehlgeschlagenem DV-Vorabtest
     dv_checked: bool = False             # DV-Vorabtest für diesen Job bereits erledigt
+    suspended: bool = False              # Laufender FFmpeg-Prozess pausiert (Suspend)
     created_at: float = field(default_factory=time.time)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -423,6 +446,7 @@ class QueueItem:
             "eta_estimate": self.eta_estimate,
             "vmaf_warning": self.vmaf_warning,
             "dv_prompt": self.dv_prompt,
+            "suspended": bool(getattr(self, "suspended", False)),
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -587,6 +611,16 @@ class QueueManager:
                 else:
                     # Unterbrochene läuft/vmaf-test → sauber neu als wartend.
                     final_status = STATUS_WAITING
+                raw_info = d.get("info")
+                if isinstance(raw_info, dict) and isinstance(raw_info.get("dolby_vision"), dict):
+                    raw_info = dict(raw_info)
+                    dv_dict = raw_info["dolby_vision"]
+                    is_dv = bool(dv_dict.get("present")) and (int(dv_dict.get("profile") or 0) > 0 or dv_dict.get("rpu") is True or dv_dict.get("el") is True)
+                    raw_info["dolby_vision"] = is_dv
+                    if not is_dv:
+                        raw_info["dv_profile"] = 0
+                        tr = str(raw_info.get("color_transfer") or "").lower()
+                        raw_info["is_hdr"] = tr in ("smpte2084", "arib-std-b67", "smptest2084") or bool(raw_info.get("hdr10_plus"))
                 item = QueueItem(
                     id=d.get("id") or uuid.uuid4().hex[:10],
                     title=d.get("title") or (Path(path).name if path else "?"),
@@ -594,7 +628,7 @@ class QueueManager:
                     settings=s,
                     group_id=d.get("group_id") or uuid.uuid4().hex[:8],
                     status=final_status,
-                    info=d.get("info"),
+                    info=raw_info,
                     vmaf=saved_vmaf if (is_awaiting or is_terminal) else None,
                     error=str(d.get("error") or ""),
                     message=str(d.get("message") or ""),
@@ -670,6 +704,51 @@ class QueueManager:
             self._items[idx], self._items[j] = self._items[j], self._items[idx]
         self._persist()
         return True
+
+    def reorder(self, item_id: str, before_id: Optional[str] = None,
+                to_top: bool = False) -> bool:
+        """Wartenden Job an den Anfang aller wartenden Jobs oder vor `before_id` ziehen."""
+        with self._lock:
+            src_idx = next((i for i, it in enumerate(self._items) if it.id == item_id), None)
+            if src_idx is None or self._items[src_idx].status != STATUS_WAITING:
+                return False
+            item = self._items.pop(src_idx)
+            if to_top:
+                first_wait = next(
+                    (i for i, it in enumerate(self._items) if it.status == STATUS_WAITING),
+                    len(self._items),
+                )
+                self._items.insert(first_wait, item)
+            elif before_id:
+                dst_idx = next(
+                    (i for i, it in enumerate(self._items)
+                     if it.id == before_id and it.status == STATUS_WAITING),
+                    None,
+                )
+                if dst_idx is None:
+                    self._items.append(item)
+                else:
+                    self._items.insert(dst_idx, item)
+            else:
+                self._items.append(item)
+        self._persist()
+        self._wake.set()
+        return True
+
+    def suspend_job(self, item_id: str, suspend: Optional[bool] = None) -> dict:
+        """Pausiert oder setzt einen aktuell laufenden FFmpeg-Prozess fort."""
+        with self._lock:
+            item = next((i for i in self._items if i.id == item_id), None)
+            if item is None or item_id not in self._active:
+                return {"ok": False, "error": "Job läuft aktuell nicht"}
+            runner = self._active.get(item_id)
+            target = (not bool(getattr(item, "suspended", False))) if suspend is None else bool(suspend)
+            if runner is None:
+                return {"ok": False, "error": "Aktueller Arbeitsschritt hat keinen pausierbaren Encode-Prozess"}
+            ok = runner.set_suspended(target)
+            if ok:
+                item.suspended = target
+            return {"ok": ok, "suspended": bool(item.suspended)}
 
     # ------------------------------------------------------------- Parallelität
     def set_parallel(self, n: int) -> int:
@@ -798,6 +877,10 @@ class QueueManager:
             if item_id in self._active:
                 # Läuft gerade (Encode oder VMAF-Phase) -> Abbruch anfordern.
                 self._cancel_ids.add(item_id)
+                for it in self._items:
+                    if it.id == item_id:
+                        it.suspended = False
+                        break
                 runner = self._active.get(item_id)
                 if runner:
                     runner.cancel()
@@ -1026,6 +1109,16 @@ class QueueManager:
             # durch seine eigene Gruppe blockiert werden (sonst Deadlock).
             if not it.settings.vmaf_check and self._group_blocked_locked(it.group_id):
                 continue
+            if self._gate is not None:
+                try:
+                    from . import scheduler as _sched
+                    out_dir = _output_path(it).parent
+                    ok_disk, disk_msg = _sched.check_disk_space([out_dir])
+                    if not ok_disk:
+                        self._gate_msg = disk_msg
+                        return None
+                except Exception:
+                    pass
             return it
         return None
 
@@ -1074,6 +1167,10 @@ class QueueManager:
         with self._lock:
             self._active.pop(item_id, None)
             self._cancel_ids.discard(item_id)
+            for it in self._items:
+                if it.id == item_id:
+                    it.suspended = False
+                    break
             self._refresh_global_msg()
         # Terminal-Status wird nicht mehr gesichert -> Datei aktuell halten.
         self._persist()
@@ -1094,6 +1191,9 @@ class QueueManager:
                 from .bluray import unmount_iso
                 unmount_iso(mount)
                 item._iso_mount = None
+            ocr_tmp = config.WORK_DIR / f"ocr_{item.id}"
+            if ocr_tmp.exists():
+                shutil.rmtree(ocr_tmp, ignore_errors=True)
             _end_step(item)
             item.finished_at = time.time()
             item.duration = item.finished_at - started
@@ -1254,6 +1354,9 @@ class QueueManager:
             else:
                 logger.info("Auto-Crop: keine nennenswerten Balken (%s)", item.title)
 
+        # --- Auto-Filmkorn + regelbasierte Spur-/Sidecar-Auswahl --------------
+        self._prepare_auto_grain_and_rules(item, s, info)
+
         # --- Dolby-Vision-Vorabtest (1 s Mini-Encode vor VMAF/Encode) ---------
         if not s.compare_encoders and not s.compare_rows:
             if not self._ensure_dv_preflight(item, s, info):
@@ -1315,6 +1418,10 @@ class QueueManager:
                 sample_windows=sample_windows,
                 credits_at=float(getattr(s, "credits_at", 0) or 0),
                 two_pass=bool(s.two_pass) and s.rate_mode in ("bitrate", "abr"),
+                search_mode="binary" if getattr(s, "vmaf_search_mode", "grid") == "binary" else "grid",
+                min_p5=float(getattr(s, "vmaf_min_p5", 0) or 0),
+                subsample=vmaf_mod.normalize_vmaf_subsample(getattr(s, "vmaf_subsample", 1)),
+                gpu_accel=bool(getattr(s, "vmaf_gpu", False)),
             )
             try:
                 analysis = vmaf_mod.analyze(
@@ -1555,6 +1662,7 @@ class QueueManager:
             _end_step(item)
             if item.crop:
                 logger.info("Auto-Crop erkannt (%s): crop=%s", item.title, item.crop)
+        self._prepare_auto_grain_and_rules(item, s, info)
         if not self._ensure_dv_preflight(item, s, info):
             return
         item.message = "Chunked Adaptive Encoding …"
@@ -1590,11 +1698,14 @@ class QueueManager:
             "audio_channels": s.audio_channels,
             "audio_normalize": s.audio_normalize,
             "audio_tracks": list(s.audio_tracks),
+            "external_subtitles": list(getattr(item, "_sidecar_subs_cache", None) or []),
         }
 
         def set_active(runner) -> None:
             if runner is not None:
                 runner.on_command = lambda cmd: _capture_command(item, cmd)
+                if getattr(item, "suspended", False):
+                    runner.suspended = True
             with self._lock:
                 self._active[item.id] = runner
 
@@ -1653,6 +1764,8 @@ class QueueManager:
             "audio_channels": s.audio_channels,
             "audio_bitrate": s.audio_bitrate,
             "audio_normalize": s.audio_normalize,
+            "audio_normalize_2pass": s.audio_normalize_2pass,
+            "audio_nightmode": s.audio_nightmode,
             "scope": s.audio_opt_scope,
             "min_bitrate_kbps": s.audio_min_bitrate_kbps,
         }
@@ -1662,6 +1775,10 @@ class QueueManager:
             return
 
         item.status = STATUS_RUNNING
+        ln_stats = None
+        if s.audio_normalize and s.audio_normalize_2pass:
+            ln_stats = self._prepare_loudnorm(item, s, info, remux_plan=audio_opt.plan_tracks(info, settings))
+
         item.message = "Audio-Optimierung (Remux) …"
         _begin_step(item, "Audio-Optimierung")
         self._refresh_global_msg()
@@ -1680,7 +1797,7 @@ class QueueManager:
                 "saved_human": ff.human_size(saved),
             }
 
-        cmd = audio_opt.build_remux_cmd(info, out_path, settings)
+        cmd = audio_opt.build_remux_cmd(info, out_path, settings, loudnorm_stats=ln_stats)
         _log_cmd(item, cmd)
         runner = _queue_runner(item, on_progress=on_prog, output=out_path)
         with self._lock:
@@ -2083,17 +2200,197 @@ class QueueManager:
         item.status = STATUS_DONE
         item.message = "Separater Testexport; Original und endgültige Ausgabe unverändert."
 
+    def _prepare_loudnorm(self, item: "QueueItem", s: "JobSettings", info,
+                          remux_plan: Optional[list[dict]] = None) -> dict[int, dict]:
+        """Führt vorab die 2-Pass-EBU-R128-Lautheitsmessung für zu normalisierende
+        Tonspuren durch (gecacht pro QueueItem)."""
+        cached = getattr(item, "_loudnorm_cache", None)
+        if isinstance(cached, dict):
+            return cached
+        indices: list[int] = []
+        if remux_plan is not None:
+            indices = [int(p["index"]) for p in remux_plan if p.get("transcode")]
+        elif s.audio_mode == "none":
+            indices = []
+        elif s.audio_per_track:
+            indices = [int(t.get("index", 0)) for t in (s.audio_track_settings or [])
+                       if t.get("normalize") and s.audio_normalize_2pass]
+        elif s.audio_normalize and s.audio_normalize_2pass:
+            if s.audio_tracks:
+                indices = [int(idx) for idx in s.audio_tracks]
+            else:
+                indices = [int(t.get("index", i)) for i, t in enumerate(info.audio or [])]
+
+        stats: dict[int, dict] = {}
+        if not indices:
+            item._loudnorm_cache = stats
+            return stats
+
+        start_at = s.test_export.get("start") if s.test_export else None
+        dur_lim = s.test_export.get("seconds") if s.test_export else None
+        _begin_step(item, "EBU-R128 Analyse (Pass 1)")
+        try:
+            for pos, src_idx in enumerate(indices, start=1):
+                if item.id in self._cancel_ids:
+                    break
+                item.message = f"EBU-R128 Lautheitsanalyse (Spur {pos}/{len(indices)}) …"
+                self._refresh_global_msg()
+                measured = ff.measure_loudnorm(
+                    Path(info.path), src_idx, start_at=start_at, duration_limit=dur_lim,
+                )
+                if measured:
+                    stats[src_idx] = measured
+        finally:
+            _end_step(item)
+        item._loudnorm_cache = stats
+        return stats
+
+    def _prepare_ocr_subs(self, item: "QueueItem", s: "JobSettings", info) -> list[dict]:
+        """Wandelt Bild-Untertitel (PGS/VobSub) bei aktivem `subtitle_ocr` vorab per OCR
+        in temporäre SRT-Dateien um (gecacht pro QueueItem)."""
+        cached = getattr(item, "_ocr_subs_cache", None)
+        if isinstance(cached, list):
+            return cached
+        if not getattr(s, "subtitle_ocr", False) or s.test_export:
+            return []
+        from . import subtitle_ocr
+        if not subtitle_ocr.available():
+            logger.warning("Untertitel-OCR angefordert, aber kein OCR-Backend verfügbar (%s).", item.title)
+            return []
+
+        src_subs = {int(sub.get("index", i)): sub for i, sub in enumerate(info.subtitles or [])}
+        if not src_subs:
+            return []
+
+        candidates: list[dict] = []
+        if s.subtitle_per_track:
+            for t in (s.subtitle_track_settings or []):
+                idx = int(t.get("index", -1))
+                sub = src_subs.get(idx)
+                if sub and (sub.get("codec", "") or "").lower() in ff._SUB_IMAGE:
+                    candidates.append({
+                        "sub_index": idx,
+                        "codec": sub.get("codec", ""),
+                        "language": sub.get("language", "eng"),
+                        "title": sub.get("title", ""),
+                        "default": bool(t.get("default")),
+                        "forced": bool(t.get("forced")),
+                    })
+        elif s.keep_subtitles:
+            for idx, sub in src_subs.items():
+                if (sub.get("codec", "") or "").lower() in ff._SUB_IMAGE:
+                    candidates.append({
+                        "sub_index": idx,
+                        "codec": sub.get("codec", ""),
+                        "language": sub.get("language", "eng"),
+                        "title": sub.get("title", ""),
+                        "default": bool(sub.get("default")),
+                        "forced": bool(sub.get("forced")),
+                    })
+
+        if not candidates:
+            item._ocr_subs_cache = []
+            return []
+
+        ocr_dir = config.WORK_DIR / f"ocr_{item.id}"
+        ocr_dir.mkdir(parents=True, exist_ok=True)
+        out_list: list[dict] = []
+        _begin_step(item, "Untertitel-OCR")
+        try:
+            for pos, cand in enumerate(candidates, start=1):
+                if item.id in self._cancel_ids:
+                    break
+                srt_file = ocr_dir / f"sub_{cand['sub_index']}.srt"
+                item.message = f"OCR Bild-Untertitel ({pos}/{len(candidates)}, {cand['language']}) …"
+                self._refresh_global_msg()
+                ok, err = subtitle_ocr.convert_subtitle_track_to_srt(
+                    Path(info.path), cand["sub_index"], srt_file,
+                    codec=cand["codec"], language=cand["language"],
+                )
+                if ok and srt_file.is_file():
+                    entry = dict(cand)
+                    entry["path"] = str(srt_file)
+                    out_list.append(entry)
+                else:
+                    logger.warning("OCR für Spur #%s übersprungen (%s): %s",
+                                   cand["sub_index"], item.title, err)
+        finally:
+            _end_step(item)
+        item._ocr_subs_cache = out_list
+        return out_list
+
+    def _prepare_auto_grain_and_rules(self, item: "QueueItem", s: "JobSettings", info) -> None:
+        """Misst bei Bedarf automatisch das Filmkorn (SVT-AV1) und wendet
+        regelbasierte Spurfilter sowie Sidecar-Untertitel-Erkennung an."""
+        if getattr(s, "film_grain_auto", False) and s.codec == "av1" and s.platform == "cpu":
+            item.message = "Auto-Filmkorn: Rauschen der Quelle wird gemessen …"
+            self._refresh_global_msg()
+            _begin_step(item, "Filmkorn-Messung")
+            try:
+                est = ff.estimate_film_grain(info, anime=bool(s.anime))
+            except Exception as exc:
+                logger.warning("Auto-Filmkorn fehlgeschlagen (%s): %s", item.title, exc)
+                est = {"film_grain": int(s.film_grain or 0), "mse_y": 0.0, "label": "Messung fehlgeschlagen"}
+            finally:
+                _end_step(item)
+            s.film_grain = max(0, min(50, int(est.get("film_grain") or 0)))
+            item.details["auto_film_grain"] = est
+            logger.info("Auto-Filmkorn (%s): film-grain=%d (MSE %.2f, %s)",
+                        item.title, s.film_grain, float(est.get("mse_y") or 0.0), est.get("label") or "")
+
+        from . import library
+        sidecars: list[dict] = []
+        if getattr(s, "embed_sidecar_subs", False):
+            try:
+                sidecars = library.find_sidecar_subtitles(Path(item.path))
+            except OSError as exc:
+                logger.warning("Sidecar-Suche fehlgeschlagen (%s): %s", item.title, exc)
+                sidecars = []
+
+        rules = ff.apply_track_rules(info, s, sidecars=sidecars)
+        if rules.get("audio_rules_active") and not s.audio_per_track and not s.audio_tracks:
+            s.audio_tracks = list(rules.get("audio_tracks") or [])
+            logger.info("Spurregel Audio (%s): %d/%d Tonspuren ausgewählt (%s)",
+                        item.title, len(s.audio_tracks), len(info.audio or []), s.audio_tracks)
+        if rules.get("sub_rules_active") and not s.subtitle_per_track and s.keep_subtitles:
+            s.subtitle_per_track = True
+            s.subtitle_track_settings = list(rules.get("subtitle_track_settings") or [])
+            if not s.subtitle_track_settings and not (rules.get("sidecars") or []):
+                s.keep_subtitles = False
+            logger.info("Spurregel Untertitel (%s): %d/%d interne Spuren ausgewählt",
+                        item.title, len(s.subtitle_track_settings), len(info.subtitles or []))
+        item._sidecar_subs_cache = list(rules.get("sidecars") or [])
+        s._sidecar_subs_cache = list(item._sidecar_subs_cache)
+        if item._sidecar_subs_cache:
+            logger.info("Sidecar-Untertitel zum Einbetten (%s): %d Datei(en)",
+                        item.title, len(item._sidecar_subs_cache))
+        item.details["track_rules"] = {
+            "audio_rules_active": bool(rules.get("audio_rules_active")),
+            "sub_rules_active": bool(rules.get("sub_rules_active")),
+            "sidecar_count": len(item._sidecar_subs_cache),
+            "sidecar_names": [sc.get("name") for sc in item._sidecar_subs_cache],
+        }
+
     def _encode_to(self, item: "QueueItem", s: "JobSettings", info,
                    out_path: Path, on_prog) -> tuple:
         """Ein Encode-Durchlauf (Ein-/Zwei-Pass). Liefert
         (rc, stderr, cmd, cancelled). enc_kw wird je Aufruf frisch aus `s`
         gebaut, damit ein Guardrail-Retry die erhöhte Qualität übernimmt."""
+        ln_stats = None
+        if s.audio_normalize_2pass and (
+            s.audio_normalize or (s.audio_per_track and any(t.get("normalize") for t in (s.audio_track_settings or [])))
+        ):
+            ln_stats = self._prepare_loudnorm(item, s, info)
+        ocr_subs = self._prepare_ocr_subs(item, s, info)
+
         enc_kw: dict = {
             "audio_mode": s.audio_mode,
             "audio_codec": s.audio_codec,
             "audio_bitrate_kbps": s.audio_bitrate,
             "audio_channels": s.audio_channels,
             "audio_normalize": s.audio_normalize,
+            "audio_nightmode": s.audio_nightmode,
+            "loudnorm_stats": ln_stats,
             "audio_tracks": list(s.audio_tracks),
             "audio_per_track": s.audio_per_track,
             "audio_track_settings": list(s.audio_track_settings),
@@ -2101,6 +2398,8 @@ class QueueManager:
             "keep_subtitles": s.keep_subtitles,
             "subtitle_per_track": s.subtitle_per_track,
             "subtitle_track_settings": list(s.subtitle_track_settings),
+            "ocr_subtitles": ocr_subs,
+            "external_subtitles": list(getattr(item, "_sidecar_subs_cache", None) or []),
             "keep_chapters": s.keep_chapters,
             "keep_metadata": s.keep_metadata,
             "film_grain": s.film_grain,
@@ -2217,6 +2516,8 @@ class QueueManager:
                 tonemap_peak=s.tonemap_peak,
                 tonemap_engine=s.tonemap_engine,
                 platform=s.platform,
+                subsample=vmaf_mod.normalize_vmaf_subsample(getattr(s, "vmaf_subsample", 1)),
+                gpu_accel=bool(getattr(s, "vmaf_gpu", False)),
             )
             if score is not None:
                 logger.info("Guardrail-VMAF %.2f (%s)", score, item.title)
@@ -2461,22 +2762,58 @@ class QueueManager:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    @staticmethod
+    def _av1_hdr10plus_blocked(item: QueueItem, s: "JobSettings", info: dict) -> bool:
+        """True, falls aktive Videofilter die dynamischen HDR10+-Side-Data verwerfen würden."""
+        src_h = int(info.get("height") or 0)
+        if s.target_height and src_h and int(s.target_height) < src_h:
+            return True
+        if item.crop:
+            return True
+        if normalize_deband(s.deband) in ("light", "medium", "strong"):
+            return True
+        if s.denoise in ("light", "medium", "strong"):
+            return True
+        if s.sharpen in ("light", "medium", "strong"):
+            return True
+        if s.grain in ("light", "medium", "strong"):
+            return True
+        if deinterlace_filter(s.deinterlace, bool(info.get("interlaced"))):
+            return True
+        if s.mobile_copy:
+            return True
+        return False
+
     def _reinject_hdr10plus(self, item: QueueItem, out_path: Path) -> None:
-        """HDR10+-Szenenmetadaten in einen HEVC-Encode zurückschreiben."""
-        import shutil
+        """HDR10+-Szenenmetadaten in einen HEVC-Encode zurückschreiben bzw. AV1-Passthrough prüfen."""
         from . import hdr10plus
 
         info = item.info or {}
         hdr = bool(info.get("hdr10_plus")) or ("HDR10+" in str(info.get("hdr_type") or ""))
         s = item.settings
+        av1_blocked = self._av1_hdr10plus_blocked(item, s, info) if s.codec == "av1" else False
         reason = hdr10plus.applicable(
             target_codec=s.codec,
             source_codec=str(info.get("codec") or ""),
             preserve_hdr=bool(s.preserve_hdr),
             tonemap=bool(s.tonemap),
             hdr10_plus=hdr,
+            platform=s.platform,
+            av1_passthrough_blocked=av1_blocked,
         )
         if reason in ("keine Quelle", "nicht beibehalten"):
+            return
+        if reason == "nativ_av1":
+            out_info = ffprobe(out_path) if out_path.exists() else None
+            if out_info is not None and out_info.hdr10_plus:
+                item.details["hdr10plus_av1"] = True
+                logger.info("HDR10+ nativ in AV1 übernommen (ITU-T T.35 OBU): %s", item.title)
+            else:
+                item.details["hdr10plus_av1"] = False
+                self._note_hdr10plus(
+                    item,
+                    "HDR10+ wurde vom SVT-AV1-Build nicht als T.35-OBU durchgereicht – HDR10-Basislayer bleibt.",
+                )
             return
         _begin_step(item, "HDR10+")
         try:
@@ -2899,9 +3236,12 @@ def build_job_settings(d: dict) -> JobSettings:
         keep_subtitles=bool(d.get("keep_subtitles", True)),
         subtitle_per_track=bool(d.get("subtitle_per_track", False)),
         subtitle_track_settings=list(d.get("subtitle_track_settings", [])),
+        subtitle_ocr=bool(d.get("subtitle_ocr", False)),
+        embed_sidecar_subs=bool(d.get("embed_sidecar_subs", False)),
         keep_chapters=bool(d.get("keep_chapters", True)),
         keep_metadata=bool(d.get("keep_metadata", True)),
         film_grain=max(0, min(50, int(d.get("film_grain", 0) or 0))),
+        film_grain_auto=bool(d.get("film_grain_auto", False)),
         denoise=_level(d.get("denoise", "off")),
         sharpen=_level(d.get("sharpen", "off")),
         grain=_level(d.get("grain", "off")),
@@ -2920,6 +3260,8 @@ def build_job_settings(d: dict) -> JobSettings:
         chunked=bool(d.get("chunked", False)),
         chunk_seconds=max(15, int(d.get("chunk_seconds", 60) or 60)),
         chunk_cq_range=max(0, min(12, int(d.get("chunk_cq_range", 6) or 6))),
+        chunk_scene_align=bool(d.get("chunk_scene_align", True)),
+        chunk_resume=bool(d.get("chunk_resume", True)),
         verify_vmaf=bool(d.get("verify_vmaf", False)),
         verify_min=float(d.get("verify_min", 93) or 93),
         verify_retry=bool(d.get("verify_retry", False)),
@@ -2934,6 +3276,10 @@ def build_job_settings(d: dict) -> JobSettings:
         compare_variants=_parse_variants(d.get("compare_variants")),
         compare_rows=_parse_rows(d.get("compare_rows")),
         test_values=list(d.get("test_values", [20, 24, 28, 32]))[:4],
+        vmaf_search_mode="binary" if d.get("vmaf_search_mode") == "binary" else "grid",
+        vmaf_min_p5=max(0.0, min(99.0, float(d.get("vmaf_min_p5", 0) or 0))),
+        vmaf_subsample=vmaf_mod.normalize_vmaf_subsample(d.get("vmaf_subsample", 1)),
+        vmaf_gpu=bool(d.get("vmaf_gpu", False)),
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         ssimulacra2_frames=max(0, min(7, int(d.get("ssimulacra2_frames") if d.get("ssimulacra2_frames") is not None else 3))),
@@ -2951,9 +3297,17 @@ def build_job_settings(d: dict) -> JobSettings:
         audio_bitrate=int(d.get("audio_bitrate", 160) or 160),
         audio_channels=int(d.get("audio_channels", 0) or 0),
         audio_normalize=bool(d.get("audio_normalize", False)),
+        audio_normalize_2pass=bool(d.get("audio_normalize_2pass", False)),
+        audio_nightmode=bool(d.get("audio_nightmode", False)),
         audio_tracks=list(d.get("audio_tracks", [])),
         audio_per_track=bool(d.get("audio_per_track", False)),
         audio_track_settings=list(d.get("audio_track_settings", [])),
+        audio_languages=str(d.get("audio_languages", "") or "").strip(),
+        audio_keep_original=bool(d.get("audio_keep_original", True)),
+        audio_exclude_commentary=bool(d.get("audio_exclude_commentary", False)),
+        subtitle_languages=str(d.get("subtitle_languages", "") or "").strip(),
+        sub_exclude_sdh=bool(d.get("sub_exclude_sdh", False)),
+        sub_keep_forced=bool(d.get("sub_keep_forced", True)),
         batch_id=str(d.get("batch_id", "") or ""),
         edit_spec=dict(d.get("edit_spec", {}) or {}),
         remux_only=bool(d.get("remux_only", False)),

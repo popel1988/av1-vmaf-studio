@@ -168,7 +168,11 @@ def _smoke_test() -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="AV1 / VMAF Studio Desktop")
     parser.add_argument("--desktop-smoke-test", action="store_true")
-    parser.add_argument("--tray", action="store_true", help="Optionales Symbol im Infobereich")
+    parser.add_argument("--tray", dest="tray", action="store_true",
+                        default=(os.name == "nt"),
+                        help="Symbol im Infobereich aktivieren (Standard unter Windows)")
+    parser.add_argument("--no-tray", dest="tray", action="store_false",
+                        help="Kein Symbol im Infobereich anzeigen")
     parser.add_argument("--register-open-with", action="store_true",
                         help="Explizite Registrierung für den aktuellen Benutzer")
     parser.add_argument("files", nargs="*")
@@ -239,6 +243,8 @@ def main(argv=None) -> int:
         url = f"http://127.0.0.1:{port}"
         bridge = DesktopBridge(grants, studio_app.queue, stop_server, logs, options.tray,
                                folders=folders)
+        from core import notify
+        notify.register_desktop_notifier(bridge._notify_local)
         install_desktop_routes(studio_app.app, bridge, url)
         studio_app.app.state.desktop_open_folder = bridge._open_folder
         instance.listen(lambda incoming: bridge._accept_paths(incoming, "ipc"))

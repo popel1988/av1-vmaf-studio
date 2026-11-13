@@ -169,7 +169,7 @@ async def _startup() -> None:
     logger.info("FFmpeg-Version: %s", ff.ffmpeg_version())
     logger.info("Datenordner: %s", config.data_paths_dict())
     encs = sorted(e for e in ff.available_encoders()
-                  if any(x in e for x in ("nvenc", "qsv", "vaapi", "svt", "x264", "x265")))
+                  if any(x in e for x in ("nvenc", "qsv", "vaapi", "amf", "svt", "x264", "x265")))
     logger.info("Verfügbare relevante Encoder: %s", ", ".join(encs) or "KEINE erkannt!")
     logger.info("Encoder-Kapazität: %s GPU(s), NVENC-Engines: %s, Threads: %s → "
                 "empfohlen %s parallel, aktiv %s (Limit %s)",
@@ -200,7 +200,8 @@ def _platform_label(p: str) -> str:
     if p == "nvidia":
         return "NVIDIA (GPU · NVENC)"
     if p == "amd":
-        return "AMD (GPU · VAAPI)"
+        backend = "AMF" if os.name == "nt" else "VAAPI"
+        return f"AMD (GPU · {backend})"
     if p == "intel":
         backend = "VAAPI" if ff.intel_uses_vaapi() else "QSV"
         return f"Intel (GPU · {backend})"
@@ -563,7 +564,66 @@ async def probe(path: str, disc_clip: str = ""):
             bluray_mod.apply_languages(info, target)
     if info is None:
         return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
-    return info.to_dict()
+    data = info.to_dict()
+    if target.is_file() and not disc_clip:
+        from core import library as lib_mod
+        try:
+            data["sidecar_subtitles"] = lib_mod.find_sidecar_subtitles(target)
+        except OSError:
+            data["sidecar_subtitles"] = []
+    return data
+
+
+class FilmGrainEstimateRequest(BaseModel):
+    path: str
+    anime: bool = False
+
+
+@app.post("/api/film-grain/estimate")
+async def estimate_film_grain_api(req: FilmGrainEstimateRequest):
+    """Misst das natürliche Rauschen/Filmkorn einer Quelle für SVT-AV1 film-grain (0..50)."""
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    info = await asyncio.to_thread(ff.ffprobe, target)
+    if info is None:
+        return JSONResponse({"error": "ffprobe fehlgeschlagen"}, status_code=400)
+    est = await asyncio.to_thread(ff.estimate_film_grain, info, anime=bool(req.anime))
+    return est
+
+
+@app.get("/api/vmaf/gpu-status")
+async def get_vmaf_gpu_status():
+    """Prüft libvmaf_cuda / CUDA-HW-Decode inkl. NVIDIA-Mindesttreiber (Main vs. Legacy)."""
+    from core import vmaf as vmaf_mod
+    return await asyncio.to_thread(vmaf_mod.vmaf_gpu_status)
+
+
+@app.get("/api/dv-curve")
+async def dv_curve(path: str, duration: float = 600.0):
+    """Dolby-Vision-L1-Helligkeitskurve (Max/Avg/Min Nits pro Szene/Frame) aus der RPU."""
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"error": "Datei nicht gefunden"}, status_code=404)
+    info, err = ff.probe_with_error(target)
+    if info is None:
+        return JSONResponse({"error": f"ffprobe: {err or 'unbekannt'}"}, status_code=500)
+    if not info.dolby_vision:
+        return JSONResponse({"error": "Keine Dolby-Vision-Quelle"}, status_code=400)
+    from core import dolby_vision as dv_mod
+    data = await asyncio.to_thread(
+        dv_mod.extract_l1_curve, target,
+        source_codec=info.codec or "hevc",
+        duration_limit=max(30.0, min(7200.0, float(duration or 600.0))),
+    )
+    return data
+
+
+@app.get("/api/ocr/status")
+async def ocr_status_api():
+    """Verfügbare OCR-Backends für Bild-Untertitel (Tesseract / SubtitleEdit)."""
+    from core import subtitle_ocr
+    return await asyncio.to_thread(subtitle_ocr.ocr_status)
 
 
 @app.get("/api/bitrate")
@@ -1621,6 +1681,62 @@ async def delete_profile(name: str):
     return {"profiles": profiles.delete(name)}
 
 
+class ProfileImportRequest(BaseModel):
+    bundle: dict
+    overwrite: bool = True
+    import_watch: bool = True
+
+
+@app.get("/api/profiles/export")
+async def export_profiles_bundle(include_watch: int = 1):
+    """Exportiert eigene Profile und optional Watchfolder-Regeln als JSON-Bundle."""
+    from core import profiles
+    from core import watcher as watcher_mod
+    watch_rules = None
+    if include_watch:
+        cfg = watcher_mod.load_config()
+        watch_rules = list(cfg.get("rules") or [])
+    return profiles.export_bundle(include_watch=bool(include_watch), watch_rules=watch_rules)
+
+
+@app.post("/api/profiles/import")
+async def import_profiles_bundle(req: ProfileImportRequest):
+    """Importiert Profile und optional Watchfolder-Regeln aus einem JSON-Bundle."""
+    from core import profiles
+    from core import watcher as watcher_mod
+    try:
+        res = profiles.import_bundle(req.bundle, overwrite=bool(req.overwrite))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    watch_imported = 0
+    if req.import_watch and res.get("watch_rules"):
+        cfg = watcher_mod.load_config()
+        existing = list(cfg.get("rules") or [])
+        seen_names = {str(r.get("name") or "").strip().lower() for r in existing if isinstance(r, dict)}
+        for rule in res["watch_rules"]:
+            if not isinstance(rule, dict):
+                continue
+            rname = str(rule.get("name") or "").strip().lower()
+            if rname and rname in seen_names and not req.overwrite:
+                continue
+            if rname and rname in seen_names and req.overwrite:
+                existing = [x for x in existing if str(x.get("name") or "").strip().lower() != rname]
+            existing.append(rule)
+            if rname:
+                seen_names.add(rname)
+            watch_imported += 1
+        cfg["rules"] = existing
+        watcher_mod.save_config(cfg)
+        watcher_mod.watcher.reconfigure()
+    return {
+        "ok": True,
+        "imported": res["imported"],
+        "skipped": res["skipped"],
+        "watch_imported": watch_imported,
+        "profiles": res["profiles"],
+    }
+
+
 class SuggestRequest(BaseModel):
     path: str
     platform: str = "cpu"
@@ -2178,6 +2294,8 @@ class SchedulerRequest(BaseModel):
     end_hour: int = 6
     throttle_enabled: bool = False
     max_cpu_percent: int = 85
+    disk_guard_enabled: bool = True
+    min_free_gb: float = 5.0
 
 
 @app.post("/api/scheduler")
@@ -2270,6 +2388,15 @@ async def get_watch():
     return watcher.status()
 
 
+class WatchRuleModel(BaseModel):
+    id: Optional[str] = None
+    enabled: bool = True
+    folder: str = ""
+    profile: str = ""
+    active_start: Optional[int] = None
+    active_end: Optional[int] = None
+
+
 class WatchRequest(BaseModel):
     enabled: bool = False
     folder: str = ""
@@ -2277,6 +2404,7 @@ class WatchRequest(BaseModel):
     profile: str = ""
     active_start: Optional[int] = None
     active_end: Optional[int] = None
+    rules: Optional[list[WatchRuleModel]] = None
 
 
 @app.post("/api/watch")
@@ -2287,6 +2415,8 @@ async def set_watch(req: WatchRequest):
     for k in ("active_start", "active_end"):
         if data[k] is not None:
             data[k] = max(0, min(23, int(data[k])))
+    if data.get("rules") is None:
+        data.pop("rules", None)
     watcher_mod.save_config(data)
     watcher_mod.watcher.reconfigure()
     return {"ok": True}
@@ -2312,6 +2442,16 @@ async def get_stats():
 async def clear_stats():
     from core import history
     return {"deleted": history.clear()}
+
+
+@app.delete("/api/history/{item_id}")
+async def delete_history_entry(item_id: str):
+    """Einzelnen Eintrag aus der persistenten Historie entfernen."""
+    from core import history
+    ok = history.delete_job(item_id)
+    if not ok:
+        return JSONResponse({"error": "Eintrag nicht gefunden"}, status_code=404)
+    return {"deleted": 1, "stats": history.stats(), "recent": history.recent(100)}
 
 
 @app.get("/api/vmaf/sessions")
@@ -2477,6 +2617,25 @@ class PauseRequest(BaseModel):
 @app.post("/api/queue/pause")
 async def pause_queue(req: PauseRequest):
     return {"paused": queue.set_paused(req.paused)}
+
+
+class SuspendJobRequest(BaseModel):
+    suspended: Optional[bool] = None
+
+
+class ReorderJobRequest(BaseModel):
+    before_id: Optional[str] = None
+    to_top: bool = False
+
+
+@app.post("/api/queue/{item_id}/suspend")
+async def suspend_job(item_id: str, req: Optional[SuspendJobRequest] = None):
+    return queue.suspend_job(item_id, None if req is None else req.suspended)
+
+
+@app.post("/api/queue/{item_id}/reorder")
+async def reorder_item(item_id: str, req: ReorderJobRequest):
+    return {"ok": queue.reorder(item_id, before_id=req.before_id, to_top=req.to_top)}
 
 
 @app.post("/api/queue/{item_id}/move")
@@ -2731,6 +2890,7 @@ class PlayerSessionRequest(BaseModel):
     client_codecs: list[str] = []   # was der Browser abspielen kann
     lookahead_sec: float = 30       # Zielpuffer; 0 = Encode nicht drosseln
     audio_copy: bool = False        # Ton nicht umcodieren (Stream-Copy)
+    audio_delay_ms: int = 0         # Audio-Versatz in ms (negativ = früher via -itsoffset)
     look: Optional[dict] = None     # Encode-Vorschau: Tonemap und Bildfilter
     client_token: str = ""          # A/B-Entladen kann den Start vor der Antwort abbrechen
     owner: str = Field(default="player", pattern="^(player|ab_standard|ab_nerd|preview|editor)$")
@@ -2758,6 +2918,7 @@ class PlayerPlanRequest(BaseModel):
     v_bitrate: int = 0
     client_codecs: list[str] = []
     audio_copy: bool = False
+    audio_delay_ms: int = 0
     look: Optional[dict] = None
 
 
@@ -2779,6 +2940,7 @@ async def player_plan(req: PlayerPlanRequest):
         height=req.height,
         v_bitrate=req.v_bitrate,
         audio_copy=bool(req.audio_copy),
+        audio_delay_ms=int(req.audio_delay_ms or 0),
         start_sec=req.start,
         look=req.look,
     )
@@ -2798,6 +2960,7 @@ async def player_session_start(req: PlayerSessionRequest):
         client_codecs=req.client_codecs or None,
         lookahead_sec=req.lookahead_sec,
         audio_copy=bool(req.audio_copy),
+        audio_delay_ms=int(req.audio_delay_ms or 0),
         look=req.look,
         client_token=req.client_token or "",
         owner=req.owner, label=req.label,
@@ -2885,10 +3048,22 @@ async def player_session_file(sid: str, name: str):
 
 
 @app.get("/api/media/vtt")
-async def media_vtt(path: str, root: str = "media", subtitle: int = 0):
-    """Text-Untertitelspur als WebVTT für den HTML5-Player."""
+async def media_vtt(path: str, root: str = "media", subtitle: int = 0, sidecar: str = ""):
+    """Text-Untertitelspur (intern oder externe Sidecar-Datei) als WebVTT für den HTML5-Player."""
     from fastapi.responses import StreamingResponse
     from core import media_stream as ms
+
+    if sidecar:
+        sc_target = _safe_resolve(sidecar)
+        if sc_target is None or not sc_target.is_file():
+            return JSONResponse({"error": "Sidecar nicht gefunden"}, status_code=404)
+        cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error",
+               "-i", str(sc_target), "-map", "0:s:0?", "-f", "webvtt", "pipe:1"]
+        return StreamingResponse(
+            ms.async_stream_bytes(cmd, owner="preview", label="WebVTT-Sidecar", source=str(sc_target)),
+            media_type="text/vtt; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
 
     target = _resolve_media_root(path, root)
     if target is None:

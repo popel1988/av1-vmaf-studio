@@ -18,7 +18,14 @@
 #export-preflight-report code, .studio-source-context strong { overflow-wrap: anywhere; }
 .studio-source-context { padding: 10px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .workspace-desktop-tools { padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-#desktop-file-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow: auto; }
+#desktop-file-list, #desktop-folder-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow: auto; flex-basis: 100%; min-width: 0; }
+.desktop-folder-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.desktop-folder-chip button { background: none; border: 0; color: var(--text-muted); cursor: pointer; padding: 0 3px; font-size: 13px; line-height: 1; }
+.desktop-folder-chip button:hover { color: var(--bad, #e5484d); }
+.desktop-power-wrap { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-inline-start: auto; font-size: 12px; }
+.desktop-power-wrap select { padding: 4px 8px; font-size: 12px; }
+.desktop-power-banner { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--warn, #f5a623); background: color-mix(in srgb, var(--warn, #f5a623) 14%, var(--surface)); font-size: 12.5px; }
+.desktop-power-banner[hidden], #desktop-folder-list[hidden] { display: none; }
 .workspace-sidebar-toggle { width: 100%; display: flex; align-items: center; gap: 9px; }
 #workspace-sidebar-content { display: flex; flex-direction: column; gap: 20px; }
 .workspace-nav-group, .workspace-nav-subgroup { min-width: 0; }

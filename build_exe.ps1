@@ -4,7 +4,8 @@
 
 param(
     [string]$Python = "py",
-    [switch]$SkipToolDownloads
+    [switch]$SkipToolDownloads,
+    [switch]$BuildInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,6 +114,10 @@ if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "hdr10plus_t
 
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 
+# Entferne Mark-of-the-Web (Zone.Identifier), damit .NET Framework Assemblies
+# (Python.Runtime.dll, WebView2) nicht mit HRESULT 0x80131515 blockiert werden.
+Get-ChildItem -LiteralPath $Root -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+
 Write-Host "=== 2. Prüfe gepinnte native Laufzeit ===" -ForegroundColor Cyan
 & $PyCmd desktop_main.py --desktop-smoke-test
 if ($LASTEXITCODE -ne 0) { throw "Native Desktop-Laufzeitprüfung fehlgeschlagen; siehe LOCALAPPDATA\AV1-VMAF-Studio\studio.log." }
@@ -149,6 +154,7 @@ $DistAppDir = Join-Path $Root "dist\AV1-VMAF-Studio"
 $DistBinDir = Join-Path $DistAppDir "bin"
 New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
 Get-ChildItem -LiteralPath $BinDir | Copy-Item -Destination $DistBinDir -Recurse -Force
+Get-ChildItem -LiteralPath $DistAppDir -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
 # The smoke test exercises the matching Python.Runtime assembly loader in the
 # frozen process, without opening a window or changing file associations.
@@ -163,8 +169,31 @@ if ($Smoke.ExitCode -ne 0) {
     throw "Frozen-Smoke-Test fehlgeschlagen; siehe LOCALAPPDATA\AV1-VMAF-Studio\desktop-smoke.json und studio.log."
 }
 
+$IssFile = Join-Path $Root "installer.iss"
+if ($BuildInstaller -and (Test-Path $IssFile)) {
+    $IsccCandidates = @(
+        (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    $Iscc = $IsccCandidates | Select-Object -First 1
+    if (-not $Iscc) {
+        throw "Inno Setup 6 (ISCC.exe) wurde nicht gefunden. Bitte Inno Setup 6 installieren oder ohne -BuildInstaller bauen."
+    }
+    Write-Host "=== 4. Erstelle Windows-Setup via Inno Setup 6 ===" -ForegroundColor Cyan
+    & $Iscc $IssFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup ist mit Exit-Code $LASTEXITCODE fehlgeschlagen."
+    }
+}
+
 Write-Host ""
 Write-Host "Fertig! Die direkt startbare Anwendung liegt unter:" -ForegroundColor Green
 Write-Host "  $DistAppDir\AV1-VMAF-Studio.exe" -ForegroundColor Yellow
 Write-Host "Externe Tools & Modelle liegen unter:" -ForegroundColor Green
 Write-Host "  $DistBinDir" -ForegroundColor Yellow
+if ($BuildInstaller -and (Test-Path (Join-Path $Root "dist\AV1-VMAF-Studio-Setup.exe"))) {
+    Write-Host "Windows-Installer:" -ForegroundColor Green
+    Write-Host "  $Root\dist\AV1-VMAF-Studio-Setup.exe" -ForegroundColor Yellow
+}

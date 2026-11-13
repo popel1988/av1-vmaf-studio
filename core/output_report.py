@@ -58,7 +58,10 @@ def _codec(value):
                "libx264": "h264", "libvpx-vp9": "vp9", "libopus": "opus",
                "srt": "subrip", "libfdk_aac": "aac"}
     value = str(value or "")
-    return aliases.get(value, value.split("_", 1)[0] if value.endswith(("_nvenc", "_qsv", "_vaapi")) else value)
+    return aliases.get(
+        value,
+        value.split("_", 1)[0] if value.endswith(("_nvenc", "_qsv", "_vaapi", "_amf")) else value,
+    )
 
 
 def _option(command, *names):
