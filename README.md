@@ -54,6 +54,7 @@ mode**, and language support for **DE / EN / ES / FR**:
 | **Editor** | Timeline editor: In/Out cuts, keep/cut ranges, automatic scene/cut & crop detection, crossfades, logo removal (`delogo`), text overlays, color/look presets, multi-file concat, **direct upload**, per-source audio/subtitle selection, remux (keyframe copy) or encode export (CQ/CBR/ABR) to the queue. |
 | **Player** | Full media player: probes native browser codec & HDR support in Automatic mode (keeps native resolution such as 2160p whenever supported and only tone-maps when needed, showing explicit DV → HDR10 fallback indicators), Direct-Play when possible, else HLS; single-frame stepping (`±1` frame), chapters, text subs + optional PGS burn-in. |
 | **A/B compare** | Synchronized **2-way (`A / B`) and 3-way (`A / B / C`)** visual inspection: Side-by-Side, Wipe, **Pixel-Difference**, **Error Heatmap**, **ABX Blind Test**, and **Direct 3-Way Delta-Error Heatmap (`Δ(C − B)` vs. Original `A`)**. Includes a **Frame-Indexed Ring Buffer** for ghost-free live motion diffing (`Frame-Lock #N`), **1-click `⚡ Auto-Sync`** (`±12` frames), independent per-side frame nudging, `⅛×`–`2×` playback speed, dynamic color legend, 2-way/3-way pixel hover inspector, PNG snapshot export, and clickable weakest VMAF spots. |
+| **HDR / DV Lab** | Native Dolby Vision & HDR10+ suite (`dovi_tool` + `hdr10plus_tool`): **MEL vs. FEL** & `CM v2.9/v4.0` analyzer, **0-disk-space** BL/EL/RPU in-memory bitrate scanner with zoomable multi-layer graph & 5-format integrated MediaInfo export, **cross-release DV hybrid injector** with scene-cut intro auto-sync & L5 crop protection, **HDR10+ → Dolby Vision 8.1 Dual-HDR** generator, and a searchable **RPU database (Vault)** with customizable columns. |
 | **Queue** | Live progress (bar, FPS, bitrate, ETA), queue & per-job process suspend/resume (`⏸`), worker priority control, reorder, cancel, **requeue** finished jobs, and a structured output verification report at the bottom of job details. Waiting encodes show an **estimated runtime** from history. |
 | **Stats** | Historical job analytics (SQLite): savings, VMAF, runtimes, CSV export; requeue from history. |
 | **Library** | Recursive scan with live filters, savings estimates (not a probe encode), **sub-libraries**, NFO title/year on each row (sort and search), NFO popup, CSV export. |
@@ -653,10 +654,10 @@ optional fades/tempo) and sends it to the same queue as Encoding/Remux.
 - Direct file playback in the browser when the codec is playable; otherwise a
   light FFmpeg/HLS fallback. Jump **±0.2 s** and frame-step; **Timeline follow**
   skips cut-away parts and continues at the next clip.
-- Source ruler for the whole loaded file (In/Out, keep/cut range, automatic scene/cut detection, snap to
-  chapters or keyframes). The output timeline supports trim-by-drag, fade/crossfade
+- Source ruler for the whole loaded file (In/Out, keep/cut range, interactive auto-cut preview with speech padding & per-hit selection, snap to
+  chapters or keyframes). The output timeline supports trim-by-drag, `±1F` frame nudging & rolling-trim (`⇹ ±1F`), fade/crossfade
   corners, reorder, split, duplicate, black clips, intro/outro, undo/redo.
-- Optional picture tools in the editor: auto-crop detection, logo/watermark removal (`delogo`), text overlays (`drawtext`), color/look presets, and frame snapshot export (`/api/editor/snapshot`).
+- Live Program-Monitor FX preview (look presets, rotation/flip, crop, fades, text overlays, and WebAudio dB gain), plus auto-crop detection, logo/watermark removal (`delogo`), frame snapshot export (`/api/editor/snapshot`), and 1-click animated WebP / Loop-MP4 export (`/api/editor/quick-loop`).
 - Keyboard: **I/O** In/Out · **J/K/L** −5 s / pause / play · arrows for frames
   and clip change · **S** split · **Del** delete clip · **Ctrl+Z** undo.
 - Unload a source from the preview without dropping clips already on the

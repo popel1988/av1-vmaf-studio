@@ -77,6 +77,12 @@ class SourceContextTests(unittest.TestCase):
         js.eval("window.StudioSourceContext.publish({path:'upload:temporary.mkv'},'editor')")
         self.assertEqual(js.eval("window.StudioSourceContext.get().path"), "first.mkv")
 
+    def test_editor_js_full_syntax_valid(self):
+        source = (ROOT / "static/js/editor.js").read_text(encoding="utf-8")
+        js = quickjs.Context()
+        # Parst die komplette Datei per new Function(...), ohne DOM-Ausführung zu benötigen.
+        js.eval("new Function(" + json.dumps(source) + "); true;")
+
 
 if __name__ == "__main__":
     unittest.main()

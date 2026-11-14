@@ -228,6 +228,7 @@ class JobSettings:
     svt_look: str = "standard"      # standard | detail (nur CPU-AV1)
     preserve_hdr: bool = False       # HDR10/HLG erhalten statt SDR-Tonemapping
     preserve_dv: bool = False        # Dolby-Vision-RPU nach Encode re-injizieren (HEVC 8.1 / AV1 10.1)
+    generate_dv_from_hdr10plus: bool = False  # Aus HDR10+-Quelle zusätzlich DV Profil 8.1 generieren (Dual-HDR HEVC)
     keep_subtitles: bool = True      # Untertitel-Spuren übernehmen (alle)
     subtitle_per_track: bool = False # Untertitel pro Spur konfiguriert
     subtitle_track_settings: list = field(default_factory=list)  # je Spur: index/default/forced
@@ -1584,6 +1585,8 @@ class QueueManager:
             self._reinject_hdr10plus(item, out_path)
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
+            elif s.generate_dv_from_hdr10plus and s.codec == "hevc":
+                self._generate_dv_from_hdr10plus(item, out_path)
             # Schon zu groß: Qualität nicht weiter anheben (würde noch größer).
             if (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
                     and self._savings_too_low(item, out_path)):
@@ -1734,6 +1737,8 @@ class QueueManager:
             self._reinject_hdr10plus(item, out_path)
             if s.preserve_dv and s.codec == "hevc":
                 self._reinject_dv(item, out_path)
+            elif s.generate_dv_from_hdr10plus and s.codec == "hevc":
+                self._generate_dv_from_hdr10plus(item, out_path)
             if (s.workflow == "auto" and self._vmaf_chose_quality(item, s)
                     and self._savings_too_low(item, out_path)):
                 item.message = self._discard_keep_source(item, out_path)
@@ -1973,9 +1978,11 @@ class QueueManager:
         info.duration = editor.total_duration(segs, float(spec.get("crossfade") or 0)) or getattr(info, "duration", 0.0)
 
         if mode == "smart":
+            smart_plat = str(spec.get("smart_platform") or "cpu").lower()
             part_jobs, final_cmd, temp_files, err = editor.build_editor_smart_plan(
                 segs, out_path, config.WORK_DIR,
                 add_chapters=bool(spec.get("chapters_from_cuts", True)),
+                platform=smart_plat,
             )
             if err:
                 item.status = STATUS_FAILED
@@ -2041,6 +2048,10 @@ class QueueManager:
                 aq_strength=max(1, min(15, int(
                     spec.get("aq_strength", getattr(s, "aq_strength", 8)) or 8))),
                 tonemap=bool(spec.get("tonemap", getattr(s, "tonemap", False))),
+                tonemap_engine=str(spec.get("tonemap_engine") or getattr(s, "tonemap_engine", "cpu") or "cpu"),
+                tonemap_algo=str(spec.get("tonemap_algo") or getattr(s, "tonemap_algo", "hable") or "hable"),
+                tonemap_desat=float(spec.get("tonemap_desat", getattr(s, "tonemap_desat", 0.0)) or 0.0),
+                tonemap_peak=float(spec.get("tonemap_peak", getattr(s, "tonemap_peak", 0.0)) or 0.0),
                 preserve_hdr=bool(spec.get("preserve_hdr", getattr(s, "preserve_hdr", True))),
                 preserve_dv=s.preserve_dv,
                 overlays=ovs,
@@ -2747,6 +2758,7 @@ class QueueManager:
                 Path(item.path), out_path, work, fps=fps,
                 source_codec=source_codec, target_codec=target_codec,
                 profile=profile,
+                crop_active_area=bool(item.crop),
                 status=lambda m: setattr(item, "message", m))
             if final and final.exists():
                 out_path.unlink(missing_ok=True)
@@ -2761,6 +2773,39 @@ class QueueManager:
             logger.exception("DV-Reinjektion abgestürzt: %s", item.title)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    def _generate_dv_from_hdr10plus(self, item: QueueItem, out_path: Path) -> None:
+        """Erzeugt bei HDR10+-Quellen ohne DV zusätzlich eine Dolby-Vision-8.1-RPU (Dual-HDR)."""
+        info = item.info or {}
+        if info.get("dolby_vision"):
+            return
+        has_h10p = bool(info.get("hdr10_plus")) or ("HDR10+" in str(info.get("hdr_type") or ""))
+        if not has_h10p or not item.settings.preserve_hdr or item.settings.tonemap:
+            return
+        _begin_step(item, "HDR10+ → Dolby Vision")
+        try:
+            from . import dv_lab
+            res = dv_lab.transfer_dv_to_release(
+                out_path,
+                donor_path=Path(item.path),
+                frame_offset=0,
+                auto_sync_intro=False,
+                adjust_l5_crop=bool(item.crop),
+                replace_target=True,
+                status=lambda m: setattr(item, "message", m),
+            )
+            if res.get("ok"):
+                item.details["dv_generated_from_hdr10plus"] = True
+                logger.info("Dual-HDR (HDR10+ -> DV 8.1) eingebettet: %s", item.title)
+            else:
+                self._note_hdr10plus(
+                    item,
+                    f"HDR10+→DV nicht eingebettet ({res.get('error', 'unbekannt')}) – HDR10/HDR10+ bleibt.",
+                )
+        except Exception as e:  # pragma: no cover
+            self._note_hdr10plus(item, f"HDR10+→DV Fehler: {e}")
+        finally:
+            _end_step(item)
 
     @staticmethod
     def _av1_hdr10plus_blocked(item: QueueItem, s: "JobSettings", info: dict) -> bool:
@@ -3233,6 +3278,7 @@ def build_job_settings(d: dict) -> JobSettings:
         svt_look=normalize_svt_look(d.get("svt_look", "standard")),
         preserve_hdr=preserve_hdr,
         preserve_dv=preserve_dv,
+        generate_dv_from_hdr10plus=bool(d.get("generate_dv_from_hdr10plus", False)),
         keep_subtitles=bool(d.get("keep_subtitles", True)),
         subtitle_per_track=bool(d.get("subtitle_per_track", False)),
         subtitle_track_settings=list(d.get("subtitle_track_settings", [])),

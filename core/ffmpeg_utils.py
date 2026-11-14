@@ -72,6 +72,7 @@ class VideoInfo:
     max_fall: int = 0
     master_max: float = 0.0
     master_min: float = 0.0
+    master_display: str = ""   # Roh-Mastering-Display-String (x265/SVT-AV1 kompatibel)
     # None = der Dolby-Vision-Datensatz nennt das Feld nicht.
     dv_level: Optional[int] = None
     dv_version: str = ""
@@ -308,6 +309,7 @@ def info_from_probe(data: dict, path: Path,
         max_fall=int(light.get("max_fall") or 0),
         master_max=float(light.get("master_max") or 0.0),
         master_min=float(light.get("master_min") or 0.0),
+        master_display=str(light.get("master_display") or ""),
     )
     return info, None
 
@@ -347,6 +349,7 @@ def extra_probe_fields(info: VideoInfo) -> dict:
         "max_fall": info.max_fall,
         "master_max": info.master_max,
         "master_min": info.master_min,
+        "master_display": info.master_display,
         "dv_level": info.dv_level,
         "dv_version": info.dv_version,
         "dv_profile_label": info.dv_profile_label,
@@ -476,6 +479,19 @@ def _hdr_light(video: dict) -> dict:
                 out["master_max"] = round(peak, 2)
             if floor is not None and peak and peak > 0:
                 out["master_min"] = round(floor, 4)
+            rx, ry = _f(side.get("red_x")), _f(side.get("red_y"))
+            gx, gy = _f(side.get("green_x")), _f(side.get("green_y"))
+            bx, by = _f(side.get("blue_x")), _f(side.get("blue_y"))
+            wx, wy = _f(side.get("white_point_x")), _f(side.get("white_point_y"))
+            if (None not in (rx, ry, gx, gy, bx, by, wx, wy, peak, floor)
+                    and peak and peak > 0):
+                out["master_display"] = (
+                    f"G({int(round(gx * 50000))},{int(round(gy * 50000))})"
+                    f"B({int(round(bx * 50000))},{int(round(by * 50000))})"
+                    f"R({int(round(rx * 50000))},{int(round(ry * 50000))})"
+                    f"WP({int(round(wx * 50000))},{int(round(wy * 50000))})"
+                    f"L({int(round(peak * 10000))},{int(round(max(0.0, floor) * 10000))})"
+                )
     return out
 
 

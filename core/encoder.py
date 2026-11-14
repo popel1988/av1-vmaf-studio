@@ -698,10 +698,17 @@ def _hdr_output_args(info: VideoInfo, codec: str, enc: str) -> list[str]:
         x265_range = "full" if rng == "pc" else "limited"
         params = (f"colorprim={prim}:transfer={trc}:colormatrix={space}"
                   f":range={x265_range}:hdr10=1:repeat-headers=1")
+        md = str(getattr(info, "master_display", "") or "").strip()
+        if md:
+            params += f":master-display={md}"
+        cll = int(getattr(info, "max_cll", 0) or 0)
+        fall = int(getattr(info, "max_fall", 0) or 0)
+        if cll > 0 or fall > 0:
+            params += f":max-cll={cll},{fall}"
         args += ["-pix_fmt", "yuv420p10le", "-x265-params", params]
     elif enc in ("libsvtav1", "libx264", "libvpx-vp9"):
         args += ["-pix_fmt", "yuv420p10le"]
-    elif "nvenc" in enc and codec == "hevc":
+    elif ("nvenc" in enc or "qsv" in enc or "vaapi" in enc or "amf" in enc) and codec == "hevc":
         args += ["-profile:v", "main10"]
     # AV1-NVENC/QSV/VAAPI führen 10-bit über das Surface-Format (p010) mit.
     return args

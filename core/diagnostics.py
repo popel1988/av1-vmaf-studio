@@ -141,6 +141,19 @@ def _tools_section() -> dict:
     except Exception as e:  # pragma: no cover
         checks.append(_check("hdr10plus_tool (HDR10+)", "warn", str(e)))
 
+    try:
+        from . import dv_lab
+        mkv_ok = dv_lab._mkvmerge_available()
+        checks.append(_check(
+            "mkvmerge (MKVToolNix)", "ok" if mkv_ok else "warn",
+            config.MKVMERGE if mkv_ok else "optional – FFmpeg-Muxer als Fallback aktiv"))
+        mi_ok = dv_lab._mediainfo_available()
+        checks.append(_check(
+            "MediaInfo CLI", "ok" if mi_ok else "warn",
+            config.MEDIAINFO if mi_ok else "optional – ffprobe-MediaInfo-Fallback aktiv"))
+    except Exception as e:  # pragma: no cover
+        checks.append(_check("DV-Labor Werkzeuge", "warn", str(e)))
+
     return _section("FFmpeg & Werkzeuge", checks)
 
 

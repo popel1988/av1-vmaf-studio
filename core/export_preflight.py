@@ -201,6 +201,16 @@ def inspect(path, settings, *, info=None, reservations=(), protected_sources=())
                    settings.deinterlace == "on" or (settings.deinterlace == "auto" and media.get("interlaced")))
         if filters:
             issue(blockers, "unsupported_dv_filters", "AV1-Dolby-Vision ist mit diesen Videofiltern nicht exakt erhaltbar.")
+    if media.get("dolby_vision") and settings.preserve_dv and int(media.get("dv_profile") or 0) == 7:
+        issue(warnings, "dv_p7_el_dropped",
+              "Dolby Vision Profil 7 wird in Single-Layer (8.1/10.1) gewandelt; der Enhancement-Layer (MEL/FEL) entfällt.")
+    if getattr(settings, "generate_dv_from_hdr10plus", False) and settings.video_mode == "encode":
+        if settings.codec != "hevc":
+            issue(warnings, "hdr10plus_to_dv_hevc_only",
+                  "HDR10+ → Dolby Vision (Dual-HDR) wird nur für HEVC-Ziele unterstützt.")
+        elif not media.get("hdr10_plus") and not media.get("dolby_vision"):
+            issue(warnings, "hdr10plus_to_dv_no_source",
+                  "Quelle besitzt keine HDR10+-Metadaten für die DV-Generierung.")
     if media.get("dolby_vision") and not settings.preserve_dv and settings.video_mode == "encode":
         issue(warnings, "dv_loss", "Dolby-Vision-Metadaten entfallen.")
     if media.get("is_hdr") and settings.video_mode == "encode" and not settings.preserve_hdr:

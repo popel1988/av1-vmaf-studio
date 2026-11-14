@@ -116,6 +116,7 @@
     if (page === "audio" && !state.audioLoaded) { state.audioLoaded = true; auLoadDir(""); }
     if (page === "remux" && !state.remuxLoaded) { state.remuxLoaded = true; remuxInit(); }
     if (page === "editor" && typeof window.editorInit === "function") window.editorInit();
+    if (page === "dvlab" && typeof window.dvLabInit === "function") window.dvLabInit();
     if (page === "diag" && !state.diagLoaded) loadDiagnostics();
     if ((page === "encode" || page === "vmaf") && state.bitrateData) drawBitrateChart(state.bitrateData);
     if (page === "vmafnerd") {
@@ -1351,6 +1352,13 @@
     const isDv = !!(info && info.dolby_vision);
     if (hdrWrap) hdrWrap.style.display = isDv ? "none" : "";
     if (dvWrap) dvWrap.style.display = isDv ? "" : "none";
+    const h10pDvWrap = $("opt-hdr10plus-to-dv-wrap");
+    if (h10pDvWrap) {
+      const hdrSel = $("opt-hdr-mode");
+      const canDualHdr = !isDv && !!(info && info.hdr10_plus)
+        && codec === "hevc" && (!hdrSel || hdrSel.value === "preserve");
+      h10pDvWrap.style.display = canDualHdr ? "" : "none";
+    }
     if (!isDv || !dvSel) {
       syncTonemapPanels();
       return;
@@ -1884,6 +1892,12 @@
     });
     const dvCurveBtn = $("btn-dv-l1-curve");
     if (dvCurveBtn) dvCurveBtn.addEventListener("click", loadDvL1Curve);
+    const openDvLabBtn = $("btn-open-dvlab");
+    if (openDvLabBtn) openDvLabBtn.addEventListener("click", () => {
+      if (typeof window.openInDvLab === "function") window.openInDvLab(state.selectedFile || "");
+    });
+    const hdrModeSelForDual = $("opt-hdr-mode");
+    if (hdrModeSelForDual) hdrModeSelForDual.addEventListener("change", () => syncDvOption());
 
     const verifyCb = $("opt-verify-vmaf");
     if (verifyCb) {
@@ -2247,6 +2261,9 @@
       // DV-Behandlung nur mitsenden, wenn die DV-Auswahl aktiv (= DV-Quelle) ist.
       dv_mode: ($("dv-mode-wrap") && $("dv-mode-wrap").style.display !== "none"
                 && $("opt-dv-mode")) ? $("opt-dv-mode").value : "",
+      generate_dv_from_hdr10plus: ($("opt-hdr10plus-to-dv-wrap")
+        && $("opt-hdr10plus-to-dv-wrap").style.display !== "none"
+        && $("opt-hdr10plus-to-dv")) ? $("opt-hdr10plus-to-dv").checked : false,
       ...tonemapPayload("opt"),
       keep_subtitles: subTracks === null
         ? ($("opt-keep-subs") ? $("opt-keep-subs").checked : true) : true,
@@ -9644,6 +9661,9 @@
     if (s.dv_mode) {
       const dvSel = $("opt-dv-mode");
       if (dvSel) { dvSel.value = s.dv_mode; dvSel.dataset.userset = "1"; }
+    }
+    if (s.generate_dv_from_hdr10plus !== undefined) {
+      set("opt-hdr10plus-to-dv", !!s.generate_dv_from_hdr10plus);
     }
     set("opt-keep-subs", s.keep_subtitles);
     set("opt-keep-chapters", s.keep_chapters);

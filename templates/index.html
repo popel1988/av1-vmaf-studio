@@ -70,6 +70,7 @@
         </details>
         <button class="nav-item" data-nav="player"><span>▶</span> Player</button>
         <button class="nav-item" data-nav="abcompare"><span>🎞</span> A/B-Vergleich</button>
+        <button class="nav-item" data-nav="dvlab"><span>✨</span> HDR / DV Labor</button>
         </details>
         <details class="workspace-nav-group" data-nav-group="manage" open>
         <summary>Verwalten</summary>
@@ -299,6 +300,12 @@
                       <option value="preserve">HDR beibehalten (10-bit)</option>
                     </select>
                     <p class="hint">Nur bei HDR-Quellen. „Beibehalten“ überträgt HDR10/HLG. Bei HDR10+ und einem HEVC-Ziel setzt das Studio die Szenen-Metadaten nach dem Encode wieder ein. <a href="#faq-hdr" class="faq-jump">FAQ: Dynamik</a></p>
+                    <div id="opt-hdr10plus-to-dv-wrap" style="display:none;margin-top:8px">
+                      <label class="check">
+                        <input type="checkbox" id="opt-hdr10plus-to-dv" />
+                        <span>✨ Zusätzlich Dolby Vision 8.1 aus HDR10+ generieren (Dual-HDR, nur HEVC)</span>
+                      </label>
+                    </div>
                   </div>
                   <div id="dv-mode-wrap" style="display:none">
                     <label data-tip="Profil 7 → HEVC 8.1 (dovi_tool, auch GPU) bzw. AV1 10.1 nur CPU/SVT. Profil 5 → HDR10 konvertiert IPTPQc2 per libplacebo (Vulkan) nach BT.2020 PQ.">Dolby-Vision-Behandlung</label>
@@ -308,8 +315,9 @@
                       <option value="tonemap">HDR &rarr; SDR (Tone-Mapping)</option>
                     </select>
                     <p class="hint" id="dv-mode-hint"></p>
-                    <div style="margin-top:6px">
+                    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
                       <button type="button" class="btn btn-ghost btn-sm" id="btn-dv-l1-curve">📈 DV-L1-Helligkeitskurve laden</button>
+                      <button type="button" class="btn btn-ghost btn-sm" id="btn-open-dvlab">✨ Im HDR / DV Labor analysieren</button>
                     </div>
                     <div id="dv-l1-curve-box" style="display:none;margin-top:8px"></div>
                   </div>
@@ -2702,6 +2710,7 @@
                   <div class="ed-src-ruler-bg"></div>
                   <div class="ed-src-strip" id="ed-src-strip"></div>
                   <div class="ed-src-keeps" id="ed-src-keeps"></div>
+                  <div class="ed-src-detects" id="ed-src-detects"></div>
                   <div class="ed-src-chaps" id="ed-src-chaps"></div>
                   <div class="ed-src-sel" id="ed-src-sel">
                     <span class="ed-src-sel-grip left" data-sel-grip="in" title="In-Punkt ziehen"></span>
@@ -2730,6 +2739,8 @@
                   <span class="muted ed-time" id="ed-time">0:00 / 0:00</span>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-loop-toggle" title="In/Out-Bereich in Endlosschleife abspielen">🔁 Loop</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-snapshot" title="Aktuelles Bild als PNG speichern">📸 Foto</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-quick-webp" title="Markierten In/Out-Bereich (max. 25 s) als animiertes WebP speichern">🎞 WebP</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-quick-loop-mp4" title="Markierten In/Out-Bereich (max. 25 s) als stummes Loop-MP4 speichern">🔁 Loop-MP4</button>
                   <button type="button" class="btn btn-ghost btn-sm" id="ed-crop-toggle" title="Visuellen Rahmen für Crop oder Blur/Delogo im Bild einblenden">✂ Crop / Blur</button>
                 </div>
 
@@ -2832,6 +2843,9 @@
                 <div class="ed-stage ed-prog-stage" id="ed-prog-stage">
                   <video id="ed-prog-video" playsinline></video>
                   <video id="ed-video-v2" class="ed-video-v2" playsinline muted hidden></video>
+                  <div class="ed-prog-fx-fade" id="ed-prog-fx-fade" hidden></div>
+                  <div class="ed-prog-fx-text" id="ed-prog-fx-text" hidden></div>
+                  <span class="ed-prog-fx-badge" id="ed-prog-fx-badge" hidden></span>
                 </div>
 
                 <div class="ed-transport">
@@ -2898,10 +2912,14 @@
               <div class="ed-tl-tools">
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-split" disabled
                         title="Aktiven Clip am Playhead in zwei Teile schneiden (S)">✂ Teilen</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-in" disabled
-                        title="Clip-Anfang auf die aktuelle Position ziehen">⇥ Anfang hier</button>
-                <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-out" disabled
-                        title="Clip-Ende auf die aktuelle Position ziehen">⇤ Ende hier</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-in" disabled
+                          title="Clip-Anfang auf die aktuelle Position ziehen">⇥ Anfang hier</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-trim-out" disabled
+                          title="Clip-Ende auf die aktuelle Position ziehen">⇤ Ende hier</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-roll-back" disabled
+                          title="Rolling-Trim: Schnittkante zum vorherigen Clip um 1 Frame nach links verschieben">⇹ −1F Schnitt</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-roll-fwd" disabled
+                          title="Rolling-Trim: Schnittkante zum vorherigen Clip um 1 Frame nach rechts verschieben">⇹ +1F Schnitt</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-left" disabled
                         title="Clip nach links schieben">◀</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="ed-tl-right" disabled
@@ -2913,13 +2931,18 @@
                 <button type="button" class="btn btn-ghost btn-sm bad-btn" id="ed-tl-del" disabled
                         title="Aktiven Clip aus der Timeline löschen (Entf)">🗑 Clip löschen</button>
                 <span class="ed-tl-sep"></span>
-                <details class="ed-tl-more">
+                <details class="ed-tl-more" id="ed-auto-details">
                   <summary class="btn btn-ghost btn-sm">🪄 Auto-Schnitt</summary>
                   <div class="ed-tl-more-panel">
-                    <div class="ed-more-label">Automatische Erkennung (aktuelle Quelle)</div>
-                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-black">⬛ Schwarzbilder herausschneiden</button>
-                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-silence">🔇 Sprechpausen / Stille entfernen</button>
-                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-scene">🎬 Bei Szenenwechseln teilen</button>
+                    <div class="ed-more-label">Interaktive Vorschau &amp; Feineinstellung</div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-open-silence">🔇 Sprechpausen / Stille (Vorschau &amp; Polster)…</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-open-black">⬛ Schwarzbilder (Vorschau &amp; Schwelle)…</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-open-scene">🎬 Szenenwechsel (Vorschau &amp; Sensitivität)…</button>
+                    <div class="ed-more-sep"></div>
+                    <div class="ed-more-label">1-Klick Direkt-Schnitt</div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-black">⚡ Schwarzbilder sofort entfernen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-silence">⚡ Stille sofort entfernen (0,15 s Polster)</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-det-scene">⚡ Szenen sofort teilen</button>
                     <div class="ed-more-sep"></div>
                     <button type="button" class="btn btn-ghost btn-sm" id="ed-det-autocrop">🖼 Schwarze Ränder erkennen (Auto-Crop)</button>
                   </div>
@@ -2960,6 +2983,42 @@
                   </div>
                 </details>
               </div>
+              <div class="ed-auto-panel" id="ed-auto-panel" hidden>
+                <div class="ed-auto-head">
+                  <strong id="ed-auto-title">🪄 Auto-Schnitt Vorschau</strong>
+                  <div class="ed-auto-controls">
+                    <label>Modus
+                      <select id="ed-auto-kind">
+                        <option value="silence">🔇 Sprechpausen / Stille</option>
+                        <option value="black">⬛ Schwarzbilder</option>
+                        <option value="scene">🎬 Szenenwechsel</option>
+                      </select>
+                    </label>
+                    <label title="Mindestlänge einer Pause / Schwarzblende bzw. Mindestabstand zwischen Szenen">Min. Dauer (s)
+                      <input type="number" id="ed-auto-mindur" value="0.6" min="0.1" max="15" step="0.1" style="width:68px" />
+                    </label>
+                    <label id="ed-auto-thresh-wrap"><span id="ed-auto-thresh-lbl">Schwelle (dB)</span>
+                      <input type="number" id="ed-auto-thresh" value="-35" step="1" style="width:72px" />
+                    </label>
+                    <label id="ed-auto-pad-wrap" title="Lässt vor und nach Sprache etwas Luft stehen, damit Wortanfänge/-enden nicht abgehackt klingen">Polster (s)
+                      <input type="number" id="ed-auto-pad" value="0.15" min="0" max="1.5" step="0.05" style="width:68px" />
+                    </label>
+                    <label class="check" style="margin:0" title="Nur innerhalb des gesetzten In/Out-Bereichs suchen">
+                      <input type="checkbox" id="ed-auto-inrange" />
+                      <span>Nur In/Out</span>
+                    </label>
+                    <button type="button" class="btn btn-primary btn-sm" id="ed-auto-scan">🔍 Analysieren</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="ed-auto-close">Schließen</button>
+                  </div>
+                </div>
+                <div class="ed-auto-summary" id="ed-auto-summary">Klicke auf „Analysieren“, um Treffer auf der Quell-Leiste vorab zu prüfen.</div>
+                <div class="ed-auto-chips" id="ed-auto-chips"></div>
+                <div class="ed-auto-foot" id="ed-auto-foot" hidden>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-auto-sel-all">Alle wählen</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ed-auto-sel-none">Keine</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="ed-auto-apply">✂ Gewählte Schnitte auf Timeline anwenden</button>
+                </div>
+              </div>
               <div class="ed-tl-scroll" id="ed-tl-scroll">
                 <div class="ed-tl-canvas" id="ed-tl-canvas">
                   <div class="ed-tl-ruler" id="ed-tl-ruler"></div>
@@ -2990,8 +3049,16 @@
                 <label>Export-Modus</label>
                 <select id="ed-mode">
                   <option value="remux">Remux (Copy, Keyframe)</option>
-                  <option value="smart">Smart Cut (Framegenau, nur Schnittränder encodieren)</option>
+                  <option value="smart">Smart Cut 2.0 (Framegenau, Anfang/Ende encodieren)</option>
                   <option value="encode">Encode (Komplett neu encodieren + Effekte)</option>
+                </select>
+              </div>
+              <div class="field" id="ed-smart-plat-field" style="display:none">
+                <label title="Encoder für die kurzen angeschnittenen GOP-Ränder beim Smart Cut">Smart-Cut Ränder</label>
+                <select id="ed-smart-plat">
+                  {% for p in platform_options %}
+                  <option value="{{ p.value }}">{{ p.label }}</option>
+                  {% endfor %}
                 </select>
               </div>
               <div class="field">
@@ -3134,9 +3201,40 @@
                 <div class="field">
                   <label>HDR / Farbraum</label>
                   <select id="ed-hdr-mode">
-                    <option value="keep">10-Bit / HDR beibehalten</option>
-                    <option value="tonemap">HDR → SDR Tonemapping (Hable)</option>
+                    <option value="keep">10-Bit / HDR10 beibehalten (inkl. Metadaten)</option>
+                    <option value="tonemap">HDR → SDR Tonemapping</option>
                   </select>
+                </div>
+                <div class="field ed-tonemap-sub" id="ed-tm-engine-field" style="display:none">
+                  <label data-tip="CPU (zscale+tonemap), Vulkan libplacebo oder GPU-Filter (CUDA/OpenCL/VAAPI/tonemapx via Jellyfin-FFmpeg).">Tonemap-Engine</label>
+                  <select id="ed-tonemap-engine">
+                    <option value="cpu">CPU (zscale + tonemap)</option>
+                    <option value="libplacebo">libplacebo (Vulkan)</option>
+                    <option value="cuda">CUDA (NVIDIA)</option>
+                    <option value="opencl">OpenCL</option>
+                    <option value="vaapi">VAAPI (Intel/AMD)</option>
+                    <option value="tonemapx">tonemapx (CPU)</option>
+                  </select>
+                </div>
+                <div class="field ed-tonemap-sub" id="ed-tm-algo-field" style="display:none">
+                  <label>Tonemap-Kurve</label>
+                  <select id="ed-tonemap-algo">
+                    <option value="hable">Hable (Mitten heller)</option>
+                    <option value="bt2390">BT.2390 (Broadcast)</option>
+                    <option value="reinhard">Reinhard</option>
+                    <option value="mobius">Mobius</option>
+                    <option value="gamma">Gamma</option>
+                    <option value="clip">Clip</option>
+                    <option value="linear">Linear</option>
+                  </select>
+                </div>
+                <div class="field ed-tonemap-sub" id="ed-tm-desat-field" style="display:none">
+                  <label>Entsättigung: <strong id="ed-tonemap-desat-val">0,0</strong></label>
+                  <input type="range" id="ed-tonemap-desat" min="0" max="2" step="0.1" value="0" />
+                </div>
+                <div class="field ed-tonemap-sub" id="ed-tm-peak-field" style="display:none">
+                  <label>Quell-Peak (nits)</label>
+                  <input type="number" id="ed-tonemap-peak" min="0" max="10000" step="50" placeholder="aus Metadaten" />
                 </div>
                 <div class="field">
                   <label>Zielformat</label>
@@ -3446,6 +3544,234 @@
             </div>
             <p class="muted" id="fp-status" style="margin-top:8px;font-size:12px"></p>
             <div id="fp-provenance"></div>
+          </div>
+        </section>
+
+        <!-- PAGE: HDR / Dolby Vision Labor -->
+        <section class="card span-3" id="dvlab-card" data-page="dvlab" style="display:none">
+          <div class="card-head">
+            <h3><span class="card-idx">✨</span> HDR &amp; Dolby Vision Labor</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-refresh-files">↻ Mediathek neu laden</button>
+              <span class="badge">dovi_tool · hdr10plus_tool · 0-Disk-Scan</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="dvl-subtabs" role="tablist">
+              <button type="button" class="btn btn-ghost active" data-dvl-subtab="analyzer">📊 Layer-Inspektor &amp; Bitrate-Graph</button>
+              <button type="button" class="btn btn-ghost" data-dvl-subtab="copy">⇄ Hybrid-Mux &amp; RPU-Transfer</button>
+              <button type="button" class="btn btn-ghost" data-dvl-subtab="dualhdr">✨ HDR10+ &rarr; Dolby Vision</button>
+              <button type="button" class="btn btn-ghost" data-dvl-subtab="vault">💾 RPU-Tresor (Archiv)</button>
+            </div>
+
+            <!-- SUBTAB 1: DV-ANALYZER -->
+            <div data-dvl-panel="analyzer">
+              <p class="hint">Analysiert Dolby Vision (inkl. <strong>MEL vs. FEL</strong>, CM v2.9/v4.0, RPU Mastering Display &amp; MaxCLL/MaxFALL) und misst Base Layer, Enhancement Layer und RPU-Bitrate direkt im RAM – <strong>ohne doppelten Festplattenspeicher</strong>.</p>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:2">
+                  <label>Videodatei aus Mediathek</label>
+                  <select id="dvl-an-file-select"></select>
+                </div>
+                <div class="field" style="flex:2">
+                  <label>Relativer Medienpfad</label>
+                  <input type="text" id="dvl-an-path" placeholder="z. B. Filme/Film.2160p.UHD.mkv" />
+                </div>
+                <div class="field" style="flex:1">
+                  <label>Bitrate-Scan Umfang</label>
+                  <select id="dvl-scan-limit">
+                    <option value="0">Kompletter Film (Vollscan)</option>
+                    <option value="300">Erste 5 Minuten (Schnell)</option>
+                    <option value="900">Erste 15 Minuten</option>
+                  </select>
+                </div>
+              </div>
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-primary" id="btn-dvl-analyze">🔍 Schritt 1: Schnell-Analyse (RPU &amp; Layer)</button>
+                <button type="button" class="btn btn-ghost" id="btn-dvl-bitrate-scan">📊 Schritt 2: BL / EL / RPU Bitrate-Scan (0 Disk)</button>
+              </div>
+              <div id="dvl-an-status" class="dvl-status" style="display:none"></div>
+
+              <div id="dvl-an-results" style="display:none;margin-top:16px">
+                <div class="dvl-inner-tabs">
+                  <button type="button" class="btn btn-ghost btn-sm active" data-dvl-antab="dvdata">Dolby Vision Daten</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-antab="mediainfo">MediaInfo</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-antab="graph">Zoombarer Bitrate-Graph</button>
+                </div>
+
+                <div data-dvl-anpanel="dvdata" style="margin-top:12px">
+                  <div class="dvl-kv-grid" id="dvl-an-kv-grid"></div>
+                </div>
+
+                <div data-dvl-anpanel="mediainfo" style="display:none;margin-top:12px">
+                  <pre class="dvl-pre" id="dvl-mediainfo-pre"></pre>
+                </div>
+
+                <div data-dvl-anpanel="graph" style="display:none;margin-top:12px">
+                  <p class="hint" id="dvl-graph-empty">Starte „Schritt 2: BL / EL / RPU Bitrate-Scan“, um den zeitlichen Verlauf von Base Layer, Enhancement Layer (MEL/FEL) und RPU zu berechnen.</p>
+                  <div class="dvl-zoom-bar">
+                    <span>Zoom-Bereich: <strong id="dvl-zoom-label">0% – 100%</strong></span>
+                    <label>Start <input type="range" id="dvl-zoom-start" min="0" max="98" value="0" /></label>
+                    <label>Ende <input type="range" id="dvl-zoom-end" min="2" max="100" value="100" /></label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-zoom-reset">↺ Vollansicht</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-export-png">📸 Graph als PNG</button>
+                  </div>
+                  <div class="dvl-chart-box">
+                    <canvas id="dvl-bitrate-canvas"></canvas>
+                  </div>
+                </div>
+
+                <div class="dvl-export-bar">
+                  <span>Integrierten Report exportieren (DV-Datenblock + MediaInfo):</span>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-export="txt">📄 TXT (MediaInfo)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-export="md">📄 Markdown</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-export="json">📄 JSON</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-export="csv">📄 CSV (Bitraten)</button>
+                  <button type="button" class="btn btn-ghost btn-sm" data-dvl-export="html">📄 HTML</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- SUBTAB 2: DV-COPY / HYBRID-INJECTOR -->
+            <div data-dvl-panel="copy" style="display:none">
+              <p class="hint">Überträgt Dolby Vision (oder konvertiertes HDR10+) verlustfrei von einem Spender-Release (oder aus dem RPU-Tresor) in ein anderes HEVC-Release – inklusive automatischer Intro-Längenkorrektur über Szenenschnitt-Abgleich und L5-Crop-Anpassung.</p>
+              <div id="dvl-copy-vault-banner" class="dvl-banner" style="display:none"></div>
+
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>1. Spender-Film (mit Dolby Vision oder HDR10+)</label>
+                  <select id="dvl-copy-donor-select"></select>
+                  <input type="text" id="dvl-copy-donor-path" placeholder="Spender-Pfad (leer lassen, wenn Tresor-RPU aktiv)" style="margin-top:6px" />
+                </div>
+                <div class="field" style="flex:1">
+                  <label>2. Ziel-Release (eigener Encode / anderes HEVC-Release)</label>
+                  <select id="dvl-copy-target-select"></select>
+                  <input type="text" id="dvl-copy-target-path" placeholder="Ziel-Pfad (MKV / MP4 mit HEVC)" style="margin-top:6px" />
+                </div>
+              </div>
+
+              <div class="dvl-options-grid">
+                <label class="check">
+                  <input type="checkbox" id="dvl-copy-autosync" checked />
+                  <span>Intro-/Längen-Versatz automatisch prüfen &amp; synchronisieren</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-copy-l5" checked />
+                  <span>L5 Active-Area (schwarze Balken / Crop) automatisch ans Ziel anpassen</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-copy-save-vault" checked />
+                  <span>Extrahierte RPU zusätzlich im RPU-Tresor sichern</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-copy-keep-temp" />
+                  <span>Arbeitsordner &amp; RPU-Dateien neben der Zieldatei behalten (nicht löschen)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-copy-replace" />
+                  <span>Zieldatei direkt ersetzen (sonst neue Datei mit Suffix anlegen)</span>
+                </label>
+              </div>
+
+              <div class="dvl-form-row" style="margin-top:10px">
+                <div class="field">
+                  <label>Manueller Frame-Offset (optional, + = Ziel hat längeres Intro, − = kürzer)</label>
+                  <input type="number" id="dvl-copy-offset" placeholder="Leer = Auto-Sync" step="1" />
+                </div>
+                <div class="field">
+                  <label>Datei-Suffix (wenn Zieldatei nicht ersetzt wird)</label>
+                  <input type="text" id="dvl-copy-suffix" value=".DV" />
+                </div>
+              </div>
+
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-ghost" id="btn-dvl-copy-check">🔍 Releases &amp; Intro-Offset vorab prüfen</button>
+                <button type="button" class="btn btn-primary" id="btn-dvl-copy-run">⇄ Dolby Vision übertragen &amp; muxen</button>
+              </div>
+              <div id="dvl-copy-status" class="dvl-status" style="display:none"></div>
+              <div id="dvl-copy-compat-box" class="dvl-compat-card" style="display:none"></div>
+            </div>
+
+            <!-- SUBTAB 3: HDR10+ -> DOLBY VISION -->
+            <div data-dvl-panel="dualhdr" style="display:none">
+              <p class="hint">Erzeugt aus einem <strong>HDR10+-Film</strong> verlustfrei echte <strong>Dolby-Vision-Profil-8.1-Metadaten</strong> und bettet sie in denselben HEVC-Stream ein. Danach enthält die Datei <strong>HDR10 + HDR10+ + Dolby Vision</strong> gleichzeitig (ideal für LG/Sony-TVs sowie Samsung-TVs).</p>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>HDR10+-Videodatei (HEVC)</label>
+                  <select id="dvl-dual-file-select"></select>
+                </div>
+                <div class="field" style="flex:1">
+                  <label>Relativer Pfad</label>
+                  <input type="text" id="dvl-dual-path" placeholder="z. B. Filme/HDR10Plus-Release.mkv" />
+                </div>
+              </div>
+              <div class="dvl-options-grid">
+                <label class="check">
+                  <input type="checkbox" id="dvl-dual-vault" checked />
+                  <span>Generierte DV-RPU zusätzlich im RPU-Tresor speichern</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-dual-replace" />
+                  <span>Originaldatei direkt ersetzen (sonst .DV-HDR10Plus.mkv anlegen)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-dual-keep-temp" />
+                  <span>Arbeitsordner behalten</span>
+                </label>
+              </div>
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-primary" id="btn-dvl-dual-run">✨ Dual-HDR (HDR10+ &rarr; Dolby Vision 8.1) erzeugen</button>
+              </div>
+              <div id="dvl-dual-status" class="dvl-status" style="display:none"></div>
+            </div>
+
+            <!-- SUBTAB 4: RPU-DATENBANK (TRESOR) -->
+            <div data-dvl-panel="vault" style="display:none">
+              <p class="hint">Extrahiere Dolby-Vision- oder HDR10+-Metadaten auf Vorrat aus beliebig vielen Filmen. Gespeicherte RPUs belegen nur ~25–70 MB und lassen sich jederzeit per Klick in ein anderes Release einsetzen. Speicherort: <code id="dvl-vault-dir-label">/data/rpu_vault</code></p>
+
+              <div class="dvl-vault-extract-card">
+                <div class="dvl-form-row">
+                  <div class="field" style="flex:1">
+                    <label>Filme für Batch-Extraktion filtern</label>
+                    <input type="text" id="dvl-vault-src-filter" placeholder="Nach Dateiname filtern …" />
+                  </div>
+                </div>
+                <div id="dvl-vault-source-list" class="dvl-checklist"></div>
+                <div class="dvl-options-grid" style="margin-top:8px">
+                  <label class="check">
+                    <input type="checkbox" id="dvl-vault-conv81" checked />
+                    <span>Profil 7 automatisch in Profil 8.1 umwandeln</span>
+                  </label>
+                  <label class="check">
+                    <input type="checkbox" id="dvl-vault-keep-orig" />
+                    <span>Original-RPU (unverändert) zusätzlich behalten</span>
+                  </label>
+                </div>
+                <div class="dvl-btn-row">
+                  <button type="button" class="btn btn-primary" id="btn-dvl-vault-extract">📥 Ausgewählte Filme in Datenbank extrahieren</button>
+                </div>
+                <div id="dvl-vault-status" class="dvl-status" style="display:none"></div>
+              </div>
+
+              <div class="dvl-vault-list-head" style="margin-top:18px">
+                <input type="text" id="dvl-vault-search" placeholder="🔎 In gespeicherten RPUs nach Titel, Nits oder Herkunft suchen …" style="flex:1" />
+                <details class="dvl-col-picker">
+                  <summary class="btn btn-ghost btn-sm">⚙ Spalten</summary>
+                  <div class="dvl-col-menu">
+                    <label class="check"><input type="checkbox" data-dvl-col="origin" checked /> <span>Herkunft (DV / HDR10+)</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="profile" checked /> <span>Profil &amp; EL</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="cm_version" checked /> <span>CM-Version</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="frames" checked /> <span>Frames</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="fps" checked /> <span>FPS</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="peak_nits" checked /> <span>Peak L1 (Nits)</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="cll" checked /> <span>MaxCLL / MaxFALL</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="mastering" /> <span>Mastering Display</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="scenes" /> <span>Szenenschnitte</span></label>
+                    <label class="check"><input type="checkbox" data-dvl-col="size" checked /> <span>RPU-Größe</span></label>
+                  </div>
+                </details>
+              </div>
+              <div id="dvl-vault-table-wrap" style="margin-top:10px;overflow-x:auto"></div>
+            </div>
           </div>
         </section>
 
@@ -4234,6 +4560,7 @@
   <script src="/static/js/player.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/editor.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/dv_lab.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/workspace-ui.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/desktop-ui.js?v={{ asset_version }}" defer></script>
 </body>

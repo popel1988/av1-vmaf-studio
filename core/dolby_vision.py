@@ -117,6 +117,7 @@ def reinject(source: Path, encoded: Path, work_dir: Path, *,
              source_codec: str = "hevc", target_codec: str = "hevc",
              profile: int = 0, fps: float = 0.0,
              duration_limit: Optional[float] = None,
+             crop_active_area: bool = False,
              status: StatusCb = None) -> tuple[Optional[Path], str]:
     """DV-RPU aus `source` in den `encoded`-Stream re-injizieren und remuxen.
 
@@ -143,6 +144,15 @@ def reinject(source: Path, encoded: Path, work_dir: Path, *,
         if not _extract_rpu(source, source_codec, rpu, mode, duration_limit=duration_limit):
             return None, "RPU-Extraktion fehlgeschlagen"
 
+        if crop_active_area:
+            import json as _json
+            crop_cfg = work_dir / "crop_l5.json"
+            rpu_cropped = work_dir / "rpu_cropped.bin"
+            crop_cfg.write_text(_json.dumps({"active_area": {"crop": True}}), encoding="utf-8")
+            if _run([config.DOVI_TOOL, "editor", "-i", str(rpu), "-j", str(crop_cfg), "-o", str(rpu_cropped)],
+                    "RPU-L5-Crop"):
+                rpu = rpu_cropped
+
         if status:
             status(f"Dolby Vision: Encode-Stream wird vorbereitet ({dv_target}) …")
         if not _run([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
@@ -164,9 +174,14 @@ def reinject(source: Path, encoded: Path, work_dir: Path, *,
         if fps and fps > 0:
             # Roh-Elementarstream hat keine Framerate – sonst rät ffmpeg (25 fps).
             mux += ["-r", f"{fps:.6f}"]
+        if out_file_mp4 := (final.suffix.lower() in (".mp4", ".m4v", ".mov")):
+            pass
         mux += ["-i", str(inj_es), "-i", str(encoded),
                 "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
-                "-map_chapters", "1", "-c", "copy", str(final)]
+                "-map_chapters", "1", "-c", "copy"]
+        if out_file_mp4:
+            mux += ["-strict", "unofficial", "-tag:v", "dvh1"]
+        mux.append(str(final))
         if not _run(mux, "DV-Mux"):
             return None, "DV-Mux fehlgeschlagen"
 

@@ -5864,7 +5864,16 @@
     "Dieser Browser kann den HDR-Pfad nicht abspielen. Tonemapping ist an.": ["This browser cannot play the HDR path. Tone mapping is on.", "Este navegador no puede reproducir la ruta HDR. El mapeo de tonos está activado.", "Ce navigateur ne peut pas lire le chemin HDR. Le mappage de tons est activé."],
     "Dolby Vision Profil 5 hat keine HDR10-Basis. Tonemapping ist nötig.": ["Dolby Vision profile 5 has no HDR10 base. Tone mapping is required.", "El perfil 5 de Dolby Vision no tiene base HDR10. El mapeo de tonos es necesario.", "Le profil 5 Dolby Vision n’a pas de base HDR10. Le mappage de tons est nécessaire."],
     "Dieses HDR-Format kann der Browser nicht direkt abspielen. Tonemapping ist an.": ["The browser cannot play this HDR format directly. Tone mapping is on.", "El navegador no puede reproducir este formato HDR directamente. El mapeo de tonos está activado.", "Le navigateur ne peut pas lire directement ce format HDR. Le mappage de tons est activé."],
-    "H.264 kann diese HDR-Quelle nicht tragen. Tonemapping ist für den Transcode nötig.": ["H.264 cannot carry this HDR source. Tone mapping is required for the transcode.", "H.264 no puede transportar esta fuente HDR. El mapeo de tonos es necesario para la transcodificación.", "H.264 ne peut pas porter cette source HDR. Le mappage de tons est nécessaire pour le transcodage."]
+    "H.264 kann diese HDR-Quelle nicht tragen. Tonemapping ist für den Transcode nötig.": ["H.264 cannot carry this HDR source. Tone mapping is required for the transcode.", "H.264 no puede transportar esta fuente HDR. El mapeo de tonos es necesario para la transcodificación.", "H.264 ne peut pas porter cette source HDR. Le mappage de tons est nécessaire pour le transcodage."],
+    "HDR / DV Labor": ["HDR / DV Lab", "Laboratorio HDR / DV", "Labo HDR / DV"],
+    "HDR & Dolby Vision Labor": ["HDR & Dolby Vision Lab", "Laboratorio HDR y Dolby Vision", "Laboratoire HDR & Dolby Vision"],
+    "Layer-Inspektor & Bitrate-Graph": ["Layer Inspector & Bitrate Graph", "Inspector de capas y gráfico de bitrate", "Inspecteur de couches & graphe de débit"],
+    "Hybrid-Mux & RPU-Transfer": ["Hybrid Mux & RPU Transfer", "Mux híbrido y transferencia RPU", "Mux hybride & transfert RPU"],
+    "RPU-Tresor (Archiv)": ["RPU Vault (Archive)", "Bóveda RPU (Archivo)", "Coffre RPU (Archive)"],
+    "Dolby Vision Daten": ["Dolby Vision Data", "Datos Dolby Vision", "Données Dolby Vision"],
+    "Zoombarer Bitrate-Graph": ["Zoomable Bitrate Graph", "Gráfico de bitrate con zoom", "Graphe de débit zoomable"],
+    "Spalten": ["Columns", "Columnas", "Colonnes"],
+    "In Film packen": ["Inject into movie", "Inyectar en película", "Injecter dans le film"]
   };
   Object.keys(WORKSPACE).forEach(function (key) {
     DICT[key] = WORKSPACE[key][0];

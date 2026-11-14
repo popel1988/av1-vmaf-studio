@@ -44,8 +44,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # --- GPU-Monitoring-Werkzeuge ---
         intel-gpu-tools radeontop \
         libdrm2 \
-        # --- MKV-Werkzeuge (mkvpropedit für Bitraten-/Statistik-Tags) ---
-        mkvtoolnix \
+        # --- MKV- & Analyse-Werkzeuge (mkvtoolnix + mediainfo für DV-Labor) ---
+        mkvtoolnix mediainfo \
         # --- SMB-Freigaben aus den Einstellungen (mount.cifs) ---
         cifs-utils \
     && rm -rf /var/lib/apt/lists/*

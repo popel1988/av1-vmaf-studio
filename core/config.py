@@ -87,6 +87,10 @@ HDR10PLUS_TOOL = _resolve_binary("hdr10plus_tool")
 # SSIMULACRA2: Wahrnehmungsvergleich eines Standbilds, Quelle gegen Encode.
 SSIMULACRA2 = _resolve_binary("ssimulacra2")
 
+# mkvmerge / mediainfo: optionale Werkzeuge für DV-Hybrid-Remux & DV-Analyzer.
+MKVMERGE = _resolve_binary("mkvmerge")
+MEDIAINFO = _resolve_binary("mediainfo")
+
 # --- Optionaler Zugriffsschutz -----------------------------------------------
 # Ist APP_PASSWORD gesetzt, verlangt die App einen Login. Ohne Variable läuft
 # alles offen wie bisher (Standardverhalten).
@@ -410,6 +414,8 @@ PREVIEW_DIR = Path(os.getenv("PREVIEW_DIR", str(DATA_DIR / "previews")))
 # Vom Nutzer hochgeladene externe Spuren (persistent, bis der Job gelaufen ist).
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", str(DATA_DIR / "uploads")))
 VMAF_SESSIONS_DIR = Path(os.getenv("VMAF_SESSIONS_DIR", str(DATA_DIR / "vmaf")))
+# Lokale Dolby-Vision-RPU-Datenbank (RPU-Tresor).
+RPU_VAULT_DIR = Path(os.getenv("RPU_VAULT_DIR", str(DATA_DIR / "rpu_vault")))
 
 # VMAF-Artefakte nach Analyse behalten (statt work-Ordner zu löschen)
 RETAIN_VMAF_SESSIONS = _env_bool("RETAIN_VMAF_SESSIONS", True)
@@ -530,6 +536,7 @@ def data_paths_dict() -> dict:
         "work_dir": str(WORK_DIR),
         "preview_dir": str(PREVIEW_DIR),
         "vmaf_sessions_dir": str(VMAF_SESSIONS_DIR),
+        "rpu_vault_dir": str(RPU_VAULT_DIR),
         "media_dir": str(MEDIA_DIR),
         "default_output": str(default_output_path()),
         "retain_vmaf_sessions": RETAIN_VMAF_SESSIONS,
@@ -539,7 +546,7 @@ def data_paths_dict() -> dict:
 def ensure_dirs() -> None:
     """Stellt sicher, dass alle Arbeitsverzeichnisse existieren."""
     dirs = [MEDIA_DIR, DATA_DIR, WORK_DIR, PREVIEW_DIR, VMAF_SESSIONS_DIR, UPLOAD_DIR,
-            DATA_DIR / "encoder_bench"]
+            RPU_VAULT_DIR, DATA_DIR / "encoder_bench"]
     for _, base in MEDIA_ROOTS:
         dirs.append(base)
     try:

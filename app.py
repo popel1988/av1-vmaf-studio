@@ -619,6 +619,196 @@ async def dv_curve(path: str, duration: float = 600.0):
     return data
 
 
+# =============================================================================
+#  Dolby Vision & HDR10+ Labor API (Analyzer, Hybrid-Copy, Dual-HDR, RPU-Tresor)
+# =============================================================================
+
+class DvScanRequest(BaseModel):
+    path: str
+    duration_limit: float = 0.0
+
+
+class DvReportRequest(BaseModel):
+    analysis: dict = Field(default_factory=dict)
+    format: str = "txt"
+
+
+class DvCompatibilityRequest(BaseModel):
+    target_path: str
+    donor_path: str = ""
+    vault_id: str = ""
+    auto_sync_intro: bool = True
+
+
+class DvTransferRequest(BaseModel):
+    target_path: str
+    donor_path: str = ""
+    vault_id: str = ""
+    frame_offset: Optional[int] = None
+    auto_sync_intro: bool = True
+    adjust_l5_crop: bool = True
+    keep_temp_files: bool = False
+    save_to_vault: bool = False
+    replace_target: bool = False
+    output_suffix: str = ".DV"
+
+
+class DvDualHdrRequest(BaseModel):
+    path: str
+    replace_source: bool = False
+    save_rpu_to_vault: bool = True
+    keep_temp_files: bool = False
+
+
+class RpuVaultExtractRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list)
+    convert_to_81: bool = True
+    keep_original_rpu: bool = False
+
+
+@app.get("/api/dv-lab/analyze")
+async def api_dv_lab_analyze(path: str, sample_seconds: float = 180.0):
+    target = _safe_resolve(path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    data = await asyncio.to_thread(
+        dv_lab.analyze_dv_file,
+        target,
+        sample_seconds=max(15.0, min(3600.0, float(sample_seconds or 180.0))),
+    )
+    return JSONResponse(data, status_code=200 if data.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/bitrate-scan")
+async def api_dv_lab_bitrate_scan(req: DvScanRequest):
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    data = await asyncio.to_thread(
+        dv_lab.scan_dv_bitrates,
+        target,
+        duration_limit=max(0.0, float(req.duration_limit or 0.0)),
+    )
+    return JSONResponse(data, status_code=200 if data.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/report")
+async def api_dv_lab_report(req: DvReportRequest):
+    from core import dv_lab
+    content, mime, filename = dv_lab.export_dv_report(req.analysis or {}, req.format or "txt")
+    return {"ok": True, "content": content, "mime": mime, "filename": filename}
+
+
+@app.post("/api/dv-lab/compatibility")
+async def api_dv_lab_compatibility(req: DvCompatibilityRequest):
+    target = _safe_resolve(req.target_path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Zieldatei nicht gefunden"}, status_code=404)
+    donor = _safe_resolve(req.donor_path) if req.donor_path else None
+    if req.donor_path and (donor is None or not donor.is_file()):
+        return JSONResponse({"ok": False, "error": "Spenderdatei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.check_hybrid_compatibility,
+        target,
+        donor_path=donor,
+        vault_id=(req.vault_id or "").strip(),
+        auto_sync_intro=bool(req.auto_sync_intro),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/transfer")
+async def api_dv_lab_transfer(req: DvTransferRequest):
+    target = _safe_resolve(req.target_path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Zieldatei nicht gefunden"}, status_code=404)
+    donor = _safe_resolve(req.donor_path) if req.donor_path else None
+    if req.donor_path and (donor is None or not donor.is_file()):
+        return JSONResponse({"ok": False, "error": "Spenderdatei nicht gefunden"}, status_code=404)
+    clean_suffix = "".join(c for c in (req.output_suffix or ".DV") if c.isalnum() or c in "._- ")[:32] or ".DV"
+    if not clean_suffix.startswith((".", "_", "-")):
+        clean_suffix = "." + clean_suffix
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.transfer_dv_to_release,
+        target,
+        donor_path=donor,
+        vault_id=(req.vault_id or "").strip(),
+        frame_offset=req.frame_offset,
+        auto_sync_intro=bool(req.auto_sync_intro),
+        adjust_l5_crop=bool(req.adjust_l5_crop),
+        keep_temp_files=bool(req.keep_temp_files),
+        save_to_vault=bool(req.save_to_vault),
+        replace_target=bool(req.replace_target),
+        output_suffix=clean_suffix,
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/hdr10plus-to-dv")
+async def api_dv_lab_hdr10plus_to_dv(req: DvDualHdrRequest):
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Quelldatei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.convert_hdr10plus_to_dv_dual_hdr,
+        target,
+        replace_source=bool(req.replace_source),
+        save_rpu_to_vault=bool(req.save_rpu_to_vault),
+        keep_temp_files=bool(req.keep_temp_files),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.get("/api/dv-lab/vault")
+async def api_dv_lab_vault_list(query: str = ""):
+    from core import rpu_vault
+    items = await asyncio.to_thread(rpu_vault.list_entries, query)
+    return {"ok": True, "entries": items, "vault_dir": str(config.RPU_VAULT_DIR)}
+
+
+@app.post("/api/dv-lab/vault/extract")
+async def api_dv_lab_vault_extract(req: RpuVaultExtractRequest):
+    resolved: list[Path] = []
+    for p in req.paths or []:
+        t = _safe_resolve(p)
+        if t is not None and t.is_file():
+            resolved.append(t)
+    if not resolved:
+        return JSONResponse({"ok": False, "error": "Keine gültigen Mediendateien übergeben."}, status_code=400)
+    from core import rpu_vault
+    res = await asyncio.to_thread(
+        rpu_vault.batch_extract_to_vault,
+        resolved,
+        convert_to_81=bool(req.convert_to_81),
+        keep_original_rpu=bool(req.keep_original_rpu),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.delete("/api/dv-lab/vault/{entry_id}")
+async def api_dv_lab_vault_delete(entry_id: str):
+    from core import rpu_vault
+    ok = await asyncio.to_thread(rpu_vault.delete_entry, entry_id)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "Eintrag nicht gefunden"}, status_code=404)
+    return {"ok": True}
+
+
+@app.get("/api/dv-lab/vault/{entry_id}/download")
+async def api_dv_lab_vault_download(entry_id: str):
+    from core import rpu_vault
+    entry = await asyncio.to_thread(rpu_vault.get_entry, entry_id)
+    if not entry or not entry.get("rpu_path"):
+        return JSONResponse({"error": "RPU-Datei nicht gefunden"}, status_code=404)
+    p = Path(entry["rpu_path"])
+    return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
+
+
 @app.get("/api/ocr/status")
 async def ocr_status_api():
     """Verfügbare OCR-Backends für Bild-Untertitel (Tesseract / SubtitleEdit)."""
@@ -1140,6 +1330,11 @@ class EditorEnqueueRequest(BaseModel):
     crossfade: float = 0.0
     transition: str = "fade"
     tonemap: bool = False
+    tonemap_engine: str = "cpu"
+    tonemap_algo: str = "hable"
+    tonemap_desat: float = 0.0
+    tonemap_peak: float = 0.0
+    smart_platform: str = "cpu"
     preserve_hdr: bool = True
     preserve_dv: bool = False
     out_mode: str = "default"
@@ -1161,6 +1356,18 @@ class EditorDetectRequest(BaseModel):
     end: float = 0.0
     min_duration: float = 0.5
     threshold: float = 0.0
+    pad_sec: float = 0.0
+    audio_index: int = 0
+
+
+class EditorQuickLoopRequest(BaseModel):
+    path: str
+    start: float = 0.0
+    end: float = 0.0
+    fmt: str = "webp"                # webp | mp4
+    max_width: int = 640
+    fps: int = 15
+    crop: str = ""
 
 
 class EditorTransitionPreviewRequest(BaseModel):
@@ -1337,11 +1544,32 @@ async def editor_detect(req: EditorDetectRequest):
     from core import editor
     data = await asyncio.to_thread(
         editor.detect_cuts,
-        req.path, req.kind, req.start, req.end, req.min_duration, req.threshold,
+        req.path, req.kind, req.start, req.end, req.min_duration,
+        req.threshold, req.pad_sec, req.audio_index,
     )
     if data.get("error"):
         return JSONResponse(data, status_code=400)
     return data
+
+
+@app.post("/api/editor/quick-loop")
+async def editor_quick_loop(req: EditorQuickLoopRequest):
+    """Kurze Auswahl als animiertes WebP oder stummes Loop-MP4 direkt herunterladen."""
+    from starlette.background import BackgroundTask
+    from core import editor
+    out_file, dl_name, media_type, err = await asyncio.to_thread(
+        editor.export_quick_loop,
+        req.path, req.start, req.end, req.fmt, req.max_width, req.fps, req.crop,
+    )
+    if err or out_file is None:
+        return JSONResponse({"error": err or "Kurzclip-Export fehlgeschlagen"}, status_code=400)
+    return FileResponse(
+        out_file,
+        filename=dl_name,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(lambda: out_file.unlink(missing_ok=True)),
+    )
 
 
 @app.post("/api/editor/preview-transition")
@@ -1441,6 +1669,10 @@ async def editor_enqueue(req: EditorEnqueueRequest, preview: bool = False):
         "keyint_sec": int(req.keyint_sec or 0),
         "aq_strength": max(1, min(15, int(req.aq_strength or 8))),
         "tonemap": bool(req.tonemap),
+        "tonemap_engine": req.tonemap_engine or "cpu",
+        "tonemap_algo": req.tonemap_algo or "hable",
+        "tonemap_desat": float(req.tonemap_desat or 0.0),
+        "tonemap_peak": float(req.tonemap_peak or 0.0),
         "preserve_hdr": bool(req.preserve_hdr),
         "preserve_dv": bool(req.preserve_dv),
         "edit_spec": {
@@ -1448,6 +1680,7 @@ async def editor_enqueue(req: EditorEnqueueRequest, preview: bool = False):
             "segments": clean_segs,
             "overlays": clean_ovs,
             "mode": mode,
+            "smart_platform": req.smart_platform or "cpu",
             "container": container,
             "chapters_from_cuts": bool(req.chapters_from_cuts),
             "force_remux": bool(req.force_remux),
@@ -1469,6 +1702,10 @@ async def editor_enqueue(req: EditorEnqueueRequest, preview: bool = False):
             "pad_mode": pad_mode,
             "aspect_mode": aspect_mode,
             "tonemap": bool(req.tonemap),
+            "tonemap_engine": req.tonemap_engine or "cpu",
+            "tonemap_algo": req.tonemap_algo or "hable",
+            "tonemap_desat": float(req.tonemap_desat or 0.0),
+            "tonemap_peak": float(req.tonemap_peak or 0.0),
             "preserve_hdr": bool(req.preserve_hdr),
             "encoder_speed": req.encoder_speed or "balanced",
             "b_frames": req.b_frames or "auto",

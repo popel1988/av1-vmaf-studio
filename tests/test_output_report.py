@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core import output_report as report
 from core.encoder import command_details
@@ -230,6 +231,130 @@ class OutputReportTests(unittest.TestCase):
             self.assertIn("volume=3.50dB", joined)
             self.assertIn("overlay=", joined)
             self.assertIn("bt2020", joined)
+            self.assertIn("-color_trc smpte2084", joined)
+            self.assertIn("setparams=range=limited:color_primaries=bt2020:color_trc=smpte2084", joined)
+            self.assertIn("-svtav1-params tune=0", joined)
+
+    def test_editor_hdr10_static_metadata_and_tonemap_curves(self):
+        from core import editor, ffmpeg_utils as ff
+        md_str = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50)"
+        hdr_info = ff.VideoInfo(
+            path="hdr.mkv", width=3840, height=2160, duration=60.0,
+            codec="hevc", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+            color_primaries="bt2020", color_space="bt2020nc", bit_rate=25000000,
+            size_bytes=100000, fps=24.0, bit_depth=10, hdr_type="HDR10",
+            max_cll=1000, max_fall=400, master_max=1000.0, master_min=0.005,
+            master_display=md_str,
+        )
+        segs = [{
+            "path": "hdr.mkv", "abs": Path("hdr.mkv"), "kind": "media",
+            "start": 2.0, "end": 12.0, "title": "HDR Clip",
+            "audio_index": 0, "audio_indexes": [0], "mute": False,
+            "sub_index": -1, "sub_indexes": [], "burn_subs": False,
+        }]
+        with patch.object(ff, "probe_with_error", return_value=(hdr_info, None)), \
+             patch.object(editor, "_audio_tracks", return_value=[{"channels": 2}]), \
+             patch.object(editor.remux, "write_chapter_meta", return_value=None):
+            # 1) HEVC HDR10 Preserve -> master-display + max-cll + hvc1 bei MP4
+            cmd_hevc, err1 = editor.build_editor_encode_cmd(
+                segs, Path("out.mp4"), platform="cpu", codec="hevc",
+                preserve_hdr=True, tonemap=False, container="mp4", add_chapters=False,
+            )
+            self.assertEqual(err1, "")
+            j_hevc = " ".join(cmd_hevc)
+            self.assertIn("-tag:v hvc1", j_hevc)
+            self.assertIn(f"master-display={md_str}", j_hevc)
+            self.assertIn("max-cll=1000,400", j_hevc)
+            self.assertIn("-color_trc smpte2084", j_hevc)
+
+            # 2a) CPU-Tonemapping mit Mobius + Entsättigung/Peak -> SDR bt709
+            cmd_tm, err2 = editor.build_editor_encode_cmd(
+                segs, Path("out_sdr.mkv"), platform="cpu", codec="av1",
+                tonemap=True, tonemap_engine="cpu", tonemap_algo="mobius",
+                tonemap_desat=0.4, tonemap_peak=1200.0, preserve_hdr=False,
+                add_chapters=False,
+            )
+            self.assertEqual(err2, "")
+            j_tm = " ".join(cmd_tm)
+            self.assertIn("tonemap=tonemap=mobius:desat=0.4:peak=1200", j_tm)
+            self.assertIn("-color_trc bt709", j_tm)
+            self.assertNotIn("smpte2084", j_tm)
+
+            # 2b) libplacebo-Tonemapping mit BT.2390 -> Vulkan init + bt.2390
+            cmd_pl, err3 = editor.build_editor_encode_cmd(
+                segs, Path("out_placebo.mkv"), platform="cpu", codec="av1",
+                tonemap=True, tonemap_engine="libplacebo", tonemap_algo="bt2390",
+                preserve_hdr=False, add_chapters=False,
+            )
+            self.assertEqual(err3, "")
+            j_pl = " ".join(cmd_pl)
+            self.assertIn("libplacebo=tonemapping=bt.2390", j_pl)
+            self.assertIn("-init_hw_device vulkan", j_pl)
+
+    def test_smart_cut_v2_av1_hdr_and_tail_reencode(self):
+        from core import editor, ffmpeg_utils as ff
+        av1_hdr = ff.VideoInfo(
+            path="av1hdr.mkv", width=3840, height=2160, duration=100.0,
+            codec="av1", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+            color_primaries="bt2020", color_space="bt2020nc",
+            bit_rate=20000000, size_bytes=100000,
+            fps=24.0, bit_depth=10, hdr_type="HDR10",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            src_p = Path(td) / "av1hdr.mkv"
+            src_p.write_bytes(b"fake")
+            segs = [{
+                "path": "av1hdr.mkv", "abs": src_p, "kind": "media",
+                "start": 12.5, "end": 47.3, "title": "Mitte",
+                "audio_indexes": [0], "sub_indexes": [],
+            }]
+            fake_kfs = [0.0, 10.0, 15.0, 25.0, 35.0, 45.0, 55.0]
+            with patch.object(editor, "check_remux_compat", return_value={"compatible": True, "warnings": []}), \
+                 patch.object(ff, "probe_with_error", return_value=(av1_hdr, None)), \
+                 patch.object(editor, "_keyframes_around", return_value=fake_kfs):
+                jobs, final_cmd, temps, err = editor.build_editor_smart_plan(
+                    segs, Path(td) / "out.mkv", Path(td), add_chapters=False, platform="cpu",
+                )
+                self.assertEqual(err, "")
+                # 3 Phasen erwartet: Head (12.5->15.0), Body Copy (15.0->45.0), Tail (45.0->47.3)
+                self.assertEqual(len(jobs), 3)
+                head_cmd_str = " ".join(jobs[0][0])
+                body_cmd_str = " ".join(jobs[1][0])
+                tail_cmd_str = " ".join(jobs[2][0])
+                self.assertIn("libsvtav1", head_cmd_str)
+                self.assertIn("-color_trc smpte2084", head_cmd_str)
+                self.assertIn("-svtav1-params tune=0", head_cmd_str)
+                self.assertIn("-c:v copy", body_cmd_str)
+                self.assertIn("libsvtav1", tail_cmd_str)
+                self.assertTrue(len(final_cmd) > 5)
+                self.assertTrue(len(temps) >= 3)
+
+    def test_detect_cuts_silence_padding(self):
+        from core import editor, ffmpeg_utils as ff
+        fake_info = ff.VideoInfo(
+            path="talk.mkv", width=1920, height=1080, duration=30.0, codec="h264",
+            pix_fmt="yuv420p", color_transfer="bt709", color_primaries="bt709",
+            color_space="bt709", bit_rate=5000000, size_bytes=50000, fps=25.0,
+        )
+        fake_stderr = (
+            "[silencedetect @ 000] silence_start: 5.00\n"
+            "[silencedetect @ 000] silence_end: 8.00 | silence_duration: 3.00\n"
+        )
+        mock_proc = Mock(returncode=0, stderr=fake_stderr, stdout="")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "talk.mkv"
+            p.write_bytes(b"x")
+            with patch.object(editor, "resolve_path", return_value=p), \
+                 patch.object(ff, "probe_with_error", return_value=(fake_info, None)), \
+                 patch("subprocess.run", return_value=mock_proc):
+                res = editor.detect_cuts("talk.mkv", kind="silence", min_duration=0.5, threshold=-35, pad_sec=0.2)
+                self.assertNotIn("error", res)
+                self.assertEqual(len(res["gaps"]), 1)
+                # Pause 5.00..8.00 mit 0.2s Polster -> Schnitt nur von 5.20..7.80
+                self.assertAlmostEqual(res["gaps"][0]["start"], 5.20, places=2)
+                self.assertAlmostEqual(res["gaps"][0]["end"], 7.80, places=2)
+                self.assertAlmostEqual(res["keeps"][0]["end"], 5.20, places=2)
+                self.assertAlmostEqual(res["keeps"][1]["start"], 7.80, places=2)
 
 
 if __name__ == "__main__":

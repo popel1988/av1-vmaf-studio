@@ -46,6 +46,10 @@
     mediaManifest: [],
     projectBusy: false,
     sourceSeq: 0,
+    autoPreview: null, // { path, kind, rangeStart, rangeEnd, items: [{start,end,duration,selected}], scenes: [{t,selected}] }
+    progAudioCtx: null,
+    progAudioGain: null,
+    progAudioWired: false,
   };
 
   const TL_COLORS = ["#22d3ee", "#38bdf8", "#34d399", "#fbbf24", "#f87171", "#a78bfa"];
@@ -218,6 +222,147 @@
       : `≈ ${Math.max(1, Math.round(mb))} MB`;
   }
 
+  const LOOK_CSS_FILTERS = {
+    none: "",
+    night: "brightness(1.14) contrast(1.08) saturate(1.08)",
+    vivid: "contrast(1.06) saturate(1.28)",
+    clean: "contrast(1.04) saturate(1.02)",
+    cinema: "contrast(1.16) brightness(0.98) saturate(1.12)",
+    bw: "grayscale(1) contrast(1.12)",
+  };
+
+  function ensureProgAudioGain(pv) {
+    if (!pv || ed.progAudioWired) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      const ctx = new AC();
+      const srcNode = ctx.createMediaElementSource(pv);
+      const gain = ctx.createGain();
+      srcNode.connect(gain);
+      gain.connect(ctx.destination);
+      ed.progAudioCtx = ctx;
+      ed.progAudioGain = gain;
+      ed.progAudioWired = true;
+    } catch (e) { /* Browser ohne MediaElementSource-Unterstützung fällt auf pv.volume zurück */ }
+  }
+
+  function applyProgramMonitorLiveFX(cur, srcTime) {
+    const pv = $("ed-prog-video");
+    const fadeEl = $("ed-prog-fx-fade");
+    const txtEl = $("ed-prog-fx-text");
+    const badgeEl = $("ed-prog-fx-badge");
+    if (!pv) return;
+    if (!cur) {
+      pv.style.filter = "";
+      pv.style.transform = "";
+      pv.style.clipPath = "";
+      if (fadeEl) { fadeEl.hidden = true; fadeEl.style.opacity = "0"; }
+      if (txtEl) { txtEl.hidden = true; txtEl.textContent = ""; }
+      if (badgeEl) badgeEl.hidden = true;
+      return;
+    }
+
+    const fxTags = [];
+    // 1. Bild-Look (CSS Filter)
+    const look = String(cur.look_preset || "none").toLowerCase();
+    pv.style.filter = LOOK_CSS_FILTERS[look] || "";
+    if (look && look !== "none") fxTags.push(look.toUpperCase());
+
+    // 2. Drehung & Spiegelung
+    const rot = Number(cur.rotate) || 0;
+    const sx = cur.hflip ? -1 : 1;
+    const sy = cur.vflip ? -1 : 1;
+    const tfParts = [];
+    if (rot) { tfParts.push(`rotate(${rot}deg)`); fxTags.push(`${rot}°`); }
+    if (sx !== 1 || sy !== 1) { tfParts.push(`scale(${sx}, ${sy})`); fxTags.push("Flip"); }
+    pv.style.transform = tfParts.join(" ");
+
+    // 3. Visueller Crop per clip-path (falls Quellmaße bekannt)
+    let clipCss = "";
+    const cropSpec = String(cur.crop || "").trim();
+    if (cropSpec && cropSpec.includes(":")) {
+      const cp = cropSpec.split(":").map(Number);
+      const vw = pv.videoWidth || (ed.src && ed.src.path === cur.path ? ed.src.width : 0) || 0;
+      const vh = pv.videoHeight || (ed.src && ed.src.path === cur.path ? ed.src.height : 0) || 0;
+      if (cp.length === 4 && vw > 0 && vh > 0 && cp[0] > 0 && cp[1] > 0) {
+        const topPct = Math.max(0, (cp[3] / vh) * 100);
+        const leftPct = Math.max(0, (cp[2] / vw) * 100);
+        const rightPct = Math.max(0, ((vw - cp[2] - cp[0]) / vw) * 100);
+        const bottomPct = Math.max(0, ((vh - cp[3] - cp[1]) / vh) * 100);
+        clipCss = `inset(${topPct.toFixed(2)}% ${rightPct.toFixed(2)}% ${bottomPct.toFixed(2)}% ${leftPct.toFixed(2)}%)`;
+        fxTags.push("Crop");
+      }
+    }
+    pv.style.clipPath = clipCss;
+
+    // 4. Wiedergabetempo
+    const sp = Math.max(0.25, Math.min(4, Number(cur.speed) || 1));
+    if (Math.abs((pv.playbackRate || 1) - sp) > 0.01) {
+      try { pv.playbackRate = sp; } catch (e) { /* ignore */ }
+    }
+    if (Math.abs(sp - 1) > 0.01) fxTags.push(`${sp}×`);
+
+    // 5. Fades & Audio-Pegel abhängig von der aktuellen Quellzeit
+    const tNow = srcTime != null ? Number(srcTime) : (pv.currentTime || cur.start || 0);
+    const outDur = Math.max(0.05, clipDur(cur));
+    const relOut = Math.max(0, Math.min(outDur, (tNow - (Number(cur.start) || 0)) / sp));
+    const fi = Math.min(Number(cur.fade_in) || 0, outDur * 0.45);
+    const fo = Math.min(Number(cur.fade_out) || 0, outDur * 0.45);
+    let visFactor = 1;
+    if (cur.kind === "black" || cur.kind === "silence") {
+      visFactor = 0;
+    } else {
+      if (fi > 0.02 && relOut < fi) visFactor = Math.min(visFactor, relOut / fi);
+      if (fo > 0.02 && relOut > outDur - fo) visFactor = Math.min(visFactor, (outDur - relOut) / fo);
+    }
+    visFactor = Math.max(0, Math.min(1, visFactor));
+    if (fadeEl) {
+      const dark = 1 - visFactor;
+      fadeEl.hidden = dark < 0.02;
+      fadeEl.style.opacity = dark.toFixed(3);
+    }
+
+    // Audio-Lautstärke (inkl. +dB Verstärkung via WebAudio GainNode, falls aktiv)
+    const volDb = Number(cur.volume_db) || 0;
+    if (Math.abs(volDb) > 0.05) fxTags.push(`${volDb > 0 ? "+" : ""}${volDb} dB`);
+    const linGain = cur.mute ? 0 : Math.pow(10, volDb / 20) * visFactor;
+    if (volDb > 0.05 && !pv.paused) ensureProgAudioGain(pv);
+    if (ed.progAudioGain && ed.progAudioCtx) {
+      if (ed.progAudioCtx.state === "suspended" && !pv.paused) {
+        ed.progAudioCtx.resume().catch(() => {});
+      }
+      ed.progAudioGain.gain.value = Math.max(0, Math.min(8, linGain));
+      pv.volume = 1;
+    } else {
+      pv.volume = Math.max(0, Math.min(1, linGain));
+    }
+
+    // 6. Live Text-Einblendung
+    const txt = String(cur.text_overlay || "").trim();
+    if (txtEl) {
+      if (txt) {
+        const pos = String(cur.text_pos || "bottom").toLowerCase();
+        txtEl.className = `ed-prog-fx-text pos-${pos}`;
+        txtEl.textContent = txt;
+        txtEl.hidden = false;
+        fxTags.push("Text");
+      } else {
+        txtEl.hidden = true;
+        txtEl.textContent = "";
+      }
+    }
+
+    if (badgeEl) {
+      if (fxTags.length) {
+        badgeEl.textContent = `Live-FX: ${fxTags.join(" · ")}`;
+        badgeEl.hidden = false;
+      } else {
+        badgeEl.hidden = true;
+      }
+    }
+  }
+
   function syncProgramMonitorInfo(srcTime) {
     const pInfo = $("ed-prog-info");
     const pv = $("ed-prog-video");
@@ -229,6 +374,7 @@
         pv.removeAttribute("src");
         try { pv.load(); } catch (e) { /* ignore */ }
       }
+      applyProgramMonitorLiveFX(null);
       return;
     }
     const cur = s || ed.segments[0];
@@ -236,8 +382,8 @@
     if (pInfo) {
       pInfo.textContent = `Clip ${idx + 1}/${ed.segments.length}: ${clipLabel(cur)} · ${fmt(cur.start)} → ${fmt(cur.end)} (${fmt(clipDur(cur))}) · Gesamt ${fmt(totalDur())}`;
     }
-    if (!pv || cur.kind !== "media" || !cur.path) return;
-    const url = mediaUrl(cur.path, 0);
+    applyProgramMonitorLiveFX(cur, srcTime);
+    if (!pv || (cur.kind !== "media" && cur.kind !== "freeze") || !cur.path) return;
     if (pv.dataset.clipPath !== cur.path) {
       pv.dataset.clipPath = cur.path;
       pv.src = fileUrl(cur.path);
@@ -1016,11 +1162,19 @@
         </div>
         <div>
           <label>In (Zeit / s)</label>
-          <input data-f="start" value="${fmt(s.start)}" />
+          <div class="ed-insp-step-row">
+            <button type="button" class="btn btn-ghost btn-sm ed-insp-step-btn" data-step-edge="start" data-step-dir="-1" title="In-Punkt 1 Frame früher">−1F</button>
+            <input data-f="start" value="${fmt(s.start)}" />
+            <button type="button" class="btn btn-ghost btn-sm ed-insp-step-btn" data-step-edge="start" data-step-dir="1" title="In-Punkt 1 Frame später">+1F</button>
+          </div>
         </div>
         <div>
           <label>Out (Zeit / s)</label>
-          <input data-f="end" value="${fmt(s.end)}" />
+          <div class="ed-insp-step-row">
+            <button type="button" class="btn btn-ghost btn-sm ed-insp-step-btn" data-step-edge="end" data-step-dir="-1" title="Out-Punkt 1 Frame früher">−1F</button>
+            <input data-f="end" value="${fmt(s.end)}" />
+            <button type="button" class="btn btn-ghost btn-sm ed-insp-step-btn" data-step-edge="end" data-step-dir="1" title="Out-Punkt 1 Frame später">+1F</button>
+          </div>
         </div>
         <div>
           <label>Fade-In (s)</label>
@@ -1134,7 +1288,25 @@
     const autoBtn = $("ed-insp-crop-auto");
     if (autoBtn) autoBtn.addEventListener("click", runAutoCrop);
 
+    box.querySelectorAll("[data-step-edge]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const edge = btn.dataset.stepEdge;
+        const dir = Number(btn.dataset.stepDir) || 0;
+        nudgeClipEdgeByFrames(s.id, edge, dir);
+      });
+    });
+
     box.querySelectorAll("[data-f]").forEach((inp) => {
+      const fKey = inp.dataset.f;
+      if (fKey === "text_overlay" || fKey === "volume_db") {
+        inp.addEventListener("input", () => {
+          const rec = ed.segments.find((x) => x.id === s.id);
+          if (!rec) return;
+          if (fKey === "text_overlay") rec.text_overlay = String(inp.value);
+          else rec.volume_db = Number(inp.value) || 0;
+          applyProgramMonitorLiveFX(rec);
+        });
+      }
       inp.addEventListener("change", () => {
         pushHist();
         const f = inp.dataset.f;
@@ -1151,6 +1323,7 @@
           syncMarkLabels();
         }
         renderSegList();
+        applyProgramMonitorLiveFX(rec);
       });
     });
   }
@@ -1797,9 +1970,13 @@
     const sameSrc = !!(isMedia && ed.src && ed.src.path === s.path);
     const inside = sameSrc && ed.playhead > s.start + 0.05 && ed.playhead < s.end - 0.05;
     const set = (id, on) => { const el = $(id); if (el) el.disabled = !on; };
+    const prevClip = idx > 0 ? ed.segments[idx - 1] : null;
+    const canRoll = !!(isMedia && prevClip && prevClip.kind === "media");
     set("ed-tl-split", inside);
     set("ed-tl-trim-in", sameSrc);
     set("ed-tl-trim-out", sameSrc);
+    set("ed-tl-roll-back", canRoll);
+    set("ed-tl-roll-fwd", canRoll);
     set("ed-tl-left", idx > 0);
     set("ed-tl-right", idx >= 0 && idx < ed.segments.length - 1);
     set("ed-tl-dup", !!s);
@@ -1888,11 +2065,13 @@
 
   function renderSourceRuler() {
     const keepsEl = $("ed-src-keeps");
+    const detEl = $("ed-src-detects");
     const selEl = $("ed-src-sel");
     const head = $("ed-src-playhead");
     const chEl = $("ed-src-chaps");
     if (!keepsEl || !selEl || !ed.src || !(ed.src.duration > 0)) {
       if (keepsEl) keepsEl.innerHTML = "";
+      if (detEl) detEl.innerHTML = "";
       if (selEl) selEl.style.width = "0";
       if (head) head.style.left = "0";
       if (chEl) chEl.innerHTML = "";
@@ -1918,6 +2097,30 @@
       d.style.width = "100%";
       d.title = tt("Noch keine Clips – ganze Datei oder Bereiche behalten/entfernen");
       keepsEl.appendChild(d);
+    }
+    if (detEl) {
+      detEl.innerHTML = "";
+      const ap = ed.autoPreview;
+      if (ap && ap.path === ed.src.path) {
+        if (ap.kind === "scene") {
+          (ap.scenes || []).forEach((sc, i) => {
+            const m = document.createElement("div");
+            m.className = "ed-src-det-scene" + (sc.selected ? "" : " off");
+            m.style.left = `${(Math.min(dur, Math.max(0, sc.t)) / dur) * 100}%`;
+            m.title = `${tt("Szene")} #${i + 1} @ ${fmt(sc.t)}`;
+            detEl.appendChild(m);
+          });
+        } else {
+          (ap.items || []).forEach((g, i) => {
+            const m = document.createElement("div");
+            m.className = "ed-src-det-gap" + (g.selected ? "" : " off");
+            m.style.left = `${(Math.max(0, g.start) / dur) * 100}%`;
+            m.style.width = `${Math.max(0.25, ((g.end - g.start) / dur) * 100)}%`;
+            m.title = `#${i + 1}: ${fmt(g.start)} – ${fmt(g.end)} (${fmt(g.duration)})`;
+            detEl.appendChild(m);
+          });
+        }
+      }
     }
     if (chEl) {
       chEl.innerHTML = "";
@@ -2191,6 +2394,10 @@
       });
       aSel.appendChild(none);
       aSel.value = ed.src.audio.length ? "0" : "-1";
+    }
+    if (ed.autoPreview && ed.autoPreview.path !== path) {
+      ed.autoPreview = null;
+      renderAutoPreviewPanel();
     }
     ed.inSec = opts.inSec != null ? opts.inSec : 0;
     ed.outSec = opts.outSec != null ? opts.outSec : ed.src.duration;
@@ -2669,7 +2876,7 @@
     setStatus(which === "intro" ? tt("Intro gespeichert.") : tt("Outro gespeichert."));
   }
 
-  const PROJECT_FIELDS = ("mode hdr-mode export-split bgm-path bgm-vol bgm-duck pad-mode aspect-mode container suffix name-mode out-name chapters force platform codec enc-speed b-frames nvenc-tune aq-strength keyint cq rate-mode vbr acodec abr achannels out-mode out-subdir crossfade transition follow snap-ch snap-kf burn").split(" ").map((name) => "ed-" + name);
+  const PROJECT_FIELDS = ("mode smart-plat hdr-mode tonemap-engine tonemap-algo tonemap-desat tonemap-peak export-split bgm-path bgm-vol bgm-duck pad-mode aspect-mode container suffix name-mode out-name chapters force platform codec enc-speed b-frames nvenc-tune aq-strength keyint cq rate-mode vbr acodec abr achannels out-mode out-subdir crossfade transition follow snap-ch snap-kf burn").split(" ").map((name) => "ed-" + name);
 
   function projectData() {
     const settings = {};
@@ -3108,6 +3315,23 @@
     }
   }
 
+  function syncTonemapUI() {
+    const mode = ($("ed-mode") && $("ed-mode").value) || "remux";
+    const hdrMode = ($("ed-hdr-mode") && $("ed-hdr-mode").value) || "keep";
+    const isTm = mode === "encode" && hdrMode === "tonemap";
+    const eng = ($("ed-tonemap-engine") && $("ed-tonemap-engine").value) || "cpu";
+    const supportsPeak = eng !== "libplacebo";
+    ["ed-tm-engine-field", "ed-tm-algo-field"].forEach((id) => {
+      if ($(id)) $(id).style.display = isTm ? "" : "none";
+    });
+    ["ed-tm-desat-field", "ed-tm-peak-field"].forEach((id) => {
+      if ($(id)) $(id).style.display = isTm && supportsPeak ? "" : "none";
+    });
+    const dv = $("ed-tonemap-desat-val");
+    const di = $("ed-tonemap-desat");
+    if (dv && di) dv.textContent = (Number(di.value) || 0).toFixed(1).replace(".", ",");
+  }
+
   function syncModeUI() {
     const need = clipsNeedEncode();
     const modeEl = $("ed-mode");
@@ -3117,20 +3341,23 @@
     const mode = (modeEl && modeEl.value) || "remux";
     const enc = $("ed-encode-opts");
     if (enc) enc.style.display = mode === "encode" ? "" : "none";
+    const spf = $("ed-smart-plat-field");
+    if (spf) spf.style.display = mode === "smart" ? "" : "none";
     const xf = Number(($("ed-crossfade") || {}).value) || 0;
     const tf = $("ed-transition-field");
     if (tf) tf.style.display = xf > 0.01 ? "" : "none";
     const hint = $("ed-mode-hint");
     if (hint) {
       if (mode === "encode") {
-        hint.textContent = tt("Encode schneidet framegenau, unterstützt Fades, B-Roll (V2) sowie Filter und behält 10-Bit/HDR bei.");
+        hint.textContent = tt("Encode schneidet framegenau, unterstützt Fades, B-Roll (V2) sowie Filter und behält 10-Bit/HDR10-Metadaten bei.");
       } else if (mode === "smart") {
-        hint.textContent = tt("Smart Cut encodiert nur wenige Sekunden an angeschnittenen GOP-Rändern und kopiert den Hauptteil verlustfrei.");
+        hint.textContent = tt("Smart Cut 2.0 encodiert nur wenige Sekunden an angeschnittenen Clip-Anfängen & -Enden (auf Wunsch mit GPU) und kopiert den Hauptteil verlustfrei.");
       } else {
         hint.textContent = tt("Remux kopiert Streams ohne Neucodierung. Schnitte liegen am nächsten Keyframe.");
       }
     }
     updateKfDeltaBar();
+    syncTonemapUI();
     syncRateUI();
     syncAudioUI(mode);
     syncNameUI();
@@ -3266,6 +3493,7 @@
       out_name: (($("ed-out-name") && $("ed-out-name").value) || "").trim(),
       chapters_from_cuts: !!($("ed-chapters") && $("ed-chapters").checked),
       force_remux: !!($("ed-force") && $("ed-force").checked),
+      smart_platform: ($("ed-smart-plat") && $("ed-smart-plat").value) || "cpu",
       platform: ($("ed-platform") && $("ed-platform").value) || "cpu",
       codec: ($("ed-codec") && $("ed-codec").value) || "av1",
       encoder_speed: ($("ed-enc-speed") && $("ed-enc-speed").value) || "balanced",
@@ -3284,6 +3512,10 @@
       crossfade: Number(($("ed-crossfade") || {}).value) || 0,
       transition: ($("ed-transition") && $("ed-transition").value) || "fade",
       tonemap: hdrMode === "tonemap",
+      tonemap_engine: ($("ed-tonemap-engine") && $("ed-tonemap-engine").value) || "cpu",
+      tonemap_algo: ($("ed-tonemap-algo") && $("ed-tonemap-algo").value) || "hable",
+      tonemap_desat: Number(($("ed-tonemap-desat") || {}).value) || 0,
+      tonemap_peak: Number(($("ed-tonemap-peak") || {}).value) || 0,
       preserve_hdr: hdrMode !== "tonemap",
       post_processing: "keep",
       editor_project: projectData(),
@@ -3716,6 +3948,232 @@
     });
   }
 
+  function syncAutoPanelControls() {
+    const kind = ($("ed-auto-kind") && $("ed-auto-kind").value) || "silence";
+    const lbl = $("ed-auto-thresh-lbl");
+    const th = $("ed-auto-thresh");
+    const md = $("ed-auto-mindur");
+    const padWrap = $("ed-auto-pad-wrap");
+    if (kind === "silence") {
+      if (lbl) lbl.textContent = tt("Schwelle (dB)");
+      if (th && (Number(th.value) >= 0 || !th.value)) { th.value = "-35"; th.step = "1"; th.min = "-70"; th.max = "-10"; }
+      if (md && Number(md.value) > 5) md.value = "0.6";
+      if (padWrap) padWrap.style.display = "";
+    } else if (kind === "black") {
+      if (lbl) lbl.textContent = tt("Schwarz-Schwelle");
+      if (th && (Number(th.value) < 0 || Number(th.value) > 0.5)) { th.value = "0.10"; th.step = "0.02"; th.min = "0.01"; th.max = "0.50"; }
+      if (padWrap) padWrap.style.display = "";
+    } else {
+      if (lbl) lbl.textContent = tt("Szenen-Sensitivität");
+      if (th && (Number(th.value) <= 0 || Number(th.value) > 0.8)) { th.value = "0.32"; th.step = "0.02"; th.min = "0.08"; th.max = "0.80"; }
+      if (md && Number(md.value) < 0.8) md.value = "1.5";
+      if (padWrap) padWrap.style.display = "none";
+    }
+  }
+
+  function openAutoDetectPanel(kind) {
+    const panel = $("ed-auto-panel");
+    if (!panel) return;
+    if (kind && $("ed-auto-kind")) $("ed-auto-kind").value = kind;
+    syncAutoPanelControls();
+    panel.hidden = false;
+    if (ed.src && ed.src.path) scanAutoDetectPreview();
+  }
+
+  function closeAutoDetectPanel() {
+    const panel = $("ed-auto-panel");
+    if (panel) panel.hidden = true;
+    ed.autoPreview = null;
+    renderSourceRuler();
+  }
+
+  function renderAutoPreviewPanel() {
+    const sum = $("ed-auto-summary");
+    const chips = $("ed-auto-chips");
+    const foot = $("ed-auto-foot");
+    if (!sum || !chips) return;
+    const ap = ed.autoPreview;
+    if (!ap || !ed.src || ap.path !== ed.src.path) {
+      sum.textContent = tt("Klicke auf „Analysieren“, um Treffer auf der Quell-Leiste vorab zu prüfen.");
+      chips.innerHTML = "";
+      if (foot) foot.hidden = true;
+      renderSourceRuler();
+      return;
+    }
+    chips.innerHTML = "";
+    if (ap.kind === "scene") {
+      const list = ap.scenes || [];
+      const selCount = list.filter((x) => x.selected).length;
+      sum.textContent = list.length
+        ? `${list.length} ${tt("Szenenwechsel erkannt")} (${selCount} ${tt("aktiv")}) — ${tt("Klick auf Zeitstempel springt im Player dorthin.")}`
+        : tt("Keine Szenenwechsel im gewählten Bereich erkannt.");
+      if (foot) foot.hidden = list.length === 0;
+      list.forEach((sc, idx) => {
+        const el = document.createElement("span");
+        el.className = "ed-auto-chip" + (sc.selected ? " on" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!sc.selected;
+        cb.addEventListener("change", () => {
+          sc.selected = cb.checked;
+          renderAutoPreviewPanel();
+        });
+        const jb = document.createElement("button");
+        jb.type = "button";
+        jb.className = "ed-auto-jump";
+        jb.textContent = `#${idx + 1} ${fmt(sc.t)}`;
+        jb.title = tt("Vorschau an Schnittpunkt springen");
+        jb.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          seekSoft(sc.t, { snap: false });
+        });
+        el.appendChild(cb);
+        el.appendChild(jb);
+        chips.appendChild(el);
+      });
+    } else {
+      const list = ap.items || [];
+      const active = list.filter((x) => x.selected);
+      const savedSec = active.reduce((a, g) => a + (Number(g.duration) || 0), 0);
+      sum.textContent = list.length
+        ? `${list.length} ${tt("Pausen/Blenden erkannt")} · ${active.length} ${tt("zum Entfernen gewählt")} (−${fmt(savedSec)}). ${tt("Rote Balken oben im Quell-Ruler zeigen die Schnitte.")}`
+        : tt("Keine passenden Pausen oder Schwarzbilder mit diesen Schwellen gefunden.");
+      if (foot) foot.hidden = list.length === 0;
+      list.forEach((g, idx) => {
+        const el = document.createElement("span");
+        el.className = "ed-auto-chip" + (g.selected ? " on" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!g.selected;
+        cb.addEventListener("change", () => {
+          g.selected = cb.checked;
+          renderAutoPreviewPanel();
+        });
+        const jb = document.createElement("button");
+        jb.type = "button";
+        jb.className = "ed-auto-jump";
+        jb.textContent = `${fmt(g.start)}–${fmt(g.end)} (${g.duration.toFixed(1)}s)`;
+        jb.title = tt("An Anfang dieser Pause springen");
+        jb.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          seekSoft(Math.max(0, g.start - 0.35), { snap: false });
+        });
+        el.appendChild(cb);
+        el.appendChild(jb);
+        chips.appendChild(el);
+      });
+    }
+    renderSourceRuler();
+  }
+
+  async function scanAutoDetectPreview() {
+    if (!ed.src || !ed.src.path) {
+      setStatus(tt("Zuerst eine Quelle laden."), true);
+      return;
+    }
+    const kind = ($("ed-auto-kind") && $("ed-auto-kind").value) || "silence";
+    const minDur = Math.max(0.1, Number(($("ed-auto-mindur") || {}).value) || 0.5);
+    const thresh = Number(($("ed-auto-thresh") || {}).value) || (kind === "silence" ? -35 : 0.1);
+    const padSec = kind === "scene" ? 0 : Math.max(0, Number(($("ed-auto-pad") || {}).value) || 0);
+    const onlyInOut = !!($("ed-auto-inrange") && $("ed-auto-inrange").checked);
+    const marks = readMarks();
+    const s0 = onlyInOut && marks.end > marks.start + 0.3 ? marks.start : 0;
+    const s1 = onlyInOut && marks.end > marks.start + 0.3 ? marks.end : ed.src.duration;
+    const sum = $("ed-auto-summary");
+    if (sum) sum.textContent = `${tt("Analysiere Quelle")} (${fmt(s0)} → ${fmt(s1)}) …`;
+    setStatus(`${tt("Auto-Schnitt-Analyse läuft")} …`);
+    try {
+      const r = await fetch("/api/editor/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: ed.src.path,
+          kind,
+          start: s0,
+          end: s1,
+          min_duration: minDur,
+          threshold: thresh,
+          pad_sec: padSec,
+          audio_index: Math.max(0, previewAudioIndex()),
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || "Analyse fehlgeschlagen");
+      ed.autoPreview = {
+        path: ed.src.path,
+        kind: d.kind || kind,
+        rangeStart: Number(d.range_start != null ? d.range_start : s0),
+        rangeEnd: Number(d.range_end != null ? d.range_end : s1),
+        items: (d.gaps || []).map((g) => ({
+          start: Number(g.start),
+          end: Number(g.end),
+          duration: Number(g.duration) || Math.max(0, Number(g.end) - Number(g.start)),
+          selected: true,
+        })),
+        scenes: (d.scenes || []).map((t) => ({ t: Number(t), selected: true })),
+      };
+      renderAutoPreviewPanel();
+      setStatus(tt("Auto-Schnitt-Vorschau bereit – Treffer prüfen und anwenden."));
+    } catch (e) {
+      if (sum) sum.textContent = String(e.message || e);
+      setStatus(String(e.message || e), true);
+    }
+  }
+
+  function applyAutoDetectPreview() {
+    const ap = ed.autoPreview;
+    if (!ap || !ed.src || ap.path !== ed.src.path) return;
+    const s0 = Number(ap.rangeStart) || 0;
+    const s1 = Number(ap.rangeEnd) || ed.src.duration;
+    const keeps = [];
+    if (ap.kind === "scene") {
+      const pts = [round2(s0)]
+        .concat((ap.scenes || []).filter((x) => x.selected).map((x) => round2(x.t)))
+        .concat([round2(s1)]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (pts[i + 1] - pts[i] >= 0.25) {
+          keeps.push({ start: pts[i], end: pts[i + 1], title: `Szene ${i + 1}` });
+        }
+      }
+    } else {
+      const gaps = (ap.items || []).filter((x) => x.selected).sort((a, b) => a.start - b.start);
+      let cursor = s0;
+      let idx = 1;
+      gaps.forEach((g) => {
+        if (g.start - cursor >= 0.25) {
+          keeps.push({ start: round2(cursor), end: round2(g.start), title: `Teil ${idx++}` });
+        }
+        cursor = Math.max(cursor, g.end);
+      });
+      if (s1 - cursor >= 0.25) {
+        keeps.push({ start: round2(cursor), end: round2(s1), title: `Teil ${idx}` });
+      }
+    }
+    if (!keeps.length) {
+      setStatus(tt("Keine gültigen Segmente übrig."), true);
+      return;
+    }
+    pushHist();
+    const opts = audioOpts();
+    const neu = keeps.map((k, idx) => defaultClip({
+      path: ed.src.path,
+      name: ed.src.name,
+      start: round2(k.start),
+      end: round2(k.end),
+      title: k.title || `Clip ${idx + 1}`,
+      audio_index: opts.audio_index,
+      audio_indexes: opts.audio_indexes.slice(),
+      mute: opts.mute,
+      sub_index: opts.sub_index,
+      sub_indexes: (opts.sub_indexes || []).slice(),
+      burn_subs: opts.burn_subs,
+    }));
+    ed.segments = neu;
+    if (neu[0]) ed.activeId = neu[0].id;
+    renderSegList();
+    setStatus(`${neu.length} ${tt("Clips aus Auto-Schnitt übernommen.")}`);
+  }
+
   async function runAutoDetect(kind) {
     if (!ed.src || !ed.src.path) {
       setStatus(tt("Zuerst eine Quelle laden."), true);
@@ -3733,7 +4191,9 @@
           kind,
           start: start > 0 ? start : 0,
           end: end > start ? end : ed.src.duration,
-          min_duration: kind === "scene" ? 1.5 : 0.5,
+          min_duration: kind === "scene" ? 1.5 : (kind === "silence" ? 0.6 : 0.5),
+          pad_sec: kind === "silence" ? 0.15 : 0.0,
+          audio_index: Math.max(0, previewAudioIndex()),
         }),
       });
       const d = await r.json();
@@ -3890,6 +4350,125 @@
     a.click();
     a.remove();
     setStatus(`${tt("Einzelbild gespeichert")} @ ${fmt(t)}`);
+  }
+
+  /** Kurzclip-Direktexport (animiertes WebP oder stummes Loop-MP4 bis 25 s). */
+  async function exportQuickLoop(fmtKind) {
+    if (!ed.src || !ed.src.path) {
+      setStatus(tt("Zuerst eine Quelle laden."), true);
+      return;
+    }
+    const marks = readMarks();
+    const act = activeClip();
+    let s0 = marks.start;
+    let s1 = marks.end;
+    if (!(s1 > s0 + 0.15) || (s0 === 0 && Math.abs(s1 - ed.src.duration) < 0.05 && ed.src.duration > 25)) {
+      if (act && act.kind === "media" && act.path === ed.src.path) {
+        s0 = act.start;
+        s1 = Math.min(act.end, act.start + 10);
+      } else {
+        s0 = Math.max(0, currentPreviewTime());
+        s1 = Math.min(ed.src.duration || (s0 + 5), s0 + 6);
+      }
+    }
+    const span = Math.min(25, Math.max(0.2, s1 - s0));
+    s1 = s0 + span;
+    const cropStr = (act && act.path === ed.src.path && act.crop) ? act.crop : "";
+    const label = fmtKind === "mp4" ? "Loop-MP4" : "WebP";
+    setStatus(`${tt("Erstelle")} ${label} (${fmt(s0)} → ${fmt(s1)}) …`);
+    try {
+      const r = await fetch("/api/editor/quick-loop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: ed.src.path,
+          start: s0,
+          end: s1,
+          fmt: fmtKind === "mp4" ? "mp4" : "webp",
+          max_width: fmtKind === "mp4" ? 960 : 640,
+          fps: fmtKind === "mp4" ? 24 : 15,
+          crop: cropStr,
+        }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || `${label}-Export fehlgeschlagen`);
+      }
+      const cd = r.headers.get("Content-Disposition") || "";
+      const fnMatch = cd.match(/filename="?([^";]+)"?/i);
+      const dlName = (fnMatch && fnMatch[1]) || `loop.${fmtKind === "mp4" ? "mp4" : "webp"}`;
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = dlName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      setStatus(`${label} ${tt("heruntergeladen")}: ${dlName}`);
+    } catch (e) {
+      setStatus(String(e.message || e), true);
+    }
+  }
+
+  function clipFpsFor(clip) {
+    if (ed.src && (!clip || ed.src.path === clip.path) && ed.src.fps > 1) return ed.src.fps;
+    return 25;
+  }
+
+  /** Verschiebt In oder Out eines Clips framegenau (±1 Frame) und aktualisiert den Monitor. */
+  function nudgeClipEdgeByFrames(clipId, edge, frameDelta) {
+    const rec = ed.segments.find((x) => x.id === clipId);
+    if (!rec || rec.kind !== "media") return;
+    const fps = clipFpsFor(rec);
+    const dt = (Number(frameDelta) || 0) / fps;
+    if (!dt) return;
+    pushHist();
+    const maxDur = (ed.src && ed.src.path === rec.path && ed.src.duration > 0) ? ed.src.duration : 1e9;
+    if (edge === "start") {
+      rec.start = Math.max(0, Math.min(rec.end - 0.08, Math.round((rec.start + dt) * 1000) / 1000));
+    } else {
+      rec.end = Math.min(maxDur, Math.max(rec.start + 0.08, Math.round((rec.end + dt) * 1000) / 1000));
+    }
+    if (ed.src && ed.src.path === rec.path) {
+      if ($("ed-in")) $("ed-in").value = fmt(rec.start);
+      if ($("ed-out")) $("ed-out").value = fmt(rec.end);
+      syncMarkLabels();
+      seekSoft(edge === "start" ? rec.start : rec.end, { snap: false });
+    }
+    renderSegList();
+    syncProgramMonitorInfo(edge === "start" ? rec.start : rec.end);
+  }
+
+  /** Rolling-Trim: Verschiebt die Schnittkante zwischen vorherigem Clip und aktivem Clip um ±N Frames,
+   *  sodass die Gesamtlänge konstant bleibt. */
+  function rollingTrimActiveCut(frameDelta) {
+    const cur = activeClip();
+    if (!cur || cur.kind !== "media") return;
+    const idx = ed.segments.indexOf(cur);
+    if (idx <= 0) return;
+    const prev = ed.segments[idx - 1];
+    if (!prev || prev.kind !== "media") return;
+    const fps = clipFpsFor(cur);
+    const dt = (Number(frameDelta) || 0) / fps;
+    if (!dt) return;
+    const maxPrev = (ed.src && ed.src.path === prev.path && ed.src.duration > 0) ? ed.src.duration : 1e9;
+    const nextPrevEnd = prev.end + dt;
+    const nextCurStart = cur.start + dt;
+    if (nextPrevEnd <= prev.start + 0.08 || nextPrevEnd > maxPrev) return;
+    if (nextCurStart < 0 || nextCurStart >= cur.end - 0.08) return;
+    pushHist();
+    prev.end = Math.round(nextPrevEnd * 1000) / 1000;
+    cur.start = Math.round(nextCurStart * 1000) / 1000;
+    if (ed.src && ed.src.path === cur.path) {
+      if ($("ed-in")) $("ed-in").value = fmt(cur.start);
+      syncMarkLabels();
+      seekSoft(cur.start, { snap: false });
+    }
+    renderSegList();
+    syncProgramMonitorInfo(cur.start);
+    setStatus(`${tt("Rolling-Trim Schnittkante")}: ${fmt(prev.end)} | ${fmt(cur.start)}`);
   }
 
   /** 1-Klick: Alles vor dem Playhead wegschneiden (Ripple Trim Start). */
@@ -4401,6 +4980,8 @@
     if ($("ed-kf-prev")) $("ed-kf-prev").addEventListener("click", () => jumpKeyframe(-1));
     if ($("ed-kf-next")) $("ed-kf-next").addEventListener("click", () => jumpKeyframe(1));
     if ($("ed-snapshot")) $("ed-snapshot").addEventListener("click", takeSnapshot);
+    if ($("ed-quick-webp")) $("ed-quick-webp").addEventListener("click", () => exportQuickLoop("webp"));
+    if ($("ed-quick-loop-mp4")) $("ed-quick-loop-mp4").addEventListener("click", () => exportQuickLoop("mp4"));
     if ($("ed-freeze-insert")) $("ed-freeze-insert").addEventListener("click", () => insertFreezeFrame(3));
     if ($("ed-loop-toggle")) $("ed-loop-toggle").addEventListener("click", () => {
       ed.loopRange = !ed.loopRange;
@@ -4447,6 +5028,25 @@
       btn.addEventListener("click", () => applyCropRatio(btn.dataset.cropRatio));
     });
     wireCropDrag();
+    if ($("ed-det-open-silence")) $("ed-det-open-silence").addEventListener("click", () => openAutoDetectPanel("silence"));
+    if ($("ed-det-open-black")) $("ed-det-open-black").addEventListener("click", () => openAutoDetectPanel("black"));
+    if ($("ed-det-open-scene")) $("ed-det-open-scene").addEventListener("click", () => openAutoDetectPanel("scene"));
+    if ($("ed-auto-kind")) $("ed-auto-kind").addEventListener("change", syncAutoPanelControls);
+    if ($("ed-auto-scan")) $("ed-auto-scan").addEventListener("click", scanAutoDetectPreview);
+    if ($("ed-auto-close")) $("ed-auto-close").addEventListener("click", closeAutoDetectPanel);
+    if ($("ed-auto-sel-all")) $("ed-auto-sel-all").addEventListener("click", () => {
+      if (!ed.autoPreview) return;
+      (ed.autoPreview.items || []).forEach((x) => { x.selected = true; });
+      (ed.autoPreview.scenes || []).forEach((x) => { x.selected = true; });
+      renderAutoPreviewPanel();
+    });
+    if ($("ed-auto-sel-none")) $("ed-auto-sel-none").addEventListener("click", () => {
+      if (!ed.autoPreview) return;
+      (ed.autoPreview.items || []).forEach((x) => { x.selected = false; });
+      (ed.autoPreview.scenes || []).forEach((x) => { x.selected = false; });
+      renderAutoPreviewPanel();
+    });
+    if ($("ed-auto-apply")) $("ed-auto-apply").addEventListener("click", applyAutoDetectPreview);
     if ($("ed-det-black")) $("ed-det-black").addEventListener("click", () => runAutoDetect("black"));
     if ($("ed-det-silence")) $("ed-det-silence").addEventListener("click", () => runAutoDetect("silence"));
     if ($("ed-det-scene")) $("ed-det-scene").addEventListener("click", () => runAutoDetect("scene"));
@@ -4550,6 +5150,8 @@
     if ($("ed-tl-dup")) $("ed-tl-dup").addEventListener("click", duplicateActive);
     if ($("ed-tl-trim-in")) $("ed-tl-trim-in").addEventListener("click", () => trimActive("in"));
     if ($("ed-tl-trim-out")) $("ed-tl-trim-out").addEventListener("click", () => trimActive("out"));
+    if ($("ed-tl-roll-back")) $("ed-tl-roll-back").addEventListener("click", () => rollingTrimActiveCut(-1));
+    if ($("ed-tl-roll-fwd")) $("ed-tl-roll-fwd").addEventListener("click", () => rollingTrimActiveCut(1));
 
     const tl = $("ed-timeline");
     if (tl) {
@@ -4650,6 +5252,18 @@
       });
     }
 
+    const pv = $("ed-prog-video");
+    if (pv) {
+      pv.addEventListener("timeupdate", () => {
+        const cur = activeClip() || ed.segments[0];
+        if (cur) applyProgramMonitorLiveFX(cur, pv.currentTime);
+      });
+      pv.addEventListener("loadedmetadata", () => {
+        const cur = activeClip() || ed.segments[0];
+        if (cur) applyProgramMonitorLiveFX(cur, pv.currentTime);
+      });
+    }
+
     if ($("ed-clear")) $("ed-clear").addEventListener("click", () => {
       pushHist();
       ed.segments = [];
@@ -4662,6 +5276,9 @@
     });
     if ($("ed-play-tl")) $("ed-play-tl").addEventListener("click", playTimeline);
     if ($("ed-mode")) $("ed-mode").addEventListener("change", syncModeUI);
+    if ($("ed-hdr-mode")) $("ed-hdr-mode").addEventListener("change", syncTonemapUI);
+    if ($("ed-tonemap-engine")) $("ed-tonemap-engine").addEventListener("change", syncTonemapUI);
+    if ($("ed-tonemap-desat")) $("ed-tonemap-desat").addEventListener("input", syncTonemapUI);
     if ($("ed-rate-mode")) $("ed-rate-mode").addEventListener("change", syncRateUI);
     if ($("ed-acodec")) $("ed-acodec").addEventListener("change", () => syncAudioUI());
     if ($("ed-name-mode")) $("ed-name-mode").addEventListener("change", syncNameUI);
