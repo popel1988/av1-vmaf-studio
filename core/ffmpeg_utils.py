@@ -311,13 +311,14 @@ def info_from_probe(data: dict, path: Path,
         master_min=float(light.get("master_min") or 0.0),
         master_display=str(light.get("master_display") or ""),
     )
+    _promote_companion_dovi(info)
     return info, None
 
 
 def extra_probe_fields(info: VideoInfo) -> dict:
     """Felder, die der Bibliotheksscan zusätzlich zum bisherigen Eintrag speichert."""
     return {
-        "probe_rev": 4,
+        "probe_rev": 5,
         "pix_fmt": info.pix_fmt,
         "color_transfer": info.color_transfer,
         "color_primaries": info.color_primaries,
@@ -573,6 +574,43 @@ def _video_track(stream: dict, index: int, primary_index: int) -> dict:
         "master_max": float(light.get("master_max") or 0.0),
         "master_min": float(light.get("master_min") or 0.0),
     }
+
+
+def _promote_companion_dovi(info: VideoInfo) -> None:
+    """Profil 7 mit getrennter EL-Spur: die dvcC-Box hängt nur an der zweiten Spur.
+
+    Das Hauptbild bleibt HDR10. Die Datei ist trotzdem Dolby Vision, weil RPU
+    und Enhancement Layer auf der Begleitspur liegen.
+    """
+    if info.dolby_vision:
+        return
+    tracks = info.video_tracks or []
+    donor = next(
+        (t for t in tracks if t.get("role") == "enhancement" and t.get("dolby_vision")),
+        None,
+    )
+    if donor is None:
+        donor = next((t for t in tracks if t.get("dolby_vision")), None)
+    if not donor:
+        return
+    info.dolby_vision = True
+    info.dv_profile = int(donor.get("dv_profile") or 0)
+    info.dv_profile_label = str(donor.get("dv_profile_label") or "")
+    info.dv_level = donor.get("dv_level")
+    info.dv_version = str(donor.get("dv_version") or "")
+    info.dv_rpu = donor.get("dv_rpu")
+    # Die EL-Spur selbst hat keine Basisschicht. Die Datei hat sie: Spur 1.
+    info.dv_el = None
+    info.dv_bl = True
+    info.dv_compatibility = donor.get("dv_compatibility")
+    info.dv_compatibility_label = str(donor.get("dv_compatibility_label") or "")
+    base = next((t for t in tracks if t.get("role") == "base"), None)
+    base_name = str((base or {}).get("hdr_type") or info.hdr_type or "HDR10")
+    if "Dolby" in base_name:
+        base_name = "HDR10"
+    shown = info.dv_profile_label or (str(info.dv_profile) if info.dv_profile else "")
+    label = f"Dolby Vision {shown}".strip()
+    info.hdr_type = f"{label} + {base_name}" if base_name and base_name != "SDR" else label
 
 
 def _infer_enhancement(tracks: list[dict]) -> None:

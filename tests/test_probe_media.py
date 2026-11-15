@@ -70,7 +70,7 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertEqual(info.subtitles[0]["kind"], "image")
         self.assertEqual(info.attachments[0]["filename"], "Font.ttf")
         self.assertIs(info.dolby_vision, False)
-        self.assertEqual(ff.extra_probe_fields(info)["probe_rev"], 4)
+        self.assertEqual(ff.extra_probe_fields(info)["probe_rev"], 5)
 
     def test_cover_does_not_replace_the_real_picture(self):
         info, err = ff.info_from_probe({"streams": [
@@ -147,7 +147,7 @@ class ProbeMediaTests(unittest.TestCase):
                                      Path("movie.mkv"), 20)
         with patch.object(library.ff, "probe_with_error", return_value=(info, None)):
             details = library.file_details(Path("movie.mkv"), probe=True)
-        self.assertEqual(details["probe_rev"], 4)
+        self.assertEqual(details["probe_rev"], 5)
         self.assertIs(details["dolby_vision"], False)
         self.assertTrue(details["interlaced"])
         self.assertEqual(details["field_order"], "bb")
@@ -205,6 +205,33 @@ class ProbeMediaTests(unittest.TestCase):
         self.assertFalse(info.video_tracks[1]["el_inferred"])
         self.assertFalse(info.video_tracks[1]["dv_bl"])
         self.assertEqual(info.video_tracks[1]["hdr_type"], "Dolby Vision 7 + HDR10")
+
+    def test_profile_7_on_the_enhancement_track_marks_the_file_as_dolby_vision(self):
+        info, err = ff.info_from_probe({"streams": [
+            _video(),
+            _video(width=1920, height=1080, bit_rate="2135000", side_data_list=[{
+                "side_data_type": "DOVI configuration record",
+                "dv_version_major": 1, "dv_version_minor": 0,
+                "dv_profile": 7, "dv_level": 6,
+                "rpu_present_flag": 1, "el_present_flag": 1, "bl_present_flag": 0,
+                "dv_bl_signal_compatibility_id": 6,
+            }]),
+        ], "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2"}}, Path("dual.mp4"), 10)
+        self.assertIsNone(err)
+        self.assertEqual([track["role"] for track in info.video_tracks], ["base", "enhancement"])
+        self.assertFalse(info.video_tracks[0]["dolby_vision"])
+        self.assertEqual(info.video_tracks[0]["hdr_type"], "HDR10")
+        self.assertTrue(info.dolby_vision)
+        self.assertEqual(info.dv_profile, 7)
+        self.assertEqual(info.dv_profile_label, "7")
+        self.assertEqual(info.dv_level, 6)
+        self.assertEqual(info.dv_version, "1.0")
+        self.assertTrue(info.dv_rpu)
+        self.assertTrue(info.dv_bl)
+        self.assertIsNone(info.dv_el)
+        self.assertEqual(info.dv_compatibility_label, "HDR10")
+        self.assertEqual(info.hdr_type, "Dolby Vision 7 + HDR10")
+        self.assertFalse(info.video_tracks[1]["dv_bl"])
 
     def test_one_extra_hevc_track_is_inferred_only_for_profile_7(self):
         extra = _video(width=1920, height=1080, color_transfer="bt709",

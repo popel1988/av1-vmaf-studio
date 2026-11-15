@@ -164,11 +164,15 @@ def analyze_dv_file(path: Path, *, sample_seconds: float = 180.0) -> dict:
     vtracks = info.video_tracks or []
     base_track = next((t for t in vtracks if t.get("role") == "base"), vtracks[0] if vtracks else {})
     el_track = next((t for t in vtracks if t.get("role") == "enhancement"), None)
+    dv_track = base_track if base_track.get("dolby_vision") else (
+        el_track if el_track and el_track.get("dolby_vision") else
+        next((t for t in vtracks if t.get("dolby_vision")), {})
+    )
 
-    has_dv = bool(info.dolby_vision)
-    has_el = bool(base_track.get("dv_el") or el_track is not None or int(info.dv_profile or 0) == 7)
+    has_dv = bool(info.dolby_vision or dv_track.get("dolby_vision"))
+    has_el = bool(base_track.get("dv_el") or el_track is not None or int(info.dv_profile or dv_track.get("dv_profile") or 0) == 7)
     has_bl = bool(base_track.get("dv_bl") is not False)
-    has_rpu = bool(base_track.get("dv_rpu") or has_dv)
+    has_rpu = bool(base_track.get("dv_rpu") or (el_track or {}).get("dv_rpu") or dv_track.get("dv_rpu") or has_dv)
 
     rpu_meta: dict = {}
     if has_dv and dv.available() and (info.codec or "").lower() in ("hevc", "h265", "av1"):
@@ -219,11 +223,15 @@ def analyze_dv_file(path: Path, *, sample_seconds: float = 180.0) -> dict:
         "fps": round(float(info.fps or 0.0), 3),
         "dolby_vision": has_dv,
         "hdr10_plus": bool(info.hdr10_plus),
-        "is_hdr": bool(info.is_hdr),
+        "is_hdr": bool(info.is_hdr or has_dv),
         "hdr_format": info.hdr_type or "SDR",
-        "profile": int(rpu_meta.get("profile") or info.dv_profile or 0),
-        "profile_label": base_track.get("dv_profile_label") or (str(info.dv_profile) if info.dv_profile else ""),
-        "level": base_track.get("dv_level"),
+        "profile": int(rpu_meta.get("profile") or dv_track.get("dv_profile") or info.dv_profile or 0),
+        "profile_label": (
+            dv_track.get("dv_profile_label")
+            or info.dv_profile_label
+            or (str(dv_track.get("dv_profile") or info.dv_profile) if (dv_track.get("dv_profile") or info.dv_profile) else "")
+        ),
+        "level": dv_track.get("dv_level") if dv_track.get("dv_level") is not None else base_track.get("dv_level"),
         "cm_version": rpu_meta.get("cm_version") or ("CM v2.9" if has_dv else ""),
         "base_layer": has_bl,
         "base_layer_type": _base_layer_type(info),
@@ -251,7 +259,47 @@ def analyze_dv_file(path: Path, *, sample_seconds: float = 180.0) -> dict:
             "mediainfo": _mediainfo_available(),
         },
     }
+    _apply_mediainfo_hdr_hints(summary)
+    if has_dv and "Dolby Vision" not in str(summary.get("hdr_format") or ""):
+        shown = summary.get("profile_label") or summary.get("profile") or ""
+        base_name = summary.get("hdr_format") or "HDR10"
+        label = f"Dolby Vision {shown}".strip()
+        summary["hdr_format"] = f"{label} + {base_name}" if base_name and base_name != "SDR" else label
     return summary
+
+
+def _apply_mediainfo_hdr_hints(summary: dict) -> None:
+    """MediaInfo liest HDR10+-SEI, die ffprobe an der Spur oft nicht als Side-Data liefert."""
+    text = str(summary.get("mediainfo_text") or "")
+    if summary.get("hdr10_plus") or ("HDR10+" not in text and "SMPTE ST 2094" not in text):
+        return
+    summary["hdr10_plus"] = True
+    if summary.get("base_layer_type") == "HDR10":
+        summary["base_layer_type"] = "HDR10+"
+    hdr = str(summary.get("hdr_format") or "")
+    if hdr.endswith(" + HDR10"):
+        summary["hdr_format"] = hdr + "+"
+    elif hdr == "HDR10":
+        summary["hdr_format"] = "HDR10+"
+
+
+def _mark_dv_from_measurement(base_info: dict, stats: dict) -> None:
+    """RPU-NALUs auf der EL-Spur sind Dolby Vision, auch wenn Spur 1 nur HDR10 meldet."""
+    if int(stats.get("rpu_size_bytes") or 0) <= 0:
+        return
+    base_info["rpu"] = True
+    if base_info.get("dolby_vision"):
+        return
+    base_info["dolby_vision"] = True
+    if not int(base_info.get("profile") or 0):
+        base_info["profile"] = 7
+        base_info["profile_label"] = base_info.get("profile_label") or "7"
+    hdr = str(base_info.get("hdr_format") or "HDR10")
+    if "Dolby Vision" not in hdr:
+        shown = base_info.get("profile_label") or base_info.get("profile") or 7
+        base_info["hdr_format"] = (
+            f"Dolby Vision {shown} + {hdr}" if hdr and hdr != "SDR" else f"Dolby Vision {shown}".strip()
+        )
 
 
 def _extract_rpu_from_track(
@@ -576,6 +624,8 @@ def scan_dv_bitrates(
         elif int(base_info.get("profile") or 0) != 7:
             base_info["enhancement_layer"] = False
             base_info["enhancement_layer_type"] = "None"
+
+        _mark_dv_from_measurement(base_info, stats)
 
         # L1-Nits-Kurve passend zur Sekundenachse ergänzen (falls DV vorhanden)
         if base_info.get("dolby_vision") and dv.available():

@@ -11440,7 +11440,7 @@
     const cached = state.libDetails && state.libDetails[path];
     const haveTracks = Array.isArray(row.audio) || (cached && Array.isArray(cached.audio));
     const haveNfo = !libNfoIsStub(row.nfo) || (cached && !libNfoIsStub(cached.nfo));
-    const haveFacts = row.probe_rev >= 4 || (cached && cached.probe_rev >= 4);
+    const haveFacts = row.probe_rev >= 5 || (cached && cached.probe_rev >= 5);
     if (!haveTracks || !haveNfo || !haveFacts) {
       if (!state.libDetails) state.libDetails = {};
       state.libDetails[path] = {
