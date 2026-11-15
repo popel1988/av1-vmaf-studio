@@ -3598,6 +3598,12 @@
                 <button type="button" class="btn btn-primary" id="btn-dvl-analyze">🔍 Schritt 1: Schnell-Analyse (RPU &amp; Layer)</button>
                 <button type="button" class="btn btn-ghost" id="btn-dvl-bitrate-scan">📊 Schritt 2: BL / EL / RPU Bitrate-Scan (0 Disk)</button>
               </div>
+              <div id="dvl-an-progress" class="dvl-progress" hidden>
+                <div class="dvl-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <div id="dvl-an-progress-fill" class="dvl-progress-fill"></div>
+                </div>
+                <span id="dvl-an-progress-label" class="dvl-progress-label"></span>
+              </div>
               <div id="dvl-an-status" class="dvl-status" style="display:none"></div>
 
               <div id="dvl-an-results" style="display:none;margin-top:16px">
@@ -3617,15 +3623,20 @@
 
                 <div data-dvl-anpanel="graph" style="display:none;margin-top:12px">
                   <p class="hint" id="dvl-graph-empty">Starte „Schritt 2: BL / EL / RPU Bitrate-Scan“, um den zeitlichen Verlauf von Base Layer, Enhancement Layer (MEL/FEL) und RPU zu berechnen.</p>
-                  <div class="dvl-zoom-bar">
-                    <span>Zoom-Bereich: <strong id="dvl-zoom-label">0% – 100%</strong></span>
-                    <label>Start <input type="range" id="dvl-zoom-start" min="0" max="98" value="0" /></label>
-                    <label>Ende <input type="range" id="dvl-zoom-end" min="2" max="100" value="100" /></label>
-                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-zoom-reset">↺ Vollansicht</button>
-                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-export-png">📸 Graph als PNG</button>
-                  </div>
                   <div class="dvl-chart-box">
                     <canvas id="dvl-bitrate-canvas"></canvas>
+                  </div>
+                  <div class="vmaf-zoom" id="dvl-zoom">
+                    <label class="vmaf-zoom-x">Ausschnitt
+                      <span class="vmaf-range">
+                        <span class="vmaf-range-track" aria-hidden="true"><span class="vmaf-range-fill" id="dvl-zoom-fill"></span></span>
+                        <input id="dvl-zoom-start" type="range" min="0" max="100" step="1" value="0" title="Anfang">
+                        <input id="dvl-zoom-end" type="range" min="0" max="100" step="1" value="100" title="Ende">
+                      </span>
+                      <span id="dvl-zoom-label">gesamt</span>
+                    </label>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-zoom-reset">Zurücksetzen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-export-png">📸 Graph als PNG</button>
                   </div>
                 </div>
 
@@ -3708,7 +3719,7 @@
 
             <!-- SUBTAB 3: HDR10+ -> DOLBY VISION -->
             <div data-dvl-panel="dualhdr" style="display:none">
-              <p class="hint">Erzeugt aus einem <strong>HDR10+-Film</strong> verlustfrei echte <strong>Dolby-Vision-Profil-8.1-Metadaten</strong> und bettet sie in denselben HEVC-Stream ein. Danach enthält die Datei <strong>HDR10 + HDR10+ + Dolby Vision</strong> gleichzeitig (ideal für LG/Sony-TVs sowie Samsung-TVs).</p>
+              <p class="hint">Die Quelle behält HDR10 (statische Helligkeit) und HDR10+ (dynamisch, für Samsung). Daraus wird verlustfrei eine Dolby-Vision-Profil-8.1-RPU erzeugt und in denselben HEVC-Stream gelegt. Danach trägt die Datei alle drei Schichten gleichzeitig: HDR10 als Basis, HDR10+ für Samsung-TVs, Dolby Vision für LG- und Sony-TVs.</p>
               <div class="dvl-form-row">
                 <div class="field" style="flex:1">
                   <label>HDR10+-Videodatei (HEVC) auswählen</label>

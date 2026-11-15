@@ -13465,7 +13465,7 @@
 
     if (state.remuxChapters === null) {
       wrap.style.display = "none";
-      body.innerHTML = "";
+    body.innerHTML = "";
       info.textContent = "";
       showBtn("btn-remux-sort-chapters", false);
       showBtn("btn-remux-export-chapters", false);

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -294,6 +295,27 @@ class DvLabTests(unittest.TestCase):
         self.assertEqual(sess, "Dune.Part.Two.2024_2026-11-15_12-30_abcdef")
         # Deterministisch bei wiederholtem Aufruf
         self.assertEqual(qm._session_name(item), sess)
+
+    def test_bitrate_scan_job_reports_progress_then_result(self):
+        def fake_scan(path, duration_limit=0.0, progress_cb=None):
+            if progress_cb:
+                progress_cb(42.0, "Bitrate-Scan läuft: 42s / 100s (42 %)")
+            return {"ok": True, "path": str(path), "bitrate_scan": {"bl_avg_mbps": 12.5}}
+
+        with mock.patch.object(dv_lab, "scan_dv_bitrates", side_effect=fake_scan):
+            job_id = dv_lab.start_bitrate_scan_job(Path("Filme/Movie.mkv"), duration_limit=300)
+            job = None
+            for _ in range(50):
+                job = dv_lab.bitrate_scan_job(job_id)
+                if job and job["status"] == "done":
+                    break
+                time.sleep(0.02)
+        self.assertIsNotNone(job)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["percent"], 100.0)
+        self.assertTrue(job["result"]["ok"])
+        self.assertEqual(job["result"]["bitrate_scan"]["bl_avg_mbps"], 12.5)
+        self.assertIsNone(dv_lab.bitrate_scan_job("does-not-exist"))
 
     def test_http_endpoint_dv_lab_analyze_returns_200(self):
         from fastapi.testclient import TestClient

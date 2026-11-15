@@ -686,12 +686,21 @@ async def api_dv_lab_bitrate_scan(req: DvScanRequest):
     if target is None or not target.is_file():
         return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
     from core import dv_lab
-    data = await asyncio.to_thread(
-        dv_lab.scan_dv_bitrates,
+    job_id = dv_lab.start_bitrate_scan_job(
         target,
         duration_limit=max(0.0, float(req.duration_limit or 0.0)),
     )
-    return JSONResponse(data, status_code=200 if data.get("ok") else 400)
+    return {"ok": True, "job_id": job_id, "status": "running", "percent": 0.0,
+            "message": "Bitrate-Scan startet …"}
+
+
+@app.get("/api/dv-lab/bitrate-scan/{job_id}")
+async def api_dv_lab_bitrate_scan_status(job_id: str):
+    from core import dv_lab
+    job = dv_lab.bitrate_scan_job(job_id)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "Scan nicht gefunden"}, status_code=404)
+    return job
 
 
 @app.post("/api/dv-lab/report")

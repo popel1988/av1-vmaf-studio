@@ -2386,15 +2386,15 @@
       const none = document.createElement("option");
       none.value = "-1";
       none.textContent = tt("Kein Ton");
-      ed.src.audio.forEach((a, i) => {
-        const o = document.createElement("option");
-        o.value = String(i);
+        ed.src.audio.forEach((a, i) => {
+          const o = document.createElement("option");
+          o.value = String(i);
         o.textContent = trackLabel(a, i);
-        aSel.appendChild(o);
-      });
+          aSel.appendChild(o);
+        });
       aSel.appendChild(none);
       aSel.value = ed.src.audio.length ? "0" : "-1";
-    }
+      }
     if (ed.autoPreview && ed.autoPreview.path !== path) {
       ed.autoPreview = null;
       renderAutoPreviewPanel();
@@ -3187,12 +3187,12 @@
     const v = $("ed-video");
     if (!v) return;
     if (ed.playTl) {
-      stopTlPreview();
+        stopTlPreview();
       v.pause();
       v.muted = previewAudioIndex() < 0;
       setStatus(tt("Timeline-Vorschau gestoppt."));
-      return;
-    }
+        return;
+      }
     ed.playTl = { timer: null };
     const btn = $("ed-play-tl");
     if (btn) btn.textContent = `⏸ ${tt("Timeline stoppen")}`;

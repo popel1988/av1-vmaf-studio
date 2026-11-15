@@ -3088,6 +3088,29 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px 16px;
   margin-top: 12px;
 }
+.dvl-progress {
+  margin-top: 12px;
+}
+.dvl-progress-track {
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.dvl-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3b82f6, #22c55e);
+  transition: width 0.35s linear;
+}
+.dvl-progress-label {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
 .dvl-status {
   margin-top: 12px;
   padding: 9px 12px;
@@ -3151,7 +3174,7 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.45;
   white-space: pre;
 }
-.dvl-zoom-bar, .dvl-export-bar, .dvl-vault-list-head {
+.dvl-export-bar, .dvl-vault-list-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

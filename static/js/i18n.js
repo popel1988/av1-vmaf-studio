@@ -5885,7 +5885,21 @@
     "Neueste zuerst (Datum ↓)": ["Newest first (Date ↓)", "Más recientes primero (Fecha ↓)", "Plus récents d’abord (Date ↓)"],
     "Älteste zuerst (Datum ↑)": ["Oldest first (Date ↑)", "Más antiguos primero (Fecha ↑)", "Plus anciens d’abord (Date ↑)"],
     "Größe (absteigend)": ["Size (descending)", "Tamaño (descendente)", "Taille (décroissante)"],
-    "Im HDR / DV Labor öffnen": ["Open in HDR / DV Lab", "Abrir en Laboratorio HDR / DV", "Ouvrir dans le Labo HDR / DV"]
+    "Im HDR / DV Labor öffnen": ["Open in HDR / DV Lab", "Abrir en Laboratorio HDR / DV", "Ouvrir dans le Labo HDR / DV"],
+    "Die Quelle behält HDR10 (statische Helligkeit) und HDR10+ (dynamisch, für Samsung). Daraus wird verlustfrei eine Dolby-Vision-Profil-8.1-RPU erzeugt und in denselben HEVC-Stream gelegt. Danach trägt die Datei alle drei Schichten gleichzeitig: HDR10 als Basis, HDR10+ für Samsung-TVs, Dolby Vision für LG- und Sony-TVs.": [
+      "The source keeps HDR10 (static brightness) and HDR10+ (dynamic, for Samsung). A Dolby Vision Profile 8.1 RPU is generated losslessly and embedded in the same HEVC stream. The file then carries all three layers at once: HDR10 as the base, HDR10+ for Samsung TVs, Dolby Vision for LG and Sony TVs.",
+      "La fuente conserva HDR10 (brillo estático) y HDR10+ (dinámico, para Samsung). Se genera sin pérdida una RPU Dolby Vision Perfil 8.1 y se incrusta en el mismo flujo HEVC. El archivo lleva entonces las tres capas a la vez: HDR10 como base, HDR10+ para televisores Samsung, Dolby Vision para LG y Sony.",
+      "La source conserve le HDR10 (luminosité statique) et le HDR10+ (dynamique, pour Samsung). Une RPU Dolby Vision Profil 8.1 est générée sans perte et intégrée dans le même flux HEVC. Le fichier porte ensuite les trois couches à la fois : HDR10 comme base, HDR10+ pour les TV Samsung, Dolby Vision pour LG et Sony."
+    ],
+    "0-Disk-Space Bitrate-Scan startet …": ["0-disk-space bitrate scan is starting …", "El escaneo de bitrate sin disco está empezando …", "L’analyse de débit sans disque démarre …"],
+    "Bitrate-Scan läuft …": ["Bitrate scan running …", "Escaneo de bitrate en curso …", "Analyse de débit en cours …"],
+    "Bitrate-Scan abgeschlossen.": ["Bitrate scan finished.", "Escaneo de bitrate terminado.", "Analyse de débit terminée."],
+    "Bitrate-Scan abgeschlossen (0 Byte temporärer Festplattenplatz belegt).": [
+      "Bitrate scan finished (0 bytes of temporary disk space used).",
+      "Escaneo de bitrate terminado (0 bytes de espacio temporal en disco).",
+      "Analyse de débit terminée (0 octet d’espace disque temporaire)."
+    ],
+    "Bitrate-Scan fehlgeschlagen.": ["Bitrate scan failed.", "El escaneo de bitrate ha fallado.", "L’analyse de débit a échoué."]
   };
   Object.keys(WORKSPACE).forEach(function (key) {
     DICT[key] = WORKSPACE[key][0];

@@ -102,6 +102,63 @@
     el.style.display = msg ? "" : "none";
   }
 
+  function setScanProgress(visible, pct, msg) {
+    const box = $("dvl-an-progress");
+    const fill = $("dvl-an-progress-fill");
+    const label = $("dvl-an-progress-label");
+    if (!box) return;
+    box.hidden = !visible;
+    const p = Math.max(0, Math.min(100, Number(pct) || 0));
+    if (fill) fill.style.width = p.toFixed(1) + "%";
+    if (label) label.textContent = msg || "";
+    const track = box.querySelector(".dvl-progress-track");
+    if (track) track.setAttribute("aria-valuenow", String(Math.round(p)));
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function paintDvlZoom() {
+    const x0 = $("dvl-zoom-start");
+    const x1 = $("dvl-zoom-end");
+    const fill = $("dvl-zoom-fill");
+    const lab = $("dvl-zoom-label");
+    let a = x0 ? Number(x0.value) : 0;
+    let b = x1 ? Number(x1.value) : 100;
+    if (!Number.isFinite(a)) a = 0;
+    if (!Number.isFinite(b)) b = 100;
+    const lo = Math.max(0, Math.min(a, b));
+    const hi = Math.min(100, Math.max(a, b));
+    if (fill) {
+      fill.style.left = lo + "%";
+      fill.style.width = Math.max(0, hi - lo) + "%";
+    }
+    const full = lo <= 0.05 && hi >= 99.95;
+    if (lab) lab.textContent = full ? t("gesamt") : `${Math.round(lo)}–${Math.round(hi)} %`;
+    return { a: lo, b: hi };
+  }
+
+  function clampDvlZoom(changed) {
+    const x0 = $("dvl-zoom-start");
+    const x1 = $("dvl-zoom-end");
+    if (!x0 || !x1) return;
+    const gap = 1;
+    const a = Number(x0.value);
+    const b = Number(x1.value);
+    if (changed === "start" && a > b - gap) x0.value = String(Math.max(0, b - gap));
+    if (changed === "end" && b < a + gap) x1.value = String(Math.min(100, a + gap));
+    x0.classList.toggle("is-top", changed === "start");
+    x1.classList.toggle("is-top", changed !== "start");
+  }
+
+  function applyDvlZoom() {
+    const span = paintDvlZoom();
+    dvl.zoomStartPct = span.a;
+    dvl.zoomEndPct = span.b;
+    renderBitrateChart();
+  }
+
   async function apiJson(url, opts) {
     const res = await fetch(url, opts);
     const data = await res.json().catch(() => ({}));
@@ -212,18 +269,36 @@
 
     const btn = $("btn-dvl-bitrate-scan");
     if (btn) btn.disabled = true;
-    setStatus(
-      "dvl-an-status",
-      t("0-Disk-Space Bitrate-Scan läuft (BL / EL / RPU werden direkt im RAM getrennt) …"),
-      "info"
-    );
+    setStatus("dvl-an-status", "", "");
+    setScanProgress(true, 0, t("0-Disk-Space Bitrate-Scan startet …"));
     try {
-      const data = await apiJson("/api/dv-lab/bitrate-scan", {
+      const started = await apiJson("/api/dv-lab/bitrate-scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path, duration_limit: limitSec }),
       });
+      if (!started.ok || !started.job_id) {
+        setScanProgress(false, 0, "");
+        setStatus("dvl-an-status", started.error || t("Bitrate-Scan fehlgeschlagen."), "err");
+        return;
+      }
+      let data = null;
+      for (;;) {
+        const job = await apiJson("/api/dv-lab/bitrate-scan/" + encodeURIComponent(started.job_id));
+        if (!job.ok) {
+          setScanProgress(false, 0, "");
+          setStatus("dvl-an-status", job.error || t("Bitrate-Scan fehlgeschlagen."), "err");
+          return;
+        }
+        setScanProgress(true, job.percent, job.message || t("Bitrate-Scan läuft …"));
+        if (job.status === "done" || job.status === "error") {
+          data = job.result || { ok: false, error: job.message };
+          break;
+        }
+        await sleep(700);
+      }
       if (!data.ok) {
+        setScanProgress(false, 0, "");
         setStatus("dvl-an-status", data.error || t("Bitrate-Scan fehlgeschlagen."), "err");
         return;
       }
@@ -232,6 +307,8 @@
       dvl.zoomEndPct = 100;
       if ($("dvl-zoom-start")) $("dvl-zoom-start").value = "0";
       if ($("dvl-zoom-end")) $("dvl-zoom-end").value = "100";
+      paintDvlZoom();
+      setScanProgress(true, 100, t("Bitrate-Scan abgeschlossen."));
       setStatus("dvl-an-status", t("Bitrate-Scan abgeschlossen (0 Byte temporärer Festplattenplatz belegt)."), "ok");
       renderAnalysisResult(data);
       switchAnalyzerTab("graph");
@@ -913,21 +990,19 @@
 
       const zs = $("dvl-zoom-start");
       const ze = $("dvl-zoom-end");
-      const updateZoom = () => {
-        let a = parseInt(zs?.value || "0", 10);
-        let b = parseInt(ze?.value || "100", 10);
-        if (b - a < 2) b = Math.min(100, a + 2);
-        dvl.zoomStartPct = a;
-        dvl.zoomEndPct = b;
-        if ($("dvl-zoom-label")) $("dvl-zoom-label").textContent = `${a}% – ${b}%`;
-        renderBitrateChart();
-      };
-      zs?.addEventListener("input", updateZoom);
-      ze?.addEventListener("input", updateZoom);
+      zs?.addEventListener("input", () => {
+        clampDvlZoom("start");
+        applyDvlZoom();
+      });
+      ze?.addEventListener("input", () => {
+        clampDvlZoom("end");
+        applyDvlZoom();
+      });
+      paintDvlZoom();
       $("btn-dvl-zoom-reset")?.addEventListener("click", () => {
         if (zs) zs.value = "0";
         if (ze) ze.value = "100";
-        updateZoom();
+        applyDvlZoom();
       });
 
       $("btn-dvl-copy-check")?.addEventListener("click", checkCompatibility);

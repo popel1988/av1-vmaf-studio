@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -590,6 +591,84 @@ def scan_dv_bitrates(
     stats["l1_max_nits_series"] = nits_series
     base_info["bitrate_scan"] = stats
     return base_info
+
+
+_scan_jobs_lock = threading.Lock()
+_scan_jobs: dict[str, dict] = {}
+
+
+def start_bitrate_scan_job(path: Path, *, duration_limit: float = 0.0) -> str:
+    """Startet Schritt 2 im Hintergrund und liefert eine Job-ID für die Fortschrittsanzeige."""
+    job_id = uuid.uuid4().hex[:12]
+    now = time.time()
+    with _scan_jobs_lock:
+        stale = [
+            key for key, job in _scan_jobs.items()
+            if job.get("status") != "running" and now - float(job.get("updated", now)) > 1800
+        ]
+        for key in stale:
+            _scan_jobs.pop(key, None)
+        _scan_jobs[job_id] = {
+            "status": "running",
+            "percent": 0.0,
+            "message": "Bitrate-Scan startet …",
+            "result": None,
+            "updated": now,
+        }
+
+    def _run() -> None:
+        def _progress(pct: float, message: str) -> None:
+            with _scan_jobs_lock:
+                job = _scan_jobs.get(job_id)
+                if not job or job.get("status") != "running":
+                    return
+                job["percent"] = round(max(0.0, min(99.0, float(pct))), 1)
+                job["message"] = message
+                job["updated"] = time.time()
+
+        try:
+            result = scan_dv_bitrates(
+                path,
+                duration_limit=duration_limit,
+                progress_cb=_progress,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Bitrate-Scan fehlgeschlagen")
+            result = {"ok": False, "error": str(exc)}
+        with _scan_jobs_lock:
+            job = _scan_jobs.get(job_id)
+            if not job:
+                return
+            ok = bool(result.get("ok"))
+            job["result"] = result
+            job["status"] = "done" if ok else "error"
+            job["percent"] = 100.0 if ok else job.get("percent") or 0.0
+            job["message"] = (
+                "Bitrate-Scan abgeschlossen."
+                if ok else (result.get("error") or "Bitrate-Scan fehlgeschlagen.")
+            )
+            job["updated"] = time.time()
+
+    threading.Thread(target=_run, name=f"dv-scan-{job_id}", daemon=True).start()
+    return job_id
+
+
+def bitrate_scan_job(job_id: str) -> Optional[dict]:
+    """Aktueller Stand eines Bitrate-Scans. `result` erst nach Abschluss."""
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            return None
+        out = {
+            "ok": True,
+            "job_id": job_id,
+            "status": job["status"],
+            "percent": job["percent"],
+            "message": job["message"],
+        }
+        if job["status"] in ("done", "error"):
+            out["result"] = job["result"]
+        return out
 
 
 def _scan_packet_bitrates_fallback(path: Path, base_info: dict, scan_dur: float) -> dict:

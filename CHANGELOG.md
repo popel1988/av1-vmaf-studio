@@ -5,8 +5,13 @@ All notable changes, new features, and milestones of this project in reverse chr
 ---
 
 ## [This Release] – 2026-11-15
+- **Bitrate-Graph Window (`HDR / DV Labor`):** The layer-inspector zoom uses the same dual-thumb range as the VMAF nerd view: one track, highlighted span, `full` when the full film is visible, and a reset button.
+
+---
+
+## [v9.4.0](https://github.com/popel1988/av1-vmaf-studio/commit/9ea62e9) – 2026-11-15
 - **HDR & Dolby Vision Lab (`core/dv_lab.py`, `core/rpu_vault.py`, `static/js/dv_lab.js`):** Added a dedicated **HDR / DV Labor** workspace built 100% natively on open-source tools (`dovi_tool`, `hdr10plus_tool`, `ffmpeg`/`ffprobe`, `mkvmerge`, `mediainfo`):
-  - **Layer Inspector & 0-Disk-Space Bitrate Scanner:** Instant inspection of Profile, Level, `CM v2.9` / `CM v4.0`, Base Layer type, **MEL vs. FEL** Enhancement Layer detection, RPU Mastering Display luminance, and RPU `MaxCLL`/`MaxFALL`, plus an in-memory HEVC Annex-B NALU stream parser (`BL`, `EL` `UNSPEC63`/Layer 1, `RPU` `UNSPEC62`) that calculates exact sizes, average/peak bitrates, EL share `%`, and a zoomable multi-layer bitrate graph **without temporary video demuxing on disk**, with integrated MediaInfo + DV report export in 5 formats (`TXT`, `Markdown`, `JSON`, `CSV`, `HTML`) and PNG graph export.
+  - **Layer Inspector & 0-Disk-Space Bitrate Scanner:** Instant inspection of Profile, Level, `CM v2.9` / `CM v4.0`, Base Layer type, **MEL vs. FEL** Enhancement Layer detection, RPU Mastering Display luminance, and RPU `MaxCLL`/`MaxFALL`, plus an in-memory HEVC Annex-B NALU stream parser (`BL`, `EL` `UNSPEC63`/Layer 1, `RPU` `UNSPEC62`) that calculates exact sizes, average/peak bitrates, EL share `%`, and a zoomable multi-layer bitrate graph **without temporary video demuxing on disk**. Step 2 shows a live progress bar (played time and percent) while the full-movie scan runs. Integrated MediaInfo + DV report export in 5 formats (`TXT`, `Markdown`, `JSON`, `CSV`, `HTML`) and PNG graph export.
   - **Hybrid Mux & Cross-Release RPU Transfer:** Lossless Dolby Vision transfer across releases with automatic intro/cut frame-offset correlation (`scene_refresh_flag` vs. target scene cuts), automatic **L5 Active-Area** crop adjustment (also applied during cropped HEVC DV encodes), and optional work-folder retention.
   - **Lossless HDR10+ → Dolby Vision 8.1 Dual-HDR Converter:** Generates genuine Dolby Vision Profile 8.1 RPUs from `HDR10+` metadata (`hdr10plus_tool` + `dovi_tool generate`) to create Dual-HDR files (`HDR10 + HDR10+ + Dolby Vision`) both standalone in the Lab and as a direct checkbox during HEVC encoding.
   - **RPU Vault (`RPU-Tresor`):** Batch RPU extraction from multiple movies (DV or HDR10+) into `/data/rpu_vault` with multi-file & folder browser modals, searchable metadata table, customizable column picker, `.rpu.bin` download, and 1-click injection into target releases.
