@@ -452,6 +452,126 @@ class DvLabTests(unittest.TestCase):
         ffmpeg_cmd = captured[0]
         self.assertEqual(ffmpeg_cmd[ffmpeg_cmd.index("-map") + 1], "0:v:1")
 
+    def test_base_layer_annexb_drops_enhancement_and_rpu(self):
+        bl = _make_hevc_nalu(1, layer_id=0, payload_size=80)
+        el = _make_hevc_nalu(63, layer_id=0, payload_size=40)
+        rpu = _make_hevc_nalu(62, layer_id=0, payload_size=20)
+        raw = b"".join([bl, el, rpu] * 4)
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.hevc"
+            dst = Path(tmp) / "out.hevc"
+            src.write_bytes(raw)
+            stats = dv_lab.write_base_layer_annexb(src, dst)
+            self.assertEqual(stats["dropped_el_bytes"], 4 * len(el))
+            self.assertEqual(stats["dropped_rpu_bytes"], 4 * len(rpu))
+            self.assertEqual(stats["kept_bytes"], 4 * len(bl))
+            self.assertEqual(dst.read_bytes(), bl * 4)
+
+    def test_rpu_export_becomes_hdr10plus_scenes(self):
+        raw = [
+            _rpu_frame(True, max_pq=2000, avg_pq=400),
+            _rpu_frame(False, max_pq=2500, avg_pq=500),
+            _rpu_frame(True, max_pq=1000, avg_pq=200),
+        ]
+        payload = dv_lab.rpu_export_to_hdr10plus_json(raw)
+        self.assertEqual(payload["JSONInfo"]["HDR10plusProfile"], "A")
+        scenes = payload["SceneInfo"]
+        self.assertEqual(len(scenes), 2)
+        peak = dv_lab.nits_to_hdr10plus_raw(dv_lab.dv._pq_to_nits(2500))
+        lum = scenes[0]["LuminanceParameters"]
+        self.assertEqual(lum["MaxScl"], [peak, peak, peak])
+        self.assertEqual(scenes[0]["SequenceFrameIndex"], 0)
+        self.assertEqual(scenes[1]["SequenceFrameIndex"], 2)
+        vals = lum["LuminanceDistributions"]["DistributionValues"]
+        self.assertEqual(vals, sorted(vals))
+        self.assertEqual(vals[-1], peak)
+        self.assertNotIn("BezierCurveData", lum)
+
+    def test_hdr10plus_curve_sets_scene_peak_against_maxcll(self):
+        payload = {
+            "SceneInfo": [
+                {
+                    "SequenceFrameIndex": 0,
+                    "LuminanceParameters": {"MaxScl": [10000, 10000, 10000], "AverageMaxrgb": 630},
+                },
+                {
+                    "SequenceFrameIndex": 48,
+                    "LuminanceParameters": {"MaxScl": [4000, 4000, 4000], "AverageMaxrgb": 200},
+                },
+            ]
+        }
+        curve = dv_lab.hdr10plus_json_to_curve(
+            payload, fps=24.0, duration_sec=4.0, max_cll=285, max_fall=63,
+        )
+        self.assertTrue(curve["ok"])
+        self.assertEqual(curve["measured_peak_nits"], 1000.0)
+        self.assertEqual(curve["measured_fall_nits"], 63.0)
+        self.assertEqual(curve["peak_vs_maxcll"], 715.0)
+        self.assertIn("MaxCLL", curve["notes"][0])
+        self.assertGreater(curve["timestamps"][-1], 0)
+
+    def test_compare_rpu_reports_frames_l1_and_l5(self):
+        left = [_rpu_frame(i == 0, max_pq=2200, avg_pq=400, l5=(0, 0, 0, 276)) for i in range(4)]
+        right = [_rpu_frame(i == 0, max_pq=1800, avg_pq=300, l5=(0, 0, 0, 0)) for i in range(6)]
+        res = dv_lab.compare_rpu_exports(left, right, left_title="Spender", right_title="Ziel")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["frames_delta"], 2)
+        self.assertEqual(res["l5_delta"]["bottom"], -276)
+        self.assertLess(res["peak_l1_delta"], 0)
+        self.assertEqual(len(res["left"]["l1_max_series"]), 240)
+        self.assertEqual(len(res["right"]["l1_max_series"]), 240)
+        self.assertEqual(res["left"]["title"], "Spender")
+
+    def test_dv_to_hdr10plus_rejects_profile_5_and_skips_existing_hdr10plus(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "Movie.mkv"
+            movie.write_bytes(b"00")
+            profile_5 = ff.VideoInfo(
+                str(movie), 3840, 2160, 120.0, "hevc", "yuv420p10le",
+                "smpte2084", "bt2020", "bt2020nc", 40_000_000, 4,
+                fps=24.0, dolby_vision=True, dv_profile=5, hdr10_plus=False,
+            )
+            already = ff.VideoInfo(
+                str(movie), 3840, 2160, 120.0, "hevc", "yuv420p10le",
+                "smpte2084", "bt2020", "bt2020nc", 40_000_000, 4,
+                fps=24.0, dolby_vision=True, dv_profile=8, hdr10_plus=True,
+            )
+            not_seven = ff.VideoInfo(
+                str(movie), 3840, 2160, 120.0, "hevc", "yuv420p10le",
+                "smpte2084", "bt2020", "bt2020nc", 40_000_000, 4,
+                fps=24.0, dolby_vision=True, dv_profile=8, hdr10_plus=False,
+            )
+            with mock.patch.object(ff, "ffprobe", return_value=profile_5):
+                rejected = dv_lab.convert_dv_to_hdr10plus(movie)
+            with mock.patch.object(ff, "ffprobe", return_value=already):
+                present = dv_lab.convert_dv_to_hdr10plus(movie)
+            with mock.patch.object(ff, "ffprobe", return_value=not_seven):
+                tv = dv_lab.make_profile7_tv_stream(movie)
+        self.assertFalse(rejected["ok"])
+        self.assertIn("Profil 5", rejected["error"])
+        self.assertTrue(present["already_present"])
+        self.assertFalse(tv["ok"])
+        self.assertIn("Profil 7", tv["error"])
+
+
+def _rpu_frame(refresh, *, max_pq, avg_pq, min_pq=0, l5=None):
+    blocks = [{"Level1": {"min_pq": min_pq, "avg_pq": avg_pq, "max_pq": max_pq}}]
+    if l5:
+        blocks.append({
+            "Level5": {
+                "active_area_left_offset": l5[0],
+                "active_area_right_offset": l5[1],
+                "active_area_top_offset": l5[2],
+                "active_area_bottom_offset": l5[3],
+            }
+        })
+    return {
+        "vdr_dm_data": {
+            "scene_refresh_flag": 1 if refresh else 0,
+            "cmv29_metadata": {"ext_metadata_blocks": blocks},
+        }
+    }
+
 
 if __name__ == "__main__":
     unittest.main()

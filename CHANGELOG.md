@@ -5,6 +5,12 @@ All notable changes, new features, and milestones of this project in reverse chr
 ---
 
 ## [This Release] – 2026-11-15
+- **Library works:** The library recognizes a file as a film, documentary, episode, or dated broadcast from its name, folder, and NFO, and groups the versions of that work. Custom collections (a series, a film, a broadcast, or a plain collection) can be created and files assigned by hand, for example several recordings of the same occasion.
+- **HDR / DV Lab metadata tools:** Dolby Vision RPU can be approximated into an HDR10+ layer on the base track while the RPU stays (on a second track the enhancement-layer pixels stay too; Profile 5 is rejected because it has no HDR10 base). Profile 7 can be written as a single Profile 8.1 TV stream, with an explicit warning that the enhancement-layer pixels are dropped. Two RPUs (vault entries or files) can be compared on frame count, scene cuts, L1 brightness, L5 crop and the intro offset. The layer inspector plots an HDR10+ curve on the same zoom window as the bitrate graph, from the file’s JSON or from the RPU, and sets the scene peaks against static MaxCLL and MaxFALL.
+
+---
+
+## [v9.4.4](https://github.com/popel1988/av1-vmaf-studio/commit/25a87ba) – 2026-11-15
 - **Dual-track Dolby Vision Profile 7:** A file whose base track is only HDR10 and whose second HEVC track carries the Enhancement Layer plus RPU (`dvhe`, Profile 7) is now recognized as Dolby Vision in the library and in the HDR / DV Lab. The measured RPU on that track sets `Dolby Vision` and `RPU` instead of leaving both as No next to the EL/RPU sizes. MediaInfo’s HDR10+ note on the base layer is shown as coexistence when ffprobe does not list that SEI. RPU extraction (`dovi_tool`) reads that enhancement track instead of the HDR10 base, which reported `No RPU was found in input file`.
 
 ---

@@ -10027,6 +10027,23 @@
     if (rs) rs.addEventListener("input", () => { state.libPage = 1; renderLibrary(); });
     const grp = $("lib-group");
     if (grp) grp.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
+    const byWork = $("lib-by-work");
+    if (byWork) byWork.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
+    $("btn-lib-coll-add")?.addEventListener("click", libCreateCollection);
+    $("lib-coll-name")?.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); libCreateCollection(); }
+    });
+    $("btn-lib-assign")?.addEventListener("click", () => {
+      const id = $("lib-coll-pick")?.value || "";
+      if (!id) {
+        libWorksNote(tt("Zuerst eine Sammlung wählen."));
+        return;
+      }
+      libAssignSelection(id);
+    });
+    $("btn-lib-unassign")?.addEventListener("click", () => libAssignSelection(""));
+    $("btn-lib-coll-del")?.addEventListener("click", libDeleteCollection);
+    loadLibraryCatalog();
     initLibLibraries();
     document.querySelectorAll(".lib-table .sortable").forEach((th) => {
       th.addEventListener("click", (ev) => {
@@ -10222,8 +10239,189 @@
     };
   }
 
+  function libEffectiveWork(m) {
+    const catalog = state.libCatalog || { collections: [], assignments: {} };
+    const assigned = (catalog.assignments || {})[m && m.path];
+    const col = assigned
+      ? (catalog.collections || []).find((c) => c.id === assigned.collection_id)
+      : null;
+    const auto = (m && m.work) || {};
+    if (col) {
+      return {
+        key: `sammlung:${col.id}`,
+        group: `sammlung:${col.id}`,
+        kind: col.kind || "sammlung",
+        title: col.name || "Sammlung",
+        year: auto.year || 0,
+        subtitle: "",
+        edition: auto.edition || "",
+        extra: false,
+        manual: true,
+      };
+    }
+    const key = auto.key || `datei:${(m && (m.path || m.name)) || ""}`;
+    return {
+      key,
+      group: auto.group || key,
+      kind: auto.kind || "film",
+      title: auto.title || ((m && m.name) || ""),
+      year: auto.year || 0,
+      subtitle: auto.subtitle || "",
+      edition: auto.edition || "",
+      extra: !!auto.extra,
+      manual: false,
+    };
+  }
+
+  function libKindLabel(work) {
+    if (!work) return tt("Film");
+    if (work.extra) return tt("Extra");
+    if (work.manual) {
+      return tt({ film: "Film", serie: "Serie", sendung: "Sendung", sammlung: "Sammlung", doku: "Doku" }[work.kind] || "Sammlung");
+    }
+    return tt({ film: "Film", doku: "Doku", serie: "Folge", sendung: "Sendung" }[work.kind] || "Film");
+  }
+
+  function libWorkRowsHtml(rows, start, size) {
+    const counts = {};
+    rows.forEach((m) => {
+      const group = libEffectiveWork(m).group;
+      counts[group] = (counts[group] || 0) + 1;
+    });
+    const ordered = rows.slice().sort((a, b) => {
+      const wa = libEffectiveWork(a);
+      const wb = libEffectiveWork(b);
+      const multiA = wa.manual || (counts[wa.group] || 0) > 1;
+      const multiB = wb.manual || (counts[wb.group] || 0) > 1;
+      if (multiA !== multiB) return multiA ? -1 : 1;
+      if (wa.group !== wb.group) {
+        return String(wa.title || "").localeCompare(String(wb.title || ""), "de");
+      }
+      return (b.size_bytes || 0) - (a.size_bytes || 0);
+    });
+    let html = "";
+    let prev = "";
+    ordered.slice(start, start + size).forEach((m) => {
+      const work = libEffectiveWork(m);
+      const count = counts[work.group] || 1;
+      const multi = work.manual || count > 1;
+      if (multi && work.group !== prev) {
+        const year = work.year ? ` (${work.year})` : "";
+        const word = work.manual
+          ? (count === 1 ? tt("Datei") : tt("Dateien"))
+          : (count === 1 ? tt("Datei") : tt("Fassungen"));
+        html += `<tr class="lib-work-row"><td colspan="11">${escapeHtml(libKindLabel(work))} · ${escapeHtml(work.title)}${escapeHtml(year)}`
+          + ` <span class="muted">· ${count} ${word}</span></td></tr>`;
+      }
+      prev = multi ? work.group : "";
+      html += libRowHtmlSafe(m);
+    });
+    return html;
+  }
+
+  async function loadLibraryCatalog() {
+    try {
+      const res = await fetch("/api/library/catalog");
+      const data = await res.json();
+      state.libCatalog = {
+        collections: data.collections || [],
+        assignments: data.assignments || {},
+      };
+    } catch (e) {
+      state.libCatalog = state.libCatalog || { collections: [], assignments: {} };
+    }
+    const sel = $("lib-coll-pick");
+    if (sel) {
+      const current = sel.value;
+      const cols = (state.libCatalog.collections || []).slice()
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), "de"));
+      sel.innerHTML = `<option value="">${escapeHtml(tt("Sammlung wählen …"))}</option>`
+        + cols.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join("");
+      if (current) sel.value = current;
+    }
+    if ($("lib-body")) renderLibrary();
+  }
+
+  function libWorksNote(text) {
+    const el = $("lib-works-status");
+    if (el) el.textContent = text;
+  }
+
+  async function libCreateCollection() {
+    const name = ($("lib-coll-name")?.value || "").trim();
+    const kind = $("lib-coll-kind")?.value || "sammlung";
+    if (!name) {
+      libWorksNote(tt("Die Sammlung braucht einen Namen."));
+      return;
+    }
+    const res = await fetch("/api/library/catalog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, kind }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      libWorksNote(data.error || tt("Sammlung konnte nicht angelegt werden."));
+      return;
+    }
+    if ($("lib-coll-name")) $("lib-coll-name").value = "";
+    await loadLibraryCatalog();
+    if ($("lib-coll-pick") && data.collection) $("lib-coll-pick").value = data.collection.id;
+    libWorksNote(tt("Sammlung angelegt. Markierte Dateien lassen sich ihr jetzt zuordnen."));
+  }
+
+  async function libAssignSelection(collectionId) {
+    const paths = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
+    if (!paths.length) {
+      libWorksNote(tt("Zuerst Dateien in der Liste markieren."));
+      return;
+    }
+    if (collectionId === undefined) collectionId = "";
+    if (collectionId && !$("lib-coll-pick")?.value) {
+      libWorksNote(tt("Zuerst eine Sammlung wählen."));
+      return;
+    }
+    const res = await fetch("/api/library/catalog/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, collection_id: collectionId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      libWorksNote(data.error || tt("Zuordnung fehlgeschlagen."));
+      return;
+    }
+    state.libCatalog = {
+      collections: data.collections || [],
+      assignments: data.assignments || {},
+    };
+    await loadLibraryCatalog();
+    libWorksNote(collectionId
+      ? tt("Dateien sind der Sammlung zugeordnet.")
+      : tt("Zuordnung aufgehoben."));
+  }
+
+  async function libDeleteCollection() {
+    const id = $("lib-coll-pick")?.value || "";
+    if (!id) {
+      libWorksNote(tt("Zuerst eine Sammlung wählen."));
+      return;
+    }
+    const res = await fetch(`/api/library/catalog/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      libWorksNote(tt("Sammlung konnte nicht gelöscht werden."));
+      return;
+    }
+    await loadLibraryCatalog();
+    libWorksNote(tt("Sammlung gelöscht. Die Dateien bleiben in der Bibliothek."));
+  }
+
   function libIdentityKey(m) {
     if (!m) return "";
+    const work = libEffectiveWork(m);
+    if (work.group && !work.extra && !work.manual && !String(work.key).startsWith("datei:")) {
+      return `work:${work.group}`;
+    }
     const rawName = String(m.name || "").replace(/\.[^.]+$/, "");
     const epMatch = rawName.match(/\bS(\d{1,2})[\s._-]*E(\d{1,3})\b/i);
     const epTag = epMatch ? `s${String(parseInt(epMatch[1], 10)).padStart(2, "0")}e${String(parseInt(epMatch[2], 10)).padStart(2, "0")}` : "";
@@ -10988,7 +11186,8 @@
     if (q) rows = rows.filter((m) =>
       (m.name || "").toLowerCase().includes(q)
       || (m.folder || "").toLowerCase().includes(q)
-      || libNfoSearch(m).includes(q));
+      || libNfoSearch(m).includes(q)
+      || libEffectiveWork(m).title.toLowerCase().includes(q));
     const s = state.libSort || { key: "est_saved_bytes", dir: "desc" };
     const numeric = ["height", "video_bitrate", "duration", "size_bytes", "est_saved_bytes"];
     rows.sort((a, b) => {
@@ -11031,7 +11230,8 @@
               title="${escapeHtml(tt("Ton, Untertitel, Technik und NFO"))}"
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
-              <span class="lib-name">${escapeHtml(m.name)}</span>
+              <span class="lib-name"><span class="lib-kind">${escapeHtml(libKindLabel(libEffectiveWork(m)))}</span>${escapeHtml(m.name)}</span>
+              ${libWorkLine(m)}
               ${libNfoHeadline(m) ? `<span class="lib-nfo-line">${escapeHtml(libNfoHeadline(m))}</span>` : ""}
               ${meta ? `<span class="lib-meta-line">${meta}</span>` : ""}
             </span>
@@ -11054,6 +11254,17 @@
         </td>
       </tr>
       ${open ? libDetailRowHtml(m) : ""}`;
+  }
+
+  function libWorkLine(m) {
+    const work = libEffectiveWork(m);
+    const bits = [];
+    if (work.manual) bits.push(work.title);
+    else if (work.title && work.title !== String(m.name || "").replace(/\.[^.]+$/, "")) bits.push(work.year ? `${work.title} (${work.year})` : work.title);
+    if (work.subtitle) bits.push(work.subtitle);
+    if (work.edition) bits.push(work.edition);
+    if (!bits.length) return "";
+    return `<span class="lib-meta-line">${escapeHtml(bits.join(" · "))}</span>`;
   }
 
   function libRowHtmlSafe(m) {
@@ -11562,8 +11773,11 @@
       return;
     }
 
-    const grouped = $("lib-group") && $("lib-group").checked;
-    if (!grouped) {
+    const byWork = $("lib-by-work") && $("lib-by-work").checked;
+    const grouped = !byWork && $("lib-group") && $("lib-group").checked;
+    if (byWork) {
+      body.innerHTML = libWorkRowsHtml(rows, start, size);
+    } else if (!grouped) {
       body.innerHTML = pageRows.map(libRowHtmlSafe).join("");
     } else {
       const byFolder = {};

@@ -660,6 +660,31 @@ class DvDualHdrRequest(BaseModel):
     keep_temp_files: bool = False
 
 
+class DvToHdr10PlusRequest(BaseModel):
+    path: str
+    replace_source: bool = False
+    keep_temp_files: bool = False
+    force: bool = False
+
+
+class DvProfile7TvRequest(BaseModel):
+    path: str
+    replace_source: bool = False
+    keep_temp_files: bool = False
+
+
+class DvHdr10PlusCurveRequest(BaseModel):
+    path: str
+    duration_limit: float = 0.0
+
+
+class DvRpuCompareRequest(BaseModel):
+    left_vault_id: str = ""
+    right_vault_id: str = ""
+    left_path: str = ""
+    right_path: str = ""
+
+
 class RpuVaultExtractRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
     convert_to_81: bool = True
@@ -769,6 +794,70 @@ async def api_dv_lab_hdr10plus_to_dv(req: DvDualHdrRequest):
         replace_source=bool(req.replace_source),
         save_rpu_to_vault=bool(req.save_rpu_to_vault),
         keep_temp_files=bool(req.keep_temp_files),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/dv-to-hdr10plus")
+async def api_dv_lab_dv_to_hdr10plus(req: DvToHdr10PlusRequest):
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Quelldatei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.convert_dv_to_hdr10plus,
+        target,
+        replace_source=bool(req.replace_source),
+        keep_temp_files=bool(req.keep_temp_files),
+        force=bool(req.force),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/profile7-tv")
+async def api_dv_lab_profile7_tv(req: DvProfile7TvRequest):
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Quelldatei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.make_profile7_tv_stream,
+        target,
+        replace_source=bool(req.replace_source),
+        keep_temp_files=bool(req.keep_temp_files),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/hdr10plus-curve")
+async def api_dv_lab_hdr10plus_curve(req: DvHdr10PlusCurveRequest):
+    target = _safe_resolve(req.path)
+    if target is None or not target.is_file():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.load_dynamic_luminance_curve,
+        target,
+        duration_limit=max(0.0, float(req.duration_limit or 0.0)),
+    )
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
+@app.post("/api/dv-lab/rpu-compare")
+async def api_dv_lab_rpu_compare(req: DvRpuCompareRequest):
+    left = _safe_resolve(req.left_path) if req.left_path else None
+    right = _safe_resolve(req.right_path) if req.right_path else None
+    if req.left_path and (left is None or not left.is_file()):
+        return JSONResponse({"ok": False, "error": "Seite A nicht gefunden"}, status_code=404)
+    if req.right_path and (right is None or not right.is_file()):
+        return JSONResponse({"ok": False, "error": "Seite B nicht gefunden"}, status_code=404)
+    from core import dv_lab
+    res = await asyncio.to_thread(
+        dv_lab.compare_rpu_sources,
+        left_vault_id=(req.left_vault_id or "").strip(),
+        right_vault_id=(req.right_vault_id or "").strip(),
+        left_path=None if req.left_vault_id.strip() else left,
+        right_path=None if req.right_vault_id.strip() else right,
     )
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
@@ -2178,6 +2267,64 @@ async def library_clear(root: str | None = None):
     """Cache leeren: optional nur einen Root, sonst alle (nur wenn kein Scan läuft)."""
     from core import library
     return library.clear(root)
+
+
+class LibraryCollectionRequest(BaseModel):
+    name: str = ""
+    kind: str = "sammlung"
+
+
+class LibraryAssignRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list)
+    collection_id: str = ""
+
+
+@app.get("/api/library/catalog")
+async def library_catalog():
+    from core import works
+    return await asyncio.to_thread(works.list_catalog)
+
+
+@app.post("/api/library/catalog")
+async def library_catalog_create(req: LibraryCollectionRequest):
+    from core import works
+    try:
+        entry = await asyncio.to_thread(works.create_collection, req.name, req.kind or "sammlung")
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return {"ok": True, "collection": entry}
+
+
+@app.patch("/api/library/catalog/{collection_id}")
+async def library_catalog_update(collection_id: str, req: LibraryCollectionRequest):
+    from core import works
+    entry = await asyncio.to_thread(
+        works.update_collection, collection_id, name=req.name, kind=req.kind,
+    )
+    if entry is None:
+        return JSONResponse({"ok": False, "error": "Sammlung nicht gefunden"}, status_code=404)
+    return {"ok": True, "collection": entry}
+
+
+@app.delete("/api/library/catalog/{collection_id}")
+async def library_catalog_delete(collection_id: str):
+    from core import works
+    ok = await asyncio.to_thread(works.delete_collection, collection_id)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "Sammlung nicht gefunden"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/library/catalog/assign")
+async def library_catalog_assign(req: LibraryAssignRequest):
+    from core import works
+    try:
+        catalog = await asyncio.to_thread(
+            works.assign_paths, req.paths, (req.collection_id or "").strip(),
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return {"ok": True, **catalog}
 
 
 @app.get("/api/library/last")

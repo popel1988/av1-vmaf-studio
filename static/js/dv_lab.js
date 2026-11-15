@@ -28,6 +28,9 @@
     activeAnTab: "dvdata",
     currentAnalysis: null,
     chart: null,
+    h10Chart: null,
+    cmpChart: null,
+    hdr10Curve: null,
     zoomStartPct: 0,
     zoomEndPct: 100,
     vaultEntries: [],
@@ -157,6 +160,7 @@
     dvl.zoomStartPct = span.a;
     dvl.zoomEndPct = span.b;
     renderBitrateChart();
+    renderHdr10Curve();
   }
 
   async function apiJson(url, opts) {
@@ -215,9 +219,12 @@
     document.querySelectorAll("[data-dvl-panel]").forEach((panel) => {
       panel.style.display = panel.dataset.dvlPanel === tab ? "" : "none";
     });
-    if (tab === "vault") loadVault();
-    if (tab === "analyzer" && dvl.chart) {
-      requestAnimationFrame(() => { try { dvl.chart.resize(); } catch (_) {} });
+    if (tab === "vault" || tab === "compare") loadVault();
+    if (tab === "analyzer" && (dvl.chart || dvl.h10Chart)) {
+      requestAnimationFrame(() => {
+        try { if (dvl.chart) dvl.chart.resize(); } catch (_) {}
+        try { if (dvl.h10Chart) dvl.h10Chart.resize(); } catch (_) {}
+      });
     }
   }
 
@@ -229,8 +236,11 @@
     document.querySelectorAll("[data-dvl-anpanel]").forEach((p) => {
       p.style.display = p.dataset.dvlAnpanel === tab ? "" : "none";
     });
-    if (tab === "graph" && dvl.chart) {
-      requestAnimationFrame(() => { try { dvl.chart.resize(); } catch (_) {} });
+    if (tab === "graph" && (dvl.chart || dvl.h10Chart)) {
+      requestAnimationFrame(() => {
+        try { if (dvl.chart) dvl.chart.resize(); } catch (_) {}
+        try { if (dvl.h10Chart) dvl.h10Chart.resize(); } catch (_) {}
+      });
     }
   }
 
@@ -749,6 +759,7 @@
       $("dvl-vault-dir-label").textContent = res.vault_dir;
     }
     renderVaultTable();
+    fillCompareSelects();
   }
 
   function renderVaultTable() {
@@ -859,6 +870,281 @@
     switchSubtab("copy");
   }
 
+  async function runMetadataJob(url, body, statusId, btn) {
+    if (btn) btn.disabled = true;
+    setStatus(statusId, t("Läuft. Bei großen Filmen dauert das Lesen und Muxen der Basisspur."), "info");
+    try {
+      const res = await apiJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setStatus(statusId, res.error || t("Vorgang fehlgeschlagen."), "err");
+        return res;
+      }
+      if (res.already_present) {
+        setStatus(statusId, res.message || t("HDR10+ ist schon vorhanden."), "warn");
+        return res;
+      }
+      const name = res.output_name ? `✓ ${res.output_name}. ` : "✓ ";
+      setStatus(statusId, name + (res.warning || res.message || ""), res.el_dropped ? "warn" : "ok");
+      return res;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function renderHdr10Curve() {
+    const curve = dvl.hdr10Curve;
+    const box = $("dvl-h10-box");
+    const empty = $("dvl-h10-empty");
+    if (!curve || !curve.ok || !(curve.timestamps || []).length) {
+      if (box) box.style.display = "none";
+      if (empty && !curve) empty.style.display = "";
+      return;
+    }
+    if (empty) empty.style.display = "none";
+    if (box) box.style.display = "";
+    const note = $("dvl-h10-note");
+    if (note) {
+      const bits = [curve.note].concat(curve.notes || []).filter(Boolean);
+      note.textContent = bits.join(" ");
+      note.style.display = bits.length ? "" : "none";
+    }
+    const total = curve.timestamps.length;
+    const i0 = Math.max(0, Math.floor((dvl.zoomStartPct / 100) * (total - 1)));
+    const i1 = Math.max(i0 + 1, Math.ceil((dvl.zoomEndPct / 100) * total));
+    const ts = curve.timestamps.slice(i0, i1);
+    const mx = (curve.max_nits || []).slice(i0, i1);
+    const av = (curve.avg_nits || []).slice(i0, i1);
+    const step = Math.max(1, Math.floor(ts.length / 450));
+    const labels = [];
+    const maxData = [];
+    const avgData = [];
+    for (let i = 0; i < ts.length; i += step) {
+      labels.push(fmtTimeSec(ts[i]));
+      let peak = 0;
+      let mean = 0;
+      for (let j = i; j < Math.min(ts.length, i + step); j++) {
+        if ((mx[j] || 0) > peak) peak = mx[j];
+        if ((av[j] || 0) > mean) mean = av[j];
+      }
+      maxData.push(Number(peak.toFixed(1)));
+      avgData.push(Number(mean.toFixed(1)));
+    }
+    const canvas = $("dvl-h10-canvas");
+    if (!canvas || typeof window.Chart === "undefined") return;
+    if (dvl.h10Chart) {
+      dvl.h10Chart.destroy();
+      dvl.h10Chart = null;
+    }
+    const datasets = [
+      {
+        label: `Szenenpeak (max ${curve.measured_peak_nits} nits)`,
+        data: maxData,
+        borderColor: "#f0883e",
+        backgroundColor: "rgba(240,136,62,0.15)",
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 1.6,
+        tension: 0.15,
+      },
+      {
+        label: `Szenendurchschnitt (max ${curve.measured_fall_nits} nits)`,
+        data: avgData,
+        borderColor: "#58a6ff",
+        fill: false,
+        pointRadius: 0,
+        borderWidth: 1.4,
+        tension: 0.15,
+      },
+    ];
+    if (curve.max_cll_nits) {
+      datasets.push({
+        label: `MaxCLL ${Math.round(curve.max_cll_nits)} nits`,
+        data: labels.map(() => curve.max_cll_nits),
+        borderColor: "#f85149",
+        borderDash: [6, 4],
+        pointRadius: 0,
+        borderWidth: 1,
+        fill: false,
+      });
+    }
+    if (curve.max_fall_nits) {
+      datasets.push({
+        label: `MaxFALL ${Math.round(curve.max_fall_nits)} nits`,
+        data: labels.map(() => curve.max_fall_nits),
+        borderColor: "#d2a8ff",
+        borderDash: [3, 3],
+        pointRadius: 0,
+        borderWidth: 1,
+        fill: false,
+      });
+    }
+    dvl.h10Chart = new window.Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { labels: { color: "#c9d1d9" } } },
+        scales: {
+          x: { ticks: { color: "#8b949e", maxTicksLimit: 12 }, grid: { color: "rgba(255,255,255,0.05)" } },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: "nits", color: "#f0883e" },
+            ticks: { color: "#8b949e" },
+            grid: { color: "rgba(255,255,255,0.06)" },
+          },
+        },
+      },
+    });
+  }
+
+  async function loadHdr10PlusCurve() {
+    const path = ($("dvl-an-path")?.value || "").trim();
+    if (!path) {
+      setStatus("dvl-an-status", t("Bitte zuerst eine Datei wählen."), "warn");
+      return;
+    }
+    const limit = Number($("dvl-scan-limit")?.value || 0);
+    setStatus("dvl-an-status", t("HDR10+-Kurve wird gelesen …"), "info");
+    const res = await apiJson("/api/dv-lab/hdr10plus-curve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, duration_limit: limit }),
+    });
+    if (!res.ok) {
+      setStatus("dvl-an-status", res.error || t("Kurve fehlgeschlagen."), "err");
+      return;
+    }
+    dvl.hdr10Curve = res;
+    switchAnalyzerTab("graph");
+    renderHdr10Curve();
+    setStatus("dvl-an-status", t("HDR10+-Kurve geladen."), "ok");
+  }
+
+  function fillCompareSelects() {
+    ["dvl-cmp-left-vault", "dvl-cmp-right-vault"].forEach((id) => {
+      const sel = $(id);
+      if (!sel) return;
+      const cur = sel.value;
+      const opts = [`<option value="">${esc(t("— Tresor —"))}</option>`].concat(
+        (dvl.vaultEntries || []).map((it) =>
+          `<option value="${esc(it.id)}">${esc(it.title || it.id)} (${it.frames || "?"} Frames)</option>`
+        )
+      );
+      sel.innerHTML = opts.join("");
+      if (cur) sel.value = cur;
+    });
+  }
+
+  function l5Text(offsets) {
+    if (!offsets) return "—";
+    return `L ${offsets.left ?? 0} · R ${offsets.right ?? 0} · O ${offsets.top ?? 0} · U ${offsets.bottom ?? 0}`;
+  }
+
+  function signed(n) {
+    const v = Number(n) || 0;
+    return (v > 0 ? "+" : "") + v;
+  }
+
+  function renderRpuCompare(data) {
+    const box = $("dvl-cmp-result");
+    const chartBox = $("dvl-cmp-box");
+    if (box) {
+      box.style.display = "";
+      const left = data.left || {};
+      const right = data.right || {};
+      const l5 = data.l5_delta;
+      const rows = [
+        ["Frames", `${left.frames} → ${right.frames} (${signed(data.frames_delta)})`],
+        ["Szenenschnitte", `${left.scene_cuts} → ${right.scene_cuts} (${signed(data.scene_cuts_delta)})`],
+        ["Peak L1", `${Math.round(left.peak_l1_nits || 0)} → ${Math.round(right.peak_l1_nits || 0)} nits (${signed(data.peak_l1_delta)})`],
+        ["Ø L1", `${Math.round(left.avg_l1_nits || 0)} → ${Math.round(right.avg_l1_nits || 0)} nits (${signed(data.avg_l1_delta)})`],
+        ["L5 A", l5Text(left.l5_offsets)],
+        ["L5 B", l5Text(right.l5_offsets)],
+        ["L5-Differenz B−A", l5 ? `L ${signed(l5.left)} · R ${signed(l5.right)} · O ${signed(l5.top)} · U ${signed(l5.bottom)}` : "—"],
+        ["Intro-Versatz", `${signed(data.suggested_offset)} Frames (Treffer ${Math.round((data.offset_confidence || 0) * 100)} %)`],
+      ];
+      box.innerHTML = `<div class="dvl-compat-grid">${rows.map(([k, v]) =>
+        `<div><strong>${esc(k)}:</strong> ${esc(String(v))}</div>`).join("")}</div>`;
+    }
+    if (chartBox) chartBox.style.display = "";
+    const canvas = $("dvl-cmp-canvas");
+    if (!canvas || typeof window.Chart === "undefined") return;
+    if (dvl.cmpChart) {
+      dvl.cmpChart.destroy();
+      dvl.cmpChart = null;
+    }
+    const left = data.left || {};
+    const right = data.right || {};
+    const a = left.l1_max_series || [];
+    const b = right.l1_max_series || [];
+    const n = Math.max(a.length, b.length, 1);
+    const labels = [];
+    for (let i = 0; i < n; i++) labels.push(`${Math.round((i / Math.max(1, n - 1)) * 100)}%`);
+    dvl.cmpChart = new window.Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          { label: `A · ${left.title || "A"}`, data: a, borderColor: "#58a6ff", pointRadius: 0, borderWidth: 1.5, tension: 0.15 },
+          { label: `B · ${right.title || "B"}`, data: b, borderColor: "#f0883e", pointRadius: 0, borderWidth: 1.5, tension: 0.15 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: "#c9d1d9" } } },
+        scales: {
+          x: { ticks: { color: "#8b949e", maxTicksLimit: 8 }, grid: { color: "rgba(255,255,255,0.05)" } },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: "L1 max nits", color: "#c9d1d9" },
+            ticks: { color: "#8b949e" },
+          },
+        },
+      },
+    });
+  }
+
+  async function runRpuCompare() {
+    const leftVault = ($("dvl-cmp-left-vault")?.value || "").trim();
+    const rightVault = ($("dvl-cmp-right-vault")?.value || "").trim();
+    const leftPath = leftVault ? "" : ($("dvl-cmp-left-path")?.value || "").trim();
+    const rightPath = rightVault ? "" : ($("dvl-cmp-right-path")?.value || "").trim();
+    if ((!leftVault && !leftPath) || (!rightVault && !rightPath)) {
+      setStatus("dvl-cmp-status", t("Für jede Seite einen Tresor-Eintrag oder eine Datei wählen."), "warn");
+      return;
+    }
+    const btn = $("btn-dvl-cmp-run");
+    if (btn) btn.disabled = true;
+    setStatus("dvl-cmp-status", t("RPUs werden gelesen …"), "info");
+    try {
+      const res = await apiJson("/api/dv-lab/rpu-compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          left_vault_id: leftVault,
+          right_vault_id: rightVault,
+          left_path: leftPath,
+          right_path: rightPath,
+        }),
+      });
+      if (!res.ok) {
+        setStatus("dvl-cmp-status", res.error || t("Vergleich fehlgeschlagen."), "err");
+        return;
+      }
+      renderRpuCompare(res);
+      setStatus("dvl-cmp-status", t("Vergleich fertig."), "ok");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function dvLabInit(preloadPath, opts) {
     opts = opts || {};
     if (!dvl.initialized) {
@@ -885,6 +1171,8 @@
         pickSingleVideo("Videodatei für Layer-Inspektor wählen", "dvlAnDir", $("dvl-an-path")?.value, (rel, name) => {
           if ($("dvl-an-path")) $("dvl-an-path").value = rel;
           if ($("dvl-dual-path") && !$("dvl-dual-path").value) $("dvl-dual-path").value = rel;
+          if ($("dvl-rev-path") && !$("dvl-rev-path").value) $("dvl-rev-path").value = rel;
+          if ($("dvl-tv-path") && !$("dvl-tv-path").value) $("dvl-tv-path").value = rel;
           if (window.StudioSourceContext && typeof window.StudioSourceContext.set === "function") {
             window.StudioSourceContext.set({ path: rel, name });
           }
@@ -1009,6 +1297,85 @@
       $("btn-dvl-copy-run")?.addEventListener("click", runHybridTransfer);
       $("btn-dvl-dual-run")?.addEventListener("click", runDualHdrConversion);
 
+      $("btn-dvl-an-to-h10")?.addEventListener("click", () => {
+        const path = ($("dvl-an-path")?.value || "").trim();
+        if (!path) {
+          setStatus("dvl-an-status", t("Bitte zuerst eine Datei wählen."), "warn");
+          return;
+        }
+        runMetadataJob("/api/dv-lab/dv-to-hdr10plus", {
+          path, replace_source: false, keep_temp_files: false, force: false,
+        }, "dvl-an-status", $("btn-dvl-an-to-h10"));
+      });
+      $("btn-dvl-an-tv")?.addEventListener("click", () => {
+        const path = ($("dvl-an-path")?.value || "").trim();
+        if (!path) {
+          setStatus("dvl-an-status", t("Bitte zuerst eine Datei wählen."), "warn");
+          return;
+        }
+        runMetadataJob("/api/dv-lab/profile7-tv", {
+          path, replace_source: false, keep_temp_files: false,
+        }, "dvl-an-status", $("btn-dvl-an-tv"));
+      });
+      $("btn-dvl-h10-curve")?.addEventListener("click", loadHdr10PlusCurve);
+
+      $("btn-dvl-rev-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Dolby-Vision-Datei für HDR10+ wählen", "dvlRevDir", $("dvl-rev-path")?.value, (rel) => {
+          if ($("dvl-rev-path")) $("dvl-rev-path").value = rel;
+        });
+      });
+      $("btn-dvl-rev-clear")?.addEventListener("click", () => {
+        if ($("dvl-rev-path")) $("dvl-rev-path").value = "";
+      });
+      $("btn-dvl-rev-run")?.addEventListener("click", () => {
+        const path = ($("dvl-rev-path")?.value || "").trim();
+        if (!path) {
+          setStatus("dvl-rev-status", t("Bitte zuerst eine Datei wählen."), "warn");
+          return;
+        }
+        runMetadataJob("/api/dv-lab/dv-to-hdr10plus", {
+          path,
+          replace_source: !!$("dvl-rev-replace")?.checked,
+          keep_temp_files: !!$("dvl-rev-keep-temp")?.checked,
+          force: !!$("dvl-rev-force")?.checked,
+        }, "dvl-rev-status", $("btn-dvl-rev-run"));
+      });
+
+      $("btn-dvl-tv-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Profil-7-Datei für den TV-Stream wählen", "dvlTvDir", $("dvl-tv-path")?.value, (rel) => {
+          if ($("dvl-tv-path")) $("dvl-tv-path").value = rel;
+        });
+      });
+      $("btn-dvl-tv-clear")?.addEventListener("click", () => {
+        if ($("dvl-tv-path")) $("dvl-tv-path").value = "";
+      });
+      $("btn-dvl-tv-run")?.addEventListener("click", () => {
+        const path = ($("dvl-tv-path")?.value || "").trim();
+        if (!path) {
+          setStatus("dvl-tv-status", t("Bitte zuerst eine Datei wählen."), "warn");
+          return;
+        }
+        runMetadataJob("/api/dv-lab/profile7-tv", {
+          path,
+          replace_source: !!$("dvl-tv-replace")?.checked,
+          keep_temp_files: !!$("dvl-tv-keep-temp")?.checked,
+        }, "dvl-tv-status", $("btn-dvl-tv-run"));
+      });
+
+      $("btn-dvl-cmp-left-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Dolby-Vision-Datei für Seite A", "dvlCmpDir", $("dvl-cmp-left-path")?.value, (rel) => {
+          if ($("dvl-cmp-left-path")) $("dvl-cmp-left-path").value = rel;
+          if ($("dvl-cmp-left-vault")) $("dvl-cmp-left-vault").value = "";
+        });
+      });
+      $("btn-dvl-cmp-right-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Dolby-Vision-Datei für Seite B", "dvlCmpDir", $("dvl-cmp-right-path")?.value, (rel) => {
+          if ($("dvl-cmp-right-path")) $("dvl-cmp-right-path").value = rel;
+          if ($("dvl-cmp-right-vault")) $("dvl-cmp-right-vault").value = "";
+        });
+      });
+      $("btn-dvl-cmp-run")?.addEventListener("click", runRpuCompare);
+
       $("btn-dvl-vault-extract")?.addEventListener("click", runVaultBatchExtract);
       $("dvl-vault-search")?.addEventListener("input", () => loadVault());
 
@@ -1040,6 +1407,12 @@
       }
       if ($("dvl-dual-path") && (!$("dvl-dual-path").value || preloadPath)) {
         $("dvl-dual-path").value = ctxPath;
+      }
+      if ($("dvl-rev-path") && (!$("dvl-rev-path").value || preloadPath)) {
+        $("dvl-rev-path").value = ctxPath;
+      }
+      if ($("dvl-tv-path") && (!$("dvl-tv-path").value || preloadPath)) {
+        $("dvl-tv-path").value = ctxPath;
       }
     }
   }

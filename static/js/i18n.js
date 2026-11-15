@@ -5899,7 +5899,77 @@
       "Escaneo de bitrate terminado (0 bytes de espacio temporal en disco).",
       "Analyse de débit terminée (0 octet d’espace disque temporaire)."
     ],
-    "Bitrate-Scan fehlgeschlagen.": ["Bitrate scan failed.", "El escaneo de bitrate ha fallado.", "L’analyse de débit a échoué."]
+    "Bitrate-Scan fehlgeschlagen.": ["Bitrate scan failed.", "El escaneo de bitrate ha fallado.", "L’analyse de débit a échoué."],
+    "Nach Werk gruppieren": ["Group by work", "Agrupar por obra", "Grouper par œuvre"],
+    "Sammlung anlegen": ["Create collection", "Crear colección", "Créer une collection"],
+    "Auswahl zuordnen": ["Assign selection", "Asignar selección", "Affecter la sélection"],
+    "Zuordnung lösen": ["Clear assignment", "Quitar asignación", "Retirer l’affectation"],
+    "Sammlung löschen": ["Delete collection", "Eliminar colección", "Supprimer la collection"],
+    "Sammlung": ["Collection", "Colección", "Collection"],
+    "Serie": ["Series", "Serie", "Série"],
+    "Sendung": ["Broadcast", "Emisión", "Émission"],
+    "Filme, Folgen, Dokus und Mediathek-Sendungen werden am Titel erkannt. Eigene Sammlungen fassen Aufnahmen zusammen, die denselben Anlass haben.": [
+      "Films, episodes, documentaries and media-library broadcasts are recognized by title. Custom collections group recordings that share the same occasion.",
+      "Películas, episodios, documentales y emisiones de mediatecas se reconocen por el título. Las colecciones propias agrupan grabaciones de la misma ocasión.",
+      "Films, épisodes, documentaires et émissions de médiathèque sont reconnus par le titre. Les collections personnelles regroupent des enregistrements d’une même occasion."
+    ],
+    "Film": ["Film", "Película", "Film"],
+    "Folge": ["Episode", "Episodio", "Épisode"],
+    "Doku": ["Documentary", "Documental", "Documentaire"],
+    "Extra": ["Extra", "Extra", "Bonus"],
+    "Datei": ["File", "Archivo", "Fichier"],
+    "Dateien": ["Files", "Archivos", "Fichiers"],
+    "Fassungen": ["Versions", "Versiones", "Versions"],
+    "Sammlung wählen …": ["Choose a collection …", "Elegir una colección …", "Choisir une collection …"],
+    "Die Sammlung braucht einen Namen.": ["The collection needs a name.", "La colección necesita un nombre.", "La collection a besoin d’un nom."],
+    "Sammlung konnte nicht angelegt werden.": ["The collection could not be created.", "No se ha podido crear la colección.", "La collection n’a pas pu être créée."],
+    "Sammlung angelegt. Markierte Dateien lassen sich ihr jetzt zuordnen.": [
+      "Collection created. Checked files can be assigned to it now.",
+      "Colección creada. Los archivos marcados se le pueden asignar ahora.",
+      "Collection créée. Les fichiers cochés peuvent maintenant lui être affectés."
+    ],
+    "Zuerst Dateien in der Liste markieren.": ["Check files in the list first.", "Marca primero archivos en la lista.", "Cochez d’abord des fichiers dans la liste."],
+    "Zuerst eine Sammlung wählen.": ["Choose a collection first.", "Elige primero una colección.", "Choisissez d’abord une collection."],
+    "Zuordnung fehlgeschlagen.": ["Assignment failed.", "La asignación ha fallado.", "L’affectation a échoué."],
+    "Dateien sind der Sammlung zugeordnet.": ["Files are assigned to the collection.", "Los archivos están asignados a la colección.", "Les fichiers sont affectés à la collection."],
+    "Zuordnung aufgehoben.": ["Assignment cleared.", "Asignación retirada.", "Affectation retirée."],
+    "Sammlung konnte nicht gelöscht werden.": ["The collection could not be deleted.", "No se ha podido eliminar la colección.", "La collection n’a pas pu être supprimée."],
+    "Sammlung gelöscht. Die Dateien bleiben in der Bibliothek.": [
+      "Collection deleted. The files stay in the library.",
+      "Colección eliminada. Los archivos siguen en la biblioteca.",
+      "Collection supprimée. Les fichiers restent dans la bibliothèque."
+    ],
+    "HDR-Umwandlung": ["HDR conversion", "Conversión HDR", "Conversion HDR"],
+    "RPU gegen RPU": ["RPU versus RPU", "RPU contra RPU", "RPU contre RPU"],
+    "HDR10+ aus der RPU ergänzen": ["Add HDR10+ from the RPU", "Añadir HDR10+ desde la RPU", "Ajouter le HDR10+ depuis la RPU"],
+    "Profil 7 → TV-Stream (8.1)": ["Profile 7 → TV stream (8.1)", "Perfil 7 → flujo de TV (8.1)", "Profil 7 → flux TV (8.1)"],
+    "HDR10+-Kurve": ["HDR10+ curve", "Curva HDR10+", "Courbe HDR10+"],
+    "RPUs vergleichen": ["Compare RPUs", "Comparar RPUs", "Comparer les RPU"],
+    "„HDR10+ aus der RPU“ nähert die Samsung-Metadaten aus der Dolby-RPU und lässt Dolby Vision liegen. „Profil 7 → TV-Stream“ schreibt einen einzelnen Profil-8.1-Stream. Dabei entfallen die Enhancement-Layer-Pixel.": [
+      "“Add HDR10+ from the RPU” approximates the Samsung metadata from the Dolby RPU and leaves Dolby Vision in place. “Profile 7 → TV stream” writes a single Profile 8.1 stream. The enhancement-layer pixels are dropped.",
+      "“Añadir HDR10+ desde la RPU” aproxima los metadatos de Samsung a partir de la RPU Dolby y deja Dolby Vision en su sitio. “Perfil 7 → flujo de TV” escribe un único flujo de perfil 8.1. Los píxeles de la capa de mejora se descartan.",
+      "« Ajouter le HDR10+ depuis la RPU » approche les métadonnées Samsung à partir de la RPU Dolby et laisse Dolby Vision en place. « Profil 7 → flux TV » écrit un seul flux Profil 8.1. Les pixels de la couche d’amélioration sont abandonnés."
+    ],
+    "Die HDR10+-Kurve nutzt denselben Ausschnitt. Sie kommt aus der HDR10+-JSON der Datei, oder aus der RPU, wenn nur Dolby Vision vorliegt.": [
+      "The HDR10+ curve uses the same window. It comes from the file’s HDR10+ JSON, or from the RPU when the file only has Dolby Vision.",
+      "La curva HDR10+ usa el mismo recorte. Sale del JSON HDR10+ del archivo, o de la RPU si el archivo solo tiene Dolby Vision.",
+      "La courbe HDR10+ utilise la même fenêtre. Elle vient du JSON HDR10+ du fichier, ou de la RPU si le fichier n’a que du Dolby Vision."
+    ],
+    "Umgekehrt: aus der Dolby-Vision-RPU wird eine HDR10+-Schicht genähert und in die Basisspur geschrieben. Die RPU bleibt erhalten, bei einer zweiten Spur auch die Enhancement-Layer-Pixel. Profil 5 hat keine HDR10-Basis und wird abgelehnt. Die Tonkurve ist eine Näherung aus der L1-Helligkeit, keine Rückrechnung der Dolby-Reshape-Kurve.": [
+      "The other way: an HDR10+ layer is approximated from the Dolby Vision RPU and written into the base track. The RPU stays, and so do enhancement-layer pixels on a second track. Profile 5 has no HDR10 base and is rejected. The tone curve is an approximation of L1 brightness, not a reversal of the Dolby reshape curve.",
+      "Al revés: una capa HDR10+ se aproxima desde la RPU Dolby Vision y se escribe en la pista base. La RPU se conserva, y también los píxeles de mejora si hay una segunda pista. El perfil 5 no tiene base HDR10 y se rechaza. La curva es una aproximación del brillo L1, no una inversión de la curva de reshape de Dolby.",
+      "Dans l’autre sens : une couche HDR10+ est approchée depuis la RPU Dolby Vision et écrite dans la piste de base. La RPU reste, ainsi que les pixels d’amélioration d’une seconde piste. Le profil 5 n’a pas de base HDR10 et est refusé. La courbe est une approximation de la luminance L1, pas l’inverse de la courbe de reshape Dolby."
+    ],
+    "Profil 7, ob als zweite Spur oder in derselben Spur, wird zu einem einzelnen Profil-8.1-Stream für Fernseher. Die Enhancement-Layer-Pixel entfallen. Übrig bleiben die HDR10-Basisschicht und eine Profil-8.1-RPU.": [
+      "Profile 7, whether a second track or the same track, becomes a single Profile 8.1 stream for TVs. The enhancement-layer pixels are dropped. What remains is the HDR10 base layer plus a Profile 8.1 RPU.",
+      "El perfil 7, ya sea una segunda pista o la misma, se convierte en un único flujo de perfil 8.1 para televisores. Los píxeles de la capa de mejora se descartan. Quedan la capa base HDR10 y una RPU de perfil 8.1.",
+      "Le profil 7, qu’il soit une seconde piste ou la même, devient un seul flux Profil 8.1 pour les téléviseurs. Les pixels de la couche d’amélioration sont abandonnés. Il reste la couche de base HDR10 et une RPU Profil 8.1."
+    ],
+    "Zwei RPUs übereinander: Framezahl, Szenenschnitte, L1-Helligkeit und L5-Crop. Der Versatz ist derselbe Intro-Abgleich wie beim Hybrid-Mux, hier als eigene Ansicht. Seite A und Seite B dürfen je ein Tresoreintrag oder eine Dolby-Vision-Datei sein.": [
+      "Two RPUs overlaid: frame count, scene cuts, L1 brightness and L5 crop. The offset is the same intro match as hybrid mux, shown on its own. Side A and side B can each be a vault entry or a Dolby Vision file.",
+      "Dos RPU superpuestas: número de fotogramas, cortes de escena, brillo L1 y recorte L5. El desfase es el mismo ajuste de intro que el mux híbrido, en su propia vista. El lado A y el lado B pueden ser una entrada de la bóveda o un archivo Dolby Vision.",
+      "Deux RPU superposées : nombre d’images, coupures de scène, luminance L1 et recadrage L5. Le décalage est le même calage d’intro que le mux hybride, dans sa propre vue. Le côté A et le côté B peuvent être une entrée du coffre ou un fichier Dolby Vision."
+    ]
   };
   Object.keys(WORKSPACE).forEach(function (key) {
     DICT[key] = WORKSPACE[key][0];

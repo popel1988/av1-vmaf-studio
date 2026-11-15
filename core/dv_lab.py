@@ -15,14 +15,15 @@ Implementiert alle Funktionen moderner DV-Analyse- und Hybrid-Copy-Werkzeuge
    - **5-Format-Report-Export**: Standard-MediaInfo inkl. integriertem Dolby-Vision-Block
      als TXT, Markdown, JSON, CSV und HTML.
 
-2. **Cross-Release DV-Transfer (Hybrid-Builder) & HDR10+ → DV Generator**:
+2. **Cross-Release DV-Transfer (Hybrid-Builder) & HDR-Metadaten**:
    - Kompatibilitätsprüfung zweier Releases inkl. automatischer Intro-Offset-Erkennung
      (Szenenschnitt-Korrelation über `scene_refresh_flag`) und L5-Active-Area-Schutz
      bei gecroppten Zieldateien.
    - Framegenaue RPU-Anpassung (`dovi_tool editor`: Intro-Trim/Padding, Endlängen-Sync,
      L5-Offsets).
-   - Verlustfreier Dual-HDR-Konverter: Erzeugt aus HDR10+ eine Dolby-Vision-8.1-RPU
-     und bettet sie zusätzlich ein (HDR10 + HDR10+ + Dolby Vision gleichzeitig).
+   - HDR10+ → Dolby Vision 8.1, die umgekehrte Näherung DV-RPU → HDR10+ (RPU bleibt),
+     Profil 7 → einzelner TV-Stream 8.1 (Enhancement-Layer-Pixel entfallen) und
+     ein RPU-gegen-RPU-Vergleich (Frames, Schnitte, L1, L5).
 """
 from __future__ import annotations
 
@@ -1222,10 +1223,18 @@ def _mux_injected_hevc(
     target_container: Path,
     out_file: Path,
     fps: float,
+    *,
+    keep_second_video: bool = False,
+    video_tag: str = "",
 ) -> tuple[bool, str]:
-    """Muxt den neuen DV-HEVC-Stream mit allen Audio-/Untertitel-/Kapitel-/Font-Spuren des Ziels."""
+    """Muxt den neuen HEVC-Stream mit Audio, Untertiteln und Kapiteln des Ziels.
+
+    `keep_second_video` behält die zweite Videospur (Dual-Track-Enhancement-Layer).
+    `video_tag` setzt den MP4-Codec-Tag der neuen Spur (`dvh1` oder `hvc1`).
+    """
     is_mkv = out_file.suffix.lower() in (".mkv", ".mk3d")
-    if is_mkv and _mkvmerge_available():
+    tag = (video_tag or ("hvc1" if keep_second_video else "dvh1")).lower()
+    if is_mkv and _mkvmerge_available() and not keep_second_video:
         cmd = [config.MKVMERGE, "-o", str(out_file)]
         if fps and fps > 0:
             cmd += ["--default-duration", f"0:{fps:.6f}fps"]
@@ -1237,7 +1246,7 @@ def _mux_injected_hevc(
         if res.returncode in (0, 1) and out_file.is_file() and out_file.stat().st_size > 0:
             return True, ""
 
-    # Universeller Fallback via FFmpeg (MP4 & MKV, inkl. dvh1/dvhe Tagging bei MP4)
+    # Universeller Fallback via FFmpeg (MP4 & MKV, inkl. dvh1/hvc1 Tagging bei MP4)
     mux = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
     if fps and fps > 0:
         mux += ["-r", f"{fps:.6f}"]
@@ -1245,6 +1254,10 @@ def _mux_injected_hevc(
         "-i", str(injected_hevc),
         "-i", str(target_container),
         "-map", "0:v:0",
+    ]
+    if keep_second_video:
+        mux += ["-map", "1:v:1"]
+    mux += [
         "-map", "1:a?",
         "-map", "1:s?",
         "-map", "1:t?",
@@ -1253,7 +1266,7 @@ def _mux_injected_hevc(
         "-c", "copy",
     ]
     if out_file.suffix.lower() in (".mp4", ".m4v", ".mov"):
-        mux += ["-strict", "unofficial", "-tag:v", "dvh1"]
+        mux += ["-strict", "unofficial", "-tag:v:0", tag]
     mux.append(str(out_file))
 
     res = subprocess.run(
@@ -1491,4 +1504,779 @@ def convert_hdr10plus_to_dv_dual_hdr(
         replace_target=replace_source,
         output_suffix=".DV-HDR10Plus",
         status=status,
+    )
+
+
+# hdr10plus_tool speichert MaxScl und AverageMaxrgb in Einheiten von 0,1 cd/m².
+# 65535 ist die Obergrenze, die das JSON-Schema als 16-Bit-Wert annimmt (~6553 nits).
+_H10_DIST_INDEX = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+_H10_RAW_MAX = 65535
+
+
+def nits_to_hdr10plus_raw(nits: float) -> int:
+    """Wandelt cd/m² in die 0,1-Nit-Einheit der HDR10+-JSON um."""
+    raw = int(round(max(0.0, float(nits)) * 10.0))
+    return max(0, min(_H10_RAW_MAX, raw))
+
+
+def hdr10plus_raw_to_nits(value: float) -> float:
+    """Liest eine HDR10+-JSON-Helligkeit (0,1 cd/m²) als Nits."""
+    return max(0.0, float(value or 0)) / 10.0
+
+
+def _frame_l1_nits(entry: dict) -> Optional[tuple[float, float, float]]:
+    """L1 einer exportierten RPU-Frame als (min, avg, max) in Nits."""
+    if not isinstance(entry, dict):
+        return None
+    vdr = entry.get("vdr_dm_data") or {}
+    blocks: list = []
+    for key in ("cmv40_metadata", "cmv29_metadata"):
+        meta = vdr.get(key)
+        if isinstance(meta, dict):
+            blocks.extend(meta.get("ext_metadata_blocks") or [])
+    if isinstance(vdr.get("ext_metadata_blocks"), list):
+        blocks.extend(vdr["ext_metadata_blocks"])
+    for block in blocks:
+        if isinstance(block, dict) and isinstance(block.get("Level1"), dict):
+            level = block["Level1"]
+            return (
+                dv._pq_to_nits(float(level.get("min_pq") or 0)),
+                dv._pq_to_nits(float(level.get("avg_pq") or 0)),
+                dv._pq_to_nits(float(level.get("max_pq") or 0)),
+            )
+    return None
+
+
+def _distribution_raw(min_n: float, avg_n: float, max_n: float) -> list[int]:
+    """Neun Perzentile zwischen Minimum, Durchschnitt und Peak, monoton steigend."""
+    anchors = (0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99)
+    cap = nits_to_hdr10plus_raw(max_n)
+    vals: list[int] = []
+    for pos in anchors:
+        if pos <= 0.5:
+            nits = min_n + (avg_n - min_n) * (pos / 0.5)
+        else:
+            nits = avg_n + (max_n - avg_n) * (((pos - 0.5) / 0.5) ** 0.7)
+        raw = min(cap, nits_to_hdr10plus_raw(nits))
+        if vals and raw < vals[-1]:
+            raw = vals[-1]
+        vals.append(raw)
+    if vals:
+        vals[-1] = cap
+    return vals
+
+
+def rpu_export_to_hdr10plus_json(raw: list) -> dict:
+    """Nähert eine HDR10+-Profil-A-JSON aus den L1-Werten einer exportierten RPU.
+
+    Szenen folgen `scene_refresh_flag`. MaxScl ist der Szenenpeak, AverageMaxrgb
+    der mittlere L1-Durchschnitt. Eine Bezier-Kurve wird nicht erfunden: der
+    Fernseher leitet die Tonkurve aus den Perzentilen ab. Das ist eine Näherung,
+    keine Rückrechnung der Dolby-Reshape-Kurve.
+    """
+    scenes: list[dict] = []
+    for idx, entry in enumerate(raw or []):
+        if not isinstance(entry, dict):
+            continue
+        flag = ((entry.get("vdr_dm_data") or {}).get("scene_refresh_flag") == 1)
+        if idx == 0 or flag or not scenes:
+            scenes.append({"start": idx, "samples": []})
+        sample = _frame_l1_nits(entry)
+        if sample is not None:
+            scenes[-1]["samples"].append(sample)
+
+    scene_info: list[dict] = []
+    for scene in scenes:
+        samples = scene["samples"]
+        if not samples:
+            continue
+        min_n = min(item[0] for item in samples)
+        avg_n = sum(item[1] for item in samples) / len(samples)
+        max_n = max(item[2] for item in samples)
+        peak_raw = nits_to_hdr10plus_raw(max_n)
+        scene_info.append({
+            "SceneId": len(scene_info),
+            "SequenceFrameIndex": int(scene["start"]),
+            "SceneFrameIndex": 0,
+            "LuminanceParameters": {
+                "AverageMaxrgb": nits_to_hdr10plus_raw(avg_n),
+                "MaxScl": [peak_raw, peak_raw, peak_raw],
+                "LuminanceDistributions": {
+                    "DistributionIndex": list(_H10_DIST_INDEX),
+                    "DistributionValues": _distribution_raw(min_n, avg_n, max_n),
+                },
+            },
+            "TargetedSystemDisplayMaximumLuminance": 0,
+        })
+    return {
+        "JSONInfo": {"HDR10plusProfile": "A", "Version": "1.0"},
+        "SceneInfo": scene_info,
+    }
+
+
+def hdr10plus_json_to_curve(
+    payload: dict,
+    *,
+    fps: float,
+    duration_sec: float = 0.0,
+    max_cll: float = 0.0,
+    max_fall: float = 0.0,
+    max_points: int = 900,
+) -> dict:
+    """Baut eine Sekundenreihe aus HDR10+-Szenen und stellt sie MaxCLL/MaxFALL gegenüber."""
+    parsed: list[tuple[int, float, float]] = []
+    for scene in (payload or {}).get("SceneInfo") or []:
+        if not isinstance(scene, dict):
+            continue
+        lum = scene.get("LuminanceParameters") or {}
+        maxscl = lum.get("MaxScl") or [0]
+        try:
+            peak = hdr10plus_raw_to_nits(max(float(x or 0) for x in maxscl))
+        except (TypeError, ValueError):
+            peak = 0.0
+        avg_raw = lum.get("AverageMaxrgb", lum.get("AverageRGB", lum.get("AverageRgb", 0)))
+        try:
+            avg = hdr10plus_raw_to_nits(float(avg_raw or 0))
+        except (TypeError, ValueError):
+            avg = 0.0
+        parsed.append((int(scene.get("SequenceFrameIndex") or 0), peak, avg))
+    if not parsed:
+        return {"ok": False, "error": "HDR10+-JSON enthält keine Szenen."}
+    parsed.sort(key=lambda item: item[0])
+    eff_fps = fps if fps and fps > 1.0 else 23.976
+    last_sec = parsed[-1][0] / eff_fps
+    total = float(duration_sec or 0.0)
+    if total <= last_sec:
+        total = last_sec + 1.0
+    total_sec = max(1, int(math.ceil(total)))
+    step = max(1, math.ceil(total_sec / max(1, max_points)))
+    timestamps: list[int] = []
+    max_series: list[float] = []
+    avg_series: list[float] = []
+    cursor = 0
+    for sec in range(0, total_sec, step):
+        frame_at = int(sec * eff_fps)
+        while cursor + 1 < len(parsed) and parsed[cursor + 1][0] <= frame_at:
+            cursor += 1
+        timestamps.append(sec)
+        max_series.append(round(parsed[cursor][1], 1))
+        avg_series.append(round(parsed[cursor][2], 1))
+    measured_peak = round(max(item[1] for item in parsed), 1)
+    measured_fall = round(max(item[2] for item in parsed), 1)
+    notes: list[str] = []
+    if max_cll:
+        if measured_peak > float(max_cll) + 1.0:
+            notes.append(
+                f"Der höchste Szenenpeak ({measured_peak:.0f} nits) liegt über dem statischen MaxCLL ({float(max_cll):.0f} nits)."
+            )
+        else:
+            notes.append(
+                f"Der höchste Szenenpeak ({measured_peak:.0f} nits) bleibt innerhalb des statischen MaxCLL ({float(max_cll):.0f} nits)."
+            )
+    if max_fall:
+        if measured_fall > float(max_fall) + 1.0:
+            notes.append(
+                f"Der höchste Szenendurchschnitt ({measured_fall:.0f} nits) liegt über MaxFALL ({float(max_fall):.0f} nits)."
+            )
+        else:
+            notes.append(
+                f"Der höchste Szenendurchschnitt ({measured_fall:.0f} nits) bleibt innerhalb von MaxFALL ({float(max_fall):.0f} nits)."
+            )
+    return {
+        "ok": True,
+        "fps": round(eff_fps, 3),
+        "step_seconds": step,
+        "scene_count": len(parsed),
+        "measured_peak_nits": measured_peak,
+        "measured_fall_nits": measured_fall,
+        "max_cll_nits": float(max_cll or 0),
+        "max_fall_nits": float(max_fall or 0),
+        "peak_vs_maxcll": round(measured_peak - float(max_cll), 1) if max_cll else None,
+        "fall_vs_maxfall": round(measured_fall - float(max_fall), 1) if max_fall else None,
+        "timestamps": timestamps,
+        "max_nits": max_series,
+        "avg_nits": avg_series,
+        "notes": notes,
+    }
+
+
+def rpu_l1_overlay(raw: list, points: int = 240) -> list[float]:
+    """L1-Maximum auf eine feste Punktzahl gebracht, damit zwei Filme übereinanderliegen."""
+    vals: list[float] = []
+    for entry in raw or []:
+        sample = _frame_l1_nits(entry)
+        vals.append(sample[2] if sample else 0.0)
+    if not vals:
+        return []
+    points = max(1, int(points))
+    out: list[float] = []
+    for i in range(points):
+        start = int(i * len(vals) / points)
+        end = int((i + 1) * len(vals) / points)
+        chunk = vals[start:max(start + 1, end)]
+        out.append(round(max(chunk) if chunk else 0.0, 1))
+    return out
+
+
+def compare_rpu_exports(
+    left_raw: list,
+    right_raw: list,
+    *,
+    left_title: str = "",
+    right_title: str = "",
+) -> dict:
+    """Stellt zwei RPU-Exporte gegenüber: Frames, Schnitte, L1, L5 und Intro-Versatz."""
+    def _side(raw: list, title: str) -> dict:
+        info: dict = {}
+        rpu_vault._enrich_from_exported_rpu(raw, info)
+        return {
+            "title": title,
+            "frames": int(info.get("frames") or 0),
+            "profile": int(info.get("profile") or 0),
+            "el_type": info.get("el_type") or "",
+            "cm_version": info.get("cm_version") or "",
+            "scene_cuts": int(info.get("scene_cuts") or 0),
+            "peak_l1_nits": float(info.get("peak_l1_nits") or 0),
+            "avg_l1_nits": float(info.get("avg_l1_nits") or 0),
+            "max_cll_nits": float(info.get("max_cll_nits") or 0),
+            "max_fall_nits": float(info.get("max_fall_nits") or 0),
+            "l5_offsets": info.get("l5_offsets"),
+            "l1_max_series": rpu_l1_overlay(raw),
+            "_cuts": list(info.get("scene_cut_frames") or []),
+        }
+
+    left = _side(left_raw, left_title or "A")
+    right = _side(right_raw, right_title or "B")
+    offset, confidence = correlate_scene_cut_offset(left.pop("_cuts"), right.pop("_cuts"))
+    l5_left = left.get("l5_offsets") if isinstance(left.get("l5_offsets"), dict) else {}
+    l5_right = right.get("l5_offsets") if isinstance(right.get("l5_offsets"), dict) else {}
+    l5_delta = None
+    if l5_left or l5_right:
+        l5_delta = {
+            key: int((l5_right or {}).get(key) or 0) - int((l5_left or {}).get(key) or 0)
+            for key in ("left", "right", "top", "bottom")
+        }
+    return {
+        "ok": True,
+        "left": left,
+        "right": right,
+        "frames_delta": int(right["frames"]) - int(left["frames"]),
+        "scene_cuts_delta": int(right["scene_cuts"]) - int(left["scene_cuts"]),
+        "peak_l1_delta": round(float(right["peak_l1_nits"]) - float(left["peak_l1_nits"]), 1),
+        "avg_l1_delta": round(float(right["avg_l1_nits"]) - float(left["avg_l1_nits"]), 1),
+        "l5_delta": l5_delta,
+        "suggested_offset": int(offset),
+        "offset_confidence": float(confidence),
+    }
+
+
+def write_base_layer_annexb(src: Path, dst: Path) -> dict:
+    """Schreibt nur Basisspur-NALs. Enhancement Layer (Typ 63 / Layer > 0) und RPU (Typ 62) entfallen."""
+    kept = 0
+    dropped_el = 0
+    dropped_rpu = 0
+    buf = bytearray()
+    start_code = b"\x00\x00\x01"
+
+    def _emit(nalu: memoryview | bytes) -> None:
+        nonlocal kept, dropped_el, dropped_rpu
+        nlen = len(nalu)
+        if nlen < 5:
+            return
+        sc_len = 4 if (nlen >= 4 and nalu[0] == 0 and nalu[1] == 0 and nalu[2] == 0 and nalu[3] == 1) else 3
+        if nlen <= sc_len + 1:
+            return
+        b0 = nalu[sc_len]
+        b1 = nalu[sc_len + 1]
+        nal_type = (b0 >> 1) & 0x3F
+        layer_id = ((b0 & 1) << 5) | ((b1 >> 3) & 0x1F)
+        if nal_type == 62:
+            dropped_rpu += nlen
+            return
+        if nal_type == 63 or layer_id > 0:
+            dropped_el += nlen
+            return
+        out.write(nalu)
+        kept += nlen
+
+    with src.open("rb") as inp, dst.open("wb") as out:
+        while True:
+            chunk = inp.read(1024 * 1024)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            pos = buf.find(start_code)
+            if pos < 0:
+                if len(buf) > 4:
+                    del buf[:-3]
+                continue
+            if pos > 0 and buf[pos - 1] == 0:
+                pos -= 1
+            if pos > 0:
+                del buf[:pos]
+            cursor = 0
+            while True:
+                nxt = buf.find(start_code, cursor + 3)
+                if nxt < 0:
+                    break
+                nalu_end = nxt - 1 if (nxt > 0 and buf[nxt - 1] == 0) else nxt
+                _emit(memoryview(buf)[cursor:nalu_end])
+                cursor = nalu_end
+            if cursor > 0:
+                del buf[:cursor]
+        if buf:
+            _emit(bytes(buf))
+    return {
+        "kept_bytes": kept,
+        "dropped_el_bytes": dropped_el,
+        "dropped_rpu_bytes": dropped_rpu,
+    }
+
+
+def _dv_profile_of(info) -> int:
+    if int(getattr(info, "dv_profile", 0) or 0):
+        return int(info.dv_profile)
+    for track in getattr(info, "video_tracks", None) or []:
+        if track.get("dolby_vision") and int(track.get("dv_profile") or 0):
+            return int(track.get("dv_profile") or 0)
+    return 0
+
+
+def _dual_enhancement_track(info) -> bool:
+    for track in getattr(info, "video_tracks", None) or []:
+        if track.get("attached_pic"):
+            continue
+        if track.get("role") == "enhancement" and track.get("dolby_vision"):
+            return True
+    return False
+
+
+def _file_has_hdr10plus(info, path: Path) -> bool:
+    if getattr(info, "hdr10_plus", False):
+        return True
+    text = get_mediainfo_text(path)
+    return "HDR10+" in text or "SMPTE ST 2094" in text
+
+
+def _job_work_dir(source: Path, kind: str) -> Path:
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source.stem).strip("._")[:55] or "dv_job"
+    work = config.WORK_DIR / f"{kind}_{safe_stem}_{time.strftime('%Y-%m-%d_%H-%M')}_{uuid.uuid4().hex[:6]}"
+    work.mkdir(parents=True, exist_ok=True)
+    return work
+
+
+def _output_beside(source: Path, suffix: str, replace: bool) -> Path:
+    suffix_ext = source.suffix if source.suffix.lower() in (".mkv", ".mp4", ".m4v", ".mov") else ".mkv"
+    if replace:
+        return source.with_name(f"{source.stem}.__dv_tmp__{suffix_ext}")
+    clean = "".join(ch for ch in (suffix or ".DV") if ch.isalnum() or ch in "._- ")[:32] or ".DV"
+    if not clean.startswith((".", "_", "-")):
+        clean = "." + clean
+    return source.with_name(f"{source.stem}{clean}{suffix_ext}")
+
+
+def _demux_base_hevc(source: Path, dest: Path, *, duration_limit: float = 0.0) -> tuple[bool, str]:
+    cmd = [config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
+    if duration_limit and duration_limit > 0:
+        cmd += ["-t", f"{float(duration_limit):.3f}"]
+    cmd += [
+        "-i", str(source),
+        "-map", "0:v:0",
+        "-c:v", "copy",
+        "-bsf:v", "hevc_mp4toannexb",
+        "-f", "hevc",
+        str(dest),
+    ]
+    res = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+    )
+    if res.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        return False, (res.stderr or "Extraktion der Basisspur fehlgeschlagen.")[-500:]
+    return True, ""
+
+
+def _export_rpu_file(rpu_path: Path) -> list:
+    if not rpu_path.is_file() or rpu_path.stat().st_size <= 0:
+        raise ValueError("RPU-Datei ist leer.")
+    with tempfile.TemporaryDirectory(prefix="vc_rpuexp_") as tmp:
+        exp = Path(tmp) / "rpu.json"
+        res = subprocess.run(
+            [config.DOVI_TOOL, "export", "-i", str(rpu_path), "-d", f"all={exp}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=600, check=False,
+        )
+        if res.returncode != 0 or not exp.is_file():
+            err = (res.stderr or res.stdout or "dovi_tool export fehlgeschlagen").strip()[-400:]
+            raise ValueError(err)
+        raw = json.loads(exp.read_text(encoding="utf-8", errors="replace"))
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("RPU-Export enthält keine Frames.")
+    return raw
+
+
+def _load_rpu_raw(*, vault_id: str = "", path: Optional[Path] = None) -> tuple[list, str]:
+    if vault_id:
+        entry = rpu_vault.get_entry(vault_id)
+        if not entry or not entry.get("rpu_path"):
+            raise LookupError("RPU-Eintrag im Tresor nicht gefunden.")
+        return _export_rpu_file(Path(entry["rpu_path"])), str(entry.get("title") or vault_id)
+    if path is None or not path.is_file():
+        raise LookupError("Für jede Seite einen Tresor-Eintrag oder eine Dolby-Vision-Datei wählen.")
+    info = ff.ffprobe(path)
+    if info is None or not info.dolby_vision:
+        raise LookupError(f"{path.name} enthält kein Dolby Vision.")
+    profile = _dv_profile_of(info)
+    codec = "av1" if (info.codec or "").lower() == "av1" else "hevc"
+    with tempfile.TemporaryDirectory(prefix="vc_rpu_cmp_") as tmp:
+        rpu = Path(tmp) / "side.rpu.bin"
+        if not dv._extract_rpu(path, codec, rpu, mode=2 if profile == 7 else 0):
+            raise LookupError(f"RPU aus {path.name} nicht lesbar.")
+        return _export_rpu_file(rpu), path.name
+
+
+def convert_dv_to_hdr10plus(
+    source_path: Path,
+    *,
+    replace_source: bool = False,
+    keep_temp_files: bool = False,
+    force: bool = False,
+    status: StatusCb = None,
+) -> dict:
+    """Schreibt eine aus der RPU genäherte HDR10+-Schicht in die Datei und behält Dolby Vision.
+
+    Dual-Track-Profil 7: HDR10+ kommt auf die Basisspur, die Enhancement-Spur bleibt.
+    Einzelspur: die RPU wird nach der HDR10+-Injektion wieder in dieselbe Spur gelegt.
+    Profil 5 hat keine HDR10-Basis und wird abgelehnt.
+    """
+    if not source_path.is_file():
+        return {"ok": False, "error": "Quelldatei nicht gefunden."}
+    info = ff.ffprobe(source_path)
+    if info is None:
+        return {"ok": False, "error": "Quelldatei konnte nicht gelesen werden."}
+    codec = (info.codec or "").lower()
+    if codec not in ("hevc", "h265"):
+        return {
+            "ok": False,
+            "error": f"HDR10+ schreibt hdr10plus_tool nur in HEVC (gefunden: {info.codec or 'unbekannt'}).",
+        }
+    profile = _dv_profile_of(info)
+    if profile == 5:
+        return {
+            "ok": False,
+            "error": "Profil 5 hat keine HDR10-Basis. HDR10+ braucht die Bildpunkte einer HDR10-Schicht.",
+        }
+    if not info.dolby_vision:
+        return {
+            "ok": False,
+            "error": "Die Datei enthält kein Dolby Vision, dessen RPU sich nach HDR10+ nähern ließe.",
+        }
+    if not force and _file_has_hdr10plus(info, source_path):
+        return {
+            "ok": True,
+            "already_present": True,
+            "message": "Die Datei trägt bereits HDR10+. Es wurde nichts geschrieben.",
+        }
+    if not dv.available():
+        return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
+    if not hdr10plus.available():
+        return {"ok": False, "error": "hdr10plus_tool ist nicht verfügbar."}
+
+    dual = _dual_enhancement_track(info)
+    work_dir: Optional[Path] = None
+    try:
+        work_dir = _job_work_dir(source_path, "h10fromdv")
+        out_path = _output_beside(source_path, ".HDR10Plus", replace_source)
+        if status:
+            status("RPU wird gelesen …")
+        rpu = work_dir / "source.rpu.bin"
+        if not dv._extract_rpu(source_path, "hevc", rpu, mode=0):
+            return {"ok": False, "error": "RPU-Extraktion fehlgeschlagen."}
+        try:
+            raw = _export_rpu_file(rpu)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": f"RPU-Export fehlgeschlagen: {exc}"}
+        payload = rpu_export_to_hdr10plus_json(raw)
+        scenes = payload.get("SceneInfo") or []
+        if not scenes:
+            return {"ok": False, "error": "Die RPU enthält keine L1-Helligkeit, daraus lässt sich kein HDR10+ bauen."}
+        meta = work_dir / "hdr10plus.json"
+        meta.write_text(json.dumps(payload), encoding="utf-8")
+        if status:
+            status("Basisspur wird vorbereitet …")
+        base_es = work_dir / "base.hevc"
+        ok_es, err_es = _demux_base_hevc(source_path, base_es)
+        if not ok_es:
+            return {"ok": False, "error": err_es or "Extraktion der Basisspur fehlgeschlagen."}
+        h10_es = work_dir / "base_hdr10plus.hevc"
+        if status:
+            status("HDR10+ wird in die Basisspur geschrieben …")
+        if not hdr10plus._run(
+            [config.HDR10PLUS_TOOL, "inject", "-i", str(base_es), "-j", str(meta), "-o", str(h10_es)],
+            "HDR10+-Injektion aus RPU",
+        ):
+            return {"ok": False, "error": "HDR10+-Injektion fehlgeschlagen."}
+        final_es = h10_es
+        if not dual:
+            if status:
+                status("Dolby-Vision-RPU wird wieder eingesetzt …")
+            reinjected = work_dir / "base_hdr10plus_rpu.hevc"
+            res_inj = subprocess.run(
+                [config.DOVI_TOOL, "inject-rpu", "-i", str(h10_es), "--rpu-in", str(rpu), "-o", str(reinjected)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            if res_inj.returncode != 0 or not reinjected.is_file():
+                err_i = (res_inj.stderr or res_inj.stdout or "")[-500:]
+                return {"ok": False, "error": f"RPU-Rückinjektion fehlgeschlagen: {err_i}"}
+            final_es = reinjected
+        if status:
+            status("Container wird gemuxt …")
+        ok_mux, err_mux = _mux_injected_hevc(
+            final_es,
+            source_path,
+            out_path,
+            float(info.fps or 0.0),
+            keep_second_video=dual,
+            video_tag="hvc1" if dual else "dvh1",
+        )
+        if not ok_mux:
+            return {"ok": False, "error": f"Container-Mux fehlgeschlagen: {err_mux}"}
+        final_out = out_path
+        if replace_source:
+            source_path.unlink(missing_ok=True)
+            out_path.replace(source_path)
+            final_out = source_path
+        curve = hdr10plus_json_to_curve(
+            payload,
+            fps=float(info.fps or 23.976),
+            duration_sec=float(info.duration or 0.0),
+            max_cll=float(info.max_cll or 0),
+            max_fall=float(info.max_fall or 0),
+        )
+        if dual:
+            message = (
+                "HDR10+ liegt auf der Basisspur. Die Dolby-Vision-Spur mit Enhancement Layer "
+                "und RPU ist unverändert. Die Helligkeitswerte sind aus der RPU genähert."
+            )
+        elif profile == 7:
+            message = (
+                "HDR10+ und die bisherige RPU liegen in derselben HEVC-Spur. "
+                "Die Helligkeitswerte sind aus der RPU genähert. "
+                "Enhancement-Layer-Pixel in derselben Spur überstehen das nur, wenn das Schreibwerkzeug sie mitkopiert. "
+                "Einen Stream ohne diese Pixel schreibt „Profil 7 → TV-Stream“."
+            )
+        else:
+            message = (
+                "HDR10+ und die bisherige RPU liegen in derselben HEVC-Spur. "
+                "Die Helligkeitswerte sind aus der RPU genähert."
+            )
+        return {
+            "ok": True,
+            "output_path": config.rel_input(final_out) or final_out.name,
+            "output_name": final_out.name,
+            "approximation": True,
+            "already_present": False,
+            "scenes": len(scenes),
+            "el_kept": dual,
+            "dolby_vision_kept": True,
+            "measured_peak_nits": curve.get("measured_peak_nits") or 0,
+            "message": message,
+            "kept_work_dir": str(work_dir) if keep_temp_files else "",
+        }
+    finally:
+        if work_dir is not None and not keep_temp_files:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def make_profile7_tv_stream(
+    source_path: Path,
+    *,
+    replace_source: bool = False,
+    keep_temp_files: bool = False,
+    status: StatusCb = None,
+) -> dict:
+    """Macht aus Profil 7 einen einzelnen Profil-8.1-Stream. Die Enhancement-Layer-Pixel entfallen."""
+    if not source_path.is_file():
+        return {"ok": False, "error": "Quelldatei nicht gefunden."}
+    info = ff.ffprobe(source_path)
+    if info is None:
+        return {"ok": False, "error": "Quelldatei konnte nicht gelesen werden."}
+    if (info.codec or "").lower() not in ("hevc", "h265"):
+        return {
+            "ok": False,
+            "error": f"Der TV-Stream braucht eine HEVC-Basisspur (gefunden: {info.codec or 'unbekannt'}).",
+        }
+    profile = _dv_profile_of(info)
+    if profile != 7:
+        shown = profile or "ohne Profil"
+        return {
+            "ok": False,
+            "error": f"Ein einzelner TV-Stream entsteht aus Profil 7. Diese Datei ist Profil {shown}.",
+        }
+    if not dv.available():
+        return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
+
+    dual = _dual_enhancement_track(info)
+    where = "der zweiten Spur" if dual else "derselben Spur"
+    warning = (
+        f"Die Enhancement-Layer-Pixel aus {where} entfallen. Die neue Datei enthält nur "
+        "die HDR10-Basisschicht plus eine Profil-8.1-RPU."
+    )
+    work_dir: Optional[Path] = None
+    try:
+        work_dir = _job_work_dir(source_path, "dv81")
+        out_path = _output_beside(source_path, ".DV81", replace_source)
+        if status:
+            status("Profil-7-RPU wird nach 8.1 gewandelt …")
+        rpu = work_dir / "p81.rpu.bin"
+        if not dv._extract_rpu(source_path, "hevc", rpu, mode=2):
+            return {"ok": False, "error": "RPU-Extraktion (Profil 7 → 8.1) fehlgeschlagen."}
+        if status:
+            status("Basisspur wird ohne Enhancement Layer geschrieben …")
+        full_es = work_dir / "full.hevc"
+        base_es = work_dir / "base.hevc"
+        ok_es, err_es = _demux_base_hevc(source_path, full_es)
+        if not ok_es:
+            return {"ok": False, "error": err_es or "Extraktion der Basisspur fehlgeschlagen."}
+        dropped = write_base_layer_annexb(full_es, base_es)
+        full_es.unlink(missing_ok=True)
+        injected = work_dir / "tv.hevc"
+        if status:
+            status("Profil-8.1-RPU wird in die Basisspur gelegt …")
+        res_inj = subprocess.run(
+            [config.DOVI_TOOL, "inject-rpu", "-i", str(base_es), "--rpu-in", str(rpu), "-o", str(injected)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        if res_inj.returncode != 0 or not injected.is_file():
+            err_i = (res_inj.stderr or res_inj.stdout or "")[-500:]
+            return {"ok": False, "error": f"RPU-Injektion fehlgeschlagen: {err_i}"}
+        if status:
+            status("TV-Stream wird gemuxt …")
+        ok_mux, err_mux = _mux_injected_hevc(
+            injected,
+            source_path,
+            out_path,
+            float(info.fps or 0.0),
+            keep_second_video=False,
+            video_tag="dvh1",
+        )
+        if not ok_mux:
+            return {"ok": False, "error": f"Container-Mux fehlgeschlagen: {err_mux}"}
+        final_out = out_path
+        if replace_source:
+            source_path.unlink(missing_ok=True)
+            out_path.replace(source_path)
+            final_out = source_path
+        return {
+            "ok": True,
+            "output_path": config.rel_input(final_out) or final_out.name,
+            "output_name": final_out.name,
+            "el_dropped": True,
+            "dual_track": dual,
+            "dropped_el_bytes": int(dropped.get("dropped_el_bytes") or 0),
+            "profile": "8.1",
+            "warning": warning,
+            "message": warning,
+            "kept_work_dir": str(work_dir) if keep_temp_files else "",
+        }
+    finally:
+        if work_dir is not None and not keep_temp_files:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def load_dynamic_luminance_curve(path: Path, *, duration_limit: float = 0.0) -> dict:
+    """HDR10+-Kurve auf der Filmzeitachse, sonst die aus der RPU genäherte Kurve."""
+    if not path.is_file():
+        return {"ok": False, "error": "Datei nicht gefunden."}
+    info = ff.ffprobe(path)
+    if info is None:
+        return {"ok": False, "error": "Datei konnte nicht gelesen werden."}
+    fps = float(info.fps or 23.976)
+    duration = float(info.duration or 0.0)
+    if duration_limit and duration_limit > 0:
+        duration = min(duration, float(duration_limit)) if duration else float(duration_limit)
+    max_cll = float(info.max_cll or 0)
+    max_fall = float(info.max_fall or 0)
+    profile = _dv_profile_of(info)
+    payload = None
+    source = ""
+    note = ""
+
+    if _file_has_hdr10plus(info, path) and (info.codec or "").lower() in ("hevc", "h265"):
+        if not hdr10plus.available():
+            return {"ok": False, "error": "hdr10plus_tool ist nicht verfügbar."}
+        with tempfile.TemporaryDirectory(prefix="vc_h10curve_") as tmp:
+            tmp_dir = Path(tmp)
+            meta = tmp_dir / "hdr10plus.json"
+            work_es = tmp_dir / "src.hevc"
+            extracted = False
+            if duration_limit and duration_limit > 0:
+                ok_es, _err = _demux_base_hevc(path, work_es, duration_limit=duration_limit)
+                extracted = ok_es and hdr10plus._run(
+                    [config.HDR10PLUS_TOOL, "extract", str(work_es), "-o", str(meta)],
+                    "HDR10+-Kurve",
+                )
+            else:
+                extracted = hdr10plus._extract_json(path, meta, work_es)
+            if extracted:
+                try:
+                    payload = json.loads(meta.read_text(encoding="utf-8", errors="replace"))
+                    source = "hdr10plus"
+                    note = "Kurve aus der HDR10+-JSON der Datei."
+                except (OSError, ValueError):
+                    payload = None
+
+    if payload is None and info.dolby_vision and profile != 5:
+        if not dv.available():
+            return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
+        with tempfile.TemporaryDirectory(prefix="vc_rpucurve_") as tmp:
+            rpu = Path(tmp) / "curve.rpu.bin"
+            limit = float(duration_limit) if duration_limit and duration_limit > 0 else None
+            if not dv._extract_rpu(path, "hevc", rpu, mode=2 if profile == 7 else 0, duration_limit=limit):
+                return {"ok": False, "error": "RPU-Extraktion für die Helligkeitskurve fehlgeschlagen."}
+            try:
+                raw = _export_rpu_file(rpu)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                return {"ok": False, "error": f"RPU-Export fehlgeschlagen: {exc}"}
+        payload = rpu_export_to_hdr10plus_json(raw)
+        source = "rpu_approximation"
+        note = "Genähert aus der Dolby-Vision-RPU (L1 pro Szene). Die Datei hat keine HDR10+-JSON."
+
+    if payload is None:
+        if profile == 5:
+            return {
+                "ok": False,
+                "error": "Profil 5 hat keine HDR10-Basis. Eine HDR10+-Kurve braucht HDR10-Bildpunkte oder eine HDR10+-JSON.",
+            }
+        return {"ok": False, "error": "Weder HDR10+ noch eine Dolby-Vision-RPU gefunden."}
+
+    curve = hdr10plus_json_to_curve(
+        payload, fps=fps, duration_sec=duration, max_cll=max_cll, max_fall=max_fall,
+    )
+    if curve.get("ok"):
+        curve["source"] = source
+        curve["note"] = note
+    return curve
+
+
+def compare_rpu_sources(
+    *,
+    left_vault_id: str = "",
+    right_vault_id: str = "",
+    left_path: Optional[Path] = None,
+    right_path: Optional[Path] = None,
+) -> dict:
+    """Vergleicht zwei Tresoreinträge oder zwei Dolby-Vision-Dateien."""
+    if not (left_vault_id or left_path) or not (right_vault_id or right_path):
+        return {"ok": False, "error": "Für jede Seite einen Tresor-Eintrag oder eine Dolby-Vision-Datei wählen."}
+    if not dv.available():
+        return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
+    try:
+        left_raw, left_title = _load_rpu_raw(vault_id=left_vault_id, path=left_path)
+        right_raw, right_title = _load_rpu_raw(vault_id=right_vault_id, path=right_path)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": f"RPU-Vergleich fehlgeschlagen: {exc}"}
+    return compare_rpu_exports(
+        left_raw, right_raw, left_title=left_title, right_title=right_title,
     )

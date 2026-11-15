@@ -307,6 +307,20 @@ def _save_cache() -> None:
         logger.debug("Library-Cache schreiben fehlgeschlagen: %s", e)
 
 
+def _work_of(item: dict) -> dict:
+    from . import works
+    return works.describe_work(
+        str(item.get("name") or ""),
+        str(item.get("folder") or ""),
+        item.get("nfo") if isinstance(item.get("nfo"), dict) else None,
+    )
+
+
+def _with_work(item: dict) -> dict:
+    item["work"] = _work_of(item)
+    return item
+
+
 def _sanitize_cached_matched(items: list) -> list[dict]:
     """Repariert gecachte Einträge aus älteren Scans (z. B. als ``dolby_vision``
     fälschlich ein nicht-leeres Konfigurations-Dict statt ``bool`` war)."""
@@ -358,6 +372,8 @@ def _sanitize_cached_matched(items: list) -> list[dict]:
             )
             prev_sug = m.get("suggest") if isinstance(m.get("suggest"), dict) else {}
             m["suggest"] = suggest_encode(sug_in, str(prev_sug.get("codec") or "av1"))
+        if not isinstance(m.get("work"), dict) or not m["work"].get("key"):
+            m["work"] = _work_of(m)
         out.append(m)
     return out
 
@@ -564,7 +580,7 @@ def _run(root_rel: str, filters: dict) -> None:
                 processed = history.is_processed(str(f))
 
             with _lock:
-                _state["matched"].append({
+                _state["matched"].append(_with_work({
                     "path": rel,
                     "name": f.name,
                     "folder": "" if folder == "." else folder,
@@ -597,7 +613,7 @@ def _run(root_rel: str, filters: dict) -> None:
                     "est_saved_human": ff.human_size(proj["est_saved_bytes"]),
                     "suggest": sug,
                     **ff.extra_probe_fields(info),
-                })
+                }))
                 _state["total_size_bytes"] += info.size_bytes
                 _state["total_saved_bytes"] += proj["est_saved_bytes"]
     except Exception as e:  # pragma: no cover

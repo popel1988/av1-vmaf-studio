@@ -1518,6 +1518,30 @@ input[type="search"]:focus { outline: none; border-color: var(--accent); box-sha
 .lib-table .sortable:hover { color: var(--accent); }
 .lib-sort-year { margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
 .lib-group-row td { background: var(--surface-3); font-weight: 700; font-size: 12px; }
+.lib-works-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+}
+.lib-works-bar input[type="text"],
+.lib-works-bar select {
+  min-width: 0;
+}
+.lib-works-bar input[type="text"] { flex: 1 1 180px; }
+.lib-kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.16);
+  color: #9ecbff;
+  font-size: 11px;
+  font-weight: 650;
+  vertical-align: 1px;
+}
+.lib-work-row td { background: rgba(88, 166, 255, 0.08); font-weight: 650; }
 .dyn-badge { display: inline-block; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 700; background: var(--surface-3); color: var(--text-muted); }
 .dyn-badge.warn { background: color-mix(in srgb, var(--warn, #e0a83a) 25%, transparent); color: var(--text); }
 .dyn-badge.accent { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
@@ -3181,6 +3205,11 @@ input[type="range"]::-moz-range-thumb {
   gap: 10px;
   margin-top: 12px;
   font-size: 12.5px;
+}
+.dvl-split {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 22px 0 16px;
 }
 .dvl-chart-box {
   position: relative;

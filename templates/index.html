@@ -1431,6 +1431,25 @@
               <button class="btn btn-primary btn-sm" id="btn-lib-add-auto" disabled title="Mit automatisch je Datei vorgeschlagenen Einstellungen (Codec/HDR/DV)">Auswahl mit Auto-Einstellungen</button>
             </div>
 
+            <div class="lib-works-bar" id="lib-works-bar">
+              <label class="check"><input type="checkbox" id="lib-by-work" checked /><span>Nach Werk gruppieren</span></label>
+              <input type="text" id="lib-coll-name" placeholder="Name, z. B. Urlaub Island" maxlength="80" />
+              <select id="lib-coll-kind" title="Art der Sammlung">
+                <option value="sammlung">Sammlung</option>
+                <option value="serie">Serie</option>
+                <option value="film">Film</option>
+                <option value="sendung">Sendung</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-coll-add">Sammlung anlegen</button>
+              <select id="lib-coll-pick" title="Vorhandene Sammlung">
+                <option value="">Sammlung wählen …</option>
+              </select>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-lib-assign">Auswahl zuordnen</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-unassign">Zuordnung lösen</button>
+              <button type="button" class="btn btn-ghost btn-sm bad-btn" id="btn-lib-coll-del" title="Die gewählte Sammlung und ihre Zuordnungen entfernen">Sammlung löschen</button>
+            </div>
+            <p class="hint" id="lib-works-status">Filme, Folgen, Dokus und Mediathek-Sendungen werden am Titel erkannt. Eigene Sammlungen fassen Aufnahmen zusammen, die denselben Anlass haben.</p>
+
             <div class="lib-result-toolbar">
               <input type="search" id="lib-result-search" placeholder="In Treffern suchen … (Name, Titel, Ordner)" autocomplete="off" />
               <label class="check"><input type="checkbox" id="lib-group" /><span>Nach Ordner gruppieren</span></label>
@@ -3569,7 +3588,8 @@
             <div class="dvl-subtabs" role="tablist">
               <button type="button" class="btn btn-ghost active" data-dvl-subtab="analyzer">📊 Layer-Inspektor &amp; Bitrate-Graph</button>
               <button type="button" class="btn btn-ghost" data-dvl-subtab="copy">⇄ Hybrid-Mux &amp; RPU-Transfer</button>
-              <button type="button" class="btn btn-ghost" data-dvl-subtab="dualhdr">✨ HDR10+ &rarr; Dolby Vision</button>
+              <button type="button" class="btn btn-ghost" data-dvl-subtab="dualhdr">✨ HDR-Umwandlung</button>
+              <button type="button" class="btn btn-ghost" data-dvl-subtab="compare">⇄ RPU gegen RPU</button>
               <button type="button" class="btn btn-ghost" data-dvl-subtab="vault">💾 RPU-Tresor (Archiv)</button>
             </div>
 
@@ -3597,7 +3617,10 @@
               <div class="dvl-btn-row">
                 <button type="button" class="btn btn-primary" id="btn-dvl-analyze">🔍 Schritt 1: Schnell-Analyse (RPU &amp; Layer)</button>
                 <button type="button" class="btn btn-ghost" id="btn-dvl-bitrate-scan">📊 Schritt 2: BL / EL / RPU Bitrate-Scan (0 Disk)</button>
+                <button type="button" class="btn btn-ghost" id="btn-dvl-an-to-h10">HDR10+ aus der RPU ergänzen</button>
+                <button type="button" class="btn btn-ghost" id="btn-dvl-an-tv">Profil 7 → TV-Stream (8.1)</button>
               </div>
+              <p class="hint">„HDR10+ aus der RPU“ nähert die Samsung-Metadaten aus der Dolby-RPU und lässt Dolby Vision liegen. „Profil 7 → TV-Stream“ schreibt einen einzelnen Profil-8.1-Stream. Dabei entfallen die Enhancement-Layer-Pixel.</p>
               <div id="dvl-an-progress" class="dvl-progress" hidden>
                 <div class="dvl-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                   <div id="dvl-an-progress-fill" class="dvl-progress-fill"></div>
@@ -3636,7 +3659,13 @@
                       <span id="dvl-zoom-label">gesamt</span>
                     </label>
                     <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-zoom-reset">Zurücksetzen</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-h10-curve">HDR10+-Kurve</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-export-png">📸 Graph als PNG</button>
+                  </div>
+                  <p class="hint" id="dvl-h10-empty">Die HDR10+-Kurve nutzt denselben Ausschnitt. Sie kommt aus der HDR10+-JSON der Datei, oder aus der RPU, wenn nur Dolby Vision vorliegt.</p>
+                  <p class="hint" id="dvl-h10-note" style="display:none"></p>
+                  <div class="dvl-chart-box" id="dvl-h10-box" style="display:none">
+                    <canvas id="dvl-h10-canvas"></canvas>
                   </div>
                 </div>
 
@@ -3748,6 +3777,103 @@
                 <button type="button" class="btn btn-primary" id="btn-dvl-dual-run">✨ Dual-HDR (HDR10+ &rarr; Dolby Vision 8.1) erzeugen</button>
               </div>
               <div id="dvl-dual-status" class="dvl-status" style="display:none"></div>
+
+              <hr class="dvl-split" />
+              <p class="hint">Umgekehrt: aus der Dolby-Vision-RPU wird eine HDR10+-Schicht genähert und in die Basisspur geschrieben. Die RPU bleibt erhalten, bei einer zweiten Spur auch die Enhancement-Layer-Pixel. Profil 5 hat keine HDR10-Basis und wird abgelehnt. Die Tonkurve ist eine Näherung aus der L1-Helligkeit, keine Rückrechnung der Dolby-Reshape-Kurve.</p>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>Dolby-Vision-Datei (HEVC, Profil 7 oder 8)</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-rev-path" placeholder="Dolby-Vision-Datei wählen …" />
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-rev-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-rev-clear" title="Auswahl leeren">✕</button>
+                  </div>
+                </div>
+              </div>
+              <div class="dvl-options-grid">
+                <label class="check">
+                  <input type="checkbox" id="dvl-rev-force" />
+                  <span>Auch schreiben, wenn HDR10+ schon in der Datei steht</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-rev-replace" />
+                  <span>Originaldatei direkt ersetzen (sonst .HDR10Plus anlegen)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-rev-keep-temp" />
+                  <span>Arbeitsordner behalten</span>
+                </label>
+              </div>
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-primary" id="btn-dvl-rev-run">HDR10+ aus der RPU ergänzen</button>
+              </div>
+              <div id="dvl-rev-status" class="dvl-status" style="display:none"></div>
+
+              <hr class="dvl-split" />
+              <p class="hint">Profil 7, ob als zweite Spur oder in derselben Spur, wird zu einem einzelnen Profil-8.1-Stream für Fernseher. Die Enhancement-Layer-Pixel entfallen. Übrig bleiben die HDR10-Basisschicht und eine Profil-8.1-RPU.</p>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>Profil-7-Datei</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-tv-path" placeholder="Profil-7-Datei wählen …" />
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-tv-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-tv-clear" title="Auswahl leeren">✕</button>
+                  </div>
+                </div>
+              </div>
+              <div class="dvl-options-grid">
+                <label class="check">
+                  <input type="checkbox" id="dvl-tv-replace" />
+                  <span>Originaldatei direkt ersetzen (sonst .DV81 anlegen)</span>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="dvl-tv-keep-temp" />
+                  <span>Arbeitsordner behalten</span>
+                </label>
+              </div>
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-primary" id="btn-dvl-tv-run">Profil 7 → TV-Stream (8.1)</button>
+              </div>
+              <div id="dvl-tv-status" class="dvl-status" style="display:none"></div>
+            </div>
+
+            <!-- SUBTAB: RPU gegen RPU -->
+            <div data-dvl-panel="compare" style="display:none">
+              <p class="hint">Zwei RPUs übereinander: Framezahl, Szenenschnitte, L1-Helligkeit und L5-Crop. Der Versatz ist derselbe Intro-Abgleich wie beim Hybrid-Mux, hier als eigene Ansicht. Seite A und Seite B dürfen je ein Tresoreintrag oder eine Dolby-Vision-Datei sein.</p>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>Seite A aus dem Tresor</label>
+                  <select id="dvl-cmp-left-vault"><option value="">— Tresor —</option></select>
+                </div>
+                <div class="field" style="flex:1">
+                  <label>oder Dolby-Vision-Datei A</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-cmp-left-path" placeholder="Datei A …" />
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-cmp-left-browse">📂</button>
+                  </div>
+                </div>
+              </div>
+              <div class="dvl-form-row">
+                <div class="field" style="flex:1">
+                  <label>Seite B aus dem Tresor</label>
+                  <select id="dvl-cmp-right-vault"><option value="">— Tresor —</option></select>
+                </div>
+                <div class="field" style="flex:1">
+                  <label>oder Dolby-Vision-Datei B</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-cmp-right-path" placeholder="Datei B …" />
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-cmp-right-browse">📂</button>
+                  </div>
+                </div>
+              </div>
+              <div class="dvl-btn-row">
+                <button type="button" class="btn btn-primary" id="btn-dvl-cmp-run">RPUs vergleichen</button>
+              </div>
+              <div id="dvl-cmp-status" class="dvl-status" style="display:none"></div>
+              <div id="dvl-cmp-result" class="dvl-compat-card" style="display:none"></div>
+              <div class="dvl-chart-box" id="dvl-cmp-box" style="display:none">
+                <canvas id="dvl-cmp-canvas"></canvas>
+              </div>
             </div>
 
             <!-- SUBTAB 4: RPU-DATENBANK (TRESOR) -->
