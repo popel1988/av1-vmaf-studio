@@ -5,7 +5,7 @@ All notable changes, new features, and milestones of this project in reverse chr
 ---
 
 ## [This Release] – 2026-11-15
-- **Dual-track Dolby Vision Profile 7:** A file whose base track is only HDR10 and whose second HEVC track carries the Enhancement Layer plus RPU (`dvhe`, Profile 7) is now recognized as Dolby Vision in the library and in the HDR / DV Lab. The measured RPU on that track sets `Dolby Vision` and `RPU` instead of leaving both as No next to the EL/RPU sizes. MediaInfo’s HDR10+ note on the base layer is shown as coexistence when ffprobe does not list that SEI.
+- **Dual-track Dolby Vision Profile 7:** A file whose base track is only HDR10 and whose second HEVC track carries the Enhancement Layer plus RPU (`dvhe`, Profile 7) is now recognized as Dolby Vision in the library and in the HDR / DV Lab. The measured RPU on that track sets `Dolby Vision` and `RPU` instead of leaving both as No next to the EL/RPU sizes. MediaInfo’s HDR10+ note on the base layer is shown as coexistence when ffprobe does not list that SEI. RPU extraction (`dovi_tool`) reads that enhancement track instead of the HDR10 base, which reported `No RPU was found in input file`.
 
 ---
 

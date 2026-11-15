@@ -400,6 +400,57 @@ class DvLabTests(unittest.TestCase):
                 remaining_ids = [e["id"] for e in rpu_vault.list_entries()]
                 self.assertEqual(remaining_ids, ["222222"])
 
+    def test_rpu_extract_maps_the_enhancement_track_when_the_base_has_no_rpu(self):
+        from core import dolby_vision as dv
+
+        info = ff.VideoInfo(
+            "dual.mp4", 3840, 2160, 10.0, "hevc", "yuv420p10le",
+            "smpte2084", "bt2020", "bt2020nc", 40_000_000, 10,
+            dolby_vision=True, dv_profile=7,
+        )
+        info.video_tracks = [
+            {"role": "base", "index": 0, "dolby_vision": False, "dv_rpu": None, "attached_pic": False},
+            {"role": "enhancement", "index": 1, "dolby_vision": True, "dv_rpu": True, "attached_pic": False},
+        ]
+        self.assertEqual(dv._rpu_video_map(info), "0:v:1")
+        single = ff.VideoInfo(
+            "single.mkv", 3840, 2160, 10.0, "hevc", "yuv420p10le",
+            "smpte2084", "bt2020", "bt2020nc", 40_000_000, 10,
+            dolby_vision=True, dv_profile=7,
+        )
+        single.video_tracks = [
+            {"role": "base", "index": 0, "dolby_vision": True, "dv_rpu": True, "attached_pic": False},
+        ]
+        self.assertEqual(dv._rpu_video_map(single), "0:v:0")
+
+        captured = []
+
+        class _Proc:
+            def __init__(self, cmd, **_kw):
+                captured.append(cmd)
+                self.stdout = None
+                self.returncode = 0
+                self._cmd = cmd
+
+            def communicate(self):
+                if "extract-rpu" in self._cmd:
+                    out = Path(self._cmd[self._cmd.index("-o") + 1])
+                    out.write_bytes(b"rpu")
+                return "", ""
+
+            def wait(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "out.rpu.bin"
+            with (
+                mock.patch.object(ff, "ffprobe", return_value=info),
+                mock.patch.object(dv.subprocess, "Popen", side_effect=_Proc),
+            ):
+                ok = dv._extract_rpu(Path("dual.mp4"), "hevc", dest, mode=2)
+        self.assertTrue(ok)
+        ffmpeg_cmd = captured[0]
+        self.assertEqual(ffmpeg_cmd[ffmpeg_cmd.index("-map") + 1], "0:v:1")
 
 
 if __name__ == "__main__":

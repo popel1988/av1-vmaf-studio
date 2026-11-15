@@ -78,6 +78,23 @@ def _run(cmd: list[str], label: str) -> bool:
     return res.returncode == 0
 
 
+def _rpu_video_map(info) -> str:
+    """ffmpeg-Map der Spur, in der die RPU liegt.
+
+    Einspurig (Blu-ray/MKV) steckt sie im Hauptbild. Bei Profil 7 mit getrennter
+    Enhancement-Spur ist das Hauptbild nur HDR10 und die RPU liegt auf Spur 2.
+    """
+    tracks = [t for t in (getattr(info, "video_tracks", None) or []) if not t.get("attached_pic")]
+    if not tracks:
+        return "0:v:0"
+    base = next((t for t in tracks if t.get("role") == "base"), tracks[0])
+    el = next((t for t in tracks if t.get("role") == "enhancement" and t.get("dolby_vision")), None)
+    base_has_rpu = bool(base.get("dolby_vision")) and base.get("dv_rpu") is not False
+    if el is not None and not base_has_rpu:
+        return f"0:v:{int(el.get('index') or 0)}"
+    return f"0:v:{int(base.get('index') or 0)}"
+
+
 def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
                  duration_limit: Optional[float] = None) -> bool:
     """RPU-Schicht aus der (Dolby-Vision-)Quelle in eine .bin extrahieren.
@@ -85,11 +102,19 @@ def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
     ffmpeg liefert den Elementarstream (HEVC-Annex-B bzw. AV1-OBU) via Pipe an
     dovi_tool. `mode` konvertiert die RPU dabei (z. B. Profil 7 -> 8.1).
     """
+    vmap = "0:v:0"
+    try:
+        from . import ffmpeg_utils as ff
+        probed = ff.ffprobe(source)
+        if probed is not None:
+            vmap = _rpu_video_map(probed)
+    except Exception:  # pragma: no cover
+        vmap = "0:v:0"
     fmt, bsf = _es_args(source_codec)
     ff_cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error"]
     if duration_limit and duration_limit > 0:
         ff_cmd += ["-t", f"{float(duration_limit):.3f}"]
-    ff_cmd += ["-i", str(source), "-map", "0:v:0", "-c:v", "copy",
+    ff_cmd += ["-i", str(source), "-map", vmap, "-c:v", "copy",
                *bsf, "-f", fmt, "-"]
     dv_cmd = [config.DOVI_TOOL]
     if mode:
