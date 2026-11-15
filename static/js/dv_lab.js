@@ -26,13 +26,12 @@
     initialized: false,
     activeSubtab: "analyzer",
     activeAnTab: "dvdata",
-    mediaFiles: [],
     currentAnalysis: null,
     chart: null,
     zoomStartPct: 0,
     zoomEndPct: 100,
     vaultEntries: [],
-    selectedVaultBatch: new Set(),
+    vaultQueue: new Map(),
     activeVaultIdForCopy: "",
     prefs: loadPrefs(),
   };
@@ -110,47 +109,45 @@
     return data;
   }
 
-  // --- Dateiliste rekursiv aus /api/browse sammeln (flach bis Tiefe 3) ---
-  async function refreshMediaFiles() {
-    const out = [];
+  function parentFolderOf(relPath) {
+    const clean = String(relPath || "").trim().replace(/\\/g, "/");
+    const idx = clean.lastIndexOf("/");
+    return idx > 0 ? clean.slice(0, idx) : undefined;
+  }
+
+  function pickSingleVideo(title, memKey, currentVal, onChosen) {
+    if (typeof window.openFilePickerModal !== "function") return;
+    const startDir = currentVal ? parentFolderOf(currentVal) : undefined;
+    const opts = {
+      title: t(title),
+      kind: "video",
+      rememberKey: memKey,
+      onPick: (f) => {
+        const rel = (f && (f.rel || f.path || f.name)) || "";
+        if (rel && onChosen) onChosen(rel, f.name || rel.split("/").pop());
+      },
+    };
+    if (startDir !== undefined) opts.start = startDir;
+    window.openFilePickerModal(opts);
+  }
+
+  async function collectFolderVideos(folderRel) {
+    const found = [];
     async function walk(rel, depth) {
-      if (depth > 3 || out.length >= 500) return;
-      const data = await apiJson(`/api/browse?path=${encodeURIComponent(rel || "")}`);
+      if (depth > 6 || found.length >= 500) return;
+      const data = await apiJson(`/api/browse?path=${encodeURIComponent(rel || "")}&kind=video`);
       if (!data || data.error) return;
       for (const f of (data.files || [])) {
-        out.push({ path: f.rel || f.path || f.name, name: f.name, size: f.size || 0 });
+        const p = f.rel || (rel ? `${rel}/${f.name}` : f.name);
+        found.push({ path: p, name: f.name, size: f.size || 0, size_human: f.size_human || "" });
       }
-      for (const dir of (data.dirs || []).slice(0, 25)) {
+      for (const dir of (data.dirs || [])) {
         const sub = dir.rel || (rel ? `${rel}/${dir.name}` : dir.name);
         await walk(sub, depth + 1);
       }
     }
-    await walk("", 0);
-    dvl.mediaFiles = out;
-    populateSelects();
-    renderVaultSourceChecklist();
-  }
-
-  function populateSelects() {
-    const selects = [
-      "dvl-an-file-select",
-      "dvl-copy-donor-select",
-      "dvl-copy-target-select",
-      "dvl-dual-file-select",
-    ];
-    selects.forEach((id) => {
-      const sel = $(id);
-      if (!sel) return;
-      const prev = sel.value;
-      sel.innerHTML = `<option value="">${esc(t("— Datei aus Mediathek wählen —"))}</option>`;
-      dvl.mediaFiles.forEach((f) => {
-        const opt = document.createElement("option");
-        opt.value = f.path;
-        opt.textContent = `${f.path} (${fmtBytes(f.size)})`;
-        sel.appendChild(opt);
-      });
-      if (prev) sel.value = prev;
-    });
+    await walk(folderRel || "", 0);
+    return found;
   }
 
   function switchSubtab(tab) {
@@ -556,7 +553,6 @@
         `✓ Fertig: ${res.output_name} (${res.hdr_result}, Offset ${res.applied_frame_offset >= 0 ? "+" : ""}${res.applied_frame_offset} Frames)`,
         "ok"
       );
-      refreshMediaFiles();
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -594,7 +590,6 @@
         `✓ Dual-HDR erstellt: ${res.output_name} (${res.hdr_result})`,
         "ok"
       );
-      refreshMediaFiles();
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -606,31 +601,30 @@
   function renderVaultSourceChecklist() {
     const box = $("dvl-vault-source-list");
     if (!box) return;
-    const filter = ($("dvl-vault-src-filter")?.value || "").trim().toLowerCase();
-    const list = dvl.mediaFiles.filter((f) => !filter || f.path.toLowerCase().includes(filter));
-    if (!list.length) {
-      box.innerHTML = `<p class="hint">${esc(t("Keine passenden Videodateien gefunden."))}</p>`;
+    const items = Array.from(dvl.vaultQueue.values());
+    if (!items.length) {
+      box.innerHTML = `<p class="hint" style="margin:2px 0">${esc(t("Noch keine Filme ausgewählt – klicke oben auf „📂 Dateien wählen …“ oder „📁 Ordner hinzufügen …“."))}</p>`;
       return;
     }
-    box.innerHTML = list.slice(0, 150).map((f) => {
-      const checked = dvl.selectedVaultBatch.has(f.path) ? "checked" : "";
-      return `<label class="dvl-check-item">
-        <input type="checkbox" data-vault-src="${esc(f.path)}" ${checked} />
-        <span>${esc(f.path)} <small class="hint">(${fmtBytes(f.size)})</small></span>
-      </label>`;
+    box.innerHTML = items.map((f) => {
+      const sz = f.size_human || (f.size ? fmtBytes(f.size) : "");
+      return `<div class="dvl-picked-item">
+        <span class="dvl-picked-path" title="${esc(f.path)}">🎬 ${esc(f.path)} ${sz ? `<small class="hint">(${esc(sz)})</small>` : ""}</span>
+        <button type="button" class="btn btn-ghost btn-sm" data-vault-rm="${esc(f.path)}" title="${esc(t("Aus Auswahl entfernen"))}">✕</button>
+      </div>`;
     }).join("");
-    box.querySelectorAll("[data-vault-src]").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        if (cb.checked) dvl.selectedVaultBatch.add(cb.dataset.vaultSrc);
-        else dvl.selectedVaultBatch.delete(cb.dataset.vaultSrc);
+    box.querySelectorAll("[data-vault-rm]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        dvl.vaultQueue.delete(btn.dataset.vaultRm);
+        renderVaultSourceChecklist();
       });
     });
   }
 
   async function runVaultBatchExtract() {
-    const paths = Array.from(dvl.selectedVaultBatch);
+    const paths = Array.from(dvl.vaultQueue.keys());
     if (!paths.length) {
-      setStatus("dvl-vault-status", t("Bitte mindestens einen Film in der Auswahlliste anhaken."), "warn");
+      setStatus("dvl-vault-status", t("Bitte zuerst über „📂 Dateien wählen …“ mindestens einen Film hinzufügen."), "warn");
       return;
     }
     const conv81 = !!$("dvl-vault-conv81")?.checked;
@@ -661,7 +655,7 @@
           `✓ ${res.succeeded} von ${res.processed} RPU(s) im Tresor gespeichert.`,
           "ok"
         );
-        dvl.selectedVaultBatch.clear();
+        dvl.vaultQueue.clear();
         renderVaultSourceChecklist();
       }
       await loadVault();
@@ -771,19 +765,25 @@
     });
   }
 
-  function bindSelectToInput(selectId, inputId, autoAnalyze) {
-    const sel = $(selectId);
-    const inp = $(inputId);
-    if (!sel || !inp) return;
-    sel.addEventListener("change", () => {
-      if (sel.value) {
-        inp.value = sel.value;
-        if (autoAnalyze) runQuickAnalyze(sel.value);
-      }
-    });
+  function activateVaultRpuForCopy(vaultId, title, frames, profile) {
+    dvl.activeVaultIdForCopy = vaultId || "";
+    const banner = $("dvl-copy-vault-banner");
+    if (banner && dvl.activeVaultIdForCopy) {
+      banner.style.display = "";
+      banner.innerHTML = `<span>💾 <strong>${esc(t("Tresor-RPU gewählt:"))}</strong> ${esc(title || vaultId)}${profile ? ` (P${esc(profile)}${frames ? `, ${esc(frames)} Frames` : ""})` : ""}</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-clear-vault-sel">✕ ${esc(t("Aufheben"))}</button>`;
+      $("btn-dvl-clear-vault-sel")?.addEventListener("click", () => {
+        dvl.activeVaultIdForCopy = "";
+        banner.style.display = "none";
+      });
+    } else if (banner) {
+      banner.style.display = "none";
+    }
+    switchSubtab("copy");
   }
 
-  function dvLabInit(preloadPath) {
+  function dvLabInit(preloadPath, opts) {
+    opts = opts || {};
     if (!dvl.initialized) {
       dvl.initialized = true;
 
@@ -794,7 +794,7 @@
         btn.addEventListener("click", () => switchAnalyzerTab(btn.dataset.dvlAntab));
       });
 
-      //Gespeicherte Einstellungen anwenden
+      // Gespeicherte Einstellungen anwenden
       if ($("dvl-scan-limit")) $("dvl-scan-limit").value = dvl.prefs.scanLimit;
       if ($("dvl-copy-autosync")) $("dvl-copy-autosync").checked = dvl.prefs.autoSync;
       if ($("dvl-copy-l5")) $("dvl-copy-l5").checked = dvl.prefs.adjustL5;
@@ -803,14 +803,108 @@
       if ($("dvl-vault-conv81")) $("dvl-vault-conv81").checked = dvl.prefs.vaultConv81;
       if ($("dvl-vault-keep-orig")) $("dvl-vault-keep-orig").checked = dvl.prefs.vaultOrigRpu;
 
-      bindSelectToInput("dvl-an-file-select", "dvl-an-path", true);
-      bindSelectToInput("dvl-copy-donor-select", "dvl-copy-donor-path", false);
-      bindSelectToInput("dvl-copy-target-select", "dvl-copy-target-path", false);
-      bindSelectToInput("dvl-dual-file-select", "dvl-dual-path", false);
+      // Modal-Ordner-/Dateiauswahl für alle 4 Subtabs
+      $("btn-dvl-an-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Videodatei für Layer-Inspektor wählen", "dvlAnDir", $("dvl-an-path")?.value, (rel, name) => {
+          if ($("dvl-an-path")) $("dvl-an-path").value = rel;
+          if ($("dvl-dual-path") && !$("dvl-dual-path").value) $("dvl-dual-path").value = rel;
+          if (window.StudioSourceContext && typeof window.StudioSourceContext.set === "function") {
+            window.StudioSourceContext.set({ path: rel, name });
+          }
+          runQuickAnalyze(rel);
+        });
+      });
+      $("btn-dvl-an-clear")?.addEventListener("click", () => {
+        if ($("dvl-an-path")) $("dvl-an-path").value = "";
+        if ($("dvl-an-results")) $("dvl-an-results").style.display = "none";
+        setStatus("dvl-an-status", "", "");
+      });
+      $("dvl-an-path")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); runQuickAnalyze(); }
+      });
+
+      $("btn-dvl-donor-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Spender-Film (Dolby Vision / HDR10+) wählen", "dvlDonorDir", $("dvl-copy-donor-path")?.value, (rel) => {
+          if ($("dvl-copy-donor-path")) $("dvl-copy-donor-path").value = rel;
+          if (dvl.activeVaultIdForCopy) {
+            dvl.activeVaultIdForCopy = "";
+            if ($("dvl-copy-vault-banner")) $("dvl-copy-vault-banner").style.display = "none";
+          }
+        });
+      });
+      $("btn-dvl-donor-clear")?.addEventListener("click", () => {
+        if ($("dvl-copy-donor-path")) $("dvl-copy-donor-path").value = "";
+      });
+
+      $("btn-dvl-target-browse")?.addEventListener("click", () => {
+        pickSingleVideo("Ziel-Release (HEVC MKV / MP4) wählen", "dvlTargetDir", $("dvl-copy-target-path")?.value, (rel) => {
+          if ($("dvl-copy-target-path")) $("dvl-copy-target-path").value = rel;
+        });
+      });
+      $("btn-dvl-target-clear")?.addEventListener("click", () => {
+        if ($("dvl-copy-target-path")) $("dvl-copy-target-path").value = "";
+      });
+
+      $("btn-dvl-dual-browse")?.addEventListener("click", () => {
+        pickSingleVideo("HDR10+-Videodatei für Dual-HDR wählen", "dvlDualDir", $("dvl-dual-path")?.value, (rel) => {
+          if ($("dvl-dual-path")) $("dvl-dual-path").value = rel;
+        });
+      });
+      $("btn-dvl-dual-clear")?.addEventListener("click", () => {
+        if ($("dvl-dual-path")) $("dvl-dual-path").value = "";
+      });
+
+      // RPU-Tresor: Mehrfach-Dateiauswahl & Ordner-Auswahl
+      $("btn-dvl-vault-pick-files")?.addEventListener("click", () => {
+        if (typeof window.openFilePickerModal !== "function") return;
+        window.openFilePickerModal({
+          title: t("Filme für RPU-Extraktion auswählen"),
+          kind: "video",
+          multi: true,
+          rememberKey: "dvlVaultDir",
+          onPickMany: (files) => {
+            (files || []).forEach((f) => {
+              const rel = f.rel || f.path || f.name;
+              if (rel) {
+                dvl.vaultQueue.set(rel, {
+                  path: rel,
+                  name: f.name || rel.split("/").pop(),
+                  size: f.size || 0,
+                  size_human: f.size_human || "",
+                });
+              }
+            });
+            renderVaultSourceChecklist();
+          },
+        });
+      });
+
+      $("btn-dvl-vault-pick-folder")?.addEventListener("click", () => {
+        if (typeof window.openFolderPickerModal !== "function") return;
+        window.openFolderPickerModal({
+          title: t("Ordner für RPU-Extraktion hinzufügen"),
+          rememberKey: "dvlVaultDir",
+          onPick: async (folderRel) => {
+            setStatus("dvl-vault-status", t("Durchsuche Ordner nach Videodateien …"), "info");
+            const videos = await collectFolderVideos(folderRel || "");
+            videos.forEach((v) => dvl.vaultQueue.set(v.path, v));
+            renderVaultSourceChecklist();
+            setStatus(
+              "dvl-vault-status",
+              videos.length ? `${videos.length} ${t("Videodatei(en) aus Ordner hinzugefügt.")}` : t("Keine Videodateien im gewählten Ordner gefunden."),
+              videos.length ? "ok" : "warn"
+            );
+          },
+        });
+      });
+
+      $("btn-dvl-vault-clear-sel")?.addEventListener("click", () => {
+        dvl.vaultQueue.clear();
+        renderVaultSourceChecklist();
+      });
 
       $("btn-dvl-analyze")?.addEventListener("click", () => runQuickAnalyze());
       $("btn-dvl-bitrate-scan")?.addEventListener("click", runBitrateScan);
-      $("btn-dvl-refresh-files")?.addEventListener("click", refreshMediaFiles);
 
       document.querySelectorAll("[data-dvl-export]").forEach((btn) => {
         btn.addEventListener("click", () => exportReport(btn.dataset.dvlExport));
@@ -840,30 +934,56 @@
       $("btn-dvl-copy-run")?.addEventListener("click", runHybridTransfer);
       $("btn-dvl-dual-run")?.addEventListener("click", runDualHdrConversion);
 
-      $("dvl-vault-src-filter")?.addEventListener("input", renderVaultSourceChecklist);
       $("btn-dvl-vault-extract")?.addEventListener("click", runVaultBatchExtract);
       $("dvl-vault-search")?.addEventListener("input", () => loadVault());
 
       initColumnToggles();
-      refreshMediaFiles();
+      renderVaultSourceChecklist();
+    }
+
+    if (opts.vaultId) {
+      activateVaultRpuForCopy(opts.vaultId, opts.title, opts.frames, opts.profile);
+      return;
+    }
+
+    if (opts.subtab) {
+      switchSubtab(opts.subtab);
     }
 
     // Aktive Studio-Quelle übernehmen, falls Feld noch leer oder explizit übergeben
     const ctxPath = preloadPath || (window.StudioSourceContext && window.StudioSourceContext.get()?.path) || "";
     if (ctxPath && !ctxPath.startsWith("upload:")) {
+      if (preloadPath) {
+        switchSubtab(opts.subtab || "analyzer");
+        if (window.StudioSourceContext && typeof window.StudioSourceContext.set === "function") {
+          window.StudioSourceContext.set({ path: preloadPath, name: opts.name || preloadPath.split("/").pop() });
+        }
+      }
       if ($("dvl-an-path") && (!dvl.currentAnalysis || preloadPath)) {
         $("dvl-an-path").value = ctxPath;
         runQuickAnalyze(ctxPath);
       }
-      if ($("dvl-dual-path") && !$("dvl-dual-path").value) {
+      if ($("dvl-dual-path") && (!$("dvl-dual-path").value || preloadPath)) {
         $("dvl-dual-path").value = ctxPath;
       }
     }
   }
 
-  window.dvLabInit = dvLabInit;
-  window.openInDvLab = function (path) {
+  window.dvLabInit = function (preloadPath, opts) {
+    if (dvl.pendingOpen) {
+      const p = dvl.pendingOpen;
+      dvl.pendingOpen = null;
+      return dvLabInit(p.path, p.opts);
+    }
+    return dvLabInit(preloadPath, opts);
+  };
+  window.openInDvLab = function (path, opts) {
+    dvl.pendingOpen = { path: path || "", opts: opts || {} };
     if (typeof window.navTo === "function") window.navTo("dvlab");
-    dvLabInit(path || "");
+    if (dvl.pendingOpen) {
+      const p = dvl.pendingOpen;
+      dvl.pendingOpen = null;
+      dvLabInit(p.path, p.opts);
+    }
   };
 })();

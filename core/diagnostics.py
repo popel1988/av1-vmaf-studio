@@ -498,6 +498,7 @@ def _storage_section() -> dict:
         ("Arbeitsordner", config.WORK_DIR, True),
         ("Previews", config.PREVIEW_DIR, True),
         ("VMAF-Sessions", config.VMAF_SESSIONS_DIR, True),
+        ("RPU-Archiv", config.RPU_VAULT_DIR, True),
     ]
     for label, path, need_write in dirs:
         p = Path(path)

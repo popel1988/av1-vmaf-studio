@@ -1233,10 +1233,10 @@
           </div>
         </section>
 
-        <!-- CARD 6: Datenordner / VMAF-Archive -->
+        <!-- CARD 6: Datenordner / Archive -->
         <section class="card span-3" data-page="data">
           <div class="card-head">
-            <h3><span class="card-idx">💾</span> Datenordner &amp; VMAF-Archive</h3>
+            <h3><span class="card-idx">💾</span> Datenordner &amp; Archive</h3>
             <div class="data-head-actions">
               <span class="badge" id="data-storage-badge">—</span>
               <button class="btn btn-ghost btn-sm" id="btn-data-refresh">Aktualisieren</button>
@@ -1250,7 +1250,17 @@
                 <select id="data-root">
                   <option value="vmaf">VMAF-Sessions (Clips &amp; Logs)</option>
                   <option value="previews">Screenshots</option>
+                  <option value="rpu_vault">RPU-Archiv (Dolby Vision)</option>
                   <option value="work">Arbeit / Temp</option>
+                </select>
+              </div>
+              <div class="field" style="margin:0">
+                <label>Sortierung</label>
+                <select id="data-sort">
+                  <option value="name">Filmname (A–Z, Läufe gruppiert)</option>
+                  <option value="date_desc">Neueste zuerst (Datum ↓)</option>
+                  <option value="date_asc">Älteste zuerst (Datum ↑)</option>
+                  <option value="size_desc">Größe (absteigend)</option>
                 </select>
               </div>
               <label class="check data-select-all">
@@ -3552,7 +3562,6 @@
           <div class="card-head">
             <h3><span class="card-idx">✨</span> HDR &amp; Dolby Vision Labor</h3>
             <div style="display:flex;gap:8px;align-items:center">
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-refresh-files">↻ Mediathek neu laden</button>
               <span class="badge">dovi_tool · hdr10plus_tool · 0-Disk-Scan</span>
             </div>
           </div>
@@ -3568,15 +3577,15 @@
             <div data-dvl-panel="analyzer">
               <p class="hint">Analysiert Dolby Vision (inkl. <strong>MEL vs. FEL</strong>, CM v2.9/v4.0, RPU Mastering Display &amp; MaxCLL/MaxFALL) und misst Base Layer, Enhancement Layer und RPU-Bitrate direkt im RAM – <strong>ohne doppelten Festplattenspeicher</strong>.</p>
               <div class="dvl-form-row">
-                <div class="field" style="flex:2">
-                  <label>Videodatei aus Mediathek</label>
-                  <select id="dvl-an-file-select"></select>
+                <div class="field" style="flex:3">
+                  <label>Videodatei auswählen</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-an-path" placeholder="Datei über Ordner-Browser wählen oder Pfad eingeben …" />
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-an-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-an-clear" title="Auswahl leeren">✕</button>
+                  </div>
                 </div>
-                <div class="field" style="flex:2">
-                  <label>Relativer Medienpfad</label>
-                  <input type="text" id="dvl-an-path" placeholder="z. B. Filme/Film.2160p.UHD.mkv" />
-                </div>
-                <div class="field" style="flex:1">
+                <div class="field" style="flex:1;min-width:210px">
                   <label>Bitrate-Scan Umfang</label>
                   <select id="dvl-scan-limit">
                     <option value="0">Kompletter Film (Vollscan)</option>
@@ -3639,13 +3648,19 @@
               <div class="dvl-form-row">
                 <div class="field" style="flex:1">
                   <label>1. Spender-Film (mit Dolby Vision oder HDR10+)</label>
-                  <select id="dvl-copy-donor-select"></select>
-                  <input type="text" id="dvl-copy-donor-path" placeholder="Spender-Pfad (leer lassen, wenn Tresor-RPU aktiv)" style="margin-top:6px" />
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-copy-donor-path" placeholder="Spender-Datei wählen (leer lassen, wenn Tresor-RPU aktiv)" />
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-donor-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-donor-clear" title="Auswahl leeren">✕</button>
+                  </div>
                 </div>
                 <div class="field" style="flex:1">
                   <label>2. Ziel-Release (eigener Encode / anderes HEVC-Release)</label>
-                  <select id="dvl-copy-target-select"></select>
-                  <input type="text" id="dvl-copy-target-path" placeholder="Ziel-Pfad (MKV / MP4 mit HEVC)" style="margin-top:6px" />
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-copy-target-path" placeholder="Ziel-Datei wählen (MKV / MP4 mit HEVC)" />
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-target-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-target-clear" title="Auswahl leeren">✕</button>
+                  </div>
                 </div>
               </div>
 
@@ -3664,7 +3679,7 @@
                 </label>
                 <label class="check">
                   <input type="checkbox" id="dvl-copy-keep-temp" />
-                  <span>Arbeitsordner &amp; RPU-Dateien neben der Zieldatei behalten (nicht löschen)</span>
+                  <span>Arbeitsordner unter „Daten &amp; Archive &rarr; Arbeit / Temp“ behalten</span>
                 </label>
                 <label class="check">
                   <input type="checkbox" id="dvl-copy-replace" />
@@ -3696,12 +3711,12 @@
               <p class="hint">Erzeugt aus einem <strong>HDR10+-Film</strong> verlustfrei echte <strong>Dolby-Vision-Profil-8.1-Metadaten</strong> und bettet sie in denselben HEVC-Stream ein. Danach enthält die Datei <strong>HDR10 + HDR10+ + Dolby Vision</strong> gleichzeitig (ideal für LG/Sony-TVs sowie Samsung-TVs).</p>
               <div class="dvl-form-row">
                 <div class="field" style="flex:1">
-                  <label>HDR10+-Videodatei (HEVC)</label>
-                  <select id="dvl-dual-file-select"></select>
-                </div>
-                <div class="field" style="flex:1">
-                  <label>Relativer Pfad</label>
-                  <input type="text" id="dvl-dual-path" placeholder="z. B. Filme/HDR10Plus-Release.mkv" />
+                  <label>HDR10+-Videodatei (HEVC) auswählen</label>
+                  <div class="dvl-picker-row">
+                    <input type="text" id="dvl-dual-path" placeholder="HDR10+-Videodatei über Ordner-Browser wählen oder Pfad eingeben …" />
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-dual-browse">📂 Datei wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-dual-clear" title="Auswahl leeren">✕</button>
+                  </div>
                 </div>
               </div>
               <div class="dvl-options-grid">
@@ -3729,13 +3744,18 @@
               <p class="hint">Extrahiere Dolby-Vision- oder HDR10+-Metadaten auf Vorrat aus beliebig vielen Filmen. Gespeicherte RPUs belegen nur ~25–70 MB und lassen sich jederzeit per Klick in ein anderes Release einsetzen. Speicherort: <code id="dvl-vault-dir-label">/data/rpu_vault</code></p>
 
               <div class="dvl-vault-extract-card">
-                <div class="dvl-form-row">
-                  <div class="field" style="flex:1">
-                    <label>Filme für Batch-Extraktion filtern</label>
-                    <input type="text" id="dvl-vault-src-filter" placeholder="Nach Dateiname filtern …" />
+                <div class="dvl-form-row" style="align-items:center;justify-content:space-between">
+                  <div>
+                    <strong style="font-size:13px">Filme für RPU-Extraktion zusammenstellen</strong>
+                    <p class="hint" style="margin:2px 0 0">Wähle einzelne oder mehrere Filme über den Ordner-Browser – oder füge direkt einen ganzen Ordner hinzu.</p>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-dvl-vault-pick-files">📂 Dateien wählen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-vault-pick-folder">📁 Ordner hinzufügen …</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-dvl-vault-clear-sel">🗑 Auswahl leeren</button>
                   </div>
                 </div>
-                <div id="dvl-vault-source-list" class="dvl-checklist"></div>
+                <div id="dvl-vault-source-list" class="dvl-checklist" style="margin-top:10px"></div>
                 <div class="dvl-options-grid" style="margin-top:8px">
                   <label class="check">
                     <input type="checkbox" id="dvl-vault-conv81" checked />

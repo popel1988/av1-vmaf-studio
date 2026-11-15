@@ -3729,16 +3729,16 @@ async def extra_scene(req: ExtraSceneRequest):
 
 
 class DataDeleteRequest(BaseModel):
-    root: str = Field(..., pattern="^(vmaf|previews|work)$")
+    root: str = Field(..., pattern="^(vmaf|previews|rpu_vault|work)$")
     path: str = ""
     paths: list[str] = Field(default_factory=list)
 
 
 @app.get("/api/data/browse")
-async def data_browse(root: str = "vmaf", path: str = ""):
+async def data_browse(root: str = "vmaf", path: str = "", sort: str = "name"):
     if root not in DATA_ROOTS:
         return JSONResponse({"error": "Unbekannte Zone"}, status_code=400)
-    result = browse_data_zone(root, path)
+    result = browse_data_zone(root, path, sort=sort)
     if "error" in result:
         return JSONResponse(result, status_code=404)
     return result

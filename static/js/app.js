@@ -179,6 +179,7 @@
       $("selected-info") && $("selected-info").closest("section"),
       $("remux-badge") && $("remux-badge").closest("section"),
       $("ed-src-info") && $("ed-src-info").closest("section"),
+      $("dvlab-card"),
     ];
     hosts.filter(Boolean).forEach((host) => {
       let bar = host.querySelector(".studio-source-context");
@@ -189,14 +190,20 @@
       }
       bar.hidden = !activeSource;
       if (!activeSource) return;
+      const toolLabels = { encode: "Encoding", vmaf: "VMAF", remux: "Remux", editor: "Editor", dvlab: "DV-Labor" };
       bar.innerHTML = `<span>Aktive Quelle: <strong>${escapeHtml(activeSource.name || activeSource.path)}</strong></span>
-        ${["encode", "vmaf", "remux", "editor"].map((tool) =>
-          `<button type="button" class="btn btn-ghost btn-sm" data-source-tool="${tool}">→ ${tool === "encode" ? "Encoding" : tool === "vmaf" ? "VMAF" : tool === "remux" ? "Remux" : "Editor"}</button>`).join("")}
+        ${["encode", "vmaf", "remux", "editor", "dvlab"].map((tool) =>
+          `<button type="button" class="btn btn-ghost btn-sm" data-source-tool="${tool}">→ ${toolLabels[tool]}</button>`).join("")}
         <span class="muted">Explizit übernehmen · bestehende Projekte bleiben beim Tabwechsel erhalten</span>`;
       bar.querySelectorAll("[data-source-tool]").forEach((button) => {
         button.addEventListener("click", async () => {
           const source = activeSource;
           const tool = button.dataset.sourceTool;
+          if (tool === "dvlab") {
+            if (typeof window.openInDvLab === "function") window.openInDvLab(source.path, { name: source.name });
+            else navTo("dvlab");
+            return;
+          }
           navTo(tool);
           if (tool === "editor") {
             if (window.editorOpenSource) await window.editorOpenSource(source.path, source.name);
@@ -1894,7 +1901,8 @@
     if (dvCurveBtn) dvCurveBtn.addEventListener("click", loadDvL1Curve);
     const openDvLabBtn = $("btn-open-dvlab");
     if (openDvLabBtn) openDvLabBtn.addEventListener("click", () => {
-      if (typeof window.openInDvLab === "function") window.openInDvLab(state.selectedFile || "");
+      const selPath = (state.selected && !state.selected.isBatch && state.selected.path) || state.selectedFile || "";
+      if (typeof window.openInDvLab === "function") window.openInDvLab(selPath);
     });
     const hdrModeSelForDual = $("opt-hdr-mode");
     if (hdrModeSelForDual) hdrModeSelForDual.addEventListener("change", () => syncDvOption());
@@ -8689,15 +8697,23 @@
   }
 
   /* ---------------------------------------------------------- DATA BROWSER */
-  const dataState = { root: "vmaf", path: "", selected: new Set() };
+  const dataState = { root: "vmaf", path: "", sort: "name", selected: new Set() };
 
   function initDataBrowser() {
     $("data-root").addEventListener("change", (e) => {
       dataState.root = e.target.value;
       dataState.path = "";
       dataState.selected = new Set();
+      $("data-preview").style.display = "none";
       loadDataDir();
     });
+    const sortSel = $("data-sort");
+    if (sortSel) {
+      sortSel.addEventListener("change", (e) => {
+        dataState.sort = e.target.value || "name";
+        loadDataDir();
+      });
+    }
     $("btn-data-refresh").addEventListener("click", () => {
       loadDataDir();
       refreshStorageBadge();
@@ -8729,8 +8745,9 @@
     try {
       const p = await fetch("/api/config/paths").then((r) => r.json());
       const s = p.storage || {};
-      const parts = ["vmaf", "previews", "work"].map((k) =>
-        s[k] ? `${k}: ${s[k].size_human}` : "").filter(Boolean);
+      const labels = { vmaf: "vmaf", previews: "previews", rpu_vault: "rpu", work: "work" };
+      const parts = ["vmaf", "previews", "rpu_vault", "work"].map((k) =>
+        s[k] ? `${labels[k]}: ${s[k].size_human}` : "").filter(Boolean);
       $("data-storage-badge").textContent = parts.join(" · ") || "—";
     } catch (_) { /* ignore */ }
   }
@@ -8742,7 +8759,7 @@
     browser.innerHTML = '<div class="browser-loading">Lade …</div>';
     try {
       const res = await fetch(
-        `/api/data/browse?root=${encodeURIComponent(dataState.root)}&path=${encodeURIComponent(dataState.path)}`
+        `/api/data/browse?root=${encodeURIComponent(dataState.root)}&path=${encodeURIComponent(dataState.path)}&sort=${encodeURIComponent(dataState.sort || "name")}`
       );
       const data = await res.json();
       if (data.error) {
@@ -8806,9 +8823,11 @@
     const row = document.createElement("div");
     row.className = "row-item";
     const icon = isDir ? "📁" : fileIcon(item);
+    const dateBadge = item.mtime_human ? `<span class="row-date muted">${escapeHtml(item.mtime_human)}</span>` : "";
     row.innerHTML = `
       <span class="row-icon">${icon}</span>
       <span class="row-name">${escapeHtml(item.name)}</span>
+      ${dateBadge}
       <span class="row-size">${item.size_human || ""}</span>`;
 
     if (item.name !== "..") {
@@ -8859,6 +8878,7 @@
 
   function fileIcon(item) {
     if (item.preview_url) return "🖼️";
+    if (item.kind === "rpu") return "✨";
     if (item.kind === "json") return "📄";
     if (item.kind === "video") return "🎬";
     return "📎";
@@ -8872,6 +8892,35 @@
 
     if (item.preview_url) {
       body.innerHTML = `<img src="${item.preview_url}" alt="${escapeHtml(item.name)}" />`;
+      return;
+    }
+    if (item.kind === "rpu") {
+      const dlUrl = `/api/data/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.rel)}`;
+      const m = item.rpu_meta || {};
+      const rows = [
+        m.title ? `<div><strong>Titel:</strong> ${escapeHtml(m.title)}</div>` : "",
+        m.origin_label ? `<div><strong>Herkunft:</strong> ${escapeHtml(m.origin_label)}</div>` : "",
+        m.profile ? `<div><strong>Profil:</strong> Dolby Vision P${escapeHtml(String(m.profile))}${m.el_type ? ` (${escapeHtml(m.el_type)})` : ""}</div>` : "",
+        m.cm_version ? `<div><strong>CM-Version:</strong> ${escapeHtml(m.cm_version)}</div>` : "",
+        m.frames ? `<div><strong>Frames / FPS:</strong> ${escapeHtml(String(m.frames))}${m.fps ? ` @ ${escapeHtml(String(m.fps))} FPS` : ""}</div>` : "",
+        m.peak_l1_nits ? `<div><strong>Peak L1:</strong> ${Math.round(Number(m.peak_l1_nits))} Nits</div>` : "",
+        m.rpu_mastering_display ? `<div><strong>Mastering Display:</strong> ${escapeHtml(m.rpu_mastering_display)}</div>` : "",
+        m.rpu_content_light_level ? `<div><strong>CLL:</strong> ${escapeHtml(m.rpu_content_light_level)}</div>` : "",
+      ].filter(Boolean).join("");
+      body.innerHTML = `
+        <div class="dvl-compat-grid" style="margin-bottom:10px">${rows || `<div><strong>RPU-Datei:</strong> <code>${escapeHtml(item.rel)}</code> (${escapeHtml(item.size_human || "")})</div>`}</div>
+        <div class="lib-actions">
+          <a class="btn btn-ghost btn-sm" href="${dlUrl}" download="${escapeHtml(item.name)}">⬇ .rpu.bin herunterladen</a>
+          ${m.id ? `<button type="button" class="btn btn-primary btn-sm" id="btn-data-rpu-to-lab">⇄ Im HDR / DV Labor verwenden</button>` : ""}
+        </div>`;
+      const useBtn = $("btn-data-rpu-to-lab");
+      if (useBtn && m.id) {
+        useBtn.addEventListener("click", () => {
+          if (typeof window.openInDvLab === "function") {
+            window.openInDvLab("", { vaultId: m.id, title: m.title, frames: m.frames, profile: m.profile });
+          }
+        });
+      }
       return;
     }
     if (item.kind === "json") {
@@ -11001,6 +11050,7 @@
           <button class="lib-act" data-act="encode" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Encoding übernehmen">→E</button>
           <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
           <button class="lib-act" data-act="editor" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im Video-Editor öffnen">🎬</button>
+          <button class="lib-act" data-act="dvlab" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im HDR / DV Labor öffnen">✨</button>
         </td>
       </tr>
       ${open ? libDetailRowHtml(m) : ""}`;
@@ -11576,6 +11626,11 @@
       if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
       return;
     }
+    if (act === "dvlab") {
+      if (typeof window.openInDvLab === "function") window.openInDvLab(path, { name });
+      else navTo("dvlab");
+      return;
+    }
     const row = (state.libRows || []).find((m) => m.path === path);
     libTransfer(path, name, act === "vmaf" ? "vmaf" : "encode", row ? row.suggest : null);
       return;
@@ -12009,6 +12064,7 @@
           <button class="lib-act" data-act="vmaf" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins VMAF-Tool übernehmen">→V</button>
           <button class="lib-act" data-act="remux" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Ins Remux übernehmen">→R</button>
           <button class="lib-act" data-act="editor" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im Video-Editor öffnen">🎬</button>
+          <button class="lib-act" data-act="dvlab" data-path="${escapeHtml(m.path)}" data-name="${escapeHtml(m.name)}" title="Im HDR / DV Labor öffnen">✨</button>
         </td>
       </tr>`; }).join("") :
       '<tr class="empty-row"><td colspan="11">Keine Treffer.</td></tr>';
@@ -12069,6 +12125,11 @@
     if (act === "editor") {
       navTo("editor");
       if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
+      return;
+    }
+    if (act === "dvlab") {
+      if (typeof window.openInDvLab === "function") window.openInDvLab(path, { name });
+      else navTo("dvlab");
       return;
     }
     if (act === "remux" || (act === "encode" && $("st-remux-only") && $("st-remux-only").checked)) {
@@ -18195,6 +18256,7 @@
               <button class="btn btn-ghost btn-sm gs-act" data-act="remux" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→R</button>
               <button class="btn btn-ghost btn-sm gs-act" data-act="vmaf" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">→V</button>
               <button class="btn btn-ghost btn-sm gs-act" data-act="editor" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}">🎬</button>
+              <button class="btn btn-ghost btn-sm gs-act" data-act="dvlab" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}" title="HDR / DV Labor">✨</button>
             </td></tr>`;
         }).join("") + `</tbody></table>` +
         (d.truncated ? `<p class="muted" style="margin-top:6px">${tt("Ergebnisse gekürzt.")}</p>` : "");
@@ -18206,6 +18268,11 @@
           if (act === "editor") {
             navTo("editor");
             if (typeof window.editorOpenSource === "function") window.editorOpenSource(path, name);
+            return;
+          }
+          if (act === "dvlab") {
+            if (typeof window.openInDvLab === "function") window.openInDvLab(path, { name });
+            else navTo("dvlab");
             return;
           }
           if (act === "remux") {

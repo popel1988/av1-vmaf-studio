@@ -885,7 +885,7 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 samples=samples,
                 ssimulacra2_frames=s2_frames,
                 generate_screenshots=True,
-                session_name=f"bench_{job['id']}_{speed}",
+                session_name=f"bench_{time.strftime('%Y-%m-%d_%H-%M')}_{job['id']}_{speed}",
                 source_title=job["title"],
                 source_path=str(job["path"]),
                 anime=anime,

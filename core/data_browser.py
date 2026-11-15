@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -12,12 +13,21 @@ from .ffmpeg_utils import human_size
 DATA_ROOTS = {
     "vmaf": config.VMAF_SESSIONS_DIR,
     "previews": config.PREVIEW_DIR,
+    "rpu_vault": config.RPU_VAULT_DIR,
     "work": config.WORK_DIR,
+}
+
+ROOT_LABELS = {
+    "vmaf": "VMAF-Sessions",
+    "previews": "Screenshots",
+    "rpu_vault": "RPU-Archiv (Dolby Vision)",
+    "work": "Arbeit / Temp",
 }
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 VIDEO_EXT = {".mkv", ".mp4", ".webm", ".mov"}
 JSON_EXT = {".json"}
+RPU_EXT = {".bin"}
 
 
 def _safe_resolve(root_key: str, rel: str) -> Optional[Path]:
@@ -32,19 +42,33 @@ def _safe_resolve(root_key: str, rel: str) -> Optional[Path]:
     return target
 
 
+def _fmt_mtime(ts: float) -> str:
+    if not ts or ts <= 0:
+        return ""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+    except (OSError, ValueError):
+        return ""
+
+
 def _file_entry(root_key: str, path: Path, base: Path) -> dict:
     rel = str(path.relative_to(base)).replace("\\", "/")
     ext = path.suffix.lower()
     try:
-        size = path.stat().st_size if path.is_file() else 0
+        st = path.stat()
+        size = st.st_size if path.is_file() else 0
+        mtime = float(st.st_mtime or 0.0)
     except OSError:
         size = 0
+        mtime = 0.0
     entry = {
         "name": path.name,
         "rel": rel,
         "is_dir": path.is_dir(),
         "size": size,
         "size_human": human_size(size) if path.is_file() else "—",
+        "mtime": round(mtime, 2),
+        "mtime_human": _fmt_mtime(mtime),
         "ext": ext,
     }
     if path.is_file():
@@ -57,15 +81,51 @@ def _file_entry(root_key: str, path: Path, base: Path) -> dict:
             entry["kind"] = "json"
         elif ext in VIDEO_EXT:
             entry["kind"] = "video"
+        elif ext in RPU_EXT or path.name.lower().endswith(".rpu.bin"):
+            entry["kind"] = "rpu"
+            if root_key == "rpu_vault":
+                try:
+                    from . import rpu_vault
+                    meta = rpu_vault.entry_by_filename(path.name)
+                    if meta:
+                        entry["rpu_meta"] = {
+                            "id": meta.get("id"),
+                            "title": meta.get("title"),
+                            "origin_label": meta.get("origin_label"),
+                            "profile": meta.get("profile"),
+                            "el_type": meta.get("el_type"),
+                            "cm_version": meta.get("cm_version"),
+                            "frames": meta.get("frames"),
+                            "fps": meta.get("fps"),
+                            "peak_l1_nits": meta.get("peak_l1_nits"),
+                            "rpu_mastering_display": meta.get("rpu_mastering_display"),
+                            "rpu_content_light_level": meta.get("rpu_content_light_level"),
+                        }
+                except Exception:
+                    pass
     return entry
 
 
-def browse(root_key: str, rel: str = "") -> dict:
+def _sort_entries(items: list[dict], sort_mode: str) -> list[dict]:
+    mode = (sort_mode or "name").strip().lower()
+    if mode == "date_desc":
+        return sorted(items, key=lambda x: (float(x.get("mtime") or 0.0), x["name"].lower()), reverse=True)
+    if mode == "date_asc":
+        return sorted(items, key=lambda x: (float(x.get("mtime") or 0.0), x["name"].lower()))
+    if mode == "size_desc":
+        return sorted(items, key=lambda x: (int(x.get("size") or 0), x["name"].lower()), reverse=True)
+    return sorted(items, key=lambda x: x["name"].lower())
+
+
+def browse(root_key: str, rel: str = "", sort: str = "name") -> dict:
     target = _safe_resolve(root_key, rel)
     if target is None:
         return {"error": "Ungültiger Pfad"}
     if not target.exists():
-        return {"error": "Pfad nicht gefunden"}
+        if target == DATA_ROOTS[root_key].resolve():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            return {"error": "Pfad nicht gefunden"}
     if not target.is_dir():
         return {"error": "Kein Verzeichnis"}
 
@@ -78,20 +138,27 @@ def browse(root_key: str, rel: str = "") -> dict:
     dirs, files = [], []
     total = 0
     try:
-        for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        for entry in target.iterdir():
             if entry.name.startswith("."):
                 continue
             fe = _file_entry(root_key, entry, base)
             if entry.is_dir():
-                # Größe des Ordners (summe)
                 try:
-                    folder_size = sum(
-                        f.stat().st_size for f in entry.rglob("*") if f.is_file()
-                    )
+                    folder_size = 0
+                    latest_mtime = float(fe.get("mtime") or 0.0)
+                    for f in entry.rglob("*"):
+                        if f.is_file():
+                            st = f.stat()
+                            folder_size += st.st_size
+                            if st.st_mtime > latest_mtime:
+                                latest_mtime = st.st_mtime
                 except OSError:
                     folder_size = 0
+                    latest_mtime = float(fe.get("mtime") or 0.0)
                 fe["size"] = folder_size
                 fe["size_human"] = human_size(folder_size)
+                fe["mtime"] = round(latest_mtime, 2)
+                fe["mtime_human"] = _fmt_mtime(latest_mtime)
                 dirs.append(fe)
                 total += folder_size
             else:
@@ -100,16 +167,29 @@ def browse(root_key: str, rel: str = "") -> dict:
     except OSError as e:
         return {"error": str(e)}
 
+    dirs = _sort_entries(dirs, sort)
+    files = _sort_entries(files, sort)
+
     return {
         "root": root_key,
-        "root_label": {"vmaf": "VMAF-Sessions", "previews": "Screenshots", "work": "Arbeit"}[root_key],
+        "root_label": ROOT_LABELS.get(root_key, root_key),
         "path": rel_here,
         "parent": parent,
         "is_root": target == base,
+        "sort": sort,
         "dirs": dirs,
         "files": files,
         "total_human": human_size(total),
     }
+
+
+def _sync_rpu_vault_if_needed(root_key: str) -> None:
+    if root_key == "rpu_vault":
+        try:
+            from . import rpu_vault
+            rpu_vault.sync_index_with_disk()
+        except Exception:
+            pass
 
 
 def delete_item(root_key: str, rel: str) -> tuple[bool, str]:
@@ -125,6 +205,7 @@ def delete_item(root_key: str, rel: str) -> tuple[bool, str]:
             shutil.rmtree(target)
         else:
             target.unlink()
+        _sync_rpu_vault_if_needed(root_key)
         return True, ""
     except OSError as e:
         return False, str(e)
@@ -168,7 +249,9 @@ def delete_all_in_root(root_key: str) -> tuple[int, str]:
                 entry.unlink()
             count += 1
     except OSError as e:
+        _sync_rpu_vault_if_needed(root_key)
         return count, str(e)
+    _sync_rpu_vault_if_needed(root_key)
     return count, ""
 
 

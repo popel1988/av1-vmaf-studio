@@ -5873,7 +5873,19 @@
     "Dolby Vision Daten": ["Dolby Vision Data", "Datos Dolby Vision", "Données Dolby Vision"],
     "Zoombarer Bitrate-Graph": ["Zoomable Bitrate Graph", "Gráfico de bitrate con zoom", "Graphe de débit zoomable"],
     "Spalten": ["Columns", "Columnas", "Colonnes"],
-    "In Film packen": ["Inject into movie", "Inyectar en película", "Injecter dans le film"]
+    "In Film packen": ["Inject into movie", "Inyectar en película", "Injecter dans le film"],
+    "📂 Datei wählen …": ["📂 Choose file …", "📂 Elegir archivo …", "📂 Choisir un fichier …"],
+    "📂 Dateien wählen …": ["📂 Choose files …", "📂 Elegir archivos …", "📂 Choisir des fichiers …"],
+    "📁 Ordner hinzufügen …": ["📁 Add folder …", "📁 Añadir carpeta …", "📁 Ajouter un dossier …"],
+    "🗑 Auswahl leeren": ["🗑 Clear selection", "🗑 Limpiar selección", "🗑 Vider la sélection"],
+    "RPU-Archiv (Dolby Vision)": ["RPU Archive (Dolby Vision)", "Archivo RPU (Dolby Vision)", "Archive RPU (Dolby Vision)"],
+    "Datenordner & Archive": ["Data Folder & Archives", "Carpeta de datos y archivos", "Dossier de données & archives"],
+    "Sortierung": ["Sort by", "Ordenar por", "Tri"],
+    "Filmname (A–Z, Läufe gruppiert)": ["Movie title (A–Z, runs grouped)", "Título (A–Z, pasadas agrupadas)", "Titre (A–Z, passes groupées)"],
+    "Neueste zuerst (Datum ↓)": ["Newest first (Date ↓)", "Más recientes primero (Fecha ↓)", "Plus récents d’abord (Date ↓)"],
+    "Älteste zuerst (Datum ↑)": ["Oldest first (Date ↑)", "Más antiguos primero (Fecha ↑)", "Plus anciens d’abord (Date ↑)"],
+    "Größe (absteigend)": ["Size (descending)", "Tamaño (descendente)", "Taille (décroissante)"],
+    "Im HDR / DV Labor öffnen": ["Open in HDR / DV Lab", "Abrir en Laboratorio HDR / DV", "Ouvrir dans le Labo HDR / DV"]
   };
   Object.keys(WORKSPACE).forEach(function (key) {
     DICT[key] = WORKSPACE[key][0];

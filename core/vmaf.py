@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1543,6 +1544,19 @@ def measure_output_vmaf(
         _cleanup(work)
 
 
+def _build_default_session_name(opts: VmafOptions, info: Optional[VideoInfo] = None) -> str:
+    if opts.session_name:
+        return opts.session_name
+    raw_title = opts.source_title or (info.path.name if info and getattr(info, "path", None) else "")
+    if raw_title:
+        stem = Path(str(raw_title)).stem
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:55] or "clip"
+        ts = time.strftime("%Y-%m-%d_%H-%M")
+        short_id = (opts.item_id or uuid.uuid4().hex)[:6]
+        return f"{safe}_{ts}_{short_id}"
+    return opts.item_id or uuid.uuid4().hex[:8]
+
+
 def _with_active_session(function):
     from functools import wraps
     from dataclasses import replace
@@ -1550,9 +1564,10 @@ def _with_active_session(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
         positional = list(args)
+        info = kwargs.get("info") if "info" in kwargs else (positional[0] if len(positional) > 0 else None)
         opts = kwargs.get("opts") if "opts" in kwargs else (positional[5] if len(positional) > 5 else None)
         opts = opts or VmafOptions()
-        session = opts.session_name or opts.item_id or uuid.uuid4().hex[:8]
+        session = _build_default_session_name(opts, info)
         opts = replace(opts, session_name=session)
         if len(positional) > 5:
             positional[5] = opts

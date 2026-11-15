@@ -3240,5 +3240,35 @@ input[type="range"]::-moz-range-thumb {
   gap: 6px;
   white-space: nowrap;
 }
+.dvl-picker-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dvl-picker-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+.dvl-picked-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12.5px;
+}
+.dvl-picked-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-browser .row-date {
+  font-size: 12px;
+  margin-right: 12px;
+  white-space: nowrap;
+}
+
 
 

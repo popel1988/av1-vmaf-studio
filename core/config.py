@@ -322,6 +322,9 @@ def rel_input(abs_path) -> Optional[str]:
     return None
 
 
+rel_to_media = rel_input
+
+
 def default_output_path() -> Path:
     """Absoluter Standard-Ausgabeordner (Settings → Media-Root, Fallback output/)."""
     from . import app_settings

@@ -410,8 +410,12 @@ def list_entries(query: str = "") -> list[dict]:
             fname = str(it.get("filename") or "")
             fpath = vdir / fname if fname else Path("")
             exists = bool(fname and fpath.is_file())
-            it["exists"] = exists
-            if exists and not it.get("rpu_size_bytes"):
+            if not exists:
+                # Verwaiste Index-Einträge (z. B. über Daten & Archive gelöscht) bereinigen
+                changed = True
+                continue
+            it["exists"] = True
+            if not it.get("rpu_size_bytes"):
                 it["rpu_size_bytes"] = fpath.stat().st_size
             valid.append(it)
         if changed:
@@ -428,6 +432,34 @@ def list_entries(query: str = "") -> list[dict]:
             or q in str(it.get("cm_version") or "").lower()
         ]
     return valid
+
+
+def entry_by_filename(filename: str) -> Optional[dict]:
+    """Findet einen Tresor-Eintrag anhand seines Dateinamens (Haupt- oder Original-RPU)."""
+    if not filename:
+        return None
+    with _VAULT_LOCK:
+        for it in _load_index():
+            if not isinstance(it, dict):
+                continue
+            if it.get("filename") == filename or it.get("original_rpu_filename") == filename:
+                return dict(it)
+    return None
+
+
+def sync_index_with_disk() -> int:
+    """Bereinigt verwaiste Einträge im RPU-Index, falls Dateien über Daten & Archive gelöscht wurden."""
+    with _VAULT_LOCK:
+        items = _load_index()
+        vdir = _vault_dir()
+        kept = [
+            it for it in items
+            if isinstance(it, dict) and it.get("filename") and (vdir / str(it["filename"])).is_file()
+        ]
+        removed = len(items) - len(kept)
+        if removed:
+            _save_index(kept)
+        return removed
 
 
 def get_entry(entry_id: str) -> Optional[dict]:
@@ -478,15 +510,17 @@ def extract_to_vault(
     if not dv.available():
         return {"ok": False, "error": "dovi_tool ist nicht verfügbar."}
 
-    info = ff.probe(source_path)
+    info = ff.ffprobe(source_path)
     if info is None:
         return {"ok": False, "error": "Quelldatei konnte nicht mit ffprobe gelesen werden."}
 
+    now_ts = time.time()
+    date_tag = time.strftime("%Y-%m-%d_%H-%M", time.localtime(now_ts))
     entry_id = uuid.uuid4().hex[:12]
     clean_title = (title or source_path.stem).strip()
-    slug = _clean_slug(clean_title)
+    slug = _clean_slug(clean_title)[:60]
     vdir = _vault_dir()
-    dest_rpu = vdir / f"{slug}_{entry_id}.rpu.bin"
+    dest_rpu = vdir / f"{slug}_{date_tag}_{entry_id[:6]}.rpu.bin"
     orig_rpu_name = ""
     origin = "dolby_vision"
     origin_label = "Dolby Vision"
@@ -501,7 +535,7 @@ def extract_to_vault(
             if keep_original_rpu and orig_profile == 7 and convert_to_81:
                 if status:
                     status(f"Extrahiere Original-RPU (Profil {orig_profile}) aus {source_path.name} …")
-                orig_rpu_path = vdir / f"{slug}_{entry_id}.orig_p{orig_profile}.rpu.bin"
+                orig_rpu_path = vdir / f"{slug}_{date_tag}_{entry_id[:6]}.orig_p{orig_profile}.rpu.bin"
                 if dv._extract_rpu(source_path, src_codec, orig_rpu_path, mode=0):
                     orig_rpu_name = orig_rpu_path.name
 
@@ -554,7 +588,7 @@ def extract_to_vault(
         "id": entry_id,
         "title": clean_title,
         "source_name": source_path.name,
-        "source_rel": config.rel_to_media(source_path) or source_path.name,
+        "source_rel": config.rel_input(source_path) or source_path.name,
         "filename": dest_rpu.name,
         "original_rpu_filename": orig_rpu_name,
         "origin": origin,
@@ -580,7 +614,7 @@ def extract_to_vault(
         "scene_cuts": int(rpu_meta.get("scene_cuts") or 0),
         "scene_cut_preview": scene_cut_preview,
         "l5_offsets": rpu_meta.get("l5_offsets"),
-        "created_at": round(time.time(), 2),
+        "created_at": round(now_ts, 2),
     }
 
     with _VAULT_LOCK:

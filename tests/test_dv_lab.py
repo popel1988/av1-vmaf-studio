@@ -251,6 +251,134 @@ class DvLabTests(unittest.TestCase):
             source = (ROOT / "static" / "js" / js_name).read_text(encoding="utf-8")
             self.assertTrue(ctx.eval("new Function(" + json.dumps(source) + "); true;"), js_name)
 
+    def test_analyze_dv_file_uses_rel_input_and_ffprobe_without_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_root = Path(tmp) / "media"
+            sub = media_root / "Filme"
+            sub.mkdir(parents=True)
+            movie = sub / "Movie.mkv"
+            movie.write_bytes(b"\x00\x01\x02\x03")
+
+            fake_info = ff.VideoInfo(
+                str(movie), 3840, 2160, 120.0, "hevc", "yuv420p10le",
+                "smpte2084", "bt2020", "bt2020nc", 40_000_000, 4,
+                fps=23.976, hdr_type="Dolby Vision 8.1 + HDR10",
+                dolby_vision=True, dv_profile=8, hdr10_plus=False,
+            )
+            with (
+                mock.patch.object(config, "MEDIA_ROOTS", [("Media", media_root)]),
+                mock.patch.object(ff, "probe_with_error", return_value=(fake_info, None)),
+                mock.patch.object(ff, "ffprobe", return_value=fake_info),
+                mock.patch.object(dv_lab, "_mediainfo_available", return_value=False),
+                mock.patch("core.dolby_vision.available", return_value=False),
+            ):
+                res = dv_lab.analyze_dv_file(movie, sample_seconds=60)
+                self.assertTrue(res["ok"])
+                self.assertEqual(res["path"], "Filme/Movie.mkv")
+                self.assertEqual(res["filename"], "Movie.mkv")
+                self.assertIn("General", res["mediainfo_text"])
+
+    def test_session_name_includes_movie_title_and_date_deterministically(self):
+        # 2026-11-15 12:30:00 local time
+        import time as _time
+        fixed_ts = _time.mktime((2026, 11, 15, 12, 30, 0, 0, 0, -1))
+        item = qm.QueueItem(
+            id="abcdef123456",
+            path="Filme/Dune.Part.Two.2024.mkv",
+            title="Dune.Part.Two.2024.mkv",
+            group_id="grp1",
+            settings=qm.JobSettings(),
+            created_at=fixed_ts,
+        )
+        sess = qm._session_name(item)
+        self.assertEqual(sess, "Dune.Part.Two.2024_2026-11-15_12-30_abcdef")
+        # Deterministisch bei wiederholtem Aufruf
+        self.assertEqual(qm._session_name(item), sess)
+
+    def test_http_endpoint_dv_lab_analyze_returns_200(self):
+        from fastapi.testclient import TestClient
+        import app as app_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            media_root = Path(tmp) / "media"
+            (media_root / "Filme").mkdir(parents=True)
+            movie = media_root / "Filme" / "Movie.mkv"
+            movie.write_bytes(b"\x00\x01\x02\x03")
+
+            fake_info = ff.VideoInfo(
+                str(movie), 3840, 2160, 120.0, "hevc", "yuv420p10le",
+                "smpte2084", "bt2020", "bt2020nc", 40_000_000, 4,
+                fps=24.0, hdr_type="Dolby Vision 8.1 + HDR10",
+                dolby_vision=True, dv_profile=8, hdr10_plus=False,
+            )
+            client = TestClient(app_mod.app)
+            with (
+                mock.patch.object(config, "MEDIA_ROOTS", [("Media", media_root)]),
+                mock.patch.object(ff, "probe_with_error", return_value=(fake_info, None)),
+                mock.patch.object(ff, "ffprobe", return_value=fake_info),
+                mock.patch.object(dv_lab, "_mediainfo_available", return_value=False),
+                mock.patch("core.dolby_vision.available", return_value=False),
+            ):
+                resp = client.get("/api/dv-lab/analyze?path=Filme%2FMovie.mkv&sample_seconds=180")
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.json()
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["path"], "Filme/Movie.mkv")
+
+    def test_data_browser_supports_rpu_vault_sorting_and_index_sync(self):
+        from core import data_browser
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = Path(tmp) / "rpu_vault"
+            vault_dir.mkdir(parents=True)
+            rpu_a = vault_dir / "Avatar_2026-11-14_10-00_111111.rpu.bin"
+            rpu_b = vault_dir / "Blade_Runner_2026-11-15_18-30_222222.rpu.bin"
+            rpu_a.write_bytes(b"A" * 100)
+            rpu_b.write_bytes(b"B" * 500)
+            os_utime_old = 1_700_000_000
+            os_utime_new = 1_700_100_000
+            import os as _os
+            _os.utime(rpu_a, (os_utime_old, os_utime_old))
+            _os.utime(rpu_b, (os_utime_new, os_utime_new))
+
+            with (
+                mock.patch.object(config, "RPU_VAULT_DIR", vault_dir),
+                mock.patch.dict(data_browser.DATA_ROOTS, {"rpu_vault": vault_dir}),
+            ):
+                rpu_vault._save_index([
+                    {
+                        "id": "111111",
+                        "title": "Avatar",
+                        "filename": rpu_a.name,
+                        "profile": 8,
+                        "cm_version": "CM v4.0",
+                        "frames": 230000,
+                        "created_at": os_utime_old,
+                    },
+                    {
+                        "id": "222222",
+                        "title": "Blade Runner",
+                        "filename": rpu_b.name,
+                        "profile": 8,
+                        "cm_version": "CM v2.9",
+                        "frames": 195000,
+                        "created_at": os_utime_new,
+                    },
+                ])
+
+                by_date = data_browser.browse("rpu_vault", "", sort="date_desc")
+                rpu_files = [f for f in by_date["files"] if f.get("kind") == "rpu"]
+                self.assertEqual([f["name"] for f in rpu_files], [rpu_b.name, rpu_a.name])
+                self.assertEqual(rpu_files[0]["rpu_meta"]["title"], "Blade Runner")
+                self.assertTrue(rpu_files[0]["mtime_human"])
+
+                # Löschen über data_browser bereinigt automatisch den RPU-Tresor-Index
+                ok, err = data_browser.delete_item("rpu_vault", rpu_a.name)
+                self.assertTrue(ok, err)
+                remaining_ids = [e["id"] for e in rpu_vault.list_entries()]
+                self.assertEqual(remaining_ids, ["222222"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

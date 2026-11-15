@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -98,7 +99,7 @@ def get_mediainfo_text(path: Path) -> str:
             pass
 
     # Sauberer Fallback im MediaInfo-Stil via ffprobe, falls mediainfo lokal nicht installiert ist
-    info = ff.probe(path)
+    info = ff.ffprobe(path)
     if info is None:
         return f"General\nComplete name                            : {path.name}\n"
     lines = [
@@ -210,7 +211,7 @@ def analyze_dv_file(path: Path, *, sample_seconds: float = 180.0) -> dict:
 
     summary = {
         "ok": True,
-        "path": config.rel_to_media(path) or path.name,
+        "path": config.rel_input(path) or path.name,
         "filename": path.name,
         "size_bytes": info.size_bytes,
         "duration": round(float(info.duration or 0.0), 3),
@@ -857,7 +858,7 @@ def check_hybrid_compatibility(
     """Prüft, ob Spender-DV/HDR10+ (oder Tresor-RPU) und Ziel-Release zusammenpassen."""
     if not target_path.is_file():
         return {"ok": False, "error": "Zieldatei nicht gefunden."}
-    t_info = ff.probe(target_path)
+    t_info = ff.ffprobe(target_path)
     if t_info is None:
         return {"ok": False, "error": "Zieldatei konnte nicht gelesen werden."}
 
@@ -901,7 +902,7 @@ def check_hybrid_compatibility(
             "l5_offsets": entry.get("l5_offsets"),
         }
     elif donor_path and donor_path.is_file():
-        d_info = ff.probe(donor_path)
+        d_info = ff.ffprobe(donor_path)
         if d_info is None:
             return {"ok": False, "error": "Spenderdatei konnte nicht gelesen werden."}
         if not d_info.dolby_vision and not d_info.hdr10_plus:
@@ -1156,7 +1157,7 @@ def transfer_dv_to_release(
     if not target_path.is_file():
         return {"ok": False, "error": "Zieldatei nicht gefunden."}
 
-    t_info = ff.probe(target_path)
+    t_info = ff.ffprobe(target_path)
     if t_info is None:
         return {"ok": False, "error": "Zieldatei konnte nicht gelesen werden."}
     if (t_info.codec or "").lower() not in ("hevc", "h265"):
@@ -1165,8 +1166,10 @@ def transfer_dv_to_release(
             "error": f"Verlustfreie DV-Injektion benötigt ein HEVC-Zielvideo (gefunden: {t_info.codec}).",
         }
 
-    # Arbeitsordner wie beim Foren-Tool im Zielordner anlegen (oder am Ende aufräumen)
-    work_dir = target_path.parent / f".dv_work_{target_path.stem}_{int(time.time())}"
+    # Arbeitsordner im zentralen WORK_DIR mit Filmname + Datum (erscheint bei keep_temp_files in Daten & Archive)
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", target_path.stem).strip("._")[:55] or "dv_job"
+    ts_str = time.strftime("%Y-%m-%d_%H-%M")
+    work_dir = config.WORK_DIR / f"dv_{safe_stem}_{ts_str}_{uuid.uuid4().hex[:6]}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
     rpu_raw = work_dir / "extracted.rpu.bin"
@@ -1191,7 +1194,7 @@ def transfer_dv_to_release(
                 status(f"Lade RPU aus Tresor: {entry.get('title')} …")
             shutil.copyfile(entry["rpu_path"], rpu_raw)
         elif donor_path and donor_path.is_file():
-            d_info = ff.probe(donor_path)
+            d_info = ff.ffprobe(donor_path)
             if d_info is None:
                 return {"ok": False, "error": "Spenderdatei nicht lesbar."}
             if d_info.dolby_vision:
@@ -1322,10 +1325,10 @@ def transfer_dv_to_release(
             out_path.replace(target_path)
             final_out = target_path
 
-        out_probe = ff.probe(final_out)
+        out_probe = ff.ffprobe(final_out)
         return {
             "ok": True,
-            "output_path": config.rel_to_media(final_out) or final_out.name,
+            "output_path": config.rel_input(final_out) or final_out.name,
             "output_name": final_out.name,
             "applied_frame_offset": eff_offset,
             "applied_l5_offsets": l5_target,

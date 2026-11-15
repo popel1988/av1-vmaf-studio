@@ -1026,7 +1026,7 @@ class QueueManager:
             return
         with self._lock:
             for it in self._items:
-                if _session_name(it) == session and it.vmaf:
+                if it.vmaf and (it.vmaf.get("session") == session or _session_name(it) == session):
                     it.vmaf = analysis
                     break
 
@@ -3371,10 +3371,16 @@ def build_job_settings(d: dict) -> JobSettings:
 
 
 def _session_name(item: QueueItem) -> str:
-    """Lesbarer, eindeutiger Ordnername für Previews/VMAF-Archiv."""
+    """Lesbarer, zeitlich sortierbarer Ordnername für Previews/VMAF-Archiv.
+
+    Format: ``<Filmname>_<YYYY-MM-DD_HH-MM>_<id6>`` – gleiche Filme stehen
+    alphabetisch zusammen und lassen sich zeitlich direkt auseinanderhalten.
+    Nutzt ``item.created_at``, damit der Name deterministisch bleibt.
+    """
     stem = Path(item.title).stem
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:60] or "clip"
-    return f"{safe}_{item.id[:6]}"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")[:55] or "clip"
+    ts = time.strftime("%Y-%m-%d_%H-%M", time.localtime(float(item.created_at or time.time())))
+    return f"{safe}_{ts}_{item.id[:6]}"
 
 
 def _parse_rows(entries) -> list:
