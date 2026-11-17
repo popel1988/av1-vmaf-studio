@@ -14,4 +14,6 @@ env/
 /build_temp/
 /data/
 *.spec
+graphify-out/
+.cursor/
 

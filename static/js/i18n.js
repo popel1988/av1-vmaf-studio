@@ -5743,6 +5743,38 @@
     Object.keys(S2_TOOLTIP_TEXTS).forEach(function (key) { dict[key] = S2_TOOLTIP_TEXTS[key][index]; });
   });
 
+  var MS_SSIM_TEXTS = {
+    "MS-SSIM-Kurve": ["MS-SSIM curve", "Curva MS-SSIM", "Courbe MS-SSIM"],
+    "MS-SSIM (0–1) als eigene rechte Achse in den Kurven einblenden.": [
+      "Show MS-SSIM (0–1) on its own right-hand axis in the charts.",
+      "Mostrar MS-SSIM (0–1) en su propio eje derecho en los gráficos.",
+      "Afficher le MS-SSIM (0–1) sur son propre axe droit dans les graphiques."
+    ],
+    "Für diesen Vergleich liegen keine MS-SSIM-Daten vor.": [
+      "No MS-SSIM data is stored for this comparison.",
+      "No hay datos MS-SSIM guardados para esta comparación.",
+      "Aucune donnée MS-SSIM n’est enregistrée pour cette comparaison."
+    ],
+    "PSNR, SSIM und MS-SSIM sind strukturelle bzw. klassische Signalmaße (MS-SSIM über mehrere Auflösungsstufen, 0–1). CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.": [
+      "PSNR, SSIM and MS-SSIM are structural or classic signal measures (MS-SSIM across multiple scales, 0–1). CAMBI measures banding, higher means more steps. SSIMULACRA2 (0–100, higher = closer to the source): 85+ nearly indistinguishable, 70–85 very good, 50–70 visible, below 50 weak. The recommendation stays with VMAF.",
+      "PSNR, SSIM y MS-SSIM son medidas estructurales o de señal clásicas (MS-SSIM en varias escalas, 0–1). CAMBI mide el banding, más alto significa más bandas. SSIMULACRA2 (0–100, más alto = más cerca de la fuente): desde 85 casi indistinguible, 70–85 muy bien, 50–70 visible, menos de 50 débil. La recomendación sigue siendo VMAF.",
+      "PSNR, SSIM et MS-SSIM sont des mesures structurelles ou de signal classiques (MS-SSIM sur plusieurs échelles, 0–1). CAMBI mesure le banding, plus haut veut dire plus de bandes. SSIMULACRA2 (0–100, plus haut = plus proche de la source) : dès 85 presque indiscernable, 70–85 très bon, 50–70 visible, sous 50 faible. La recommandation reste le VMAF."
+    ],
+    "Was ist MS-SSIM neben SSIM und VMAF?": [
+      "What is MS-SSIM next to SSIM and VMAF?",
+      "¿Qué es MS-SSIM junto a SSIM y VMAF?",
+      "Qu’est-ce que le MS-SSIM à côté du SSIM et du VMAF ?"
+    ],
+    "MS-SSIM (Multi-Scale SSIM) bewertet die strukturelle Ähnlichkeit über mehrere Auflösungsstufen zugleich (0–1, höher = näher an der Quelle). Dadurch erfasst es sowohl feine Texturen aus der Nähe als auch gröbere Flächenstrukturen aus normalem Sitzabstand. Es läuft ohne Zusatz-Decode direkt in libvmaf mit, lässt sich in den Diagrammen über „MS-SSIM-Kurve“ auf einer eigenen rechten Achse zuschalten und ändert die VMAF-Empfehlung nicht.": [
+      "MS-SSIM (Multi-Scale SSIM) evaluates structural similarity across multiple resolution scales at once (0–1, higher = closer to the source). That captures both fine detail up close and broader structure at normal viewing distance. It runs in the same libvmaf pass without an extra decode, can be toggled on its own right-hand axis via “MS-SSIM curve”, and does not change the VMAF recommendation.",
+      "MS-SSIM (Multi-Scale SSIM) evalúa la similitud estructural en varias escalas de resolución a la vez (0–1, más alto = más cerca de la fuente). Así capta tanto el detalle fino de cerca como las estructuras amplias a distancia normal. Se calcula en la misma pasada de libvmaf sin decodificación adicional, puede activarse en su propio eje derecho con «Curva MS-SSIM» y no cambia la recomendación VMAF.",
+      "Le MS-SSIM (Multi-Scale SSIM) évalue la similarité structurelle sur plusieurs échelles de résolution à la fois (0–1, plus haut = plus proche de la source). Il capte ainsi aussi bien les détails fins de près que les structures plus larges à distance normale. Il est calculé dans la même passe libvmaf sans décodage supplémentaire, peut être affiché sur son propre axe droit via « Courbe MS-SSIM » et ne modifie pas la recommandation VMAF."
+    ]
+  };
+  [DICT, DICT_ES, DICT_FR].forEach(function (dict, index) {
+    Object.keys(MS_SSIM_TEXTS).forEach(function (key) { dict[key] = MS_SSIM_TEXTS[key][index]; });
+  });
+
   function lowContextRules(language) {
     var en = language === "en", es = language === "es";
     function num(s) { return en ? s.replace(/,/g, ".") : s.replace(/\./g, ","); }
@@ -5900,6 +5932,46 @@
       "Analyse de débit terminée (0 octet d’espace disque temporaire)."
     ],
     "Bitrate-Scan fehlgeschlagen.": ["Bitrate scan failed.", "El escaneo de bitrate ha fallado.", "L’analyse de débit a échoué."],
+    "Ein Scan für beide Ansichten. Neue Dateien und lokale Metadaten erscheinen nach einem erneuten Scan.": ["Both views use the same scan. Rescan to pick up new files and local metadata.", "Ambas vistas utilizan el mismo escaneo. Vuelve a escanear para actualizar archivos y metadatos locales.", "Les deux vues partagent la même analyse. Relancez-la pour actualiser les fichiers et les métadonnées locales."],
+    "Bibliotheksansicht": ["Library view", "Vista de la biblioteca", "Vue de la bibliothèque"],
+    "Der Medienkatalog ist nicht erreichbar.": ["The media catalog is unavailable.", "El catálogo no está disponible.", "Le catalogue est indisponible."],
+    "Erneut laden": ["Reload", "Volver a cargar", "Recharger"],
+    "Bibliothek durchsuchen": ["Search the library", "Buscar en la biblioteca", "Rechercher dans la bibliothèque"],
+    "Medienart": ["Media type", "Tipo de medio", "Type de média"],
+    "Alle Medienarten": ["All media types", "Todos los tipos", "Tous les types"],
+    "Alle Sammlungen": ["All collections", "Todas las colecciones", "Toutes les collections"],
+    "Sammlungen verwalten": ["Manage collections", "Gestionar colecciones", "Gérer les collections"],
+    "Name der Sammlung": ["Collection name", "Nombre de la colección", "Nom de la collection"],
+    "Gewählte Sammlung löschen": ["Delete selected collection", "Eliminar la colección seleccionada", "Supprimer la collection sélectionnée"],
+    "Manuell festgelegt": ["Set manually", "Asignado manualmente", "Défini manuellement"],
+    "Lokale NFO": ["Local NFO", "NFO local", "NFO local"],
+    "Namensvorschlag": ["Filename suggestion", "Título sugerido por el nombre", "Titre suggéré par le nom de fichier"],
+    "Datei anzeigen": ["Show file", "Mostrar archivo", "Afficher le fichier"],
+    "Angezeigter Titel": ["Display title", "Título mostrado", "Titre affiché"],
+    "Titel bearbeiten": ["Edit title", "Editar título", "Modifier le titre"],
+    "Treffer bestätigen": ["Confirm match", "Confirmar coincidencia", "Confirmer le résultat"],
+    "Eigenständig lassen": ["Keep separate", "Mantener separado", "Garder séparé"],
+    "Manuelle Entscheidung zurücksetzen": ["Reset manual decision", "Restablecer decisión manual", "Réinitialiser le choix manuel"],
+    "Anderen Titel suchen": ["Find another title", "Buscar otro título", "Rechercher un autre titre"],
+    "Auf Knopfdruck wird nur der eingegebene Suchtext an Wikidata gesendet.": ["Only the text entered below is sent to Wikidata when you press Search.", "Al pulsar Buscar, solo se envía a Wikidata el texto introducido.", "Seul le texte saisi est envoyé à Wikidata lorsque vous lancez la recherche."],
+    "Suchtext für Wikidata": ["Wikidata search text", "Texto de búsqueda para Wikidata", "Recherche Wikidata"],
+    "Online suchen": ["Search online", "Buscar en línea", "Rechercher en ligne"],
+    "Weitere Fassung": ["Another version", "Otra versión", "Autre version"],
+    "Gemeinsamer Titel": ["Shared title", "Título común", "Titre commun"],
+    "Als Fassungen verbinden": ["Link as versions", "Vincular como versiones", "Associer comme versions"],
+    "Markierte Dateien": ["Selected files", "Archivos seleccionados", "Fichiers sélectionnés"],
+    "Zur Sammlung hinzufügen": ["Add to collection", "Añadir a la colección", "Ajouter à la collection"],
+    "Auswahl leeren": ["Clear selection", "Borrar selección", "Effacer la sélection"],
+    "Alle Medien": ["All media", "Todos los medios", "Tous les médias"],
+    "Staffel unbekannt": ["Unknown season", "Temporada desconocida", "Saison inconnue"],
+    "Staffeln": ["Seasons", "Temporadas", "Saisons"],
+    "Staffel": ["Season", "Temporada", "Saison"],
+    "Folgen": ["Episodes", "Episodios", "Épisodes"],
+    "Seriennavigation": ["Series navigation", "Navegación de series", "Navigation des séries"],
+    "Keine Medien für diesen Filter.": ["No media match these filters.", "Ningún medio coincide con los filtros.", "Aucun média ne correspond aux filtres."],
+    "Dieser Scan enthält keine Medien.": ["This scan contains no media.", "Este escaneo no contiene medios.", "Cette analyse ne contient aucun média."],
+    "Mindestens zwei Zeichen eingeben.": ["Enter at least two characters.", "Introduce al menos dos caracteres.", "Saisissez au moins deux caractères."],
+    "Titelsuche fehlgeschlagen.": ["Title search failed.", "Error al buscar el título.", "La recherche de titre a échoué."],
     "Nach Werk gruppieren": ["Group by work", "Agrupar por obra", "Grouper par œuvre"],
     "Sammlung anlegen": ["Create collection", "Crear colección", "Créer une collection"],
     "Auswahl zuordnen": ["Assign selection", "Asignar selección", "Affecter la sélection"],

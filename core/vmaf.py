@@ -276,6 +276,7 @@ class VmafResult:
     vmaf_5pct: float = 0.0    # Mittel der schlechtesten 5 % Frames ("5%-Low")
     psnr: float = 0.0
     ssim: float = 0.0
+    ms_ssim: Optional[float] = None       # Multi-Scale SSIM (0–1); None = nicht gemessen
     xpsnr: float = 0.0        # XPSNR (dB, 4:1:1 über Y/U/V gewichtet), FFmpeg ≥ 7.1
     cambi: Optional[float] = None          # Banding, höher = mehr; None = nicht gemessen
     ssimulacra2: Optional[float] = None    # ein Standbild je Szene, höher = besser
@@ -329,6 +330,10 @@ class VmafResult:
             d["psnr"] = round(self.psnr, 2)
         if self.ssim:
             d["ssim"] = round(self.ssim, 4)
+        if self.ms_ssim is not None:
+            ms_val = _finite(self.ms_ssim, 6)
+            if ms_val is not None:
+                d["ms_ssim"] = ms_val
         if self.xpsnr:
             d["xpsnr"] = round(self.xpsnr, 2)
         if self.cambi is not None:
@@ -378,6 +383,14 @@ class VmafResult:
                     raw = s.get(key)
                     if raw:
                         item[key] = round(float(raw), nd)
+                if s.get("ms_ssim") is not None:
+                    ms_sc = _finite(s.get("ms_ssim"), 6)
+                    if ms_sc is not None:
+                        item["ms_ssim"] = ms_sc
+                if s.get("ms_ssim_frames") is not None:
+                    ms_fr = [_finite(x, 6) if x is not None else None for x in (s.get("ms_ssim_frames") or [])]
+                    if any(x is not None for x in ms_fr):
+                        item["ms_ssim_frames"] = ms_fr
                 if s.get("cambi") is not None:
                     item["cambi"] = round(float(s["cambi"]), 2)
                 if s.get("cambi_max") is not None:
@@ -1204,10 +1217,22 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         p5 = sum(vals[:k5]) / k5
     psnr = (pooled.get("psnr_y", {}) or pooled.get("psnr", {}) or {}).get("mean") or 0.0
     ssim = (pooled.get("float_ssim", {}) or pooled.get("ssim", {}) or {}).get("mean") or 0.0
-    series = [
-        float(f["metrics"]["vmaf"]) for f in frames
+    ms_pool = pooled.get("float_ms_ssim")
+    if not isinstance(ms_pool, dict):
+        ms_pool = pooled.get("ms_ssim")
+    ms_mean = _finite(ms_pool.get("mean"), 6) if isinstance(ms_pool, dict) else None
+    scored_frames = [
+        f["metrics"] for f in frames
         if f.get("metrics") and f["metrics"].get("vmaf") is not None
     ]
+    series = [float(m["vmaf"]) for m in scored_frames]
+    ms_series = [
+        _finite(m.get("float_ms_ssim") if "float_ms_ssim" in m else m.get("ms_ssim"), 6)
+        for m in scored_frames
+    ]
+    ms_valid = [v for v in ms_series if v is not None]
+    if ms_mean is None and ms_valid:
+        ms_mean = _finite(sum(ms_valid) / len(ms_valid), 6)
     xp = data.get("xpsnr") or {}
     out = {
         "vmaf": float(mean),
@@ -1224,6 +1249,20 @@ def _metrics_from_json(data: dict) -> Optional[dict]:
         "xpsnr_min": float(xp.get("xpsnr_min") or 0.0),
         "frames": _downsample_vmaf(series),
     }
+    if ms_mean is not None:
+        out["ms_ssim"] = float(ms_mean)
+    if ms_valid:
+        if len(ms_series) <= 80:
+            out["ms_ssim_frames"] = ms_series
+        else:
+            step = len(ms_series) / 80
+            ms_down: list[Optional[float]] = []
+            for i in range(80):
+                a = int(i * step)
+                b = max(a + 1, int((i + 1) * step))
+                chunk = [v for v in (ms_series[a:b] or [ms_series[a]]) if v is not None]
+                ms_down.append(round(min(chunk), 6) if chunk else None)
+            out["ms_ssim_frames"] = ms_down
     if data.get("scored_offset") is not None:
         out["scored_offset"] = float(data["scored_offset"])
     cambi_pool = pooled.get("cambi")
@@ -1255,41 +1294,33 @@ def _vmaf_metrics(
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     clip_len: float = 0.0, subsample: int = 1, gpu_accel: bool = False,
 ) -> Optional[dict]:
-    """Vollständige Metriken (VMAF + PSNR + SSIM + CAMBI + XPSNR + 1%-Low) für einen Vergleich.
+    """Vollständige Metriken (VMAF + PSNR + SSIM + MS-SSIM + CAMBI + XPSNR + 1%-Low).
 
-    PSNR, SSIM und CAMBI laufen über die libvmaf-`feature`-Option, XPSNR im
-    selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Fehlt CAMBI im Build,
-    fällt der Lauf auf PSNR/SSIM zurück. Die Kern-Metrik bleibt so verfügbar.
+    PSNR, SSIM, MS-SSIM und CAMBI laufen über die libvmaf-`feature`-Option, XPSNR im
+    selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Fehlen optionale Features im
+    Build (z. B. `float_ms_ssim` oder `cambi`), fällt der Lauf stufenweise zurück,
+    damit vorhandene Zusatzmaße und VMAF erhalten bleiben.
     """
+    features_ms_cambi = "feature=name=psnr|name=float_ssim|name=float_ms_ssim|name=cambi:"
     features_cambi = "feature=name=psnr|name=float_ssim|name=cambi:"
+    features_ms = "feature=name=psnr|name=float_ssim|name=float_ms_ssim:"
     features = "feature=name=psnr|name=float_ssim:"
-    data = None
+    attempts: list[tuple[str, bool]] = []
     if xpsnr_available():
-        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features_cambi, clip_len=clip_len, with_xpsnr=True,
-                            subsample=subsample, gpu_accel=gpu_accel)
-    metrics = _metrics_from_json(data) if data else None
-    if metrics is None:
-        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features_cambi, clip_len=clip_len,
-                            subsample=subsample, gpu_accel=gpu_accel)
+        for feat in (features_ms_cambi, features_cambi, features_ms, features):
+            attempts.append((feat, True))
+    for feat in (features_ms_cambi, features_cambi, features_ms, features, ""):
+        attempts.append((feat, False))
+    for feat, use_xp in attempts:
+        data = _run_libvmaf(
+            distorted, reference, info, work, key, neg, dims,
+            features=feat, clip_len=clip_len, with_xpsnr=use_xp,
+            subsample=subsample, gpu_accel=gpu_accel,
+        )
         metrics = _metrics_from_json(data) if data else None
-    if metrics is None and xpsnr_available():
-        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features, clip_len=clip_len, with_xpsnr=True,
-                            subsample=subsample, gpu_accel=gpu_accel)
-        metrics = _metrics_from_json(data) if data else None
-    if metrics is None:
-        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features=features, clip_len=clip_len,
-                            subsample=subsample, gpu_accel=gpu_accel)
-        metrics = _metrics_from_json(data) if data else None
-    if metrics is None:
-        data = _run_libvmaf(distorted, reference, info, work, key, neg, dims,
-                            features="", clip_len=clip_len,
-                            subsample=subsample, gpu_accel=gpu_accel)
-        metrics = _metrics_from_json(data) if data else None
-    return metrics
+        if metrics is not None:
+            return metrics
+    return None
 
 
 def _vmaf_compare(
@@ -1760,6 +1791,7 @@ def analyze(
         p5s: list[float] = []
         psnrs: list[float] = []
         ssims: list[float] = []
+        ms_ssims: list[float] = []
         xpsnrs: list[float] = []
         cambis: list[float] = []
         s2s: list[float] = []
@@ -1879,6 +1911,8 @@ def analyze(
                     psnrs.append(metrics["psnr"])
                 if metrics.get("ssim"):
                     ssims.append(metrics["ssim"])
+                if metrics.get("ms_ssim") is not None:
+                    ms_ssims.append(float(metrics["ms_ssim"]))
                 if metrics.get("xpsnr"):
                     xpsnrs.append(metrics["xpsnr"])
                 if metrics.get("cambi") is not None:
@@ -1919,6 +1953,10 @@ def analyze(
                         scene[field] = metrics[field]
             if metrics and metrics.get("cambi") is not None:
                 scene["cambi"] = metrics["cambi"]
+            if metrics and metrics.get("ms_ssim") is not None:
+                scene["ms_ssim"] = metrics["ms_ssim"]
+            if metrics and metrics.get("ms_ssim_frames") is not None:
+                scene["ms_ssim_frames"] = list(metrics["ms_ssim_frames"])
             if metrics and metrics.get("cambi_max") is not None:
                 scene["cambi_max"] = metrics["cambi_max"]
             if metrics and metrics.get("ssimulacra2") is not None:
@@ -1992,6 +2030,7 @@ def analyze(
             vmaf_5pct=_avg(p5s),
             psnr=_avg(psnrs),
             ssim=_avg(ssims),
+            ms_ssim=_avg(ms_ssims) if ms_ssims else None,
             xpsnr=_avg(xpsnrs),
             cambi=_avg(cambis) if cambis else None,
             ssimulacra2=_avg(s2s) if s2s else None,
@@ -2750,6 +2789,10 @@ def _series_stats(frames: list[dict], clip_seconds: float) -> dict:
         out["psnr_mean"] = round(pm, 2)
         out["psnr_weak"] = round(pw, 2)
         out["psnr_delta"] = round(pm - pw, 2)
+    ms_vals = [float(f["ms_ssim"]) for f in frames if f.get("ms_ssim") is not None]
+    if ms_vals:
+        out["ms_ssim_mean"] = round(sum(ms_vals) / len(ms_vals), 6)
+        out["ms_ssim_min"] = round(min(ms_vals), 6)
     return out
 
 
@@ -2804,7 +2847,12 @@ def _downsample_min(frames: list[dict], buckets: int = 400) -> list[dict]:
     for b in range(buckets):
         a = b * n // buckets
         z = max(a + 1, (b + 1) * n // buckets)
-        out.append(min(frames[a:z], key=lambda f: float(f["vmaf"])))
+        chunk = frames[a:z]
+        picked = dict(min(chunk, key=lambda f: float(f["vmaf"])))
+        ms_chunk = [f["ms_ssim"] for f in chunk if f.get("ms_ssim") is not None]
+        if ms_chunk:
+            picked["ms_ssim"] = min(ms_chunk)
+        out.append(picked)
     return out
 
 
@@ -2855,10 +2903,16 @@ def scene_frame_logs(session: str, scene: int, full: bool = False) -> Optional[d
                 item["vmaf_raw"] = float(metrics["vmaf"])
             psnr = _finite(metrics.get("psnr_y", metrics.get("psnr")), 2)
             ssim = _finite(metrics.get("float_ssim", metrics.get("ssim")), 4)
+            ms_ssim = _finite(
+                metrics.get("float_ms_ssim") if "float_ms_ssim" in metrics else metrics.get("ms_ssim"),
+                6,
+            )
             if psnr is not None:
                 item["psnr"] = psnr
             if ssim is not None:
                 item["ssim"] = ssim
+            if ms_ssim is not None:
+                item["ms_ssim"] = ms_ssim
             frames.append(item)
         worst = sorted(frames, key=lambda x: x["vmaf"])[:8]
         n_frames = len(frames)
@@ -3008,6 +3062,7 @@ def repick_analysis(analysis: dict, target_vmaf: float = 0.0) -> dict:
             vmaf_1pct=float(raw.get("vmaf_1pct") or 0),
             psnr=float(raw.get("psnr") or 0),
             ssim=float(raw.get("ssim") or 0),
+            ms_ssim=_finite(raw.get("ms_ssim"), 6) if raw.get("ms_ssim") is not None else None,
             scene_scores=list(raw.get("scene_scores") or []),
         )
         raw["recommended"] = False
@@ -3232,7 +3287,8 @@ def idle_scene_ids(results) -> set[int]:
 
 
 def _put_metric(row, name: str, value: float) -> None:
-    shown = round(float(value), 4 if name == "ssim" else 2)
+    nd = 6 if name == "ms_ssim" else (4 if name == "ssim" else 2)
+    shown = round(float(value), nd)
     if isinstance(row, dict):
         row[name] = shown
     else:
@@ -3254,6 +3310,7 @@ def apply_idle_scenes(results) -> set[int]:
         ("p5", "vmaf_5pct"),
         ("psnr", "psnr"),
         ("ssim", "ssim"),
+        ("ms_ssim", "ms_ssim"),
         ("xpsnr", "xpsnr"),
         ("cambi", "cambi"),
         ("ssimulacra2", "ssimulacra2"),
@@ -3279,7 +3336,7 @@ def apply_idle_scenes(results) -> set[int]:
             counted.append(s)
             for src, _dest in pairs:
                 raw = s.get(src)
-                if src in ("cambi", "ssimulacra2"):
+                if src in ("cambi", "ssimulacra2", "ms_ssim"):
                     if raw is None:
                         continue
                 elif not raw:

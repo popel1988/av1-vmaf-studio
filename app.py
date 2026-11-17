@@ -284,6 +284,7 @@ def _asset_version() -> str:
 
     latest = 0.0
     for rel in ("static/js/app.js", "static/js/player.js", "static/js/editor.js",
+                "static/js/library_media.js", "static/css/library_media.css",
                 "static/js/i18n.js", "static/js/workspace-ui.js",
                 "static/js/desktop-ui.js", "static/css/styles.css", "static/css/workspace.css"):
         try:
@@ -2279,6 +2280,21 @@ class LibraryAssignRequest(BaseModel):
     collection_id: str = ""
 
 
+class LibraryDecisionRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=512)
+    action: str
+    title: str = Field(default="", max_length=200)
+
+
+@app.post("/api/library/catalog/decision")
+def library_catalog_decision(req: LibraryDecisionRequest):
+    from core import works
+    try:
+        return works.decide_paths(req.paths, req.action, req.title)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 @app.get("/api/library/catalog")
 async def library_catalog():
     from core import works
@@ -2325,6 +2341,54 @@ async def library_catalog_assign(req: LibraryAssignRequest):
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     return {"ok": True, **catalog}
+
+
+@app.get("/api/library/title-search")
+def library_title_search(q: str):
+    """Explicit, read-only title lookup. No scan record is passed to the provider."""
+    import json
+    from http.client import HTTPException as TransportError
+    from urllib.parse import urlencode
+    from urllib.request import Request as UrlRequest, urlopen
+
+    title = q.strip()
+    if (not 2 <= len(title) <= 160 or not title.isprintable() or "/" in title or "\\" in title
+            or Path(title).suffix.lower() in config.VIDEO_EXTENSIONS):
+        return JSONResponse({"error": "Bitte einen Titel ohne Dateipfad eingeben."}, status_code=400)
+    query = urlencode(dict(action="wbsearchentities", format="json", search=title, type="item",
+                           language="de", uselang="de", limit=8))
+    req = UrlRequest("https://www.wikidata.org/w/api.php?" + query,
+                     headers={"User-Agent": "AV1-VMAF-Studio/1.0 (https://github.com/popel1988/av1-vmaf-studio)"})
+    try:
+        with urlopen(req, timeout=5) as result:
+            payload = json.loads(result.read(128 * 1024))
+        hits = payload.get("search") if isinstance(payload, dict) else None
+        if not isinstance(hits, list):
+            raise ValueError("unexpected response")
+        return {"results": [{"id": h["id"], "title": h["label"][:200],
+                             "description": str(h.get("description") or "")[:400]} for h in hits[:8]
+                            if isinstance(h, dict) and isinstance(h.get("id"), str) and isinstance(h.get("label"), str)]}
+    except (OSError, ValueError, TransportError):
+        return JSONResponse({"error": "Wikidata ist momentan nicht erreichbar."}, status_code=503)
+
+
+@app.get("/api/library/media-cover")
+def library_media_cover(path: str):
+    from core import library, works
+    missing = JSONResponse({"error": "Kein lokales Cover vorhanden."}, status_code=404)
+    try:
+        video = config.resolve_input(works.catalog_media_path(path))
+        if video is None or not video.is_file() or video.suffix.lower() not in config.VIDEO_EXTENSIONS:
+            return missing
+        cover = library.media_cover_path(video)
+        if not cover or cover.is_symlink() or cover.resolve().parent != video.resolve().parent:
+            return missing
+        mime = library.cover_type(cover)
+        if mime:
+            return FileResponse(cover, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
+    except (ValueError, OSError):
+        pass
+    return missing
 
 
 @app.get("/api/library/last")

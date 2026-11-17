@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Video Studio</title>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_version }}" />
+  <link rel="stylesheet" href="/static/css/library_media.css?v={{ asset_version }}" />
   <link rel="stylesheet" href="/static/css/workspace.css?v={{ asset_version }}" />
   <script src="/static/vendor/chart.umd.min.js?v=4.4.1" defer></script>
 </head>
@@ -1066,7 +1067,13 @@
               <div id="vmaf-chart-scenes" class="shot-scenes vmaf-chart-scenes"></div>
               <p class="hint" id="vmaf-idle-note" hidden></p>
               <div id="vmaf-frame-wrap" class="vmaf-subchart vmaf-scene-wide" hidden>
-                <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
+                <div class="vmaf-subchart-head">
+                  <p class="vmaf-subchart-title" id="vmaf-frame-title">Verlauf in der Szene</p>
+                  <label class="check vmaf-curve-toggle">
+                    <input type="checkbox" id="vmaf-frame-ms-ssim-toggle" data-ms-ssim-toggle>
+                    <span>MS-SSIM-Kurve</span>
+                  </label>
+                </div>
                 <div class="vmaf-chart-wrap vmaf-chart-wrap-wide">
                   <canvas id="vmaf-frame-chart" style="cursor:pointer" title="Klick auf einen Punkt springt im A/B-Player direkt an diese Stelle"></canvas>
                 </div>
@@ -1075,9 +1082,15 @@
             </div>
             <div class="vmaf-side-main">
               <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-                <div class="btn-group" id="vmaf-chart-mode-bar">
-                  <button type="button" class="btn btn-ghost btn-sm active" data-vmaf-cmode="steps">Stufen-Ansicht</button>
-                  <button type="button" class="btn btn-ghost btn-sm" data-vmaf-cmode="rd">Rate-Distortion-Kurve (Bitrate ↔ VMAF)</button>
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px">
+                  <div class="btn-group" id="vmaf-chart-mode-bar">
+                    <button type="button" class="btn btn-ghost btn-sm active" data-vmaf-cmode="steps">Stufen-Ansicht</button>
+                    <button type="button" class="btn btn-ghost btn-sm" data-vmaf-cmode="rd">Rate-Distortion-Kurve (Bitrate ↔ VMAF)</button>
+                  </div>
+                  <label class="check vmaf-curve-toggle">
+                    <input type="checkbox" id="vmaf-ms-ssim-toggle" data-ms-ssim-toggle>
+                    <span>MS-SSIM-Kurve</span>
+                  </label>
                 </div>
                 <div id="vmaf-bdrate-bar" style="display:flex;flex-wrap:wrap;gap:6px"></div>
               </div>
@@ -1149,9 +1162,15 @@
                 <button type="button" class="btn btn-ghost btn-sm" id="vmaf-zoom-reset">Zurücksetzen</button>
               </div>
               <p class="hint vmaf-zoom-hint">Leer lässt die Höhe automatisch. Nur die untere Zahl, z. B. 85, zeigt 85 bis 100. Der Ausschnitt gilt für den Frame-Verlauf. Ein Klick auf einen Legendeneintrag blendet diese Linie aus.</p>
-              <div class="vmaf-nerd-floor">
-                <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>
-                <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
+              <div class="vmaf-nerd-floor-row">
+                <div class="vmaf-nerd-floor">
+                  <label for="nerd-floor">Anteil unter <strong id="nerd-floor-val">90</strong></label>
+                  <input type="range" id="nerd-floor" min="80" max="99" step="1" value="90" />
+                </div>
+                <label class="check vmaf-curve-toggle">
+                  <input type="checkbox" id="nerd-ms-ssim-toggle" data-ms-ssim-toggle>
+                  <span>MS-SSIM-Kurve</span>
+                </label>
               </div>
             </div>
             <div class="vmaf-side-main" id="nerd-side">
@@ -1332,9 +1351,7 @@
             <span class="badge" id="lib-scan-badge">Bereit</span>
           </div>
           <div class="card-body">
-            <p class="hint">Bibliothek scannen, dann live filtern. Neue Dateien erscheinen erst nach erneutem Scan.
-              Treffer lassen sich mit den aktuellen Encode-Einstellungen in die Warteschlange legen.
-              Über ▸ an der Datei siehst du Tonspuren, Untertitel und – falls vorhanden – die NFO im Ordner.</p>
+            <p class="hint">Ein Scan für beide Ansichten. Neue Dateien und lokale Metadaten erscheinen nach einem erneuten Scan.</p>
 
             <!-- 1) Bibliothek wählen + Scan -->
             <div class="lib-library-bar">
@@ -1355,6 +1372,11 @@
             </div>
             <p class="hint" id="lib-progress" style="margin-top:4px"></p>
 
+            <div class="lib-view-switch" role="group" aria-label="Bibliotheksansicht">
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-view-files" aria-controls="lib-files-pane" aria-pressed="true">Dateien</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-view-media" aria-controls="lib-media-pane" aria-pressed="false">Medien</button>
+            </div>
+            <section id="lib-files-pane" aria-labelledby="btn-lib-view-files">
             <!-- 2) Statistik zum (gefilterten) Scan -->
             <div class="lib-projection" id="lib-projection" style="display:none">
               <div class="stat-box"><span class="stat-val" id="lib-proj-count">0</span><span class="stat-lbl">Treffer</span></div>
@@ -1431,25 +1453,6 @@
               <button class="btn btn-primary btn-sm" id="btn-lib-add-auto" disabled title="Mit automatisch je Datei vorgeschlagenen Einstellungen (Codec/HDR/DV)">Auswahl mit Auto-Einstellungen</button>
             </div>
 
-            <div class="lib-works-bar" id="lib-works-bar">
-              <label class="check"><input type="checkbox" id="lib-by-work" checked /><span>Nach Werk gruppieren</span></label>
-              <input type="text" id="lib-coll-name" placeholder="Name, z. B. Urlaub Island" maxlength="80" />
-              <select id="lib-coll-kind" title="Art der Sammlung">
-                <option value="sammlung">Sammlung</option>
-                <option value="serie">Serie</option>
-                <option value="film">Film</option>
-                <option value="sendung">Sendung</option>
-              </select>
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-coll-add">Sammlung anlegen</button>
-              <select id="lib-coll-pick" title="Vorhandene Sammlung">
-                <option value="">Sammlung wählen …</option>
-              </select>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-lib-assign">Auswahl zuordnen</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-unassign">Zuordnung lösen</button>
-              <button type="button" class="btn btn-ghost btn-sm bad-btn" id="btn-lib-coll-del" title="Die gewählte Sammlung und ihre Zuordnungen entfernen">Sammlung löschen</button>
-            </div>
-            <p class="hint" id="lib-works-status">Filme, Folgen, Dokus und Mediathek-Sendungen werden am Titel erkannt. Eigene Sammlungen fassen Aufnahmen zusammen, die denselben Anlass haben.</p>
-
             <div class="lib-result-toolbar">
               <input type="search" id="lib-result-search" placeholder="In Treffern suchen … (Name, Titel, Ordner)" autocomplete="off" />
               <label class="check"><input type="checkbox" id="lib-group" /><span>Nach Ordner gruppieren</span></label>
@@ -1483,6 +1486,11 @@
               </table>
             </div>
             <div class="lib-pager" id="lib-pager" style="display:none" aria-label="Seiten"></div>
+            </section>
+            <section id="lib-media-pane" aria-labelledby="btn-lib-view-media" hidden>
+              <p class="hint" id="lib-media-status" role="status"></p>
+              <div id="lib-media-browser"></div>
+            </section>
           </div>
         </section>
 
@@ -4646,6 +4654,12 @@
                 <p>CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.</p>
               </div>
             </details>
+            <details class="faq-item" id="faq-ms-ssim">
+              <summary>Was ist MS-SSIM neben SSIM und VMAF?</summary>
+              <div class="faq-body">
+                <p>MS-SSIM (Multi-Scale SSIM) bewertet die strukturelle Ähnlichkeit über mehrere Auflösungsstufen zugleich (0–1, höher = näher an der Quelle). Dadurch erfasst es sowohl feine Texturen aus der Nähe als auch gröbere Flächenstrukturen aus normalem Sitzabstand. Es läuft ohne Zusatz-Decode direkt in libvmaf mit, lässt sich in den Diagrammen über „MS-SSIM-Kurve“ auf einer eigenen rechten Achse zuschalten und ändert die VMAF-Empfehlung nicht.</p>
+              </div>
+            </details>
             <details class="faq-item" id="faq-ssimulacra2">
               <summary>Was ist SSIMULACRA2 neben VMAF?</summary>
               <div class="faq-body">
@@ -4715,6 +4729,7 @@
   <script src="/static/js/i18n.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/insights.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/player.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/library_media.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/editor.js?v={{ asset_version }}" defer></script>
   <script src="/static/js/dv_lab.js?v={{ asset_version }}" defer></script>

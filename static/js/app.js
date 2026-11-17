@@ -21,6 +21,7 @@
     clipPickIds: null, // angekreuzte Clips, gleich auf VMAF-Seite und in den Nerd-Daten
     chartScene: null,  // null = Gesamtschnitt, sonst Szenenindex in der VMAF-Grafik
     vmafShown: null,   // zuletzt gezeichnete Analyse (für Szenen-Umschaltung)
+    vmafShowMsSsim: false, // zuschaltbare MS-SSIM-Kurve (eigene rechte Achse 0–1)
     stVmafId: null,    // Super-Tool-Zeile für Vergleichsbilder
     superBatch: null,  // aktive Super-Tool-Stapelkennung
     vmafSource: null,  // Quelle des aktuell gezeigten VMAF-Vergleichs (für „→ Encoding")
@@ -5222,6 +5223,9 @@
     if (nerdBack) nerdBack.addEventListener("click", () => navTo("vmaf"));
     const nerdFloor = $("nerd-floor");
     if (nerdFloor) nerdFloor.addEventListener("input", applyNerdFloor);
+    document.querySelectorAll("[data-ms-ssim-toggle]").forEach((box) => {
+      box.addEventListener("change", () => setVmafMsSsimShown(box.checked));
+    });
     bindVmafZoom();
     refreshVmafHistory();
   }
@@ -6627,7 +6631,7 @@
       s += `<span class="vmaf-delta ${mark.cls}" title="${escapeHtml(tip)}">${mark.text}</span>`;
     }
     // Mehrere Szenen: Mittelwert oben, Streuung (min–max) je Szene darunter.
-    if (r.vmaf_min != null && r.vmaf_max != null) {
+    if ((r.vmaf_min != null && r.vmaf_max != null) || (Array.isArray(r.scene_scores) && r.scene_scores.length > 1)) {
       const perScene = (r.scene_scores || [])
         .map((sc) => {
           const bits = [`Szene ${sc.scene + 1}: ${Number(sc.vmaf).toFixed(1)}`];
@@ -6639,6 +6643,8 @@
               ? ` (min ${Number(sc.xpsnr_min).toFixed(1)})` : "";
             bits.push(`XPSNR ${Number(sc.xpsnr).toFixed(1)} dB${mn}`);
           }
+          if (sc.ssim != null) bits.push(`SSIM ${Number(sc.ssim).toFixed(3)}`);
+          if (sc.ms_ssim != null) bits.push(`MS-SSIM ${Number(sc.ms_ssim).toFixed(4)}`);
           if (sc.cambi != null) {
             const mn = sc.cambi_max != null
               ? ` (max ${Number(sc.cambi_max).toFixed(2)})` : "";
@@ -6678,8 +6684,11 @@
         const tip = `Low-Kriterium nicht erfüllt: 1%-Low ${Number(sc.p1).toFixed(2)} unter ${floor.toFixed(2)}. Sichtbarkeit und Dauer separat prüfen.${s2Tip}`;
         return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
+      const sceneFallback = r.vmaf_min != null && r.vmaf_max != null
+        ? escapeHtml(`Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}`)
+        : "";
       s += `<br><span class="muted vmaf-scenes" title="${escapeHtml(perScene.join("\n"))}">`
-        + `${visible || escapeHtml(`Ø · Szenen ${r.vmaf_min.toFixed(1)}–${r.vmaf_max.toFixed(1)}`)}</span>`;
+        + `${visible || sceneFallback}</span>`;
     }
     // Zusatzmetriken (falls gemessen): 1%-Low + harmon. Mittel, PSNR/SSIM.
     const extra = [];
@@ -6704,15 +6713,19 @@
         + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
     }
     // Zweite Meinung: XPSNR und SSIMULACRA2 als eingefärbte Pillen,
-    // PSNR/SSIM/CAMBI daneben.
+    // PSNR/SSIM/MS-SSIM/CAMBI daneben.
     const pill = [xpsnrPill(r), ssimulacra2Pill(r)].filter(Boolean).join(" ");
     const qual = [];
     if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
     if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
+    if (r.ms_ssim != null) qual.push(`MS-SSIM ${Number(r.ms_ssim).toFixed(4)}`);
     if (r.cambi != null) qual.push(`CAMBI ${Number(r.cambi).toFixed(2)}`);
     if (pill || qual.length) {
+      const qualTip = r.ms_ssim != null
+        ? "PSNR, SSIM und MS-SSIM sind strukturelle bzw. klassische Signalmaße (MS-SSIM über mehrere Auflösungsstufen, 0–1). CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF."
+        : "PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.";
       s += `<br>${pill}${qual.length
-        ? `<span class="muted" title="${escapeHtml("PSNR und SSIM sind klassische Signalmaße. CAMBI misst Banding, höher heißt mehr Streifen. SSIMULACRA2 (0–100, höher = näher an der Quelle): ab 85 kaum unterscheidbar, 70–85 sehr gut, 50–70 sichtbar, unter 50 schwach. Die Empfehlung bleibt beim VMAF.")}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
+        ? `<span class="muted" title="${escapeHtml(qualTip)}">${pill ? " · " : ""}${qual.join(" · ")}</span>`
         : ""}`;
     }
     const lo = vmafTargetLo(state.vmafShown);
@@ -6828,7 +6841,7 @@
       lines.push("");
       lines.push(line([
         "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
-        "H-Mittel", "PSNR", "XPSNR", "SSIM", "CAMBI", "SSIMULACRA2", "Ersparnis %", "Prognose Bytes",
+        "H-Mittel", "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "Ersparnis %", "Prognose Bytes",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -6836,7 +6849,7 @@
           r.label || ("Q" + r.quality), r.platform || "", r.codec || "",
           r.value != null ? r.value : r.quality,
           num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
-          num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4),
+          num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4), num(r.ms_ssim, 6),
           num(r.cambi, 2), num(r.ssimulacra2, 1), num(r.savings_percent, 1),
           r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
           ...settingCells(r),
@@ -6845,7 +6858,7 @@
       lines.push("");
       lines.push(line([
         "Szene", "Start s", "Länge s", "Einstellung", "VMAF", "1%-Low", "H-Mittel",
-        "PSNR", "XPSNR", "SSIM", "CAMBI", "SSIMULACRA2", "kbit/s",
+        "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "kbit/s",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -6855,7 +6868,7 @@
             num(sc.start, 3), num(sc.length, 3),
             r.label || ("Q" + r.quality),
             num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
-            num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4),
+            num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4), num(sc.ms_ssim, 6),
             num(sc.cambi, 2), num(sc.ssimulacra2, 1),
             sc.kbps ? Math.round(sc.kbps) : "",
             ...settingCells(r),
@@ -6873,14 +6886,14 @@
             const t = sec > 0 ? (Number(f.n) || 0) * sec : "";
             frameRows.push(line([
               s.label || "", sceneNo, f.n, num(t, 3),
-              num(f.vmaf, 2), num(f.psnr, 2), num(f.ssim, 4),
+              num(f.vmaf, 2), num(f.psnr, 2), num(f.ssim, 4), num(f.ms_ssim, 6),
             ]));
           });
         });
       });
       lines.push("");
       if (frameRows.length) {
-        lines.push(line(["Einstellung", "Szene", "Frame", "Zeit s", "VMAF", "PSNR", "SSIM"]));
+        lines.push(line(["Einstellung", "Szene", "Frame", "Zeit s", "VMAF", "PSNR", "SSIM", "MS-SSIM"]));
         frameRows.forEach((row) => lines.push(row));
       } else {
         lines.push(line([
@@ -7061,7 +7074,7 @@
     if (!key || !ds || ds.floorLine) return false;
     if (ds.nerdKey && ds.nerdKey === key) return true;
     const label = ds.label || "";
-    return label === key || label === key + " · Bitrate";
+    return label === key || label === key + " · Bitrate" || label === key + " · MS-SSIM";
   }
 
   function highlightVmafSeries(key) {
@@ -7169,6 +7182,7 @@
     if (visualNote) visualNote.hidden = true;
     const curveHint = $("vmaf-curve-hint");
     if (curveHint) curveHint.hidden = false;
+    syncMsSsimToggles(vmaf, state.nerdData);
     drawChart(vmaf);
     renderChartScenes(vmaf);
     drawGapChart(vmaf);
@@ -7578,7 +7592,7 @@
       intersect: false,
       filter: (item) => {
         const ds = item.dataset || {};
-        return !ds.floorLine && ds.yAxisID !== "y1";
+        return !ds.floorLine && ds.yAxisID !== "y1" && ds.yAxisID !== "yMsSsim";
       },
       callbacks: {
         label: (item) => {
@@ -7588,6 +7602,12 @@
           const vmaf = y == null ? "—" : Number(y).toFixed(1);
           let line = (ds.label || "") + ": " + vmaf + " VMAF";
           const sets = (item.chart && item.chart.data && item.chart.data.datasets) || [];
+          const ms = sets.find((d) => d && d.yAxisID === "yMsSsim" && !d.floorLine
+            && (d.nerdKey
+              ? d.nerdKey === ds.nerdKey
+              : d.label === (ds.label || "") + " · MS-SSIM"));
+          const msVal = nearestYAt(ms, x);
+          if (msVal != null) line += " · MS-SSIM " + Number(msVal).toFixed(4);
           const br = sets.find((d) => d && d.yAxisID === "y1" && !d.floorLine
             && (d.nerdKey
               ? d.nerdKey === ds.nerdKey
@@ -7611,11 +7631,71 @@
     return tip;
   }
 
+  function vmafHasMsSsim(vmaf, nerdData) {
+    const hasResultMs = ((vmaf && vmaf.results) || []).some((r) => r && (
+      r.ms_ssim != null
+      || ((r.scene_scores || []).some((sc) => sc && (
+        sc.ms_ssim != null
+        || (Array.isArray(sc.ms_ssim_frames) && sc.ms_ssim_frames.some((v) => v != null))
+      )))
+    ));
+    if (hasResultMs) return true;
+    return ((nerdData && nerdData.series) || []).some((s) =>
+      ((s && s.frames) || []).some((f) => f && f.ms_ssim != null));
+  }
+
+  function msSsimScaleOptions(col) {
+    return {
+      position: "right",
+      max: 1,
+      suggestedMin: 0.96,
+      title: { display: true, text: "MS-SSIM", color: col.muted },
+      grid: { drawOnChartArea: false },
+      ticks: {
+        color: col.muted,
+        callback: (v) => Number(v).toFixed(Number(v) >= 0.99 ? 4 : 3),
+      },
+    };
+  }
+
+  function syncMsSsimToggles(vmaf, nerdData) {
+    const avail = vmafHasMsSsim(vmaf || state.vmafShown, nerdData || state.nerdData);
+    const tipText = tt(avail
+      ? "MS-SSIM (0–1) als eigene rechte Achse in den Kurven einblenden."
+      : "Für diesen Vergleich liegen keine MS-SSIM-Daten vor.");
+    document.querySelectorAll("[data-ms-ssim-toggle]").forEach((box) => {
+      box.disabled = !avail;
+      box.checked = !!(avail && state.vmafShowMsSsim);
+      const wrap = box.closest ? box.closest("label") : null;
+      if (wrap) {
+        if (wrap.classList && wrap.classList.toggle) wrap.classList.toggle("is-disabled", !avail);
+        wrap.title = tipText;
+      }
+    });
+  }
+
+  function setVmafMsSsimShown(on) {
+    state.vmafShowMsSsim = !!on;
+    syncMsSsimToggles(state.vmafShown, state.nerdData);
+    const vmaf = state.vmafShown;
+    if (vmaf && state.currentPage !== "vmafnerd") {
+      try { drawChart(vmaf); } catch (e) { /* Graph bleibt */ }
+      try { drawFrameChart(vmaf); } catch (e) { /* siehe oben */ }
+    }
+    if (vmaf && state.currentPage === "vmafnerd") {
+      try { drawChart(vmaf); } catch (e) { /* Graph bleibt */ }
+      if (state.nerdData) {
+        try { paintNerdChart(state.nerdData); } catch (e) { /* Tabelle bleibt */ }
+      }
+    }
+  }
+
   function drawFrameChart(vmaf) {
     const wrap = $("vmaf-frame-wrap");
     const ctx = $("vmaf-frame-chart");
     const title = $("vmaf-frame-title");
     destroyNamedChart("vmafFrameChart");
+    syncMsSsimToggles(vmaf, state.nerdData);
     const scenes = vmafSceneList(vmaf);
     const scene = state.chartScene != null
       ? state.chartScene
@@ -7635,11 +7715,19 @@
       const sc = sceneEntry(r, scene);
       return sc && sc.bitrate && sc.bitrate.length;
     });
+    const showMs = !!state.vmafShowMsSsim && rows.some((r) => {
+      const sc = sceneEntry(r, scene);
+      return sc && Array.isArray(sc.ms_ssim_frames) && sc.ms_ssim_frames.some((v) => v != null);
+    });
     const timed = hasBr || (clipSec > 0 && srcBins.length > 0);
     if (title) {
       title.textContent = timed
-        ? `Verlauf Szene ${scene + 1} · VMAF und Bitrate der Testclips`
-        : `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt`;
+        ? (showMs
+          ? `Verlauf Szene ${scene + 1} · VMAF, MS-SSIM und Bitrate der Testclips`
+          : `Verlauf Szene ${scene + 1} · VMAF und Bitrate der Testclips`)
+        : (showMs
+          ? `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt (VMAF & MS-SSIM)`
+          : `Verlauf Szene ${scene + 1} · Tiefstwert je Abschnitt`);
     }
     const col = chartColors();
     const datasets = [];
@@ -7654,6 +7742,7 @@
       if (hasBr && sc.bitrate && sc.bitrate.length) {
         datasets.push({
           label: label + " · Bitrate",
+          nerdKey: label,
           yAxisID: "y1",
           order: 2,
           data: sc.bitrate.map((b) => ({ x: bitratePointX(b), y: Number(b.kbps) })),
@@ -7666,8 +7755,28 @@
           spanGaps: true,
         });
       }
+      if (showMs && Array.isArray(sc.ms_ssim_frames) && sc.ms_ssim_frames.some((v) => v != null)) {
+        const msArr = sc.ms_ssim_frames;
+        datasets.push({
+          label: label + " · MS-SSIM",
+          nerdKey: label,
+          yAxisID: "yMsSsim",
+          order: 1,
+          data: timed
+            ? msArr.map((v, idx) => ({ x: (idx + 0.5) / msArr.length * span, y: v == null ? null : Number(v) }))
+            : msArr.map((v) => (v == null ? null : Number(v))),
+          borderColor: color,
+          backgroundColor: "transparent",
+          borderDash: [2, 3],
+          pointRadius: 0,
+          borderWidth: 1.5,
+          tension: 0.2,
+          spanGaps: false,
+        });
+      }
       datasets.push({
         label,
+        nerdKey: label,
         yAxisID: "y",
         order: 0,
         data: timed
@@ -7691,9 +7800,15 @@
     if ((vmaf.results || []).length > 4) opts.plugins.legend.display = false;
     opts.scales.y.suggestedMin = 80;
     opts.scales.y.suggestedMax = 100;
+    if (datasets.some((d) => d.yAxisID === "yMsSsim")) {
+      opts.scales.yMsSsim = msSsimScaleOptions(col);
+    }
     opts.plugins.legend.position = "bottom";
     opts.plugins.legend.labels.boxWidth = 12;
-    opts.plugins.legend.labels.filter = (item) => !String(item.text || "").endsWith("· Bitrate");
+    opts.plugins.legend.labels.filter = (item) => {
+      const txt = String(item.text || "");
+      return !txt.endsWith("· Bitrate") && !txt.endsWith("· MS-SSIM");
+    };
     if (timed) {
       opts.scales.x.type = "linear";
       opts.scales.x.title = { display: true, text: "Sekunden", color: col.muted };
@@ -7983,6 +8098,7 @@
   function paintNerdChart(data) {
     const ctx = $("vmaf-nerd-chart");
     destroyNamedChart("vmafNerdChart");
+    syncMsSsimToggles(state.vmafShown, data);
     if (!ctx || typeof Chart === "undefined") return;
     const series = (data && data.series) || [];
     const col = chartColors();
@@ -8025,6 +8141,35 @@
         tension: 0,
         spanGaps: false,
       });
+      if (state.vmafShowMsSsim) {
+        const msPoints = nerdFinite(n <= maxPoints
+          ? frames.map((f, k) => ({
+            x: frameX(f, k),
+            y: !f || f.ms_ssim == null ? null : Number(f.ms_ssim),
+          }))
+          : nerdPick((k) => {
+            const v = frames[k] && frames[k].ms_ssim;
+            return v == null ? null : Number(v);
+          }, n, buckets, "min"));
+        if (msPoints.length >= 2) {
+          datasets.push({
+            label: key + " · MS-SSIM",
+            nerdKey: key,
+            parsing: false,
+            normalized: true,
+            yAxisID: "yMsSsim",
+            data: msPoints,
+            borderColor: color,
+            backgroundColor: "transparent",
+            borderDash: [2, 3],
+            pointRadius: 0,
+            pointHitRadius: 5,
+            borderWidth: 1.35,
+            tension: 0,
+            spanGaps: false,
+          });
+        }
+      }
       const result = state.vmafShown && nerdScene != null
         ? (state.vmafShown.results || []).find((r) => (r.label || "") === (s.label || ""))
         : null;
@@ -8122,6 +8267,9 @@
     opts.scales.x.max = maxX;
     opts.scales.x.title = { display: true, text: "Frame", color: col.muted };
     opts.scales.x.ticks.maxTicksLimit = 8;
+    if (datasets.some((d) => d.yAxisID === "yMsSsim")) {
+      opts.scales.yMsSsim = msSsimScaleOptions(col);
+    }
     if (datasets.some((d) => d.yAxisID === "y1")) {
       opts.scales.y1 = {
         position: "right",
@@ -8157,6 +8305,7 @@
   function drawNerdFrames(data) {
     const body = $("vmaf-nerd-body");
     destroyNamedChart("vmafNerdChart");
+    syncMsSsimToggles(state.vmafShown, data);
     const series = (data && data.series) || [];
     if (!series.length) {
       if (body) body.innerHTML = `<p class="hint">Für diese Szene liegt kein Frame-Log im Archiv.</p>`;
@@ -8185,6 +8334,7 @@
         const extra = [
           f.psnr != null ? `PSNR ${Number(f.psnr).toFixed(1)}` : "",
           f.ssim != null ? `SSIM ${Number(f.ssim).toFixed(3)}` : "",
+          f.ms_ssim != null ? `MS-SSIM ${Number(f.ms_ssim).toFixed(4)}` : "",
         ].filter(Boolean).join(" · ");
         return `<li>Frame ${f.n} · VMAF ${Number(f.vmaf).toFixed(2)}`
           + (extra ? ` · ${extra}` : "") + `</li>`;
@@ -8198,10 +8348,14 @@
         const mark = d >= 0 ? "−" : "+";
         psnr = `PSNR schwache 5 % ${num(st.psnr_weak)} · Schnitt ${num(st.psnr_mean)} · ${mark}${Math.abs(d).toFixed(2)} dB`;
       }
+      const msSummary = st.ms_ssim_mean != null
+        ? `MS-SSIM Schnitt ${Number(st.ms_ssim_mean).toFixed(4)} · Min ${Number(st.ms_ssim_min).toFixed(4)}`
+        : "";
       const extraBits = [
         s.count != null ? `${s.count} Frames` : "",
         st.p5 != null ? `P5 ${num(st.p5)} · P95 ${num(st.p95)}` : "",
         psnr,
+        msSummary,
       ].filter(Boolean);
       const details = `<details><summary>${escapeHtml(tt("schwächste Frames"))}</summary>`
         + extraBits.map((l) => `<p class="hint">${escapeHtml(l)}</p>`).join("")
@@ -8345,6 +8499,7 @@
   function drawChartRdCurve(vmaf) {
     const ctx = pageCanvas("vmaf-chart", "nerd-std-chart");
     if (!ctx) return;
+    syncMsSsimToggles(vmaf, state.nerdData);
     const col = chartColors();
     const rows = (vmaf.results || []).filter((r) => !vmafRowOff(vmafResultKey(r)));
     const groups = new Map();
@@ -8373,9 +8528,42 @@
         tension: 0.25,
         showLine: true,
       });
+      if (state.vmafShowMsSsim && pts.some((p) => p.r && p.r.ms_ssim != null)) {
+        const msPts = pts
+          .filter((p) => p.r && p.r.ms_ssim != null)
+          .map((p) => ({ x: p.x, y: Number(p.r.ms_ssim), r: p.r, msSsimCurve: true }));
+        datasets.push({
+          label: `${gName} · MS-SSIM`,
+          yAxisID: "yMsSsim",
+          data: msPts,
+          borderColor: color,
+          backgroundColor: "transparent",
+          borderDash: [2, 3],
+          pointRadius: 3.5,
+          pointHoverRadius: 6,
+          borderWidth: 1.7,
+          tension: 0.25,
+          showLine: true,
+        });
+      }
     });
     if (state.vmafChart) state.vmafChart.destroy();
     const xLabel = rows.some((r) => r.video_kbps) ? "Videobitrate (kbit/s)" : "Geschätzte Größe (KiB)";
+    const scales = {
+      x: {
+        type: "linear",
+        title: { display: true, text: xLabel, color: col.muted },
+        grid: { color: col.grid }, ticks: { color: col.muted },
+      },
+      y: {
+        title: { display: true, text: "VMAF", color: col.muted },
+        suggestedMin: 85, suggestedMax: 100,
+        grid: { color: col.grid }, ticks: { color: col.muted },
+      },
+    };
+    if (datasets.some((d) => d.yAxisID === "yMsSsim")) {
+      scales.yMsSsim = msSsimScaleOptions(col);
+    }
     state.vmafChart = new Chart(ctx, {
       type: "scatter",
       data: { datasets },
@@ -8388,25 +8576,18 @@
               label: (item) => {
                 const raw = item.raw || {};
                 const r = raw.r || {};
+                if (raw.msSsimCurve) {
+                  return `${r.label || item.dataset.label}: MS-SSIM ${Number(raw.y).toFixed(4)} @ ${Math.round(raw.x)} kbit/s`;
+                }
                 const p5 = r.vmaf_5pct != null ? ` · 5%-Low ${Number(r.vmaf_5pct).toFixed(1)}` : "";
                 const p1 = r.vmaf_1pct != null ? ` · 1%-Low ${Number(r.vmaf_1pct).toFixed(1)}` : "";
-                return `${r.label || item.dataset.label}: VMAF ${Number(raw.y).toFixed(2)} @ ${Math.round(raw.x)} kbit/s (${r.savings_percent > 0 ? "-" : "+"}${Math.abs(Number(r.savings_percent || 0)).toFixed(1)} %)${p1}${p5}`;
+                const ms = r.ms_ssim != null ? ` · MS-SSIM ${Number(r.ms_ssim).toFixed(4)}` : "";
+                return `${r.label || item.dataset.label}: VMAF ${Number(raw.y).toFixed(2)} @ ${Math.round(raw.x)} kbit/s (${r.savings_percent > 0 ? "-" : "+"}${Math.abs(Number(r.savings_percent || 0)).toFixed(1)} %)${p1}${p5}${ms}`;
               },
             },
           },
         },
-        scales: {
-          x: {
-            type: "linear",
-            title: { display: true, text: xLabel, color: col.muted },
-            grid: { color: col.grid }, ticks: { color: col.muted },
-          },
-          y: {
-            title: { display: true, text: "VMAF", color: col.muted },
-            suggestedMin: 85, suggestedMax: 100,
-            grid: { color: col.grid }, ticks: { color: col.muted },
-          },
-        },
+        scales,
       },
     });
   }
@@ -8419,7 +8600,7 @@
       return;
     }
     const refChoice = choices.find((c) => c.id === "ref") || choices[0];
-    const cleanHint = String(labelHint || "").replace(/\s*·\s*Bitrate$/i, "").trim();
+    const cleanHint = String(labelHint || "").replace(/\s*·\s*(?:Bitrate|MS-SSIM)$/i, "").trim();
     let encChoice = choices.find((c) => c.id !== refChoice.id && (c.label === cleanHint || cleanHint.includes(c.label)));
     if (!encChoice) {
       const recIdx = (vmaf.results || []).findIndex((r) => r.recommended);
@@ -8436,6 +8617,7 @@
 
   function drawChart(vmaf) {
     if (typeof Chart === "undefined") return;
+    syncMsSsimToggles(vmaf, state.nerdData);
     renderBdRates(vmaf);
     const modeBar = $("vmaf-chart-mode-bar");
     if (modeBar && !modeBar._bound) {
@@ -8504,6 +8686,28 @@
         tension: 0.3, borderWidth: 2, fill: false, spanGaps: true,
       });
     }
+    const msValues = rows.map((r) => {
+      if (!sceneMode) return r.ms_ssim != null ? Number(r.ms_ssim) : null;
+      const sc = sceneEntry(r, scene);
+      return sc && sc.ms_ssim != null ? Number(sc.ms_ssim) : null;
+    });
+    const showMs = !!state.vmafShowMsSsim && msValues.some((v) => v != null);
+    if (showMs) {
+      datasets.push({
+        label: sceneMode ? `MS-SSIM · Szene ${scene + 1}` : "MS-SSIM",
+        data: msValues,
+        yAxisID: "yMsSsim",
+        borderColor: col.good || "#22c55e",
+        backgroundColor: "transparent",
+        borderDash: [2, 3],
+        pointRadius: 3.5,
+        pointHoverRadius: 6,
+        tension: 0.3,
+        borderWidth: 2,
+        fill: false,
+        spanGaps: true,
+      });
+    }
     datasets.push({
             label: "Ersparnis %", data: savings, yAxisID: "y1",
             borderColor: col.accent2, backgroundColor: "transparent",
@@ -8544,6 +8748,7 @@
                 }
                 if (sc && sc.psnr != null) lines.push(`PSNR ${Number(sc.psnr).toFixed(1)} dB`);
                 if (sc && sc.ssim != null) lines.push(`SSIM ${Number(sc.ssim).toFixed(3)}`);
+                if (sc && sc.ms_ssim != null) lines.push(`MS-SSIM ${Number(sc.ms_ssim).toFixed(4)}`);
                 if (sc && sc.vmaf != null)
                   lines.push(`Abstand zum Schnitt ${(Number(sc.vmaf) - r.vmaf).toFixed(1)}`);
                 lines.push("Ersparnis = Schätzung für die ganze Datei");
@@ -8552,6 +8757,7 @@
                 if (r.vmaf_hmean != null) lines.push(`H-Ø ${Number(r.vmaf_hmean).toFixed(1)}`);
                 if (r.vmaf_min != null && r.vmaf_max != null)
                   lines.push(`Szenen ${Number(r.vmaf_min).toFixed(1)}–${Number(r.vmaf_max).toFixed(1)}`);
+                if (r.ms_ssim != null) lines.push(`MS-SSIM ${Number(r.ms_ssim).toFixed(4)}`);
                 if (r.xpsnr != null) {
                   const m = xpsnrMark(r.xpsnr);
                   lines.push(`XPSNR ${m.text} (${m.word})`);
@@ -8580,6 +8786,7 @@
             position: "right", title: { display: true, text: "Ersparnis %", color: col.muted },
             grid: { drawOnChartArea: false }, ticks: { color: col.muted },
           },
+          ...(showMs ? { yMsSsim: msSsimScaleOptions(col) } : {}),
         },
       },
     });
@@ -8630,9 +8837,41 @@
           tension: 0.25, borderWidth: 1.6, showLine: true, spanGaps: true,
         });
       }
+      if (state.vmafShowMsSsim && pts.some((r) => (sceneMode ? sceneEntry(r, scene) && sceneEntry(r, scene).ms_ssim != null : r.ms_ssim != null))) {
+        datasets.push({
+          label: sceneMode ? `${name} · MS-SSIM Szene ${scene + 1}` : `${name} · MS-SSIM`,
+          yAxisID: "yMsSsim",
+          data: pts.map((r) => {
+            const sc = sceneMode ? sceneEntry(r, scene) : null;
+            const y = sceneMode ? (sc && sc.ms_ssim != null ? Number(sc.ms_ssim) : null) : (r.ms_ssim != null ? Number(r.ms_ssim) : null);
+            return { x: r.savings_percent, y, _r: r, msSsimCurve: true };
+          }),
+          borderColor: color, backgroundColor: "transparent",
+          borderDash: [2, 3], pointRadius: 3, pointHoverRadius: 6,
+          tension: 0.25, borderWidth: 1.6, showLine: true, spanGaps: true,
+        });
+      }
     });
 
     if (state.vmafChart) state.vmafChart.destroy();
+    const multiScales = {
+      x: {
+        title: { display: true, text: "Ersparnis %", color: col.muted },
+        grid: { color: col.grid }, ticks: { color: col.muted },
+      },
+      y: {
+        title: {
+          display: true,
+          text: sceneMode ? `VMAF · Szene ${scene + 1}` : tt("VMAF gesamt"),
+          color: col.muted,
+        },
+        suggestedMin: 80, suggestedMax: 100,
+        grid: { color: col.grid }, ticks: { color: col.muted },
+      },
+    };
+    if (datasets.some((d) => d.yAxisID === "yMsSsim")) {
+      multiScales.yMsSsim = msSsimScaleOptions(col);
+    }
     const multiChart = new Chart(ctx, {
       type: "scatter",
       data: { datasets },
@@ -8644,11 +8883,16 @@
             label: (c) => {
               const r = c.raw && c.raw._r;
               if (!r) return "";
+              if (c.raw && c.raw.msSsimCurve) {
+                return `${c.dataset.label} ${String(r.label || "").split("·").pop().trim()}: `
+                  + `MS-SSIM ${c.raw.y != null ? Number(c.raw.y).toFixed(4) : "—"} · ${r.predicted_human} (${r.savings_percent}%)`;
+              }
               const extra = [];
               const sc = sceneMode ? sceneEntry(r, scene) : null;
               if (sceneMode && sc) {
                 if (sc.p1 != null) extra.push(`1%-Low ${Number(sc.p1).toFixed(1)}`);
                 if (sc.hmean != null) extra.push(`H-Ø ${Number(sc.hmean).toFixed(1)}`);
+                if (sc.ms_ssim != null) extra.push(`MS-SSIM ${Number(sc.ms_ssim).toFixed(4)}`);
                 if (sc.xpsnr != null) extra.push(`XPSNR ${Number(sc.xpsnr).toFixed(1)} dB`);
                 if (sc.psnr != null) extra.push(`PSNR ${Number(sc.psnr).toFixed(1)}`);
                 if (sc.vmaf != null) extra.push(`Δ ${(Number(sc.vmaf) - r.vmaf).toFixed(1)}`);
@@ -8656,6 +8900,7 @@
                 if (r.vmaf_1pct != null) extra.push(`1%-Low ${Number(r.vmaf_1pct).toFixed(1)}`);
                 if (r.vmaf_min != null && r.vmaf_max != null)
                   extra.push(`Szenen ${Number(r.vmaf_min).toFixed(1)}–${Number(r.vmaf_max).toFixed(1)}`);
+                if (r.ms_ssim != null) extra.push(`MS-SSIM ${Number(r.ms_ssim).toFixed(4)}`);
                 if (r.xpsnr != null) extra.push(`XPSNR ${Number(r.xpsnr).toFixed(1)} dB`);
               }
               const v = sceneMode ? sceneScoreOf(r, scene) : r.vmaf;
@@ -8669,21 +8914,7 @@
             },
           }},
         },
-        scales: {
-          x: {
-            title: { display: true, text: "Ersparnis %", color: col.muted },
-            grid: { color: col.grid }, ticks: { color: col.muted },
-          },
-          y: {
-            title: {
-              display: true,
-              text: sceneMode ? `VMAF · Szene ${scene + 1}` : tt("VMAF gesamt"),
-              color: col.muted,
-            },
-            suggestedMin: 80, suggestedMax: 100,
-            grid: { color: col.grid },             ticks: { color: col.muted },
-          },
-        },
+        scales: multiScales,
       },
     });
     state.vmafChart = multiChart;
@@ -10027,23 +10258,10 @@
     if (rs) rs.addEventListener("input", () => { state.libPage = 1; renderLibrary(); });
     const grp = $("lib-group");
     if (grp) grp.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
-    const byWork = $("lib-by-work");
-    if (byWork) byWork.addEventListener("change", () => { state.libPage = 1; renderLibrary(); });
-    $("btn-lib-coll-add")?.addEventListener("click", libCreateCollection);
-    $("lib-coll-name")?.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter") { ev.preventDefault(); libCreateCollection(); }
-    });
-    $("btn-lib-assign")?.addEventListener("click", () => {
-      const id = $("lib-coll-pick")?.value || "";
-      if (!id) {
-        libWorksNote(tt("Zuerst eine Sammlung wählen."));
-        return;
-      }
-      libAssignSelection(id);
-    });
-    $("btn-lib-unassign")?.addEventListener("click", () => libAssignSelection(""));
-    $("btn-lib-coll-del")?.addEventListener("click", libDeleteCollection);
-    loadLibraryCatalog();
+    for (const view of ["files", "media"]) {
+      $(`btn-lib-view-${view}`).addEventListener("click", () => setLibraryView(view));
+    }
+    document.addEventListener("library-catalog-changed", loadLibraryCatalog);
     initLibLibraries();
     document.querySelectorAll(".lib-table .sortable").forEach((th) => {
       th.addEventListener("click", (ev) => {
@@ -10239,189 +10457,55 @@
     };
   }
 
-  function libEffectiveWork(m) {
-    const catalog = state.libCatalog || { collections: [], assignments: {} };
-    const assigned = (catalog.assignments || {})[m && m.path];
-    const col = assigned
-      ? (catalog.collections || []).find((c) => c.id === assigned.collection_id)
-      : null;
-    const auto = (m && m.work) || {};
-    if (col) {
-      return {
-        key: `sammlung:${col.id}`,
-        group: `sammlung:${col.id}`,
-        kind: col.kind || "sammlung",
-        title: col.name || "Sammlung",
-        year: auto.year || 0,
-        subtitle: "",
-        edition: auto.edition || "",
-        extra: false,
-        manual: true,
-      };
+  function setLibraryView(view) {
+    const media = view === "media";
+    $("lib-files-pane").hidden = media;
+    $("lib-media-pane").hidden = !media;
+    $("btn-lib-view-files").setAttribute("aria-pressed", String(!media));
+    $("btn-lib-view-media").setAttribute("aria-pressed", String(media));
+    if (media) {
+      if (state.libCatalog) renderLibraryMedia();
+      else loadLibraryCatalog();
     }
-    const key = auto.key || `datei:${(m && (m.path || m.name)) || ""}`;
-    return {
-      key,
-      group: auto.group || key,
-      kind: auto.kind || "film",
-      title: auto.title || ((m && m.name) || ""),
-      year: auto.year || 0,
-      subtitle: auto.subtitle || "",
-      edition: auto.edition || "",
-      extra: !!auto.extra,
-      manual: false,
-    };
   }
 
-  function libKindLabel(work) {
-    if (!work) return tt("Film");
-    if (work.extra) return tt("Extra");
-    if (work.manual) {
-      return tt({ film: "Film", serie: "Serie", sendung: "Sendung", sammlung: "Sammlung", doku: "Doku" }[work.kind] || "Sammlung");
+  function renderLibraryMedia() {
+    if (!$("lib-media-pane").hidden && state.libCatalog) {
+      window.LibraryMedia.render(state.libScanAll, state.libCatalog, state.libScanRoot);
     }
-    return tt({ film: "Film", doku: "Doku", serie: "Folge", sendung: "Sendung" }[work.kind] || "Film");
   }
 
-  function libWorkRowsHtml(rows, start, size) {
-    const counts = {};
-    rows.forEach((m) => {
-      const group = libEffectiveWork(m).group;
-      counts[group] = (counts[group] || 0) + 1;
-    });
-    const ordered = rows.slice().sort((a, b) => {
-      const wa = libEffectiveWork(a);
-      const wb = libEffectiveWork(b);
-      const multiA = wa.manual || (counts[wa.group] || 0) > 1;
-      const multiB = wb.manual || (counts[wb.group] || 0) > 1;
-      if (multiA !== multiB) return multiA ? -1 : 1;
-      if (wa.group !== wb.group) {
-        return String(wa.title || "").localeCompare(String(wb.title || ""), "de");
-      }
-      return (b.size_bytes || 0) - (a.size_bytes || 0);
-    });
-    let html = "";
-    let prev = "";
-    ordered.slice(start, start + size).forEach((m) => {
-      const work = libEffectiveWork(m);
-      const count = counts[work.group] || 1;
-      const multi = work.manual || count > 1;
-      if (multi && work.group !== prev) {
-        const year = work.year ? ` (${work.year})` : "";
-        const word = work.manual
-          ? (count === 1 ? tt("Datei") : tt("Dateien"))
-          : (count === 1 ? tt("Datei") : tt("Fassungen"));
-        html += `<tr class="lib-work-row"><td colspan="11">${escapeHtml(libKindLabel(work))} · ${escapeHtml(work.title)}${escapeHtml(year)}`
-          + ` <span class="muted">· ${count} ${word}</span></td></tr>`;
-      }
-      prev = multi ? work.group : "";
-      html += libRowHtmlSafe(m);
-    });
-    return html;
-  }
-
+  let catalogRequest = 0;
   async function loadLibraryCatalog() {
+    const request = ++catalogRequest;
+    const status = $("lib-media-status");
+    status.textContent = tt("Lade …");
     try {
       const res = await fetch("/api/library/catalog");
+      if (!res.ok) throw new Error(String(res.status));
       const data = await res.json();
-      state.libCatalog = {
-        collections: data.collections || [],
-        assignments: data.assignments || {},
-      };
-    } catch (e) {
-      state.libCatalog = state.libCatalog || { collections: [], assignments: {} };
-    }
-    const sel = $("lib-coll-pick");
-    if (sel) {
-      const current = sel.value;
-      const cols = (state.libCatalog.collections || []).slice()
-        .sort((a, b) => String(a.name).localeCompare(String(b.name), "de"));
-      sel.innerHTML = `<option value="">${escapeHtml(tt("Sammlung wählen …"))}</option>`
-        + cols.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join("");
-      if (current) sel.value = current;
-    }
-    if ($("lib-body")) renderLibrary();
-  }
-
-  function libWorksNote(text) {
-    const el = $("lib-works-status");
-    if (el) el.textContent = text;
-  }
-
-  async function libCreateCollection() {
-    const name = ($("lib-coll-name")?.value || "").trim();
-    const kind = $("lib-coll-kind")?.value || "sammlung";
-    if (!name) {
-      libWorksNote(tt("Die Sammlung braucht einen Namen."));
+      if (request !== catalogRequest) return;
+      state.libCatalog = data;
+    } catch {
+      if (request !== catalogRequest) return;
+      state.libCatalog = null;
+      $("lib-media-browser").replaceChildren();
+      status.textContent = tt("Der Medienkatalog ist nicht erreichbar.") + " ";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "btn btn-ghost btn-sm";
+      retry.textContent = tt("Erneut laden");
+      retry.addEventListener("click", loadLibraryCatalog);
+      status.append(retry);
       return;
     }
-    const res = await fetch("/api/library/catalog", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, kind }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      libWorksNote(data.error || tt("Sammlung konnte nicht angelegt werden."));
-      return;
-    }
-    if ($("lib-coll-name")) $("lib-coll-name").value = "";
-    await loadLibraryCatalog();
-    if ($("lib-coll-pick") && data.collection) $("lib-coll-pick").value = data.collection.id;
-    libWorksNote(tt("Sammlung angelegt. Markierte Dateien lassen sich ihr jetzt zuordnen."));
-  }
-
-  async function libAssignSelection(collectionId) {
-    const paths = [...document.querySelectorAll(".lib-check:checked")].map((c) => c.value);
-    if (!paths.length) {
-      libWorksNote(tt("Zuerst Dateien in der Liste markieren."));
-      return;
-    }
-    if (collectionId === undefined) collectionId = "";
-    if (collectionId && !$("lib-coll-pick")?.value) {
-      libWorksNote(tt("Zuerst eine Sammlung wählen."));
-      return;
-    }
-    const res = await fetch("/api/library/catalog/assign", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths, collection_id: collectionId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      libWorksNote(data.error || tt("Zuordnung fehlgeschlagen."));
-      return;
-    }
-    state.libCatalog = {
-      collections: data.collections || [],
-      assignments: data.assignments || {},
-    };
-    await loadLibraryCatalog();
-    libWorksNote(collectionId
-      ? tt("Dateien sind der Sammlung zugeordnet.")
-      : tt("Zuordnung aufgehoben."));
-  }
-
-  async function libDeleteCollection() {
-    const id = $("lib-coll-pick")?.value || "";
-    if (!id) {
-      libWorksNote(tt("Zuerst eine Sammlung wählen."));
-      return;
-    }
-    const res = await fetch(`/api/library/catalog/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) {
-      libWorksNote(tt("Sammlung konnte nicht gelöscht werden."));
-      return;
-    }
-    await loadLibraryCatalog();
-    libWorksNote(tt("Sammlung gelöscht. Die Dateien bleiben in der Bibliothek."));
+    status.textContent = "";
+    renderLibraryMedia();
   }
 
   function libIdentityKey(m) {
     if (!m) return "";
-    const work = libEffectiveWork(m);
-    if (work.group && !work.extra && !work.manual && !String(work.key).startsWith("datei:")) {
-      return `work:${work.group}`;
-    }
+    // Technical duplicate candidates are independent of media and collection decisions.
     const rawName = String(m.name || "").replace(/\.[^.]+$/, "");
     const epMatch = rawName.match(/\bS(\d{1,2})[\s._-]*E(\d{1,3})\b/i);
     const epTag = epMatch ? `s${String(parseInt(epMatch[1], 10)).padStart(2, "0")}e${String(parseInt(epMatch[2], 10)).padStart(2, "0")}` : "";
@@ -10965,6 +11049,7 @@
       };
     }
     libRefreshView();
+    renderLibraryMedia();
   }
 
   /** Cache der aktuell gewählten Bibliothek anzeigen (oder leere Liste). */
@@ -11186,8 +11271,7 @@
     if (q) rows = rows.filter((m) =>
       (m.name || "").toLowerCase().includes(q)
       || (m.folder || "").toLowerCase().includes(q)
-      || libNfoSearch(m).includes(q)
-      || libEffectiveWork(m).title.toLowerCase().includes(q));
+      || libNfoSearch(m).includes(q));
     const s = state.libSort || { key: "est_saved_bytes", dir: "desc" };
     const numeric = ["height", "video_bitrate", "duration", "size_bytes", "est_saved_bytes"];
     rows.sort((a, b) => {
@@ -11230,8 +11314,7 @@
               title="${escapeHtml(tt("Ton, Untertitel, Technik und NFO"))}"
               aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
             <span class="lib-name-stack">
-              <span class="lib-name"><span class="lib-kind">${escapeHtml(libKindLabel(libEffectiveWork(m)))}</span>${escapeHtml(m.name)}</span>
-              ${libWorkLine(m)}
+              <span class="lib-name">${escapeHtml(m.name)}</span>
               ${libNfoHeadline(m) ? `<span class="lib-nfo-line">${escapeHtml(libNfoHeadline(m))}</span>` : ""}
               ${meta ? `<span class="lib-meta-line">${meta}</span>` : ""}
             </span>
@@ -11254,17 +11337,6 @@
         </td>
       </tr>
       ${open ? libDetailRowHtml(m) : ""}`;
-  }
-
-  function libWorkLine(m) {
-    const work = libEffectiveWork(m);
-    const bits = [];
-    if (work.manual) bits.push(work.title);
-    else if (work.title && work.title !== String(m.name || "").replace(/\.[^.]+$/, "")) bits.push(work.year ? `${work.title} (${work.year})` : work.title);
-    if (work.subtitle) bits.push(work.subtitle);
-    if (work.edition) bits.push(work.edition);
-    if (!bits.length) return "";
-    return `<span class="lib-meta-line">${escapeHtml(bits.join(" · "))}</span>`;
   }
 
   function libRowHtmlSafe(m) {
@@ -11773,11 +11845,7 @@
       return;
     }
 
-    const byWork = $("lib-by-work") && $("lib-by-work").checked;
-    const grouped = !byWork && $("lib-group") && $("lib-group").checked;
-    if (byWork) {
-      body.innerHTML = libWorkRowsHtml(rows, start, size);
-    } else if (!grouped) {
+    if (!$("lib-group").checked) {
       body.innerHTML = pageRows.map(libRowHtmlSafe).join("");
     } else {
       const byFolder = {};

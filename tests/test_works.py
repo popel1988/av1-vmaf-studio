@@ -10,11 +10,11 @@ from core import works
 
 
 class WorkTests(unittest.TestCase):
-    def test_same_film_in_two_resolutions_is_one_work(self):
+    def test_filename_alone_suggests_two_editions_without_merging(self):
         a = works.describe_work("Amelie (2001) - 1080p.mkv", "Filme/Amelie (2001)")
         b = works.describe_work("Amelie (2001) - 2160p.mkv", "Filme/Amelie (2001)")
         self.assertEqual(a["kind"], "film")
-        self.assertEqual(a["group"], b["group"])
+        self.assertNotEqual(a["group"], b["group"])
         self.assertEqual(a["title"], "Amelie")
         self.assertEqual(a["year"], 2001)
         self.assertEqual(a["edition"], "1080p")
@@ -26,7 +26,7 @@ class WorkTests(unittest.TestCase):
         self.assertEqual(one["kind"], "serie")
         self.assertEqual(one["episode"], "S01E02")
         self.assertNotEqual(one["group"], two["group"])
-        self.assertIn("kommissar", one["group"])
+        self.assertEqual(one["title"], two["title"])
 
     def test_mediathek_date_groups_a_broadcast(self):
         item = works.describe_work("Die Sendung mit der Maus - 2024-11-10.mp4", "Mediathek")
@@ -40,12 +40,12 @@ class WorkTests(unittest.TestCase):
             {"kind": "movie", "title": "Island", "year": "2020", "genres": ["Dokumentation"]},
         )
         self.assertEqual(item["kind"], "doku")
-        self.assertTrue(item["group"].startswith("film:"))
+        self.assertTrue(item["group"].startswith("datei:"))
 
     def test_trailer_stays_beside_the_film(self):
         film = works.describe_work("Amelie (2001).mkv", "Filme/Amelie (2001)")
         trailer = works.describe_work("Amelie (2001) - trailer.mkv", "Filme/Amelie (2001)")
-        self.assertEqual(film["group"], trailer["group"])
+        self.assertNotEqual(film["group"], trailer["group"])
         self.assertTrue(trailer["extra"])
         self.assertNotEqual(film["key"], trailer["key"])
 

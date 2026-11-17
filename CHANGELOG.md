@@ -4,7 +4,13 @@ All notable changes, new features, and milestones of this project in reverse chr
 
 ---
 
-## [This Release] – 2026-11-15
+## [This Release] – 2026-11-17
+- **MS-SSIM metric and toggleable curve:** `libvmaf` passes now enable `float_ms_ssim` alongside PSNR, SSIM, CAMBI and XPSNR, with automatic fallback for builds without `float_ms_ssim`. Pooled, per-scene, and per-frame MS-SSIM values are stored in session archives, shown in result details, Nerd statistics and CSV exports, and can be switched on as an optional right-axis curve (`0–1`) in the step/RD/multi-codec charts, scene course chart, and Nerd per-frame chart without affecting VMAF recommendations or older archives.
+- **Library — Files and Media:** Files is again the default, flat encoding table. Media browses local titles, artwork, series and seasons separately. Only matching file-specific provider IDs with compatible metadata, or an explicit version choice, combine files. Filename suggestions remain individual entries. Existing collections are preserved; selecting media for a collection is independent of selecting files for the queue. Optional Wikidata lookups send only the title entered for that search and require confirmation before changing a local display title.
+
+---
+
+## [v9.5.0](https://github.com/popel1988/av1-vmaf-studio/commit/8253e8a) – 2026-11-15
 - **Library works:** The library recognizes a file as a film, documentary, episode, or dated broadcast from its name, folder, and NFO, and groups the versions of that work. Custom collections (a series, a film, a broadcast, or a plain collection) can be created and files assigned by hand, for example several recordings of the same occasion.
 - **HDR / DV Lab metadata tools:** Dolby Vision RPU can be approximated into an HDR10+ layer on the base track while the RPU stays (on a second track the enhancement-layer pixels stay too; Profile 5 is rejected because it has no HDR10 base). Profile 7 can be written as a single Profile 8.1 TV stream, with an explicit warning that the enhancement-layer pixels are dropped. Two RPUs (vault entries or files) can be compared on frame count, scene cuts, L1 brightness, L5 crop and the intro offset. The layer inspector plots an HDR10+ curve on the same zoom window as the bitrate graph, from the file’s JSON or from the RPU, and sets the scene peaks against static MaxCLL and MaxFALL.
 

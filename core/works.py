@@ -45,91 +45,108 @@ _EDITION_RES = (
 )
 
 
-def describe_work(name: str, folder: str = "", nfo: Optional[dict] = None) -> dict:
-    """Leitet Art, Titel und Fassung einer Videodatei ab."""
-    nfo = nfo if isinstance(nfo, dict) else {}
-    stem = Path(str(name or "video")).stem
-    parent, show_dir = _folder_hints(folder)
-    extra = bool(_EXTRA.search(stem))
-    edition = _edition(stem)
-    genres = nfo.get("genres") if isinstance(nfo.get("genres"), list) else []
-
-    episode = _episode_from_nfo(nfo) or _episode_from_name(stem)
-    if episode:
-        show = str(nfo.get("showtitle") or "").strip() or _clean_show(stem, episode, show_dir)
-        subtitle = str(nfo.get("title") or "").strip()
-        if subtitle.lower() == show.lower():
-            subtitle = ""
-        year = _year_of(nfo, f"{parent} {show_dir} {stem}")
-        return _pack(
-            kind="serie", title=show or stem, year=year, subtitle=subtitle,
-            edition=edition, extra=extra, episode=episode,
-            key=f"serie:{_slug(show or stem)}:{episode}",
-        )
-
-    aired = _date_in(stem)
-    if aired and not _YEAR_PARENS.match(parent):
-        show, subtitle = _split_broadcast(stem, aired)
-        if not show:
-            show = str(nfo.get("showtitle") or nfo.get("title") or parent or stem).strip()
-        return _pack(
-            kind="sendung", title=show, year=int(aired[:4]), subtitle=subtitle,
-            edition=edition, extra=extra, episode="",
-            key=f"sendung:{_slug(show)}:{aired}",
-        )
-
-    unique = str(nfo.get("uniqueid") or "").strip()
-    nfo_title = str(nfo.get("title") or nfo.get("originaltitle") or "").strip()
-    if unique and nfo_title and str(nfo.get("kind") or "") in ("", "movie", "nfo"):
-        year = _year_of(nfo, parent or stem)
-        kind = _film_kind(genres)
-        return _pack(
-            kind=kind, title=nfo_title, year=year, subtitle="",
-            edition=edition, extra=extra, episode="",
-            key=f"film:{_slug(unique)}",
-        )
-
-    titled = _title_year(parent) or _title_year(stem) or _title_year(nfo_title)
-    if titled:
-        title, year = titled
-        kind = _film_kind(genres)
-        return _pack(
-            kind=kind, title=title, year=year, subtitle="",
-            edition=edition, extra=extra, episode="",
-            key=f"film:{_slug(title)}:{year or 0}",
-        )
-
-    if nfo_title:
-        year = _year_of(nfo, stem)
-        kind = _film_kind(genres)
-        return _pack(
-            kind=kind, title=nfo_title, year=year, subtitle="",
-            edition=edition, extra=extra, episode="",
-            key=f"film:{_slug(nfo_title)}:{year or 0}",
-        )
-
-    title = _clean_loose(stem) or stem
-    return _pack(
-        kind=_film_kind(genres), title=title, year=0, subtitle="",
-        edition=edition, extra=extra, episode="",
-        key=f"film:{_slug(title)}:0",
-    )
+def describe_work(name: str, folder: str = "", nfo: Optional[dict] = None, *, media: Optional[dict] = None) -> dict:
+    """Compatibility shape for older clients, using the same conservative groups."""
+    m = media or describe_media(name, folder, folder_movie=nfo)
+    stem = Path(name).stem
+    key = m['identity'] or f"datei:{(Path(folder) / name).as_posix()}"
+    episode = (f"S{m['season']:02d}E{m['episode']:02d}" if m['season'] is not None and m['episode'] is not None else '')
+    return dict(key=key, group=key, kind=m['kind'], title=m['show'] or m['title'], year=m['year'],
+                subtitle=m['title'] if m['show'] and m['show'] != m['title'] else '',
+                episode=episode, edition=_edition(stem), extra=bool(_EXTRA.search(stem)))
 
 
-def _pack(*, kind, title, year, subtitle, edition, extra, episode, key) -> dict:
-    group = key
-    stored = f"{key}:extra" if extra else key
-    return {
-        "key": stored,
-        "group": group,
-        "kind": kind,
-        "title": title,
-        "year": int(year or 0),
-        "subtitle": subtitle,
-        "edition": edition,
-        "extra": extra,
-        "episode": episode,
-    }
+def _title_key(text: str) -> str:
+    return ' '.join(re.findall(r'[^\W_]+', text.casefold(), re.UNICODE))
+
+
+def describe_media(name: str, folder: str = '', *, file_nfo: Optional[dict] = None,
+                   folder_movie: Optional[dict] = None, show_nfo: Optional[dict] = None,
+                   cover: bool = False, dedicated_folder: bool = False) -> dict:
+    """Vorschläge und sichere Medienidentität getrennt bestimmen.
+
+    IDs stammen aus der Datei-NFO oder einer passenden movie.nfo im Einzelfilmordner.
+    In gemischten Ordnern liefern gemeinsame Metadaten höchstens Anzeigeinformationen.
+    """
+    stem = Path(name or 'Video').stem.replace('_', ' ')
+    ep = _EPISODE.search(stem) or _EPISODE_X.search(stem)
+    date = _date_in(stem) if not ep else ''
+    year_match = re.search(r'\(((?:19|20)\d{2})\)', stem) or _YEAR_TOKEN.search(stem)
+    # Ein Titel wie „1917“ ist für sich genommen kein Erscheinungsjahr.
+    year = int(year_match[1]) if year_match and stem[:year_match.start()].strip(' .-(') else 0
+    name_title = _clean_loose(stem[:year_match.start()].rstrip(' (.-') if year else stem) or stem
+    media = dict(title=name_title, year=year, kind='film' if year else 'video',
+                 description='', show='', season=None, episode=None, identity='',
+                 cover=bool(cover), source='suggestion')
+    if ep:
+        prefix = _clean_loose(stem[:ep.start()])
+        subtitle = _clean_loose(stem[ep.end():])
+        media.update(kind='serie', season=int(ep[1]), episode=int(ep[2]),
+                     title=subtitle or prefix or ep[0], show=prefix)
+    elif date:
+        media.update(kind='sendung', year=int(date[:4]), title=_clean_loose(
+            _DATE_DE.sub(' ', _DATE_ISO.sub(' ', stem))) or stem)
+    elif _DOCU.search(name_title):
+        media['kind'] = 'doku'
+
+    nfo = file_nfo or {}
+    if not nfo and folder_movie and not ep and not date:
+        # Ein Ordnername allein belegt keine Zugehörigkeit zur movie.nfo.
+        titles = {_title_key(folder_movie.get(k, '')) for k in ('title', 'originaltitle')}
+        fy = _year_of(folder_movie, '')
+        if _title_key(name_title) in titles and not (year and fy and year != fy):
+            nfo = folder_movie
+    show_nfo = show_nfo or {}
+    if ep or nfo.get('kind') == 'episode':
+        _, series_dir = _folder_hints(folder)
+        folder_title = _title_year(series_dir)
+        media['show_year'] = (_year_of(show_nfo, '') or (folder_title[1] if folder_title else 0)
+                              or (year if ep and year_match and year_match.start() < ep.start() else 0))
+        if not media['show']:
+            media['show'] = show_nfo.get('title') or _clean_loose(series_dir)
+            if show_nfo.get('title'):
+                media['source'] = 'nfo'
+    if not nfo or nfo.get('kind') == 'tvshow':
+        return media
+
+    title = nfo.get('title') or nfo.get('originaltitle') or ''
+    nfo_year = _year_of(nfo, '')
+    kind = nfo.get('kind')
+    ids = nfo.get('provider_ids') or {}
+    known = bool((file_nfo or dedicated_folder) and ids and title)
+    if _EXTRA.search(stem.replace('.', ' ')) or any(_EXTRA.fullmatch(p) for p in re.split(r'[/\\]', folder)):
+        known = False
+    if kind == 'episode':
+        coords = _episode_from_nfo(nfo)
+        known = known and bool(coords) and (not ep or coords == _episode_from_name(stem))
+        if coords:
+            s, e = coords[1:].split('E')
+            media.update(season=int(s), episode=int(e))
+        media.update(kind='serie', show=nfo.get('showtitle') or media['show'] or show_nfo.get('title', ''))
+        # Eine versehentlich in die Folgen-NFO kopierte Serien-ID ist keine Folgen-ID.
+        show_ids = show_nfo.get('provider_ids') or {}
+        known = known and not any(show_ids.get(k) == v for k, v in ids.items())
+    elif kind == 'movie' and not ep:
+        media['kind'] = _film_kind(nfo.get('genres') or [])
+        if year and not date:
+            known = known and (not nfo_year or year == nfo_year) and _title_key(name_title) in {
+                _title_key(title), _title_key(nfo.get('originaltitle', ''))}
+    else:
+        known = False
+    desc = nfo.get('plot') or nfo.get('tagline') or ''
+    if title or nfo_year or desc:
+        media.update(title=title or media['title'], year=nfo_year or media['year'],
+                     description=desc, source='nfo')
+    if known:
+        # Auch eine falsch wiederverwendete Provider-ID darf sich widersprechende
+        # Titel, Jahre, Serien oder Folgen nicht zusammenführen.
+        normalized = _title_key(title)
+        parts = [kind, sorted(ids.items()), normalized, media['year']]
+        if kind == 'episode':
+            parts += [_title_key(media['show']), media['show_year'], media['season'], media['episode']]
+        if normalized:
+            media['identity'] = json.dumps(parts, ensure_ascii=False, separators=(',', ':'))
+    return media
 
 
 def _film_kind(genres: list) -> str:
@@ -163,15 +180,6 @@ def _episode_from_name(stem: str) -> str:
     return f"S{int(match.group(1)):02d}E{int(match.group(2)):02d}"
 
 
-def _clean_show(stem: str, episode: str, show_dir: str) -> str:
-    if show_dir:
-        titled = _title_year(show_dir)
-        return titled[0] if titled else _clean_loose(show_dir)
-    cut = _EPISODE.sub(" ", stem)
-    cut = _EPISODE_X.sub(" ", cut)
-    return _clean_loose(cut)
-
-
 def _date_in(text: str) -> str:
     match = _DATE_ISO.search(text or "")
     if match:
@@ -180,17 +188,6 @@ def _date_in(text: str) -> str:
     if match:
         return f"{match.group('y')}-{match.group('m')}-{match.group('d')}"
     return ""
-
-
-def _split_broadcast(stem: str, aired: str) -> tuple[str, str]:
-    plain = stem
-    for token in (aired, aired.replace("-", ".")):
-        plain = plain.replace(token, " ")
-    plain = _clean_loose(plain)
-    parts = [p.strip(" -") for p in re.split(r"\s+-\s+", plain) if p.strip(" -")]
-    if len(parts) >= 2:
-        return parts[0], " - ".join(parts[1:])
-    return plain, ""
 
 
 def _title_year(text: str) -> Optional[tuple[str, int]]:
@@ -246,11 +243,6 @@ def _clean_loose(text: str) -> str:
     )
     raw = re.sub(r"\s+", " ", raw).strip(" -")
     return raw
-
-
-def _slug(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9äöüß]+", "", str(text or "").lower())
-    return slug or "werk"
 
 
 def list_catalog() -> dict:
@@ -328,24 +320,56 @@ def assign_paths(paths: list[str], collection_id: str) -> dict:
             for rel in clean:
                 data["assignments"].pop(rel, None)
         _write(data)
-        return _public(data)
+        return data
+
+
+def catalog_media_path(raw: str) -> str:
+    """Portable relative video key; also works for offline library entries."""
+    rel = raw.replace("\\", "/")
+    if (not rel or len(rel) > 4096 or not rel.isprintable() or ":" in rel
+            or any(part in ("", ".", "..") for part in rel.split("/"))
+            or Path(rel).suffix.lower() not in config.VIDEO_EXTENSIONS):
+        raise ValueError("Ein relativer Videopfad wird benötigt.")
+    return rel
+
+
+def decide_paths(paths: list[str], action: str, title: str) -> dict:
+    if not 1 <= len(paths) <= 512 or action not in {"confirm", "standalone", "version", "reset"}:
+        raise ValueError("Ungültige Auswahl oder Aktion.")
+    keys = sorted({catalog_media_path(path) for path in paths})
+    if action == "version" and len(keys) < 2:
+        raise ValueError("Mindestens zwei verschiedene Dateien für Fassungen auswählen.")
+    title = title.strip()
+    if action != "reset" and (not title or len(title) > 200 or not title.isprintable()):
+        raise ValueError("Ein Titel mit höchstens 200 Zeichen wird benötigt.")
+    # Same files -> same opaque group, including after renaming or reordering.
+    group = ("manual:" + uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(keys)).hex
+             if action == "version" else "")
+    with _lock:
+        data = _read()
+        for key in keys:
+            if action == "reset":
+                data["decisions"].pop(key, None)
+            else:
+                data["decisions"][key] = {"title": title, "group": group, "status": action}
+        _write(data)
+        return data
 
 
 def _clean_name(name: str) -> str:
     return re.sub(r"\s+", " ", str(name or "")).strip()[:80]
 
 
-def _empty() -> dict:
-    return {"collections": [], "assignments": {}}
-
-
 def _read() -> dict:
-    if not _CATALOG_PATH.is_file():
-        return _empty()
     try:
         raw = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return _empty()
+    except FileNotFoundError:
+        raw = {}
+    except ValueError:
+        # Never replace an unreadable catalog with a fresh, empty one.
+        raise ValueError("Der lokale Bibliothekskatalog ist nicht lesbar.") from None
+    if not isinstance(raw, dict) or not isinstance(raw.get("decisions", {}), dict):
+        raise ValueError("Ungültiges Format des lokalen Bibliothekskatalogs.")
     collections = []
     for item in raw.get("collections") or []:
         if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
@@ -364,19 +388,9 @@ def _read() -> dict:
         rel = str(path).replace("\\", "/").strip().strip("/")
         if rel:
             assignments[rel] = {"collection_id": str(item["collection_id"])}
-    return {"collections": collections, "assignments": assignments}
-
-
-def _public(data: dict) -> dict:
-    return {
-        "collections": list(data.get("collections") or []),
-        "assignments": dict(data.get("assignments") or {}),
-    }
+    return {"collections": collections, "assignments": assignments, "decisions": raw.get("decisions", {})}
 
 
 def _write(data: dict) -> None:
-    _CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CATALOG_PATH.write_text(
-        json.dumps(_public(data), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    from .provenance import atomic_json_write
+    atomic_json_write(_CATALOG_PATH, data)

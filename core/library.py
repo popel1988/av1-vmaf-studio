@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import config
+from . import config, works
 from . import ffmpeg_utils as ff
 
 logger = logging.getLogger("vcompress.library")
@@ -308,12 +308,8 @@ def _save_cache() -> None:
 
 
 def _work_of(item: dict) -> dict:
-    from . import works
-    return works.describe_work(
-        str(item.get("name") or ""),
-        str(item.get("folder") or ""),
-        item.get("nfo") if isinstance(item.get("nfo"), dict) else None,
-    )
+    return works.describe_work(str(item.get("name") or ""), str(item.get("folder") or ""),
+                               media=item["media"])
 
 
 def _with_work(item: dict) -> dict:
@@ -372,7 +368,12 @@ def _sanitize_cached_matched(items: list) -> list[dict]:
             )
             prev_sug = m.get("suggest") if isinstance(m.get("suggest"), dict) else {}
             m["suggest"] = suggest_encode(sug_in, str(prev_sug.get("codec") or "av1"))
-        if not isinstance(m.get("work"), dict) or not m["work"].get("key"):
+        if not isinstance(m.get("media"), dict):
+            # Old scans stored combined folder NFOs, without a reliable ID source.
+            m["media"] = works.describe_media(m.get("name") or Path(m.get("path") or "Video").name,
+                                              m.get("folder") or "")
+            m["work"] = _work_of(m)
+        elif not isinstance(m.get("work"), dict):
             m["work"] = _work_of(m)
         out.append(m)
     return out
@@ -567,7 +568,7 @@ def _run(root_rel: str, filters: dict) -> None:
             rel = config.rel_input(f) or f.name
             folder = str(Path(rel).parent).replace("\\", "/")
             try:
-                extras = sidecar_details(f)
+                extras = sidecar_details(f, media_folder=folder)
             except Exception:
                 logger.exception("NFO/Sidecar für %s", f)
                 extras = {"nfo": None, "sidecars": []}
@@ -605,6 +606,7 @@ def _run(root_rel: str, filters: dict) -> None:
                     "profile": info.profile or "",
                     "audio": info.audio or [],
                     "subtitles": info.subtitles or [],
+                    "media": extras.get("media") or works.describe_media(f.name, folder),
                     "nfo": extras.get("nfo"),
                     "sidecars": extras.get("sidecars") or [],
                     "processed": processed,
@@ -671,12 +673,74 @@ _SIDECAR_SUB = {".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi"}
 _NFO_ROOT_TAGS = ("movie", "tvshow", "episodedetails", "musicvideo")
 
 
-def sidecar_details(video: Path, include_text: bool = False) -> dict:
-    """NFO + externe Untertitel neben der Videodatei (gleicher Ordner)."""
-    return {
-        "nfo": collect_nfo(video, include_text=include_text),
-        "sidecars": _sidecar_subs(video),
-    }
+def sidecar_details(video: Path, include_text: bool = False, *, media_folder: Optional[str] = None) -> dict:
+    """Read sidecars once; preserve individual NFO provenance for media identity."""
+    entries = _media_siblings(video)
+    single = _single_video(entries, video)
+    parsed = _read_sidecar_nfos(video, include_text, single)
+    result = {"nfo": _merge_nfos(parsed, include_text), "sidecars": _sidecar_subs(video)}
+    if media_folder is not None:
+        own, shared, show = [], None, None
+        for path, data in parsed:
+            if path.name.lower() == "tvshow.nfo" and data.get("kind") == "tvshow":
+                show = show or data
+            elif path.parent == video.parent and path.name.lower() == "movie.nfo":
+                shared = data
+            elif path.parent == video.parent and path.stem in (video.stem, video.name):
+                own.append(data)
+        result["media"] = works.describe_media(
+            video.name, media_folder, file_nfo=own[0] if len(own) == 1 else None,
+            folder_movie=shared, dedicated_folder=not own and single,
+            show_nfo=show, cover=bool(_local_cover(video, entries)),
+        )
+    return result
+
+
+_COVER_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def cover_type(path: Path) -> str:
+    """Serve raster artwork only; an extension alone is insufficient."""
+    mime = _COVER_TYPES.get(path.suffix.lower(), "")
+    if not mime or not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as handle:
+            sig = handle.read(12)
+    except OSError:
+        return ""
+    valid = (mime == "image/jpeg" and sig.startswith(b"\xff\xd8\xff") or
+             mime == "image/png" and sig.startswith(b"\x89PNG\r\n\x1a\n") or
+             mime == "image/webp" and sig[:4] == b"RIFF" and sig[8:] == b"WEBP")
+    return mime if valid else ""
+
+
+def _media_siblings(video: Path) -> list[Path]:
+    try:
+        return list(video.parent.iterdir())
+    except OSError:
+        return []
+
+
+def _single_video(entries: list[Path], video: Path) -> bool:
+    return [p for p in entries if p.suffix.lower() in config.VIDEO_EXTENSIONS] == [video]
+
+
+def media_cover_path(video: Path) -> Optional[Path]:
+    return _local_cover(video, _media_siblings(video))
+
+
+def _local_cover(video: Path, entries: list[Path]) -> Optional[Path]:
+    by_name = {p.name: p for p in entries if p.suffix.lower() in _COVER_TYPES}
+    stems = [video.stem + "-poster", video.stem]
+    if _single_video(entries, video):
+        stems.extend(("poster", "folder"))
+    for stem in stems:
+        for ext in _COVER_TYPES:
+            candidate = by_name.get(stem + ext)
+            if candidate and not candidate.is_symlink() and cover_type(candidate):
+                return candidate
+    return None
 
 
 def file_details(video: Path, probe: bool = True) -> dict:
@@ -718,12 +782,22 @@ def _audio_languages(audio) -> str:
 
 
 def collect_nfo(video: Path, include_text: bool = False) -> Optional[dict]:
-    """Alle lesbaren .nfo im Filmordner (plus tvshow.nfo in Elternordnern)."""
-    parsed: list[dict] = []
-    for p in _nfo_paths(video):
-        data = parse_nfo(p, include_text=include_text)
-        if data:
-            parsed.append(data)
+    """NFOs der Datei und Serie; in eigenen Filmordnern auch übliche Ordner-NFOs."""
+    single = _single_video(_media_siblings(video), video)
+    return _merge_nfos(_read_sidecar_nfos(video, include_text, single), include_text)
+
+
+def _read_sidecar_nfos(video: Path, include_text: bool, single: bool) -> list[tuple[Path, dict]]:
+    paths = _nfo_paths(video)
+    if not single:
+        # Sibling NFOs belong to other files; reading them also makes large TV folders quadratic in bytes.
+        paths = [p for p in paths if p.name.lower() == 'tvshow.nfo'
+                 or p.stem in (video.name, video.stem)]
+    return [(p, data) for p in paths if not p.is_symlink() and (data := parse_nfo(p, include_text=include_text))]
+
+
+def _merge_nfos(sources: list[tuple[Path, dict]], include_text: bool) -> Optional[dict]:
+    parsed = [data for _, data in sources]
     if not parsed:
         return None
     out: dict = {}
@@ -975,13 +1049,12 @@ def parse_nfo(path: Path, include_text: bool = False) -> Optional[dict]:
 
 def _read_nfo_text(path: Path) -> Optional[str]:
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(_NFO_MAX_BYTES)
     except OSError:
         return None
     if not raw:
         return ""
-    if len(raw) > _NFO_MAX_BYTES:
-        raw = raw[:_NFO_MAX_BYTES]
     if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
         text = raw.decode("utf-16", errors="replace")
     elif raw.startswith(b"\xef\xbb\xbf"):
@@ -1044,6 +1117,7 @@ def _parse_nfo_xml(text: str) -> Optional[dict]:
         "genres": genres[:8],
         "studio": studios[0] if studios else "",
         "uniqueid": _nfo_unique_id(root),
+        "provider_ids": _provider_ids(root) if tag in {"movie", "tvshow", "episodedetails"} else {},
     }
     if not any(out.get(k) for k in ("title", "plot", "year", "showtitle", "originaltitle")):
         return None
@@ -1150,6 +1224,20 @@ def _nfo_rating(root) -> str:
             if raw:
                 return raw.split()[0]
     return ""
+
+
+def _provider_ids(root) -> dict[str, str]:
+    formats = {"tmdb": r"[1-9][0-9]{0,14}", "tvdb": r"[1-9][0-9]{0,14}", "imdb": r"tt[0-9]{7,12}"}
+    found = {}
+    for el in root:
+        tag = _nfo_tag(el)
+        provider = el.get("type", "").strip().lower() if tag == "uniqueid" else tag.removesuffix("id") if tag.endswith("id") else ""
+        value = _xml_text(el)
+        if provider in formats and re.fullmatch(formats[provider], value):
+            if provider in found and found[provider] != value:
+                return {}  # Conflicting IDs in one sidecar are ambiguous.
+            found[provider] = value
+    return found
 
 
 def _nfo_unique_id(root) -> str:

@@ -96,6 +96,81 @@ class LowContextBackendTests(unittest.TestCase):
             self.assertNotIn("vmaf_raw", short["frames"][0])
             self.assertAlmostEqual(full["frame_sec"], 14 / 500, places=5)
 
+    def test_ms_ssim_keeps_its_own_scale_zero_and_missing_frames(self):
+        fn = self.api['_metrics_from_json']
+        data = {'pooled_metrics': {'float_ms_ssim': {'mean': .987654}}, 'frames': [
+            {'metrics': {'vmaf': 94, 'float_ms_ssim': .997654}},
+            {'metrics': {'vmaf': 93, 'float_ssim': .97}},
+            {'metrics': {'vmaf': 96, 'ms_ssim': 0}},
+        ]}
+        result = fn(data)
+        self.assertEqual(result['ms_ssim'], .987654)
+        self.assertEqual(result['ms_ssim_frames'], [.997654, None, 0])
+        del data['pooled_metrics']
+        self.assertAlmostEqual(fn(data)['ms_ssim'], .997654 / 2)
+        old = fn({'frames': [{'metrics': {'vmaf': 95, 'float_ssim': .99, 'ms_ssim': 'nan'}}]})
+        self.assertNotIn('ms_ssim', old)
+        self.assertNotIn('ms_ssim_frames', old)
+
+    def test_ms_ssim_feature_and_legacy_fallback(self):
+        from core import vmaf
+        from unittest.mock import patch
+        for supported in (True, False):
+            def run(*args, features, **kwargs):
+                if not supported and 'float_ms_ssim' in features:
+                    return None
+                return {'pooled_metrics': {'vmaf': {'mean': 95}, 'cambi': {'mean': 2}}}
+            with self.subTest(supported=supported), patch.object(vmaf, '_run_libvmaf', side_effect=run) as runner, patch.object(vmaf, 'xpsnr_available', return_value=True):
+                result = vmaf._vmaf_metrics(None, None, None, None, 'test')
+                self.assertIn('name=float_ms_ssim', runner.call_args_list[0].kwargs['features'])
+                self.assertIn('name=cambi', runner.call_args.kwargs['features'])
+                self.assertTrue(runner.call_args.kwargs['with_xpsnr'])
+                self.assertEqual(result['cambi'], 2)
+                if supported:
+                    runner.assert_called_once()
+
+    def test_ms_ssim_scene_archive_and_idle_mean(self):
+        from core import vmaf
+        scenes = [{'scene': 0, 'vmaf': 100, 'ms_ssim': 1},
+                  {'scene': 1, 'vmaf': 92, 'ms_ssim': 0, 'ms_ssim_frames': [0, None]}]
+        result = vmaf.VmafResult(20, 'cq', 'test', 96, 1, 1, 0, scene_scores=scenes, ms_ssim=.5)
+        vmaf.apply_idle_scenes([result])
+        archived = result.to_dict()
+        self.assertEqual(archived['ms_ssim'], 0)
+        self.assertEqual(archived['scene_scores'][1]['ms_ssim'], 0)
+        self.assertEqual(archived['scene_scores'][1]['ms_ssim_frames'], [0, None])
+
+    def test_scene_frame_logs_extract_ms_ssim_and_preserve_bucket_dips(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "frames.json"
+            frames = [
+                {
+                    "frameNum": i,
+                    "metrics": {
+                        "vmaf": 95.0 if i == 1 else (94.5 if i == 0 else 97.0),
+                        "float_ms_ssim": 0.941234 if i == 1 else 0.9965,
+                    },
+                }
+                for i in range(800)
+            ]
+            log.write_text(json.dumps({"frames": frames}), encoding="utf-8")
+            raw = {"label": "A", "scene_scores": [{"scene": 0, "length": 15}]}
+            self.api.update({
+                "config": SimpleNamespace(VMAF_SESSIONS_DIR=Path(temp)),
+                "load_session": lambda _: {"analysis": {"results": [raw]}, "params": {}},
+                "_frame_log_path": lambda *_: log,
+            })
+            short = self.api["scene_frame_logs"]("session", 0)["series"][0]
+            self.assertEqual(len(short["frames"]), 400)
+            # Im ersten 2-Frame-Bucket hat Frame 0 niedrigeres VMAF (94.5), Frame 1 aber den MS-SSIM-Dip (0.941234).
+            self.assertEqual(short["frames"][0]["ms_ssim"], 0.941234)
+            self.assertEqual(short["stats"]["ms_ssim_min"], 0.941234)
+            self.assertAlmostEqual(
+                short["stats"]["ms_ssim_mean"],
+                (0.941234 + 799 * 0.9965) / 800,
+                places=6,
+            )
+
     def test_missing_log_does_not_invent_context(self):
         self.api.update({
             "config": SimpleNamespace(VMAF_SESSIONS_DIR=ROOT),
@@ -823,6 +898,164 @@ class LowContextFrontendTests(unittest.TestCase):
         self.drain()
         self.assertEqual(len(self.evaluate("calls")), 2)
         self.assertEqual(self.evaluate("da.body.innerHTML"), before)
+
+    def test_ms_ssim_toggleable_curves_data_and_translations(self):
+        js = quickjs.Context()
+        cell_start = self.source.index("  function vmafCell(")
+        cell_end = self.source.index("  function syncKeepSourceBanner(", cell_start)
+        match_start = self.source.index("  function lineMatchesKey(")
+        match_end = self.source.index("  function chartColors(", match_start)
+        chart_start = self.source.index("  function ensureCourseHover(")
+        chart_end = self.source.index("  function restyleChart(", chart_start)
+        js.eval(r'''
+          const createdCharts = [];
+          function Chart(ctx, cfg) {
+            this.ctx = ctx;
+            this.data = cfg.data;
+            this.options = cfg.options;
+            this.destroy = () => {};
+            this.update = () => {};
+            this.resize = () => {};
+            createdCharts.push({id: ctx.id || "canvas", cfg});
+          }
+          Chart.Interaction = {modes: {}};
+          Chart.helpers = {getRelativePosition: () => ({x: 0, y: 0})};
+          const CHART_PALETTE = ["#4f9dff", "#22c55e", "#f59e0b"];
+          const toggles = [
+            {checked: false, disabled: false, parent: {classList: {toggle() {}}, title: ""}},
+            {checked: false, disabled: false, parent: {classList: {toggle() {}}, title: ""}},
+          ];
+          toggles.forEach((t) => { t.closest = () => t.parent; });
+          const els = {
+            "vmaf-chart": {id: "vmaf-chart"},
+            "vmaf-frame-chart": {id: "vmaf-frame-chart"},
+            "vmaf-frame-wrap": {hidden: true},
+            "vmaf-frame-title": {textContent: ""},
+            "vmaf-nerd-chart": {id: "vmaf-nerd-chart"},
+          };
+          const $ = (id) => els[id] || null;
+          const document = {
+            querySelectorAll: (sel) => sel === "[data-ms-ssim-toggle]" ? toggles : [],
+          };
+          const state = {
+            vmafShown: null, vmafSession: "s1", vmafShowMsSsim: false,
+            chartScene: 0, currentPage: "vmaf", vmafChartMode: "steps",
+          };
+          const tt = (s) => s;
+          const escapeHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+          const chartColors = () => ({accent: "#4f9dff", accent2: "#38bdf8", good: "#22c55e", warn: "#fbbf24", p1: "#fbbf24", text: "#fff", muted: "#999", grid: "#333", band: "rgba(0,0,0,0.1)"});
+          const lineChartOptions = (col, yTitle) => ({
+            plugins: {legend: {display: true, labels: {}}},
+            scales: {x: {ticks: {}}, y: {title: {text: yTitle}, ticks: {}}},
+          });
+          const destroyNamedChart = (k) => { state[k] = null; };
+          const pageCanvas = (a) => els[a];
+          const vmafRowOff = () => false;
+          const vmafResultKey = (r) => r.label || "Q";
+          const vmafRowColor = (_r, i) => CHART_PALETTE[i % CHART_PALETTE.length];
+          const vmafSceneList = (v) => ((v && v.results && v.results[0] && v.results[0].scene_scores) || []).map((s) => s.scene);
+          const sceneEntry = (r, sc) => (r.scene_scores || []).find((s) => s.scene === sc) || null;
+          const sceneScoreOf = (r, sc) => { const s = sceneEntry(r, sc); return s ? s.vmaf : null; };
+          const sourceBinsFor = () => [];
+          const sourceWindowBins = () => [];
+          const scoredSpan = (clipSec) => clipSec || 10;
+          const bitratePointX = (b) => b.t || 0;
+          const bitrateIsFrame = () => false;
+          const fmtKbps = (v) => v == null ? "" : Math.round(v) + " kbit/s";
+          const attachVmafZoom = () => {};
+          const renderIdleNote = () => {};
+          const sceneTabText = (_v, n) => "Szene " + (n + 1);
+          const xpsnrPill = () => "";
+          const xpsnrMark = (v) => ({text: v + " dB", word: "gut"});
+          const ssimulacra2Pill = () => "";
+          const ssimulacra2Mark = () => ({word: "gut"});
+          const vmafSpread = () => null;
+          const vmafP1GapValue = () => 6;
+          const vmafTargetLo = () => 94;
+          const vmafSceneFloor = () => 88;
+          const vmafSceneP1Miss = () => false;
+          const vmafResultMiss = () => null;
+          const bitrateReport = () => "";
+          const drawGapChart = () => {};
+        ''' + self.source[cell_start:cell_end] + self.source[match_start:match_end] + self.source[chart_start:chart_end])
+
+        # 1. Tabellen-Zelle zeigt MS-SSIM mit 4 Nachkommastellen (auch bei 0), lässt null weg
+        cell_with = js.eval('vmafCell({vmaf: 95, ssim: 0.991, ms_ssim: 0.99426, scene_scores: [{scene: 0, vmaf: 95, ms_ssim: 0.99426}, {scene: 1, vmaf: 94, ms_ssim: 0}]})')
+        self.assertIn("MS-SSIM 0.9943", cell_with)
+        self.assertIn("MS-SSIM 0.0000", cell_with)
+        cell_without = js.eval('vmafCell({vmaf: 95, ssim: 0.991})')
+        self.assertNotIn("MS-SSIM", cell_without)
+
+        # 2. Serien-Highlighting erkennt die MS-SSIM-Linie
+        self.assertTrue(js.eval('lineMatchesKey({label: "AV1 CQ 30 · MS-SSIM"}, "AV1 CQ 30")'))
+
+        # 3. Standardmäßig ausgeschaltet -> keine yMsSsim-Achse; nach Zuschalten -> eigene rechte Achse in allen Kurvenansichten
+        js.eval('''
+          const vmaf = {
+            clip_seconds: 10,
+            results: [
+              {label: "CQ 28", quality: 28, codec: "av1", platform: "cpu", vmaf: 96.2, ms_ssim: 0.9964, video_kbps: 2400, savings_percent: 35, predicted_human: "1 GB",
+               scene_scores: [{scene: 0, vmaf: 96.2, ms_ssim: 0.9964, frames: [96, 95, 97], ms_ssim_frames: [0.996, 0.994, 0.997]}]},
+              {label: "CQ 32", quality: 32, codec: "av1", platform: "cpu", vmaf: 94.1, ms_ssim: 0.9918, video_kbps: 1700, savings_percent: 52, predicted_human: "0.7 GB",
+               scene_scores: [{scene: 0, vmaf: 94.1, ms_ssim: 0.9918, frames: [94, 93, 95], ms_ssim_frames: [0.992, 0.989, 0.993]}]}
+            ]
+          };
+          const nerd = {
+            scene: 0,
+            series: [{label: "CQ 28", count: 3, frame_sec: 0.04, frames: [{n: 0, vmaf: 96, ms_ssim: 0.996}, {n: 1, vmaf: 95, ms_ssim: 0.994}, {n: 2, vmaf: 97, ms_ssim: 0.997}]}]
+          };
+          state.vmafShown = vmaf;
+          state.nerdData = nerd;
+          syncMsSsimToggles(vmaf, nerd);
+          drawChart(vmaf);
+          drawFrameChart(vmaf);
+          paintNerdChart(nerd);
+        ''')
+        self.assertFalse(js.eval("toggles[0].disabled"))
+        self.assertFalse(js.eval("toggles[0].checked"))
+        self.assertEqual(js.eval("createdCharts.filter(c => c.cfg.options.scales.yMsSsim).length"), 0)
+
+        js.eval('''
+          createdCharts.length = 0;
+          setVmafMsSsimShown(true);
+          paintNerdChart(nerd);
+          state.vmafChartMode = "rd";
+          drawChart(vmaf);
+        ''')
+        self.assertTrue(js.eval("toggles[0].checked && toggles[1].checked"))
+        for chart_id in ("vmaf-chart", "vmaf-frame-chart", "vmaf-nerd-chart"):
+            has_axis = js.eval(
+                f"createdCharts.some(c => c.id === {json.dumps(chart_id)} "
+                "&& c.cfg.options.scales.yMsSsim && c.cfg.options.scales.yMsSsim.max === 1 "
+                "&& c.cfg.data.datasets.some(d => d.yAxisID === 'yMsSsim'))"
+            )
+            self.assertTrue(has_axis, chart_id)
+
+        # 4. Ältere Archive ohne MS-SSIM deaktivieren den Schalter und erfinden keine Null-Kurve
+        js.eval('''
+          createdCharts.length = 0;
+          const legacy = {clip_seconds: 10, results: [{label: "Alt", quality: 30, vmaf: 95, savings_percent: 40, scene_scores: [{scene: 0, vmaf: 95, frames: [95, 94]}]}]};
+          state.vmafShown = legacy;
+          state.nerdData = null;
+          state.vmafChartMode = "steps";
+          syncMsSsimToggles(legacy, null);
+          drawChart(legacy);
+          drawFrameChart(legacy);
+        ''')
+        self.assertTrue(js.eval("toggles[0].disabled"))
+        self.assertFalse(js.eval("toggles[0].checked"))
+        self.assertEqual(js.eval("createdCharts.filter(c => c.cfg.options.scales.yMsSsim).length"), 0)
+
+        # 5. HTML-Schalter & 4-Sprachen-Übersetzung
+        index_html = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertGreaterEqual(index_html.count("data-ms-ssim-toggle"), 3)
+        sample_html = (
+            '<label title="MS-SSIM (0–1) als eigene rechte Achse in den Kurven einblenden.">MS-SSIM-Kurve</label>'
+            '<p title="Für diesen Vergleich liegen keine MS-SSIM-Daten vor.">Was ist MS-SSIM neben SSIM und VMAF?</p>'
+        )
+        for language in ("en", "es", "fr"):
+            with self.subTest(language=language):
+                self.assert_dom_translated(language, sample_html)
 
 
 if __name__ == "__main__":

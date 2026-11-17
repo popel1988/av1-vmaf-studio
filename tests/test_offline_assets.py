@@ -12,11 +12,24 @@ class AssetParser(HTMLParser):
         super().__init__()
         self.assets = []
         self.ids = []
+        self.controls = {}
+        self.parents = {}
+        self.stack = []
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]
+                break
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         if values.get("id"):
             self.ids.append(values["id"])
+            self.controls[values["id"]] = values
+            self.parents[values["id"]] = [id_ for _, id_ in self.stack if id_]
+        if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            self.stack.append((tag, values.get("id")))
         if tag == "script" and values.get("src"):
             self.assets.append(values["src"])
         if tag == "link" and values.get("rel") == "stylesheet":
@@ -47,6 +60,20 @@ class OfflineAssetTests(unittest.TestCase):
                 self.assertTrue(any(name in asset for asset in self.parser.assets))
         for name in ("LICENSE.chartjs.txt", "LICENSE.hlsjs.txt", "LICENSE.Apache-2.0.txt"):
             self.assertGreater((ROOT / "static" / "vendor" / name).stat().st_size, 1000)
+
+    def test_library_starts_in_files_and_keeps_encoding_controls_separate(self):
+        controls = self.parser.controls
+        for pane, pressed in (("files", "true"), ("media", "false")):
+            button = controls[f"btn-lib-view-{pane}"]
+            self.assertEqual(button["aria-pressed"], pressed)
+            self.assertEqual(button["aria-controls"], f"lib-{pane}-pane")
+            self.assertEqual("hidden" in controls[f"lib-{pane}-pane"], pane == "media")
+        for control in ("lib-body", "lib-name", "btn-lib-add", "lib-check-all", "lib-pager"):
+            self.assertIn("lib-files-pane", self.parser.parents[control])
+        self.assertIn("lib-media-pane", self.parser.parents["lib-media-browser"])
+        self.assertNotIn("lib-files-pane", self.parser.parents["lib-media-browser"])
+        self.assertNotIn("lib-by-work", controls)
+        self.assertNotIn("checked", controls["lib-group"])
 
     def test_template_has_unique_control_ids(self):
         # Template macro bodies have no IDs; duplicate controls break existing listeners.

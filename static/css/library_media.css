@@ -1,0 +1,27 @@
+/* Local catalogue browser. All measurements adapt to the current studio theme. */
+#lib-media-browser { margin-block: 14px; }
+#lib-media-status:empty, .lm-status:empty { display: none; }
+.lm-toolbar, .lm-actions, .lm-pager, .lm-crumbs { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.lm-crumbs, .lm-pager, .lm-grid, .lm-status { margin-block: 14px; }
+.lm-field { display: grid; gap: 4px; max-width: 100%; font-size: 12px; color: var(--text-muted); }
+.lm-field input, .lm-field select { min-width: 0; max-width: 100%; }
+.lm-toolbar > :first-child { flex: 1 1 16rem; }
+.lm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr)); gap: 12px; align-items: start; }
+.lm-card, .lm-editor { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); min-width: 0; }
+.lm-overview { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: start; }
+.lm-poster { aspect-ratio: 2/3; display: grid; place-items: center; position: relative; overflow: hidden; background: var(--surface-3); color: var(--accent); border-radius: 4px; font-size: 24px; }
+.lm-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lm-kicker, .lm-source, .lm-file-meta { color: var(--text-muted); font-size: 12px; }
+.lm-copy h3, .lm-season h3 { margin: 3px 0 6px; font-size: 1rem; }
+.lm-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin-block: 6px; }
+.lm-description.lm-full { display: block; }
+.lm-card, .lm-editor { overflow-wrap: anywhere; }
+.lm-foot, .lm-files, .lm-editor, .lm-editor > *, .lm-file-meta { margin-top: 8px; }
+.lm-files { padding: 0; list-style: none; }
+.lm-files li { border-top: 1px solid var(--border); padding: 8px 0; }
+.lm-file { display: flex; align-items: baseline; gap: 8px; }
+.lm-file input { flex: none; }
+.lm-editor summary { cursor: pointer; }
+.lm-editor .lm-field { margin-block: 6px; }
+.lm-editor input { width: 100%; }
+.lm-empty { grid-column: 1 / -1; color: var(--text-muted); }
