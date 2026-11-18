@@ -148,8 +148,353 @@ def init_db() -> None:
             """
         )
         _ensure_columns(_conn)
+        _ensure_perf_table(_conn)
         _migrate_kind_labels(_conn)
+        _backfill_perf_samples(_conn)
         _conn.commit()
+
+
+def _ensure_perf_table(conn: sqlite3.Connection) -> None:
+    """Persistente Performance-Messwerte aus realen Encodes & VMAF-Testläufen."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS perf_samples (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts           REAL NOT NULL,
+            kind         TEXT NOT NULL,
+            source_kind  TEXT NOT NULL,
+            platform     TEXT NOT NULL DEFAULT '',
+            codec        TEXT NOT NULL DEFAULT '',
+            speed        TEXT NOT NULL DEFAULT 'balanced',
+            rate_mode    TEXT NOT NULL DEFAULT 'cq',
+            two_pass     INTEGER NOT NULL DEFAULT 0,
+            tonemap      INTEGER NOT NULL DEFAULT 0,
+            width        INTEGER NOT NULL DEFAULT 1920,
+            height       INTEGER NOT NULL DEFAULT 1080,
+            fps          REAL NOT NULL DEFAULT 24.0,
+            media_sec    REAL NOT NULL DEFAULT 0.0,
+            elapsed_sec  REAL NOT NULL DEFAULT 0.0,
+            fps_measured REAL NOT NULL DEFAULT 0.0,
+            metrics_mask TEXT NOT NULL DEFAULT '',
+            subsample    INTEGER NOT NULL DEFAULT 1,
+            vmaf_gpu     INTEGER NOT NULL DEFAULT 0,
+            sample_key   TEXT UNIQUE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_perf_kind_pc ON perf_samples(kind, platform, codec)")
+
+
+def _norm_speed_alias(platform: str, codec: str, raw_speed: str) -> str:
+    try:
+        from . import ffmpeg_utils as ff
+        enc = ff.encoder_name(platform or "cpu", codec or "av1")
+        return ff.nearest_alias(enc, str(raw_speed or "balanced"))
+    except Exception:
+        return "balanced"
+
+
+def _effective_dims(src: dict, settings: dict) -> tuple[int, int, float]:
+    w = int((src or {}).get("width") or 1920)
+    h = int((src or {}).get("height") or 1080)
+    fps = float((src or {}).get("fps") or 24.0)
+    if fps <= 0 or fps > 240:
+        fps = 24.0
+    th = int((settings or {}).get("target_height") or 0)
+    if th > 0 and h > 0 and th < h:
+        w = max(16, int(round(w * (th / h))))
+        h = th
+    return max(320, w), max(180, h), fps
+
+
+def _insert_perf_sample(
+    conn: sqlite3.Connection,
+    *,
+    ts: float,
+    kind: str,
+    source_kind: str,
+    platform: str = "",
+    codec: str = "",
+    speed: str = "balanced",
+    rate_mode: str = "cq",
+    two_pass: bool = False,
+    tonemap: bool = False,
+    width: int = 1920,
+    height: int = 1080,
+    fps: float = 24.0,
+    media_sec: float = 0.0,
+    elapsed_sec: float = 0.0,
+    fps_measured: float = 0.0,
+    metrics_mask: str = "",
+    subsample: int = 1,
+    vmaf_gpu: bool = False,
+    sample_key: Optional[str] = None,
+) -> None:
+    if elapsed_sec <= 0.05 or media_sec <= 0.0:
+        return
+    if fps_measured <= 0.0:
+        if kind == "s2":
+            fps_measured = round(elapsed_sec / max(1.0, media_sec), 4)
+        else:
+            fps_measured = round((media_sec * max(1.0, fps)) / elapsed_sec, 3)
+    if fps_measured <= 0.0:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO perf_samples
+        (ts, kind, source_kind, platform, codec, speed, rate_mode, two_pass, tonemap,
+         width, height, fps, media_sec, elapsed_sec, fps_measured,
+         metrics_mask, subsample, vmaf_gpu, sample_key)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            float(ts or time.time()), kind, source_kind,
+            str(platform or "").lower(), str(codec or "").lower(),
+            str(speed or "balanced"), str(rate_mode or "cq"),
+            1 if two_pass else 0, 1 if tonemap else 0,
+            int(width or 1920), int(height or 1080), float(fps or 24.0),
+            round(float(media_sec), 3), round(float(elapsed_sec), 3),
+            float(fps_measured), str(metrics_mask or ""),
+            max(1, int(subsample or 1)), 1 if vmaf_gpu else 0,
+            sample_key,
+        ),
+    )
+
+
+def _metrics_mask_from_settings(s: dict) -> str:
+    keys = []
+    for k, name in (
+        ("vmaf_psnr", "psnr"),
+        ("vmaf_ssim", "ssim"),
+        ("vmaf_ms_ssim", "ms_ssim"),
+        ("vmaf_xpsnr", "xpsnr"),
+        ("vmaf_cambi", "cambi"),
+    ):
+        if s.get(k, True):
+            keys.append(name)
+    return ",".join(keys)
+
+
+def _record_item_perf_locked(conn: sqlite3.Connection, item, now: float) -> None:
+    """Extrahiert reale Performance-Samples aus abgeschlossenen Encodes & VMAF-Teststufen."""
+    if getattr(item, "status", "") != "done":
+        return
+    s_obj = getattr(item, "settings", None)
+    s = (s_obj if isinstance(s_obj, dict) else (vars(s_obj) if s_obj is not None else {})) or {}
+    src = source_summary(getattr(item, "info", None))
+    w, h, fps = _effective_dims(src, s)
+    job_id = str(getattr(item, "id", "") or "")
+    tonemap = bool(s.get("tonemap"))
+
+    # 1) Vollständiger Encode
+    enc_sec = float(getattr(item, "encode_seconds", 0.0) or 0.0)
+    dur = float(src.get("duration") or 0.0)
+    vmode = str(s.get("video_mode") or "encode")
+    if enc_sec >= 1.0 and dur >= 2.0 and vmode == "encode" and not s.get("remux_only"):
+        plat = str(s.get("platform") or "")
+        codec = str(s.get("codec") or "")
+        if plat and codec:
+            sp = _norm_speed_alias(plat, codec, s.get("encoder_speed") or "balanced")
+            rm = str(s.get("rate_mode") or "cq")
+            tp = bool(s.get("two_pass")) and rm in ("abr", "bitrate")
+            eff_elapsed = enc_sec / (1.72 if (tp and plat == "cpu") else (1.15 if tp else 1.0))
+            _insert_perf_sample(
+                conn, ts=now, kind="encode", source_kind="full_encode",
+                platform=plat, codec=codec, speed=sp, rate_mode=rm,
+                two_pass=tp, tonemap=tonemap, width=w, height=h, fps=fps,
+                media_sec=dur, elapsed_sec=eff_elapsed,
+                sample_key=f"job:{job_id}:enc" if job_id else None,
+            )
+
+    # 2) Einzelne VMAF-Teststufen (Encode + libvmaf + SSIMULACRA2)
+    vmaf_data = getattr(item, "vmaf", None)
+    results = (vmaf_data.get("results") or []) if isinstance(vmaf_data, dict) else []
+    if results:
+        samples_n = max(1, int(s.get("samples") or 1))
+        clip_sec = max(5.0, float(s.get("clip_seconds") or 20.0))
+        total_clip_sec = samples_n * clip_sec
+        s2_frames = max(0, int(s.get("ssimulacra2_frames") if s.get("ssimulacra2_frames") is not None else 3))
+        mask = _metrics_mask_from_settings(s)
+        sub = max(1, int(s.get("vmaf_subsample") or 1))
+        vgpu = bool(s.get("vmaf_gpu"))
+        for idx, r in enumerate(results):
+            if not isinstance(r, dict):
+                continue
+            tm = r.get("timing")
+            if not isinstance(tm, dict):
+                continue
+            r_plat = str(r.get("platform") or s.get("platform") or "")
+            r_codec = str(r.get("codec") or s.get("codec") or "")
+            r_sp = _norm_speed_alias(r_plat, r_codec, r.get("encoder_speed") or s.get("encoder_speed") or "balanced")
+            r_rm = str(r.get("rate_mode") or s.get("rate_mode") or "cq")
+            r_tp = bool(r.get("two_pass")) and r_rm in ("abr", "bitrate")
+            r_enc = float(tm.get("encode_sec") or 0.0)
+            r_vmaf = float(tm.get("vmaf_sec") or 0.0)
+            r_s2 = float(tm.get("s2_sec") or 0.0)
+            if r_enc >= 0.4 and r_plat and r_codec:
+                eff_enc = r_enc / (1.72 if (r_tp and r_plat == "cpu") else (1.15 if r_tp else 1.0))
+                _insert_perf_sample(
+                    conn, ts=now, kind="encode", source_kind="vmaf_test",
+                    platform=r_plat, codec=r_codec, speed=r_sp, rate_mode=r_rm,
+                    two_pass=r_tp, tonemap=tonemap, width=w, height=h, fps=fps,
+                    media_sec=total_clip_sec, elapsed_sec=eff_enc,
+                    sample_key=f"job:{job_id}:v{idx}:enc" if job_id else None,
+                )
+            if r_vmaf >= 0.4:
+                _insert_perf_sample(
+                    conn, ts=now, kind="vmaf_metric", source_kind="vmaf_test",
+                    platform=r_plat, codec=r_codec, speed=r_sp, rate_mode=r_rm,
+                    two_pass=False, tonemap=tonemap, width=w, height=h, fps=fps,
+                    media_sec=total_clip_sec, elapsed_sec=r_vmaf,
+                    metrics_mask=mask, subsample=sub, vmaf_gpu=vgpu,
+                    sample_key=f"job:{job_id}:v{idx}:vmaf" if job_id else None,
+                )
+            if r_s2 >= 0.2 and s2_frames > 0:
+                pairs_n = float(samples_n * s2_frames)
+                _insert_perf_sample(
+                    conn, ts=now, kind="s2", source_kind="vmaf_test",
+                    width=w, height=h, fps=fps,
+                    media_sec=pairs_n, elapsed_sec=r_s2,
+                    fps_measured=round(r_s2 / pairs_n, 4),
+                    sample_key=f"job:{job_id}:v{idx}:s2" if job_id else None,
+                )
+
+
+def _backfill_perf_samples(conn: sqlite3.Connection) -> None:
+    """Übernimmt vorhandene abgeschlossene Encodes & VMAF-Steps einmalig in perf_samples."""
+    try:
+        rows = conn.execute(
+            "SELECT id, platform, codec, rate_mode, finished, encode_seconds, "
+            "source_json, settings_json, steps_json FROM jobs "
+            "WHERE status='done' ORDER BY finished DESC LIMIT 400"
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    for r in rows:
+        try:
+            src = json.loads(r["source_json"] or "{}") if r["source_json"] else {}
+            s = json.loads(r["settings_json"] or "{}") if r["settings_json"] else {}
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(src, dict) or not isinstance(s, dict):
+            continue
+        w, h, fps = _effective_dims(src, s)
+        ts = float(r["finished"] or time.time())
+        jid = str(r["id"] or "")
+        enc_sec = float(r["encode_seconds"] or 0.0)
+        dur = float(src.get("duration") or 0.0)
+        plat = str(r["platform"] or s.get("platform") or "")
+        codec = str(r["codec"] or s.get("codec") or "")
+        vmode = str(s.get("video_mode") or "encode")
+        if enc_sec >= 1.0 and dur >= 2.0 and plat and codec and vmode == "encode" and not s.get("remux_only"):
+            sp = _norm_speed_alias(plat, codec, s.get("encoder_speed") or "balanced")
+            rm = str(r["rate_mode"] or s.get("rate_mode") or "cq")
+            tp = bool(s.get("two_pass")) and rm in ("abr", "bitrate")
+            eff_enc = enc_sec / (1.72 if (tp and plat == "cpu") else (1.15 if tp else 1.0))
+            _insert_perf_sample(
+                conn, ts=ts, kind="encode", source_kind="full_encode",
+                platform=plat, codec=codec, speed=sp, rate_mode=rm,
+                two_pass=tp, tonemap=bool(s.get("tonemap")), width=w, height=h, fps=fps,
+                media_sec=dur, elapsed_sec=eff_enc,
+                sample_key=f"job:{jid}:enc" if jid else None,
+            )
+        # Auch historische VMAF-Teststufen mit subtiming aus steps_json übernehmen
+        raw_steps = r["steps_json"] or ""
+        if raw_steps:
+            try:
+                steps = json.loads(raw_steps)
+            except (TypeError, ValueError):
+                steps = []
+            samples_n = max(1, int(s.get("samples") or 1))
+            clip_sec = max(5.0, float(s.get("clip_seconds") or 20.0))
+            tot_sec = samples_n * clip_sec
+            s2_frames = max(0, int(s.get("ssimulacra2_frames") if s.get("ssimulacra2_frames") is not None else 3))
+            mask = _metrics_mask_from_settings(s)
+            sub = max(1, int(s.get("vmaf_subsample") or 1))
+            vgpu = bool(s.get("vmaf_gpu"))
+            for idx, st in enumerate(steps if isinstance(steps, list) else []):
+                if not isinstance(st, dict) or st.get("key") != "analysis.candidate":
+                    continue
+                subt = (st.get("context") or {}).get("subtiming")
+                if not isinstance(subt, dict):
+                    continue
+                sp = _norm_speed_alias(plat or "cpu", codec or "av1", s.get("encoder_speed") or "balanced")
+                s_enc = float(subt.get("encode_sec") or 0.0)
+                s_vmaf = float(subt.get("vmaf_sec") or 0.0)
+                s_s2 = float(subt.get("s2_sec") or 0.0)
+                if s_enc >= 0.4 and plat and codec:
+                    _insert_perf_sample(
+                        conn, ts=ts, kind="encode", source_kind="vmaf_test",
+                        platform=plat, codec=codec, speed=sp,
+                        rate_mode=str(s.get("rate_mode") or "cq"),
+                        tonemap=bool(s.get("tonemap")), width=w, height=h, fps=fps,
+                        media_sec=tot_sec, elapsed_sec=s_enc,
+                        sample_key=f"job:{jid}:st{idx}:enc" if jid else None,
+                    )
+                if s_vmaf >= 0.4:
+                    _insert_perf_sample(
+                        conn, ts=ts, kind="vmaf_metric", source_kind="vmaf_test",
+                        platform=plat, codec=codec, speed=sp,
+                        tonemap=bool(s.get("tonemap")), width=w, height=h, fps=fps,
+                        media_sec=tot_sec, elapsed_sec=s_vmaf,
+                        metrics_mask=mask, subsample=sub, vmaf_gpu=vgpu,
+                        sample_key=f"job:{jid}:st{idx}:vmaf" if jid else None,
+                    )
+                if s_s2 >= 0.2 and s2_frames > 0:
+                    pairs_n = float(samples_n * s2_frames)
+                    _insert_perf_sample(
+                        conn, ts=ts, kind="s2", source_kind="vmaf_test",
+                        width=w, height=h, fps=fps,
+                        media_sec=pairs_n, elapsed_sec=s_s2,
+                        fps_measured=round(s_s2 / pairs_n, 4),
+                        sample_key=f"job:{jid}:st{idx}:s2" if jid else None,
+                    )
+
+
+def record_perf_sample(**kwargs) -> None:
+    """Öffentlicher Helfer (z. B. aus Encoder-Bench), um eine reale Laufzeitmessung abzulegen."""
+    if _conn is None:
+        init_db()
+    if _conn is None:
+        return
+    try:
+        with _lock:
+            _insert_perf_sample(_conn, ts=kwargs.pop("ts", time.time()), **kwargs)
+            _conn.commit()
+    except sqlite3.Error as exc:
+        logger.debug("Performance-Sample nicht speicherbar: %s", exc)
+
+
+def list_perf_samples(limit: int = 800) -> list[dict]:
+    """Liefert die jüngsten Performance-Messwerte (neueste zuerst)."""
+    if _conn is None:
+        init_db()
+    if _conn is None:
+        return []
+    try:
+        with _lock:
+            rows = _conn.execute(
+                "SELECT * FROM perf_samples ORDER BY ts DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.Error:
+        return []
+
+
+def clear_perf_samples() -> int:
+    """Leert gelernte Performance-Samples (nicht die Job-Historie)."""
+    if _conn is None:
+        init_db()
+    if _conn is None:
+        return 0
+    try:
+        with _lock:
+            cur = _conn.execute("DELETE FROM perf_samples")
+            _conn.commit()
+            return int(cur.rowcount or 0)
+    except sqlite3.Error:
+        return 0
 
 
 def _pick_vmaf(item) -> Optional[float]:
@@ -217,6 +562,7 @@ def record_job(item, duration: float = 0.0) -> None:
                 """,
                 row,
             )
+            _record_item_perf_locked(_conn, item, row[14])
             _conn.commit()
     except sqlite3.Error as e:
         logger.warning("Job-Historie konnte nicht gespeichert werden: %s", e)

@@ -118,7 +118,10 @@
     if (page === "remux" && !state.remuxLoaded) { state.remuxLoaded = true; remuxInit(); }
     if (page === "editor" && typeof window.editorInit === "function") window.editorInit();
     if (page === "dvlab" && typeof window.dvLabInit === "function") window.dvLabInit();
-    if (page === "diag" && !state.diagLoaded) loadDiagnostics();
+    if (page === "diag") {
+      if (!state.diagLoaded) loadDiagnostics();
+      if (typeof refreshVmafCalibration === "function") refreshVmafCalibration();
+    }
     if ((page === "encode" || page === "vmaf") && state.bitrateData) drawBitrateChart(state.bitrateData);
     if (page === "vmafnerd") {
       state.vmafNerd = true;
@@ -18292,6 +18295,52 @@
     };
   }
 
+  function estimateEncodeRunJs(params, calib) {
+    const c = calib || state.vmafCalib;
+    if (!c || typeof c !== "object" || !c.encoders) return { calibrated: false };
+    const duration = Number(params.duration) || 0;
+    if (duration <= 0) return { calibrated: true, has_duration: false, encode_sec: 0 };
+    let width = Number(params.width) || 1920;
+    let height = Number(params.height) || 1080;
+    const targetH = Number(params.target_height) || 0;
+    if (targetH > 0 && targetH < height) {
+      width = Math.round(width * (targetH / height));
+      height = targetH;
+    }
+    const pixels = width * height;
+    const fps = Number(params.fps) > 0 ? Number(params.fps) : 24.0;
+    const plat = String(params.platform || "cpu").toLowerCase();
+    const codec = String(params.codec || "av1").toLowerCase();
+    const prof = (c.encoders || {})[`${plat}:${codec}`];
+    if (!prof || !prof.speeds_1080p) return { calibrated: false };
+    const sp = normSpeedJs(params.encoder_speed);
+    const fps1080 = Number(prof.speeds_1080p[sp] || prof.speeds_1080p.balanced || 0);
+    if (fps1080 <= 0) return { calibrated: false };
+    const scale4k = Number(prof.scale_2160_to_1080 || 0.27);
+    let encFps = Math.max(0.2, interpResJs(fps1080, fps1080 * scale4k, pixels));
+    if (params.tonemap && (params.tonemap_engine || "cpu") === "cpu") {
+      const tm1080 = Number((c.reference || {}).tonemap_fps_1080p || 45);
+      const tmFps = Math.max(1, interpResJs(tm1080, tm1080 * 0.28, pixels));
+      if (tmFps < encFps) encFps = tmFps;
+    }
+    const rm = String(params.rate_mode || "cq").toLowerCase();
+    const twoMult = (params.two_pass && (rm === "abr" || rm === "bitrate"))
+      ? (plat === "cpu" ? 1.72 : 1.15) : 1.0;
+    const encodeSec = ((duration * fps) / encFps) * twoMult;
+    const speedX = duration / Math.max(0.1, encodeSec);
+    return {
+      calibrated: true,
+      has_duration: true,
+      encode_sec: Math.round(encodeSec),
+      speed_x: Math.round(speedX * 10) / 10,
+      enc_fps: Math.round(encFps * 10) / 10,
+      resolution: `${width}×${height}`,
+      basis: c.basis || "calibration",
+      learned_samples: Number((c.learned && c.learned.total) || 0),
+      encoder_samples: Number(prof.learned_samples || 0),
+    };
+  }
+
   function renderVmafEtaBar(elId, params, visible) {
     const el = $(elId);
     if (!el) return;
@@ -18310,8 +18359,40 @@
     if (est.vmaf_sec > 0) subParts.push(`VMAF ~${formatDuration(est.vmaf_sec)}`);
     if (est.s2_sec > 0) subParts.push(`S2 ~${formatDuration(est.s2_sec)}`);
     const resNote = est.assumed_source ? `${est.resolution} Referenzannahme` : est.resolution;
+    const learnedN = Number((state.vmafCalib && state.vmafCalib.learned && state.vmafCalib.learned.total) || 0);
+    if (learnedN > 0) subParts.push(`+${learnedN} Praxis`);
     el.innerHTML = `<span>Geschätzte Analysedauer: <strong>~${formatDuration(est.total_sec)}</strong> <span class="muted">(${escapeHtml(resNote)})</span></span>`
       + `<span class="eta-sub">${subParts.join(" · ")}</span>`;
+  }
+
+  function renderEncodeEtaBar(baseDims, encS, encVmaf) {
+    const el = $("opt-encode-eta");
+    if (!el) return;
+    const vmode = encS.video_mode || "encode";
+    const dur = Number((state.currentInfo && state.currentInfo.duration) || 0);
+    if (vmode !== "encode" || encS.remux_only || dur <= 0) {
+      el.hidden = true;
+      return;
+    }
+    const est = estimateEncodeRunJs({ ...baseDims, duration: dur, ...encS });
+    if (!est.calibrated || !est.has_duration) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    const basisTag = est.basis === "calibration+history"
+      ? `Grundtest + ${est.learned_samples} Praxis`
+      : (est.basis === "history" ? `${est.learned_samples} Praxis-Messungen` : "Grundtest");
+    if (encVmaf) {
+      const vest = estimateVmafRunJs({ ...baseDims, ...encS });
+      const vSec = vest.calibrated ? vest.total_sec : 0;
+      const totSec = vSec + est.encode_sec;
+      el.innerHTML = `<span>Geschätzte Gesamtdauer: <strong>~${formatDuration(totSec)}</strong> <span class="muted">(${escapeHtml(est.resolution)})</span></span>`
+        + `<span class="eta-sub">VMAF ~${formatDuration(vSec)} + Encode ~${formatDuration(est.encode_sec)} (${est.speed_x}× · ${escapeHtml(basisTag)})</span>`;
+    } else {
+      el.innerHTML = `<span>Geschätzte Encode-Dauer: <strong>~${formatDuration(est.encode_sec)}</strong> <span class="muted">(${escapeHtml(est.resolution)})</span></span>`
+        + `<span class="eta-sub">~${est.speed_x}× Echtzeit · ~${Math.round(est.enc_fps)} fps · ${escapeHtml(basisTag)}</span>`;
+    }
   }
 
   function updateAllVmafEtas() {
@@ -18326,15 +18407,18 @@
       const vtS = vtGatherSettings();
       renderVmafEtaBar("vt-vmaf-eta", { ...baseDims, ...vtS }, true);
     }
-    // 2) Encoding -> Ziel-VMAF
+    // 2) Encoding -> Ziel-VMAF + Encode-Gesamtdauer
     const encVmaf = $("opt-rate-mode") && $("opt-rate-mode").value === "vmaf";
-    if ($("opt-vmaf-eta") && $("opt-platform")) {
-      if (encVmaf) {
-        const encS = gatherSettings();
-        renderVmafEtaBar("opt-vmaf-eta", { ...baseDims, ...encS }, true);
-      } else {
-        $("opt-vmaf-eta").hidden = true;
+    if ($("opt-platform")) {
+      const encS = gatherSettings();
+      if ($("opt-vmaf-eta")) {
+        if (encVmaf) {
+          renderVmafEtaBar("opt-vmaf-eta", { ...baseDims, ...encS }, true);
+        } else {
+          $("opt-vmaf-eta").hidden = true;
+        }
       }
+      renderEncodeEtaBar(baseDims, encS, encVmaf);
     }
     // 3) Super-Tool
     const stMode = $("st-mode") ? $("st-mode").value : "fixed";
@@ -18359,31 +18443,78 @@
       if (box) box.innerHTML = "";
       return;
     }
-    const dtStr = calib.calibrated_at ? new Date(calib.calibrated_at * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "";
+    const learned = calib.learned || {};
+    const totalLearned = Number(learned.total || 0);
+    const hasRaw = calib.has_raw_calibration !== false && !!calib.calibrated_at;
+    const dtStr = hasRaw ? new Date(calib.calibrated_at * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "";
     if (badge) {
-      badge.textContent = dtStr ? `Kalibriert (${dtStr})` : "Kalibriert";
+      if (hasRaw && totalLearned > 0) {
+        badge.textContent = `Kalibriert (${dtStr}) + ${totalLearned} Praxis`;
+      } else if (hasRaw) {
+        badge.textContent = dtStr ? `Kalibriert (${dtStr})` : "Kalibriert";
+      } else {
+        badge.textContent = `Praxis-DB (${totalLearned} Messungen)`;
+      }
       badge.className = "badge diag-ok";
     }
     if (!box) return;
-    const encRows = Object.entries(calib.encoders || {}).map(([k, v]) => {
-      const sp = v.speeds_1080p || {};
-      const bal = sp.balanced ? `${Math.round(sp.balanced)} fps` : "—";
-      const uhd = v.fps_2160p_balanced ? `${Math.round(v.fps_2160p_balanced)} fps` : "—";
-      return `<div>${escapeHtml(k.toUpperCase())}: 1080p <strong>${bal}</strong> · 4K <strong>${uhd}</strong></div>`;
-    }).join("");
+    const prevDetails = box.querySelector("details.vc-details");
+    const wasOpen = prevDetails ? prevDetails.open : false;
+
     const vc = calib.vmaf || {};
     const ov = vc.overheads || {};
-    const pct = (x) => `+${Math.round(Number(x || 0) * 100)} %`;
-    const ovText = `PSNR ${pct(ov.psnr)} · SSIM ${pct(ov.ssim)} · MS-SSIM ${pct(ov.ms_ssim)} · XPSNR ${pct(ov.xpsnr)} · CAMBI ${pct(ov.cambi)}`;
     const s2 = calib.ssimulacra2 || {};
-    const s2Text = s2.available
-      ? `1080p: ${Number(s2.sec_per_pair_1080p || 0).toFixed(2)} s/Bild · 4K: ${Number(s2.sec_per_pair_2160p || 0).toFixed(2)} s/Bild`
-      : "Nicht installiert";
-    box.innerHTML = `<div class="vmaf-calib-grid">`
-      + `<div class="vmaf-calib-card"><strong>Encoder-Durchsatz (Ausgewogen)</strong>${encRows || "—"}</div>`
-      + `<div class="vmaf-calib-card"><strong>libvmaf-Messung</strong><div>1080p: <strong>${Math.round(vc.fps_1080p || 0)} fps</strong> · 4K: <strong>${Math.round(vc.fps_2160p || 0)} fps</strong>${vc.gpu_fps_1080p ? ` · CUDA: ${Math.round(vc.gpu_fps_1080p)} fps` : ""}</div><div class="muted" style="margin-top:3px">${escapeHtml(ovText)}</div></div>`
-      + `<div class="vmaf-calib-card"><strong>SSIMULACRA2</strong><div>${escapeHtml(s2Text)}</div></div>`
-      + `</div>`;
+    const encEntries = Object.entries(calib.encoders || {}).sort((a, b) => a[0].localeCompare(b[0]));
+
+    const vmafChip = `1080p <strong>${Math.round(vc.fps_1080p || 0)}</strong> · 4K <strong>${Math.round(vc.fps_2160p || 0)} fps</strong>`
+      + (vc.gpu_fps_1080p ? ` · GPU <strong>${Math.round(vc.gpu_fps_1080p)} fps</strong>` : "");
+    const s2Chip = s2.available
+      ? `<strong>${Number(s2.sec_per_pair_1080p || 0).toFixed(2)}s</strong> / <strong>${Number(s2.sec_per_pair_2160p || 0).toFixed(2)}s</strong>`
+      : "—";
+    const dbParts = [];
+    if (learned.full_encodes) dbParts.push(`${learned.full_encodes} Encodes`);
+    if (learned.vmaf_tests) dbParts.push(`${learned.vmaf_tests} VMAF-Clips`);
+    if (learned.vmaf_metrics) dbParts.push(`${learned.vmaf_metrics} Messungen`);
+    const dbChip = totalLearned > 0
+      ? `<strong>${totalLearned}</strong>${dbParts.length ? ` <span class="muted">(${dbParts.join(" · ")})</span>` : ""}`
+      : `<span class="muted">nur Grundtest</span>`;
+
+    const fmtFps = (v) => (v && Number(v) > 0 ? `${Math.round(Number(v))}` : "—");
+    const encRows = encEntries.map(([k, v]) => {
+      const sp = v.speeds_1080p || {};
+      const n = Number(v.learned_samples || 0);
+      return `<tr>`
+        + `<td><strong>${escapeHtml(k.toUpperCase())}</strong></td>`
+        + `<td>${fmtFps(sp.fast)}</td>`
+        + `<td><strong>${fmtFps(sp.balanced)}</strong></td>`
+        + `<td>${fmtFps(sp.slow)}</td>`
+        + `<td>${fmtFps(v.fps_2160p_balanced)}</td>`
+        + `<td class="muted">${n > 0 ? `+${n}` : "—"}</td>`
+        + `</tr>`;
+    }).join("");
+
+    const pct = (x) => `+${Math.round(Number(x || 0) * 100)} %`;
+    const ovItems = [
+      `PSNR ${pct(ov.psnr)}`,
+      `SSIM ${pct(ov.ssim)}`,
+      `MS-SSIM ${pct(ov.ms_ssim)}`,
+      `XPSNR ${pct(ov.xpsnr)}`,
+      `CAMBI ${pct(ov.cambi)}`,
+    ];
+
+    box.innerHTML = `<div class="vc-strip">`
+      + `<span class="vc-chip"><span class="vc-k">libvmaf</span> ${vmafChip}</span>`
+      + `<span class="vc-chip"><span class="vc-k">S2 (1080p/4K)</span> ${s2Chip}</span>`
+      + `<span class="vc-chip"><span class="vc-k">Lern-DB</span> ${dbChip}</span>`
+      + `</div>`
+      + `<details class="vc-details"${wasOpen ? " open" : ""}>`
+      + `<summary>Encoder-Durchsatz in fps (${encEntries.length}) &amp; Zusatztest-Aufschläge</summary>`
+      + `<div class="vc-details-body">`
+      + (encRows
+        ? `<table class="vc-table"><thead><tr><th>Encoder</th><th>Schnell</th><th>Ausgew.</th><th>Langs.</th><th>4K (Ausg.)</th><th>Praxis</th></tr></thead><tbody>${encRows}</tbody></table>`
+        : `<div class="muted">Noch keine Encoder-Daten vorhanden.</div>`)
+      + `<div class="vc-overheads"><span>Zusatztests (Basiszeit-Aufschlag):</span><span>${ovItems.map(escapeHtml).join(" · ")}</span></div>`
+      + `</div></details>`;
   }
 
   async function refreshVmafCalibration() {

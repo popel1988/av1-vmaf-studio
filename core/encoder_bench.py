@@ -695,6 +695,26 @@ def _speed_one(
         "size_bytes": size,
         "size_human": ff.human_size(size),
     })
+    if fps > 0 and elapsed > 0.4 and length > 0:
+        try:
+            from . import history
+            enc = ff.encoder_name(platform, codec)
+            history.record_perf_sample(
+                kind="encode",
+                source_kind="encoder_bench",
+                platform=platform,
+                codec=codec,
+                speed=ff.nearest_alias(enc, str(speed or "balanced")),
+                rate_mode=rate_mode,
+                width=int(getattr(info, "width", 1920) or 1920),
+                height=int(getattr(info, "height", 1080) or 1080),
+                fps=float(getattr(info, "fps", 24.0) or 24.0),
+                media_sec=float(length),
+                elapsed_sec=float(elapsed),
+                fps_measured=float(fps),
+            )
+        except Exception:
+            pass
     return base
 
 

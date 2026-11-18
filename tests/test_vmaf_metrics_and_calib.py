@@ -227,12 +227,153 @@ class VmafCalibrationAndEstimateTests(unittest.TestCase):
             "opt-vmaf-psnr", "opt-vmaf-ms-ssim", "opt-vmaf-cambi", "opt-vmaf-xpsnr",
             "vt-psnr", "vt-ssim", "vt-ms-ssim", "vt-xpsnr", "vt-cambi",
             "st-psnr", "st-cambi", "eb-psnr", "btn-vc-start", "vt-vmaf-eta",
+            "opt-encode-eta",
         ):
             self.assertIn(f'id="{elem_id}"', body)
 
         r_cal = client.get("/api/vmaf/calibration")
         self.assertEqual(r_cal.status_code, 200)
         self.assertIn("running", r_cal.json())
+        self.assertIn("learned", r_cal.json())
+
+        r_enc_est = client.post("/api/encode/estimate", json={"duration": 1800, "width": 1920, "height": 1080})
+        self.assertEqual(r_enc_est.status_code, 200)
+        self.assertIn("calibrated", r_enc_est.json())
+
+
+class PerfLearningAndEncodeEtaTests(unittest.TestCase):
+    def setUp(self):
+        self.base_calib = {
+            "schema_version": 1,
+            "calibrated_at": 1700000000,
+            "encoders": {
+                "nvidia:av1": {
+                    "speeds_1080p": {"fastest": 260, "fast": 210, "balanced": 150, "slow": 95, "slowest": 55},
+                    "fps_2160p_balanced": 42,
+                    "scale_2160_to_1080": 0.28,
+                },
+            },
+            "vmaf": {
+                "fps_1080p": 50.0,
+                "fps_2160p": 14.0,
+                "gpu_fps_1080p": 0.0,
+                "gpu_fps_2160p": 0.0,
+                "decode_share": 0.35,
+                "overheads": {"psnr": 0.04, "ssim": 0.08, "ms_ssim": 0.16, "cambi": 0.25, "xpsnr": 0.14},
+                "combo_scale": 0.85,
+            },
+            "ssimulacra2": {"available": True, "sec_per_pair_1080p": 0.45, "sec_per_pair_2160p": 1.35},
+            "reference": {"tonemap_fps_1080p": 45.0},
+        }
+
+    def test_effective_profile_blends_history_and_works_without_raw_calib(self):
+        import time as _t
+        now = _t.time()
+        samples = [
+            {"ts": now, "kind": "encode", "source_kind": "full_encode", "platform": "nvidia", "codec": "av1",
+             "speed": "balanced", "width": 1920, "height": 1080, "fps": 24.0, "media_sec": 3600.0,
+             "elapsed_sec": 432.0, "fps_measured": 200.0},
+            {"ts": now, "kind": "encode", "source_kind": "vmaf_test", "platform": "nvidia", "codec": "av1",
+             "speed": "balanced", "width": 1920, "height": 1080, "fps": 24.0, "media_sec": 40.0,
+             "elapsed_sec": 4.6, "fps_measured": 208.0},
+            {"ts": now, "kind": "vmaf_metric", "source_kind": "vmaf_test", "width": 1920, "height": 1080,
+             "fps": 24.0, "media_sec": 40.0, "elapsed_sec": 12.0, "fps_measured": 80.0,
+             "metrics_mask": "psnr,ssim", "subsample": 1, "vmaf_gpu": 0},
+            {"ts": now, "kind": "s2", "source_kind": "vmaf_test", "width": 1920, "height": 1080,
+             "fps": 24.0, "media_sec": 6.0, "elapsed_sec": 1.8, "fps_measured": 0.30},
+        ]
+        # 1) Fusion mit Grundtest bewegt balanced FPS nach oben (zwischen 150 und ~200)
+        blended = vmaf_calib.effective_profile(calib=self.base_calib, samples=samples)
+        self.assertEqual(blended["basis"], "calibration+history")
+        self.assertEqual(blended["learned"]["full_encodes"], 1)
+        self.assertEqual(blended["learned"]["vmaf_tests"], 1)
+        bal = blended["encoders"]["nvidia:av1"]["speeds_1080p"]["balanced"]
+        self.assertGreater(bal, 165.0)
+        self.assertLess(bal, 205.0)
+        self.assertGreater(blended["vmaf"]["fps_1080p"], 50.0)
+        self.assertLess(blended["ssimulacra2"]["sec_per_pair_1080p"], 0.45)
+
+        # 2) Funktioniert auch komplett ohne Grundtest nur aus Praxis-Samples
+        hist_only = vmaf_calib.effective_profile(calib=False, samples=samples)
+        self.assertEqual(hist_only["basis"], "history")
+        self.assertIn("nvidia:av1", hist_only["encoders"])
+        self.assertGreater(hist_only["encoders"]["nvidia:av1"]["speeds_1080p"]["balanced"], 180.0)
+
+    def test_estimate_encode_run_scales_resolution_and_two_pass(self):
+        hd = vmaf_calib.estimate_encode_run({
+            "duration": 3600, "width": 1920, "height": 1080, "fps": 24,
+            "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+        }, calib=self.base_calib)
+        uhd = vmaf_calib.estimate_encode_run({
+            "duration": 3600, "width": 3840, "height": 2160, "fps": 24,
+            "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+        }, calib=self.base_calib)
+        tp = vmaf_calib.estimate_encode_run({
+            "duration": 3600, "width": 1920, "height": 1080, "fps": 24,
+            "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+            "rate_mode": "abr", "two_pass": True,
+        }, calib=self.base_calib)
+        self.assertTrue(hd["calibrated"])
+        self.assertGreater(hd["speed_x"], 4.0)
+        self.assertGreater(uhd["encode_sec"], hd["encode_sec"] * 2.5)
+        self.assertGreater(tp["encode_sec"], hd["encode_sec"])
+
+    def test_history_records_perf_samples_from_encode_and_vmaf(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from core import config, history
+
+        old_dir = config.DATA_DIR
+        old_conn = history._conn
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                config.DATA_DIR = Path(td)
+                history._conn = None
+                history.init_db()
+                item = SimpleNamespace(
+                    id="job_perf_1",
+                    title="Movie.mkv",
+                    path="/media/Movie.mkv",
+                    status="done",
+                    settings=SimpleNamespace(
+                        platform="nvidia", codec="av1", rate_mode="vmaf",
+                        quality=28, encoder_speed="balanced", video_mode="encode",
+                        remux_only=False, samples=2, clip_seconds=20,
+                        ssimulacra2_frames=3, vmaf_psnr=True, vmaf_ssim=True,
+                        vmaf_ms_ssim=False, vmaf_xpsnr=False, vmaf_cambi=False,
+                        vmaf_subsample=1, vmaf_gpu=False, tonemap=False,
+                    ),
+                    info={"width": 1920, "height": 1080, "fps": 24.0, "duration": 1200.0},
+                    encode_seconds=200.0,
+                    original_size=2_000_000_000,
+                    output_size=800_000_000,
+                    saved_bytes=1_200_000_000,
+                    created_at=1700000000.0,
+                    output_path="/out/Movie.mkv",
+                    steps=[],
+                    details={},
+                    report={},
+                    vmaf={
+                        "results": [
+                            {
+                                "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+                                "rate_mode": "cq", "value": 28, "vmaf": 95.1,
+                                "timing": {"encode_sec": 6.0, "vmaf_sec": 18.0, "s2_sec": 2.4},
+                            }
+                        ]
+                    },
+                )
+                history.record_job(item, duration=230.0)
+                rows = history.list_perf_samples()
+                kinds = {r["kind"] for r in rows}
+                self.assertEqual(kinds, {"encode", "vmaf_metric", "s2"})
+                enc_sources = {r["source_kind"] for r in rows if r["kind"] == "encode"}
+                self.assertEqual(enc_sources, {"full_encode", "vmaf_test"})
+                history._conn.close()
+        finally:
+            history._conn = old_conn
+            config.DATA_DIR = old_dir
 
 
 if __name__ == "__main__":

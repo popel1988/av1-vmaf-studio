@@ -4,7 +4,13 @@ All notable changes, new features, and milestones of this project in reverse chr
 
 ---
 
-## [This Release] – 2026-11-17
+## [This Release] – 2026-11-18
+- **Adaptive performance DB & full-encode ETA (`core/history.py`, `core/vmaf_calib.py`, `core/queue_manager.py`, `core/encoder_bench.py`):** Completed encodes, VMAF test clips, and encoder benchmarks are now automatically recorded into a persistent `perf_samples` SQLite table (with automatic backfill from existing job history) and blended with the calibration baseline via `effective_profile()` (also working from history alone when no calibration has run yet). This continuously refines runtime projections for both VMAF analyses and full-length encodes, adding a live encode duration estimate before queueing (`#opt-encode-eta`, `/api/encode/estimate`) and a calibration-backed fallback ETA for queued jobs.
+- **Compact Diagnose calibration summary (`static/js/app.js`, `static/css/styles.css`):** Replaced the tall calibration cards under **Diagnose** with a single-row metric strip (`libvmaf`, `S2`, and learned DB sample counts) plus a collapsible `<details>` encoder throughput table (`Fast` / `Balanced` / `Slow` / `4K` in fps and learned sample count) and companion-metric overhead line.
+
+---
+
+## [v9.6.1](https://github.com/popel1988/av1-vmaf-studio/commit/ccb4989) – 2026-11-18
 - **Selectable VMAF companion metrics:** Optional quality tests (`PSNR`, `SSIM`, `MS-SSIM`, `XPSNR`, `CAMBI`) can now be toggled individually via compact checkboxes alongside `SSIMULACRA2` in **Encoding (Target-VMAF)**, **VMAF-Tool**, **Super-Tool**, **Diagnose Encoder-Test**, and saved presets. Disabled metrics are excluded from the `libvmaf` feature string (and skip the separate `XPSNR` pass) to reduce analysis runtime, while internal guardrails (`_vmaf_compare`) run pure VMAF without unnecessary secondary metrics.
 - **Granular queue step sub-timings:** VMAF test-tier steps (`analysis.candidate`) now track and display separate durations for clip encoding (`Encode`), `libvmaf` scoring (`VMAF` + active companion tests), and `SSIMULACRA2` (`S2`) both live (highlighting the currently running sub-phase) and on completed steps.
 - **System calibration & pre-run VMAF duration estimate (`core/vmaf_calib.py`):** Added a local **Grundtest (VMAF & runtime calibration)** under **Diagnose** that profiles available encoders (1080p & 4K across speed presets), `libvmaf` throughput (CPU/CUDA & subsampling), per-metric overhead (`PSNR`, `SSIM`, `MS-SSIM`, `XPSNR`, `CAMBI`), `SSIMULACRA2` per-pair cost, and HDR tonemap reference prep. Once calibrated, **VMAF-Tool**, **Target-VMAF**, **Super-Tool**, and **Encoder-Test** show an immediate runtime projection (`Encode` / `VMAF` / `S2`) while configuring options. The Grundtest reads the encoder capability cache as a boolean per encoder.

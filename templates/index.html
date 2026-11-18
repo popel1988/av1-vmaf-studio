@@ -834,6 +834,7 @@
               </div>
             </div>
 
+            <div class="vmaf-eta-bar" id="opt-encode-eta" hidden style="margin-bottom:8px"></div>
             <button class="btn btn-primary btn-block" id="btn-enqueue" disabled>
               Zur Warteschlange hinzufügen
             </button>
@@ -4284,8 +4285,9 @@
               <span class="badge" id="vc-badge">Nicht kalibriert</span>
             </div>
             <p class="hint" style="margin-top:6px">Führt lokal einen kurzen Grundtest für alle verfügbaren Encoder (1080p &amp; 4K, Speeds),
-              VMAF (CPU/GPU, Subsampling), sämtliche Zusatztests (PSNR, SSIM, MS-SSIM, XPSNR, CAMBI) und SSIMULACRA2 aus.
-              Damit zeigen VMAF-Tool, Ziel-VMAF und Super-Tool schon bei der Auswahl eine realistische Dauer-Prognose an.</p>
+              VMAF (CPU/GPU, Subsampling), sämtliche Zusatztests und SSIMULACRA2 aus.
+              Abgeschlossene Encodes und VMAF-Läufe fließen zusätzlich automatisch in die lokale Leistungsdatenbank ein
+              und verfeinern die Dauer-Prognosen für VMAF-Tests und komplette Encodes laufend.</p>
             <div class="lib-actions">
               <button type="button" class="btn btn-primary btn-sm" id="btn-vc-start">Grundtest starten</button>
               <button type="button" class="btn btn-ghost btn-sm" id="btn-vc-cancel" disabled>Abbrechen</button>

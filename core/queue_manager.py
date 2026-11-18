@@ -3556,15 +3556,44 @@ def _output_path(item: QueueItem) -> Path:
 
 
 def _eta_from_history(info: Optional[dict], settings: JobSettings) -> Optional[dict]:
-    """Laufzeit-Schätzung aus früheren Encodes (None ohne passende Daten)."""
+    """Laufzeit-Schätzung aus früheren Encodes und/oder Kalibrierungs-/Perf-Daten."""
     if not info:
         return None
     try:
         from . import history
-        est = history.estimate_eta(history.source_summary(info), settings)
+        src = history.source_summary(info)
+        est = history.estimate_eta(src, settings)
     except Exception as e:  # Historie darf das Einreihen nie blockieren
         logger.debug("ETA-Schätzung nicht möglich: %s", e)
-        return None
+        est = None
+        src = None
+    if not est and src and src.get("duration"):
+        try:
+            if (getattr(settings, "video_mode", "encode") or "encode") == "encode" and not getattr(settings, "remux_only", False):
+                from . import vmaf_calib
+                ve = vmaf_calib.estimate_encode_run({
+                    "duration": src.get("duration"),
+                    "width": src.get("width") or 1920,
+                    "height": src.get("height") or 1080,
+                    "fps": src.get("fps") or 24.0,
+                    "platform": getattr(settings, "platform", "cpu"),
+                    "codec": getattr(settings, "codec", "av1"),
+                    "encoder_speed": getattr(settings, "encoder_speed", "balanced"),
+                    "rate_mode": getattr(settings, "rate_mode", "cq"),
+                    "two_pass": bool(getattr(settings, "two_pass", False)),
+                    "target_height": int(getattr(settings, "target_height", 0) or 0),
+                    "tonemap": bool(getattr(settings, "tonemap", False)),
+                })
+                if ve.get("calibrated") and ve.get("encode_sec"):
+                    est = {
+                        "seconds": round(float(ve["encode_sec"])),
+                        "speed_x": float(ve.get("speed_x") or 0.0),
+                        "samples": int(ve.get("encoder_samples") or ve.get("learned_samples") or 0),
+                        "exact": bool(ve.get("encoder_samples")),
+                        "basis": ve.get("basis") or "calibration",
+                    }
+        except Exception as e:
+            logger.debug("Kalibrierungs-ETA nicht möglich: %s", e)
     if est:
         est["human"] = ff.human_duration(est["seconds"])
     return est

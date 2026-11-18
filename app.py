@@ -3794,6 +3794,12 @@ async def vmaf_estimate_endpoint(payload: dict):
     return vmaf_calib.estimate_vmaf_run(payload or {})
 
 
+@app.post("/api/encode/estimate")
+async def encode_estimate_endpoint(payload: dict):
+    from core import vmaf_calib
+    return vmaf_calib.estimate_encode_run(payload or {})
+
+
 @app.get("/api/encoder-bench")
 async def encoder_bench_status():
     from core import encoder_bench

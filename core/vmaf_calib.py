@@ -80,7 +80,13 @@ def _save_calibration(data: dict) -> None:
 def snapshot() -> dict:
     with _lock:
         st = dict(_state)
-    st["calibration"] = load_calibration()
+    raw = load_calibration()
+    eff = effective_profile(calib=raw)
+    st["calibration"] = eff
+    st["has_raw_calibration"] = raw is not None
+    st["learned"] = (eff or {}).get("learned") or {
+        "total": 0, "full_encodes": 0, "vmaf_tests": 0, "vmaf_metrics": 0, "s2_samples": 0,
+    }
     return st
 
 
@@ -504,9 +510,281 @@ def _interp_res(val_1080: float, val_2160: float, pixels: float) -> float:
     return max(0.05, val_1080 + (val_2160 - val_1080) * t)
 
 
+def _weighted_median(pairs: list[tuple[float, float]]) -> float:
+    """Gewichteter Median über (wert, gewicht)-Paare – robust gegen Ausreißer."""
+    valid = sorted((v, w) for v, w in pairs if v > 0 and w > 0)
+    if not valid:
+        return 0.0
+    total_w = sum(w for _, w in valid)
+    acc = 0.0
+    for v, w in valid:
+        acc += w
+        if acc >= total_w * 0.5:
+            return v
+    return valid[-1][0]
+
+
+def _norm_fps_to_1080(fps_val: float, width: int, height: int, scale_4k: float = 0.27) -> float:
+    """Rechnet eine gemessene FPS bei beliebiger Auflösung auf das 1080p-Äquivalent um."""
+    px = max(640.0 * 360.0, float((width or 1920) * (height or 1080)))
+    factor = _interp_res(1.0, max(0.10, min(0.85, float(scale_4k or 0.27))), px)
+    return fps_val / max(0.08, factor)
+
+
+def _blend(base_val: float, hist_val: float, hist_weight: float) -> float:
+    """Mischt Grundtest-Wert (Basis) und reale Messungen sanft nach Sample-Gewicht."""
+    if hist_val <= 0:
+        return base_val
+    if base_val <= 0:
+        return hist_val
+    # Ab ~3 gewichteten Praxis-Samples (z. B. 1-2 volle Encodes oder 4 VMAF-Tests)
+    # übernimmt die reale Historie >50 %, gedeckelt auf 88 % damit Grundtest als Anker bleibt.
+    w = min(0.88, hist_weight / (hist_weight + 2.4))
+    return base_val * (1.0 - w) + hist_val * w
+
+
+def effective_profile(calib: Optional[dict] = None, samples: Optional[list[dict]] = None) -> Optional[dict]:
+    """Fusioniert Grundtest-Kalibrierung mit realen Encodes & VMAF-Messungen aus SQLite.
+
+    Funktioniert auch nur mit Grundtest ODER nur mit realer Historie – idealerweise mit beiden.
+    """
+    raw = calib if calib is not None else load_calibration()
+    if samples is None:
+        try:
+            from . import history
+            samples = history.list_perf_samples(limit=800)
+        except Exception:
+            samples = []
+
+    if not raw and not samples:
+        return None
+
+    import copy
+    prof = copy.deepcopy(raw) if isinstance(raw, dict) else {
+        "schema_version": 1,
+        "calibrated_at": 0,
+        "encoders": {},
+        "vmaf": {
+            "fps_1080p": 45.0,
+            "fps_2160p": 12.0,
+            "gpu_fps_1080p": 0.0,
+            "gpu_fps_2160p": 0.0,
+            "decode_share": 0.35,
+            "overheads": {"psnr": 0.03, "ssim": 0.06, "ms_ssim": 0.14, "cambi": 0.22, "xpsnr": 0.15},
+            "combo_scale": 0.85,
+        },
+        "ssimulacra2": {"available": True, "sec_per_pair_1080p": 0.45, "sec_per_pair_2160p": 1.35},
+        "reference": {"tonemap_fps_1080p": 45.0},
+    }
+
+    now = time.time()
+    counts = {"total": 0, "full_encodes": 0, "vmaf_tests": 0, "vmaf_metrics": 0, "s2_samples": 0}
+    enc_groups: dict[tuple[str, str], list[tuple[float, float]]] = {}
+    enc_4k_groups: dict[str, list[tuple[float, float]]] = {}
+    enc_sample_counts: dict[str, int] = {}
+
+    vmaf_cpu_1080: list[tuple[float, float]] = []
+    vmaf_cpu_2160: list[tuple[float, float]] = []
+    vmaf_gpu_1080: list[tuple[float, float]] = []
+    vmaf_gpu_2160: list[tuple[float, float]] = []
+    s2_1080: list[tuple[float, float]] = []
+    s2_2160: list[tuple[float, float]] = []
+
+    vc = prof.setdefault("vmaf", {})
+    ov_map = vc.get("overheads") or {"psnr": 0.03, "ssim": 0.06, "ms_ssim": 0.14, "cambi": 0.22, "xpsnr": 0.15}
+    combo_scale = float(vc.get("combo_scale") or 0.85)
+    dec_share = float(vc.get("decode_share") or 0.35)
+
+    for idx, s in enumerate(samples):
+        kind = s.get("kind")
+        src_kind = s.get("source_kind") or ""
+        w = int(s.get("width") or 1920)
+        h = int(s.get("height") or 1080)
+        px = float(w * h)
+        val = float(s.get("fps_measured") or 0.0)
+        if val <= 0:
+            continue
+        # Jüngere Messungen wiegen etwas stärker als sehr alte (Halbwertszeit ~60 Tage).
+        age_days = max(0.0, (now - float(s.get("ts") or now)) / 86400.0)
+        recency = 0.5 ** (age_days / 60.0)
+        counts["total"] += 1
+
+        if kind == "encode":
+            plat = str(s.get("platform") or "").lower()
+            codec = str(s.get("codec") or "").lower()
+            sp = str(s.get("speed") or "balanced")
+            if not plat or not codec:
+                continue
+            key = f"{plat}:{codec}"
+            if src_kind == "full_encode":
+                counts["full_encodes"] += 1
+                base_w = 2.2
+            else:
+                counts["vmaf_tests"] += 1
+                base_w = 0.85
+            wt = base_w * recency
+            existing = (prof.get("encoders") or {}).get(key) or {}
+            scale_4k = float(existing.get("scale_2160_to_1080") or 0.27)
+            fps_1080 = _norm_fps_to_1080(val, w, h, scale_4k)
+            enc_groups.setdefault((key, sp), []).append((fps_1080, wt))
+            enc_sample_counts[key] = enc_sample_counts.get(key, 0) + 1
+            if px >= 3200 * 1800 and sp == "balanced":
+                enc_4k_groups.setdefault(key, []).append((val, wt))
+
+        elif kind == "vmaf_metric":
+            counts["vmaf_metrics"] += 1
+            mask_tokens = {tok.strip() for tok in str(s.get("metrics_mask") or "").split(",") if tok.strip()}
+            raw_ov = sum(float(ov_map.get(k) or 0.0) for k in mask_tokens)
+            eff_ov = raw_ov * combo_scale
+            sub = max(1, int(s.get("subsample") or 1))
+            sub_factor = dec_share + (1.0 - dec_share) / sub
+            # Gemessene FPS auf reines Basis-libvmaf (ohne Zusatztests, subsample=1) normieren
+            base_equiv = val * (1.0 + eff_ov) * sub_factor
+            wt = 1.0 * recency
+            is_gpu = bool(s.get("vmaf_gpu"))
+            if px >= 3200 * 1800:
+                (vmaf_gpu_2160 if is_gpu else vmaf_cpu_2160).append((base_equiv, wt))
+            else:
+                norm_1080 = _norm_fps_to_1080(base_equiv, w, h, 0.27)
+                (vmaf_gpu_1080 if is_gpu else vmaf_cpu_1080).append((norm_1080, wt))
+
+        elif kind == "s2":
+            counts["s2_samples"] += 1
+            wt = 1.0 * recency
+            if px >= 3200 * 1800:
+                s2_2160.append((val, wt))
+            else:
+                s2_1080.append((val, wt))
+
+    # Encoder-Werte fusionieren
+    encoders_out = prof.setdefault("encoders", {})
+    seen_keys = set(encoders_out.keys()) | {k for k, _ in enc_groups.keys()}
+    for key in seen_keys:
+        entry = encoders_out.setdefault(key, {"speeds_1080p": {}, "fps_2160p_balanced": 0.0, "scale_2160_to_1080": 0.27})
+        sp_map = entry.setdefault("speeds_1080p", {})
+        for sp in ("fastest", "fast", "balanced", "slow", "slowest"):
+            pts = enc_groups.get((key, sp))
+            if pts:
+                hist_fps = _weighted_median(pts)
+                tot_w = sum(w for _, w in pts)
+                base_fps = float(sp_map.get(sp) or 0.0)
+                sp_map[sp] = round(_blend(base_fps, hist_fps, tot_w), 2)
+        # Fehlende Speed-Stufen (z. B. wenn nur Historie existiert) sauber ableiten
+        bal = float(sp_map.get("balanced") or 0.0)
+        if bal <= 0 and sp_map:
+            ref_sp, ref_v = next(iter(sp_map.items()))
+            bal = ref_v / max(0.1, _SPEED_EXTRAP.get(ref_sp, 1.0))
+            sp_map["balanced"] = round(bal, 2)
+        if bal > 0:
+            for sp, mult in _SPEED_EXTRAP.items():
+                if not sp_map.get(sp):
+                    sp_map[sp] = round(bal * mult, 2)
+            pts_4k = enc_4k_groups.get(key)
+            if pts_4k:
+                h4k = _weighted_median(pts_4k)
+                entry["fps_2160p_balanced"] = round(_blend(float(entry.get("fps_2160p_balanced") or 0.0), h4k, sum(w for _, w in pts_4k)), 2)
+            elif not entry.get("fps_2160p_balanced"):
+                entry["fps_2160p_balanced"] = round(bal * float(entry.get("scale_2160_to_1080") or 0.27), 2)
+            entry["scale_2160_to_1080"] = round(max(0.12, min(0.75, float(entry["fps_2160p_balanced"]) / bal)), 3)
+        if enc_sample_counts.get(key):
+            entry["learned_samples"] = enc_sample_counts[key]
+
+    # libvmaf CPU/GPU fusionieren
+    if vmaf_cpu_1080:
+        vc["fps_1080p"] = round(_blend(float(vc.get("fps_1080p") or 0.0), _weighted_median(vmaf_cpu_1080), sum(w for _, w in vmaf_cpu_1080)), 2)
+    if vmaf_cpu_2160:
+        vc["fps_2160p"] = round(_blend(float(vc.get("fps_2160p") or 0.0), _weighted_median(vmaf_cpu_2160), sum(w for _, w in vmaf_cpu_2160)), 2)
+    if vmaf_gpu_1080:
+        vc["gpu_fps_1080p"] = round(_blend(float(vc.get("gpu_fps_1080p") or 0.0), _weighted_median(vmaf_gpu_1080), sum(w for _, w in vmaf_gpu_1080)), 2)
+    if vmaf_gpu_2160:
+        vc["gpu_fps_2160p"] = round(_blend(float(vc.get("gpu_fps_2160p") or 0.0), _weighted_median(vmaf_gpu_2160), sum(w for _, w in vmaf_gpu_2160)), 2)
+
+    # SSIMULACRA2 fusionieren
+    s2c = prof.setdefault("ssimulacra2", {"available": True})
+    if s2_1080:
+        s2c["sec_per_pair_1080p"] = round(_blend(float(s2c.get("sec_per_pair_1080p") or 0.0), _weighted_median(s2_1080), sum(w for _, w in s2_1080)), 3)
+    if s2_2160:
+        s2c["sec_per_pair_2160p"] = round(_blend(float(s2c.get("sec_per_pair_2160p") or 0.0), _weighted_median(s2_2160), sum(w for _, w in s2_2160)), 3)
+
+    prof["learned"] = counts
+    prof["has_raw_calibration"] = raw is not None
+    if raw and counts["total"] > 0:
+        prof["basis"] = "calibration+history"
+    elif raw:
+        prof["basis"] = "calibration"
+    else:
+        prof["basis"] = "history"
+    return prof
+
+
+def estimate_encode_run(params: dict, calib: Optional[dict] = None) -> dict:
+    """Berechnet die geschätzte reine Encode-Dauer für einen vollständigen Film/Clip."""
+    calib = calib if calib is not None else effective_profile()
+    if not calib:
+        return {"calibrated": False}
+
+    duration = float(params.get("duration") or 0.0)
+    if duration <= 0:
+        return {"calibrated": True, "has_duration": False, "encode_sec": 0.0}
+
+    width = int(params.get("width") or 1920)
+    height = int(params.get("height") or 1080)
+    target_h = int(params.get("target_height") or 0)
+    if target_h and target_h < height:
+        width = int(round(width * (target_h / height)))
+        height = target_h
+    pixels = float(width * height)
+    fps = float(params.get("fps") or 24.0)
+    if fps <= 0:
+        fps = 24.0
+
+    plat = str(params.get("platform") or "cpu").lower()
+    codec = str(params.get("codec") or "av1").lower()
+    sp = ff.nearest_alias(ff.encoder_name(plat, codec), str(params.get("encoder_speed") or "balanced"))
+    rate_mode = str(params.get("rate_mode") or "cq").lower()
+    two_pass = bool(params.get("two_pass")) and rate_mode in ("abr", "bitrate")
+
+    enc_db = calib.get("encoders") or {}
+    prof = enc_db.get(f"{plat}:{codec}")
+    if not prof:
+        return {"calibrated": False, "reason": "encoder_unknown"}
+
+    sp_map = prof.get("speeds_1080p") or {}
+    fps_1080 = float(sp_map.get(sp) or sp_map.get("balanced") or 0.0)
+    if fps_1080 <= 0:
+        return {"calibrated": False, "reason": "encoder_unknown"}
+    scale_4k = float(prof.get("scale_2160_to_1080") or 0.27)
+    enc_fps = max(0.2, _interp_res(fps_1080, fps_1080 * scale_4k, pixels))
+
+    two_mult = (1.72 if plat == "cpu" else 1.15) if two_pass else 1.0
+    # Optionaler Tonemapping-Aufschlag bei Software-Tonemapping auf schnellen GPU-Encodern
+    tm_sec = 0.0
+    if bool(params.get("tonemap")) and str(params.get("tonemap_engine") or "cpu") == "cpu":
+        tm_1080 = float((calib.get("reference") or {}).get("tonemap_fps_1080p") or 45.0)
+        tm_fps = max(1.0, _interp_res(tm_1080, tm_1080 * 0.28, pixels))
+        if tm_fps < enc_fps:
+            enc_fps = tm_fps
+
+    total_frames = duration * fps
+    encode_sec = (total_frames / enc_fps) * two_mult + tm_sec
+    speed_x = duration / max(0.1, encode_sec)
+    learned = calib.get("learned") or {}
+    return {
+        "calibrated": True,
+        "has_duration": True,
+        "encode_sec": round(encode_sec, 1),
+        "speed_x": round(speed_x, 2),
+        "enc_fps": round(enc_fps, 1),
+        "resolution": f"{width}×{height}",
+        "basis": calib.get("basis") or "calibration",
+        "learned_samples": int(learned.get("total") or 0),
+        "encoder_samples": int(prof.get("learned_samples") or 0),
+    }
+
+
 def estimate_vmaf_run(params: dict, calib: Optional[dict] = None) -> dict:
     """Berechnet die geschätzte VMAF-Laufdauer (Gesamt + Encode + Messung + S2)."""
-    calib = calib or load_calibration()
+    calib = calib if calib is not None else effective_profile()
     if not calib:
         return {"calibrated": False}
 
@@ -628,9 +906,12 @@ def estimate_vmaf_run(params: dict, calib: Optional[dict] = None) -> dict:
 
     total_one = ref_sec + encode_sec_total + vmaf_sec_total + s2_sec_total
     total_all = total_one * batch_count
+    learned = calib.get("learned") or {}
     return {
         "calibrated": True,
         "calibrated_at": calib.get("calibrated_at"),
+        "basis": calib.get("basis") or "calibration",
+        "learned_samples": int(learned.get("total") or 0),
         "total_sec": round(total_all, 1),
         "ref_sec": round(ref_sec * batch_count, 1),
         "encode_sec": round(encode_sec_total * batch_count, 1),
