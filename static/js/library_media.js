@@ -22,9 +22,9 @@
     if (m.kind !== "serie" || !String(m.show || "").trim()) return "";
     const parts = path.replace(/\\/g, "/").split("/");
     parts.pop();
-    // Only strip a directory which unambiguously denotes a season. Never use
+    // Only strip a directory which unambiguously denotes a season or specials. Never use
     // the display label or a catch-all "unknown series" as a shared identity.
-    if (/^(?:(?:season|staffel)[ ._-]*|s)\d{1,3}$/i.test(parts.at(-1) || "")) parts.pop();
+    if (/^(?:(?:(?:season|staffel|series)[ ._-]*|s)0*\d{1,3}(?:\s*[\(\[].*[\)\]]|\s+-\s+.*)?|specials?)$/i.test(parts.at(-1) || "")) parts.pop();
     return keyOf(m.show, m.show_year ?? m.year ?? "", parts.join("/"));
   }
 

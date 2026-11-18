@@ -1765,11 +1765,48 @@ button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, t
 
 /* --- Queue: klickbare Zeilen für Detail-Ansicht --- */
 .queue-steps { list-style: none; margin: 4px 0 0; padding: 0; font-size: 11px;
-  color: var(--muted); max-height: 9.5rem; overflow: auto; }
-.queue-steps li { display: flex; justify-content: space-between; gap: 10px; line-height: 1.35; }
-.queue-steps li span:first-child { min-width: 0; }
-.queue-steps li span:last-child { flex: none; font-variant-numeric: tabular-nums; }
-.queue-steps li.is-running { color: var(--text); }
+  color: var(--muted); max-height: 11.5rem; overflow: auto; }
+.queue-steps li { display: flex; flex-direction: column; gap: 1px; line-height: 1.35; padding: 1px 0; }
+.queue-steps li .step-main { display: flex; justify-content: space-between; gap: 10px; }
+.queue-steps li .step-main span:first-child { min-width: 0; }
+.queue-steps li .step-main span:last-child { flex: none; font-variant-numeric: tabular-nums; }
+.queue-steps li.is-running .step-main { color: var(--text); }
+.queue-substeps {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; padding-left: 10px;
+  font-size: 10.5px; color: var(--muted); opacity: 0.9; font-variant-numeric: tabular-nums;
+}
+.queue-substeps .sub-part.is-active {
+  color: var(--accent, #5ea1ff); font-weight: 600; opacity: 1;
+}
+
+/* --- VMAF Zusatzmetriken (kompakte Haken) & Dauer-Prognose --- */
+.vmaf-metric-checks {
+  display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 4px;
+}
+.metric-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 6px; font-size: 11.5px; line-height: 1.3;
+  border: 1px solid var(--border); background: rgba(127,127,127,.06);
+  cursor: pointer; user-select: none; transition: border-color .15s, background .15s;
+}
+.metric-chip:hover { border-color: var(--accent, #5ea1ff); }
+.metric-chip input[type="checkbox"] { margin: 0; width: 13px; height: 13px; accent-color: var(--accent, #5ea1ff); }
+.vmaf-eta-bar {
+  margin-top: 8px; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: rgba(127,127,127,.06);
+  font-size: 12px; line-height: 1.4; color: var(--text);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px;
+}
+.vmaf-eta-bar .eta-sub { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.vmaf-calib-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.vmaf-calib-card {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: rgba(127,127,127,.05); font-size: 11.5px; line-height: 1.45;
+}
+.vmaf-calib-card strong { display: block; margin-bottom: 2px; font-size: 12px; }
 tr.queue-row { cursor: pointer; }
 tr.queue-row:hover { background: rgba(127,127,127,.08); }
 /* Alle Zellen mittig ausrichten, damit Badges/Buttons die Zeile nicht versetzen. */

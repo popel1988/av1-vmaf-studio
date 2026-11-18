@@ -321,6 +321,17 @@ def _sanitize_cached_matched(items: list) -> list[dict]:
     """Repariert gecachte Einträge aus älteren Scans (z. B. als ``dolby_vision``
     fälschlich ein nicht-leeres Konfigurations-Dict statt ``bool`` war)."""
     from types import SimpleNamespace
+    # Zähle Hauptvideos je Ordner (ohne Trailer/Extras), damit gecachte Einträge
+    # ohne NFO („suggestion“) ebenfalls von der Einzelfilmordner-Logik profitieren.
+    folder_main_counts: dict[str, int] = {}
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        f_rel = str(raw.get("folder") or "").replace("\\", "/").strip("/")
+        nm = str(raw.get("name") or Path(str(raw.get("path") or "Video")).name)
+        if not works._EXTRA.search(Path(nm).stem.replace(".", " ")):
+            folder_main_counts[f_rel] = folder_main_counts.get(f_rel, 0) + 1
+
     out: list[dict] = []
     for raw in items or []:
         if not isinstance(raw, dict):
@@ -368,10 +379,20 @@ def _sanitize_cached_matched(items: list) -> list[dict]:
             )
             prev_sug = m.get("suggest") if isinstance(m.get("suggest"), dict) else {}
             m["suggest"] = suggest_encode(sug_in, str(prev_sug.get("codec") or "av1"))
+        f_rel = str(m.get("folder") or "").replace("\\", "/").strip("/")
+        nm = str(m.get("name") or Path(str(m.get("path") or "Video")).name)
+        is_ded = (folder_main_counts.get(f_rel, 0) == 1
+                  and not works._EXTRA.search(Path(nm).stem.replace(".", " ")))
         if not isinstance(m.get("media"), dict):
             # Old scans stored combined folder NFOs, without a reliable ID source.
-            m["media"] = works.describe_media(m.get("name") or Path(m.get("path") or "Video").name,
-                                              m.get("folder") or "")
+            m["media"] = works.describe_media(nm, m.get("folder") or "", dedicated_folder=is_ded)
+            m["work"] = _work_of(m)
+        elif m["media"].get("source") == "suggestion" and not m["media"].get("identity"):
+            m["media"] = works.describe_media(
+                nm, m.get("folder") or "",
+                cover=bool(m["media"].get("cover")),
+                dedicated_folder=is_ded,
+            )
             m["work"] = _work_of(m)
         elif not isinstance(m.get("work"), dict):
             m["work"] = _work_of(m)
@@ -690,7 +711,7 @@ def sidecar_details(video: Path, include_text: bool = False, *, media_folder: Op
                 own.append(data)
         result["media"] = works.describe_media(
             video.name, media_folder, file_nfo=own[0] if len(own) == 1 else None,
-            folder_movie=shared, dedicated_folder=not own and single,
+            folder_movie=shared, dedicated_folder=bool(single),
             show_nfo=show, cover=bool(_local_cover(video, entries)),
         )
     return result
@@ -723,7 +744,13 @@ def _media_siblings(video: Path) -> list[Path]:
 
 
 def _single_video(entries: list[Path], video: Path) -> bool:
-    return [p for p in entries if p.suffix.lower() in config.VIDEO_EXTENSIONS] == [video]
+    vids = [p for p in entries if p.suffix.lower() in config.VIDEO_EXTENSIONS]
+    if vids == [video]:
+        return True
+    if works._EXTRA.search(video.stem.replace(".", " ")):
+        return False
+    main_vids = [p for p in vids if not works._EXTRA.search(p.stem.replace(".", " "))]
+    return main_vids == [video]
 
 
 def media_cover_path(video: Path) -> Optional[Path]:

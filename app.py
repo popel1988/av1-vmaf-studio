@@ -992,6 +992,15 @@ class EnqueueRequest(BaseModel):
     compare_variants: list[dict] = []  # alte Ein-Achsen-Varianten
     compare_rows: list[dict] = []  # volle Zusatzzeilen im VMAF-Vergleich
     test_values: list[int] = [20, 24, 28, 32]
+    vmaf_search_mode: str = "grid"
+    vmaf_min_p5: float = 0.0
+    vmaf_subsample: int = 1
+    vmaf_gpu: bool = False
+    vmaf_psnr: bool = True
+    vmaf_ssim: bool = True
+    vmaf_ms_ssim: bool = True
+    vmaf_xpsnr: bool = True
+    vmaf_cambi: bool = True
     clip_seconds: int = 30
     samples: int = 1
     ssimulacra2_frames: int = 3
@@ -3748,8 +3757,41 @@ class EncoderBenchStartRequest(BaseModel):
     clip_seconds: int = 12
     samples: int = 3
     ssimulacra2_frames: int = 3
+    vmaf_psnr: bool = True
+    vmaf_ssim: bool = True
+    vmaf_ms_ssim: bool = True
+    vmaf_xpsnr: bool = True
+    vmaf_cambi: bool = True
     anime: bool = False
     mode: str = "vmaf"
+
+
+@app.get("/api/vmaf/calibration")
+async def vmaf_calibration_status():
+    from core import vmaf_calib
+    return vmaf_calib.snapshot()
+
+
+@app.post("/api/vmaf/calibration/start")
+async def vmaf_calibration_start():
+    from core import vmaf_calib
+    err = vmaf_calib.start_calibration()
+    if err:
+        return JSONResponse({"error": err}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/vmaf/calibration/cancel")
+async def vmaf_calibration_cancel():
+    from core import vmaf_calib
+    vmaf_calib.cancel()
+    return {"ok": True}
+
+
+@app.post("/api/vmaf/estimate")
+async def vmaf_estimate_endpoint(payload: dict):
+    from core import vmaf_calib
+    return vmaf_calib.estimate_vmaf_run(payload or {})
 
 
 @app.get("/api/encoder-bench")

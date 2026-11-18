@@ -1116,6 +1116,7 @@
   function clearSelection() {
     state.selected = null;
     state.currentInfo = null;
+    if (typeof updateAllVmafEtas === "function") updateAllVmafEtas();
     const badge = $("selection-badge");
     if (badge) badge.textContent = "Nichts ausgewählt";
     const info = $("selected-info");
@@ -1270,6 +1271,7 @@
   // wieder zulassen, bis der Nutzer bewusst umschaltet).
   function applyDolbyVision(info) {
     state.currentInfo = info || null;
+    if (typeof updateAllVmafEtas === "function") updateAllVmafEtas();
     const dvSel = $("opt-dv-mode");
     if (dvSel) dvSel.dataset.userset = "";
     const box = $("dv-l1-curve-box");
@@ -3028,7 +3030,7 @@
   }
   function ebSyncMode() {
     const speed = ebMode() === "speed";
-    ["eb-speeds", "eb-rate", "eb-b-frames", "eb-nvenc-tune", "eb-aq-strength", "eb-keyint", "eb-samples", "eb-s2-frames", "eb-seconds"].forEach((id) => {
+    ["eb-speeds", "eb-rate", "eb-b-frames", "eb-nvenc-tune", "eb-aq-strength", "eb-keyint", "eb-samples", "eb-s2-frames", "eb-seconds", "eb-psnr"].forEach((id) => {
       const el = $(id);
       const field = el && el.closest(".field");
       if (field) field.hidden = speed;
@@ -3080,7 +3082,26 @@
       el.textContent = "Mindestens einen Clip und eine Speed-Stufe wählen.";
       return;
     }
-    el.textContent = `Ungefähr ${n} Mini-Encodes (${nClips} Clips × ${nSp} Speed-Stufen × ${nVal} Qualitätswerte × ${nSamp} Szenen).`
+    let etaSuffix = "";
+    if (state.vmafCalib && typeof estimateVmafRunJs === "function") {
+      const secClip = parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12;
+      const plat = ($("eb-platform") && $("eb-platform").value) || "cpu";
+      const codec = ($("eb-codec") && $("eb-codec").value) || "av1";
+      const vals = ebParseValues();
+      const spList = ebSelectedSpeeds();
+      const rows = spList.slice(1).map((sp) => ({ platform: plat, codec, encoder_speed: sp, rate_mode: ebRateMode(), test_values: vals }));
+      const est = estimateVmafRunJs({
+        platform: plat, codec, encoder_speed: spList[0] || "balanced",
+        rate_mode: ebRateMode(), test_values: vals, compare_rows: rows,
+        samples: nSamp, clip_seconds: secClip, file_count: nClips,
+        ssimulacra2_frames: $("eb-s2-frames") ? parseInt($("eb-s2-frames").value, 10) : 3,
+        ...gatherVmafMetricFlags("eb"),
+      }, state.vmafCalib);
+      if (est && est.calibrated && est.total_sec > 0) {
+        etaSuffix = ` · Geschätzte Dauer (Grundtest): ~${formatDuration(est.total_sec)}`;
+      }
+    }
+    el.textContent = `Ungefähr ${n} Mini-Encodes (${nClips} Clips × ${nSp} Speed-Stufen × ${nVal} Qualitätswerte × ${nSamp} Szenen)${etaSuffix}.`
       + (n >= 40
         ? " Das dauert – CPU-AV1 mit allen Stufen kann Stunden laufen."
         : " CPU-AV1 dauert deutlich länger als GPU.");
@@ -3481,6 +3502,7 @@
           clip_seconds: parseInt(($("eb-seconds") && $("eb-seconds").value) || "12", 10) || 12,
           samples: parseInt(($("eb-samples") && $("eb-samples").value) || "3", 10) || 3,
           ssimulacra2_frames: $("eb-s2-frames") ? parseInt($("eb-s2-frames").value, 10) : 3,
+          ...gatherVmafMetricFlags("eb"),
           anime: ebMode() === "speed" ? false : !!($("eb-anime") && $("eb-anime").checked),
           mode: ebMode(),
         });
@@ -3517,6 +3539,37 @@
       } finally { apply.disabled = false; }
     });
     ebRefresh();
+  }
+
+  function gatherVmafMetricFlags(prefix) {
+    const chk = (suffix) => {
+      const el = $(`${prefix}-${suffix}`);
+      return el ? !!el.checked : true;
+    };
+    return {
+      vmaf_psnr: chk("psnr"),
+      vmaf_ssim: chk("ssim"),
+      vmaf_ms_ssim: chk("ms-ssim"),
+      vmaf_xpsnr: chk("xpsnr"),
+      vmaf_cambi: chk("cambi"),
+    };
+  }
+
+  function applyVmafMetricFlags(prefix, s) {
+    if (!s || typeof s !== "object") return;
+    const map = [
+      ["vmaf_psnr", "psnr"],
+      ["vmaf_ssim", "ssim"],
+      ["vmaf_ms_ssim", "ms-ssim"],
+      ["vmaf_xpsnr", "xpsnr"],
+      ["vmaf_cambi", "cambi"],
+    ];
+    map.forEach(([key, suffix]) => {
+      const el = $(`${prefix}-${suffix}`);
+      if (el && s[key] !== undefined && s[key] !== null) {
+        el.checked = !!s[key];
+      }
+    });
   }
 
   // Encoding-Seite: fester CQ/CBR/ABR oder Ziel-VMAF (Test-Encodes, dann auto).
@@ -3560,6 +3613,7 @@
       out.vmaf_min_p5 = $("opt-vmaf-min-p5") ? (parseFloat($("opt-vmaf-min-p5").value) || 0) : 0;
       out.vmaf_subsample = $("opt-vmaf-subsample") ? (parseInt($("opt-vmaf-subsample").value, 10) || 1) : 1;
       out.vmaf_gpu = $("opt-vmaf-gpu") ? $("opt-vmaf-gpu").checked : false;
+      Object.assign(out, gatherVmafMetricFlags("opt-vmaf"));
       out.generate_screenshots = $("opt-vmaf-shots") ? $("opt-vmaf-shots").checked : false;
       const customRanges = activeCustomSampleRanges();
       if (customRanges.length) out.sample_ranges = customRanges;
@@ -3985,6 +4039,10 @@
       const on = !!(visual && visual.checked);
       if (visualHint) visualHint.hidden = !on;
       if (on && shots) shots.checked = true;
+      ["vt-psnr", "vt-ssim", "vt-ms-ssim", "vt-xpsnr", "vt-cambi", "vt-s2-frames"].forEach((id) => {
+        const el = $(id);
+        if (el) el.disabled = on;
+      });
     };
     if (visual) visual.addEventListener("change", syncVisual);
     if (shots) shots.addEventListener("change", () => {
@@ -4057,6 +4115,7 @@
       clip_seconds: parseInt($("vt-clip").value, 10),
       samples: parseInt($("vt-samples").value, 10),
       ssimulacra2_frames: $("vt-s2-frames") ? parseInt($("vt-s2-frames").value, 10) : 3,
+      ...gatherVmafMetricFlags("vt"),
       sample_mode: sampleModeValue(),
       ...(activeCustomSampleRanges().length ? { sample_ranges: activeCustomSampleRanges() } : {}),
       scene_min_pct: sceneMinPct(),
@@ -4521,13 +4580,42 @@
     return [...running, ...waiting, ...done].map((x) => x.it);
   }
 
+  function subtimingHtml(step) {
+    const st = step && step.context && step.context.subtiming;
+    if (!st || typeof st !== "object") return "";
+    const active = step.running ? (st.active || "") : "";
+    const parts = [];
+    const encSec = Number(st.encode_sec || 0);
+    const vmafSec = Number(st.vmaf_sec || 0);
+    const s2Sec = Number(st.s2_sec || 0);
+    const postSec = Number(st.post_sec || 0);
+    if (encSec > 0 || active === "encode") {
+      parts.push(`<span class="sub-part${active === "encode" ? " is-active" : ""}">Encode ${formatDuration(encSec)}</span>`);
+    }
+    if (vmafSec > 0 || active === "vmaf") {
+      const mList = Array.isArray(st.metrics) ? st.metrics.filter((m) => m && m !== "VMAF") : [];
+      const mTag = mList.length === 5
+        ? " (+5 Tests)"
+        : (mList.length ? ` (+${escapeHtml(mList.join(", "))})` : "");
+      parts.push(`<span class="sub-part${active === "vmaf" ? " is-active" : ""}">VMAF${mTag} ${formatDuration(vmafSec)}</span>`);
+    }
+    if (s2Sec > 0 || active === "s2") {
+      parts.push(`<span class="sub-part${active === "s2" ? " is-active" : ""}">S2 ${formatDuration(s2Sec)}</span>`);
+    }
+    if (postSec >= 1.0 || active === "post") {
+      parts.push(`<span class="sub-part${active === "post" ? " is-active" : ""}">Nachber. ${formatDuration(postSec)}</span>`);
+    }
+    if (!parts.length) return "";
+    return `<div class="queue-substeps"><span>↳</span>${parts.join("<span>·</span>")}</div>`;
+  }
+
   function stepsHtml(steps) {
     const list = Array.isArray(steps) ? steps.filter((s) => s && s.name) : [];
     if (!list.length) return "";
     const rows = list.map((s) => {
       const cls = s.running ? " class=\"is-running\"" : "";
       const label = window.StudioInsights ? window.StudioInsights.phaseLabel(s) : s.name;
-      return `<li${cls}><span>${escapeHtml(label)}</span><span>${formatDuration(s.seconds)}</span></li>`;
+      return `<li${cls}><div class="step-main"><span>${escapeHtml(label)}</span><span>${formatDuration(s.seconds)}</span></div>${subtimingHtml(s)}</li>`;
     }).join("");
     return `<ul class="queue-steps">${rows}</ul>`;
   }
@@ -4856,6 +4944,7 @@
       if (s.clip_seconds) set("st-clip", s.clip_seconds);
       if (s.samples) set("st-samples", String(s.samples));
       if (s.ssimulacra2_frames !== undefined && s.ssimulacra2_frames !== null) set("st-s2-frames", String(s.ssimulacra2_frames));
+      applyVmafMetricFlags("st", s);
       set("st-sample-mode", s.sample_mode === "bitrate", "change");
       set("st-two-pass", !!s.two_pass);
       const grid = [...document.querySelectorAll("#st-test-grid .st-test-val")];
@@ -5467,6 +5556,7 @@
     }
     setVal("vt-samples", base.samples);
     setVal("vt-s2-frames", base.ssimulacra2_frames != null ? base.ssimulacra2_frames : 3);
+    applyVmafMetricFlags("vt", params);
     if ($("vt-two-pass")) $("vt-two-pass").checked = !!base.two_pass;
     if ($("vt-anime")) $("vt-anime").checked = !!base.anime;
     if ($("vt-screenshots")) $("vt-screenshots").checked = !!base.screenshots;
@@ -9916,6 +10006,7 @@
       }
       if (s.samples) set("opt-vmaf-samples", String(s.samples));
       if (s.ssimulacra2_frames !== undefined && s.ssimulacra2_frames !== null) set("opt-s2-frames", String(s.ssimulacra2_frames));
+      applyVmafMetricFlags("opt-vmaf", s);
       if (s.generate_screenshots !== undefined) set("opt-vmaf-shots", s.generate_screenshots);
       const grid = [...document.querySelectorAll("#opt-vmaf-grid .opt-vmaf-val")];
       const vals = Array.isArray(s.test_values) ? s.test_values : [];
@@ -12727,6 +12818,7 @@
       s.clip_seconds = parseInt($("st-clip").value, 10) || 20;
       s.samples = parseInt($("st-samples").value, 10) || 1;
       s.ssimulacra2_frames = $("st-s2-frames") ? parseInt($("st-s2-frames").value, 10) : 3;
+      Object.assign(s, gatherVmafMetricFlags("st"));
       s.sample_mode = sampleModeValue("st-sample-mode");
       const stCustom = activeCustomSampleRanges();
       if (stCustom.length) s.sample_ranges = stCustom;
@@ -18061,11 +18153,314 @@
   }
 
   /* ------------------------------------------------------------- DIAGNOSE */
+  function interpResJs(val1080, val2160, pixels) {
+    const px1080 = 1920 * 1080;
+    const px2160 = 3840 * 2160;
+    const p = Math.max(640 * 360, Number(pixels) || px1080);
+    if (p <= px1080) {
+      return val1080 * Math.min(2.6, Math.pow(px1080 / p, 0.72));
+    }
+    const t = Math.min(1.5, (p - px1080) / (px2160 - px1080));
+    return Math.max(0.05, val1080 + (val2160 - val1080) * t);
+  }
+
+  function nearestSpeedAliasJs(raw) {
+    const s = String(raw || "balanced").toLowerCase();
+    if (["fastest", "fast", "balanced", "slow", "slowest"].includes(s)) return s;
+    const n = parseInt(s.replace(/^p/, ""), 10);
+    if (!isNaN(n)) {
+      if (s.startsWith("p")) return n <= 2 ? "fastest" : (n <= 3 ? "fast" : (n <= 5 ? "balanced" : (n === 6 ? "slow" : "slowest")));
+      return n >= 11 ? "fastest" : (n >= 8 ? "fast" : (n >= 5 ? "balanced" : (n >= 3 ? "slow" : "slowest")));
+    }
+    if (s.includes("ultra") || s.includes("veryfast")) return "fastest";
+    if (s.includes("fast")) return "fast";
+    if (s.includes("veryslow") || s.includes("placebo")) return "slowest";
+    if (s.includes("slow")) return "slow";
+    return "balanced";
+  }
+
+  function estimateVmafRunJs(params, calib) {
+    const c = calib || state.vmafCalib;
+    if (!c || typeof c !== "object" || !c.vmaf) return { calibrated: false };
+    let width = Number(params.width) || 1920;
+    let height = Number(params.height) || 1080;
+    const targetH = Number(params.target_height) || 0;
+    if (targetH > 0 && targetH < height) {
+      width = Math.round(width * (targetH / height));
+      height = targetH;
+    }
+    const pixels = width * height;
+    const fps = Number(params.fps) > 0 ? Number(params.fps) : 24.0;
+    const samples = Math.max(1, Math.min(5, parseInt(params.samples, 10) || 1));
+    const clipSec = Math.max(5, Math.min(120, Number(params.clip_seconds) || 20));
+    const totalFrames = samples * clipSec * fps;
+    const batchCount = Math.max(1, parseInt(params.file_count, 10) || 1);
+
+    let refSec = 0;
+    const refInfo = c.reference || {};
+    if (params.tonemap) {
+      const tm1080 = Number(refInfo.tonemap_fps_1080p) || 45;
+      const tmFps = interpResJs(tm1080, tm1080 * 0.28, pixels);
+      refSec = totalFrames / Math.max(1, tmFps);
+    } else {
+      refSec = samples * Math.max(0.6, clipSec * 0.04);
+    }
+    if (params.sample_mode === "bitrate") refSec += 2.5;
+
+    const baseRow = {
+      platform: params.platform || "cpu",
+      codec: params.codec || "av1",
+      encoder_speed: params.encoder_speed || "balanced",
+      rate_mode: params.rate_mode || "cq",
+      test_values: Array.isArray(params.test_values) && params.test_values.length ? params.test_values : [20, 24, 28, 32],
+      two_pass: !!params.two_pass,
+    };
+    const rows = [baseRow];
+    (Array.isArray(params.compare_rows) ? params.compare_rows : []).slice(0, 6).forEach((ex) => {
+      if (ex && typeof ex === "object") {
+        rows.push({
+          platform: ex.platform || baseRow.platform,
+          codec: ex.codec || baseRow.codec,
+          encoder_speed: ex.encoder_speed || ex.speed || baseRow.encoder_speed,
+          rate_mode: ex.rate_mode || baseRow.rate_mode,
+          test_values: Array.isArray(ex.test_values) && ex.test_values.length ? ex.test_values : baseRow.test_values,
+          two_pass: ex.two_pass !== undefined ? !!ex.two_pass : baseRow.two_pass,
+        });
+      }
+    });
+
+    const searchMode = params.vmaf_search_mode || "grid";
+    const visualOnly = !!params.visual_only;
+    const encDb = c.encoders || {};
+    let encodeSec = 0;
+    let totalTiers = 0;
+    rows.forEach((r) => {
+      const nVals = Math.max(1, (r.test_values || [24]).length);
+      const tiers = searchMode === "binary" ? 5.0 : nVals;
+      totalTiers += tiers;
+      const prof = encDb[`${r.platform}:${r.codec}`] || {};
+      const spMap = prof.speeds_1080p || {};
+      const alias = nearestSpeedAliasJs(r.encoder_speed);
+      const fps1080 = Number(spMap[alias] || spMap.balanced || (r.platform === "cpu" ? 18 : 140));
+      const scale4k = Number(prof.scale_2160_to_1080 || 0.27);
+      const encFps = Math.max(0.3, interpResJs(fps1080, fps1080 * scale4k, pixels));
+      const twoMult = (r.two_pass && (r.rate_mode === "abr" || r.rate_mode === "bitrate"))
+        ? (r.platform === "cpu" ? 1.72 : 1.15) : 1.0;
+      encodeSec += tiers * ((totalFrames / encFps) * twoMult + samples * 0.35);
+    });
+
+    let vmafSec = 0;
+    let s2Sec = 0;
+    if (!visualOnly) {
+      const vc = c.vmaf || {};
+      const useGpu = !!params.vmaf_gpu && Number(vc.gpu_fps_1080p || 0) > 0;
+      const b1080 = Number(useGpu ? vc.gpu_fps_1080p : (vc.fps_1080p || 45));
+      const b2160 = Number((useGpu && vc.gpu_fps_2160p) ? vc.gpu_fps_2160p : (vc.fps_2160p || b1080 * 0.27));
+      const vmafFps = Math.max(0.5, interpResJs(b1080, b2160, pixels));
+      const ov = vc.overheads || {};
+      let rawOv = 0;
+      [["vmaf_psnr", "psnr"], ["vmaf_ssim", "ssim"], ["vmaf_ms_ssim", "ms_ssim"], ["vmaf_xpsnr", "xpsnr"], ["vmaf_cambi", "cambi"]].forEach(([fk, ok]) => {
+        if (params[fk] !== false) rawOv += Number(ov[ok] || 0);
+      });
+      const effOv = rawOv * Number(vc.combo_scale || 1.0);
+      const sub = Math.max(1, parseInt(params.vmaf_subsample, 10) || 1);
+      const decShare = Number(vc.decode_share || 0.35);
+      const subFactor = decShare + (1.0 - decShare) / sub;
+      vmafSec = totalTiers * ((totalFrames / vmafFps) * (1.0 + effOv) * subFactor + samples * 0.3);
+
+      const s2Frames = params.ssimulacra2_frames !== undefined ? parseInt(params.ssimulacra2_frames, 10) : 3;
+      const s2Cfg = c.ssimulacra2 || {};
+      if (s2Frames > 0 && s2Cfg.available !== false) {
+        const p1080 = Number(s2Cfg.sec_per_pair_1080p || 0.45);
+        const p2160 = Number(s2Cfg.sec_per_pair_2160p || 1.35);
+        const secPair = pixels > 1920 * 1080
+          ? p1080 + (p2160 - p1080) * Math.min(1.5, (pixels - 1920 * 1080) / (3840 * 2160 - 1920 * 1080))
+          : p1080 * Math.max(0.5, Math.pow(pixels / (1920 * 1080), 0.7));
+        s2Sec = totalTiers * samples * s2Frames * secPair;
+      }
+    }
+    const total = (refSec + encodeSec + vmafSec + s2Sec) * batchCount;
+    return {
+      calibrated: true,
+      total_sec: Math.round(total),
+      encode_sec: Math.round(encodeSec * batchCount),
+      vmaf_sec: Math.round(vmafSec * batchCount),
+      s2_sec: Math.round(s2Sec * batchCount),
+      ref_sec: Math.round(refSec * batchCount),
+      resolution: `${width}×${height}`,
+      assumed_source: !state.currentInfo,
+    };
+  }
+
+  function renderVmafEtaBar(elId, params, visible) {
+    const el = $(elId);
+    if (!el) return;
+    if (!visible) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    const est = estimateVmafRunJs(params);
+    if (!est.calibrated) {
+      el.innerHTML = `<span>Dauer-Prognose verfügbar nach System-Kalibrierung</span>`
+        + `<a href="#" class="eta-sub" data-open-vc="1">Grundtest unter Diagnose starten &rarr;</a>`;
+      return;
+    }
+    const subParts = [`Encode ~${formatDuration(est.encode_sec)}`];
+    if (est.vmaf_sec > 0) subParts.push(`VMAF ~${formatDuration(est.vmaf_sec)}`);
+    if (est.s2_sec > 0) subParts.push(`S2 ~${formatDuration(est.s2_sec)}`);
+    const resNote = est.assumed_source ? `${est.resolution} Referenzannahme` : est.resolution;
+    el.innerHTML = `<span>Geschätzte Analysedauer: <strong>~${formatDuration(est.total_sec)}</strong> <span class="muted">(${escapeHtml(resNote)})</span></span>`
+      + `<span class="eta-sub">${subParts.join(" · ")}</span>`;
+  }
+
+  function updateAllVmafEtas() {
+    const info = state.currentInfo || {};
+    const baseDims = {
+      width: info.width || 1920,
+      height: info.height || 1080,
+      fps: info.fps || 24,
+    };
+    // 1) VMAF-Tool
+    if ($("vt-vmaf-eta") && $("vt-platform")) {
+      const vtS = vtGatherSettings();
+      renderVmafEtaBar("vt-vmaf-eta", { ...baseDims, ...vtS }, true);
+    }
+    // 2) Encoding -> Ziel-VMAF
+    const encVmaf = $("opt-rate-mode") && $("opt-rate-mode").value === "vmaf";
+    if ($("opt-vmaf-eta") && $("opt-platform")) {
+      if (encVmaf) {
+        const encS = gatherSettings();
+        renderVmafEtaBar("opt-vmaf-eta", { ...baseDims, ...encS }, true);
+      } else {
+        $("opt-vmaf-eta").hidden = true;
+      }
+    }
+    // 3) Super-Tool
+    const stMode = $("st-mode") ? $("st-mode").value : "fixed";
+    if ($("st-vmaf-eta") && $("st-platform")) {
+      if (stMode === "target_vmaf" || stMode === "representative") {
+        const stS = stGatherSettings();
+        const fCount = stMode === "representative" ? 1 : Math.max(1, (state.stSelected ? state.stSelected.size : 1) || 1);
+        renderVmafEtaBar("st-vmaf-eta", { ...baseDims, ...stS, file_count: fCount }, true);
+      } else {
+        $("st-vmaf-eta").hidden = true;
+      }
+    }
+    if (typeof ebUpdateEstimate === "function") ebUpdateEstimate();
+  }
+
+  let vcPollTimer = null;
+  function renderVmafCalibSummary(calib) {
+    const badge = $("vc-badge");
+    const box = $("vc-summary");
+    if (!calib || !calib.vmaf) {
+      if (badge) { badge.textContent = "Nicht kalibriert"; badge.className = "badge"; }
+      if (box) box.innerHTML = "";
+      return;
+    }
+    const dtStr = calib.calibrated_at ? new Date(calib.calibrated_at * 1000).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "";
+    if (badge) {
+      badge.textContent = dtStr ? `Kalibriert (${dtStr})` : "Kalibriert";
+      badge.className = "badge diag-ok";
+    }
+    if (!box) return;
+    const encRows = Object.entries(calib.encoders || {}).map(([k, v]) => {
+      const sp = v.speeds_1080p || {};
+      const bal = sp.balanced ? `${Math.round(sp.balanced)} fps` : "—";
+      const uhd = v.fps_2160p_balanced ? `${Math.round(v.fps_2160p_balanced)} fps` : "—";
+      return `<div>${escapeHtml(k.toUpperCase())}: 1080p <strong>${bal}</strong> · 4K <strong>${uhd}</strong></div>`;
+    }).join("");
+    const vc = calib.vmaf || {};
+    const ov = vc.overheads || {};
+    const pct = (x) => `+${Math.round(Number(x || 0) * 100)} %`;
+    const ovText = `PSNR ${pct(ov.psnr)} · SSIM ${pct(ov.ssim)} · MS-SSIM ${pct(ov.ms_ssim)} · XPSNR ${pct(ov.xpsnr)} · CAMBI ${pct(ov.cambi)}`;
+    const s2 = calib.ssimulacra2 || {};
+    const s2Text = s2.available
+      ? `1080p: ${Number(s2.sec_per_pair_1080p || 0).toFixed(2)} s/Bild · 4K: ${Number(s2.sec_per_pair_2160p || 0).toFixed(2)} s/Bild`
+      : "Nicht installiert";
+    box.innerHTML = `<div class="vmaf-calib-grid">`
+      + `<div class="vmaf-calib-card"><strong>Encoder-Durchsatz (Ausgewogen)</strong>${encRows || "—"}</div>`
+      + `<div class="vmaf-calib-card"><strong>libvmaf-Messung</strong><div>1080p: <strong>${Math.round(vc.fps_1080p || 0)} fps</strong> · 4K: <strong>${Math.round(vc.fps_2160p || 0)} fps</strong>${vc.gpu_fps_1080p ? ` · CUDA: ${Math.round(vc.gpu_fps_1080p)} fps` : ""}</div><div class="muted" style="margin-top:3px">${escapeHtml(ovText)}</div></div>`
+      + `<div class="vmaf-calib-card"><strong>SSIMULACRA2</strong><div>${escapeHtml(s2Text)}</div></div>`
+      + `</div>`;
+  }
+
+  async function refreshVmafCalibration() {
+    try {
+      const st = await (await fetch("/api/vmaf/calibration")).json();
+      state.vmafCalib = st.calibration || null;
+      const startBtn = $("btn-vc-start");
+      const cancelBtn = $("btn-vc-cancel");
+      const wrap = $("vc-progress-wrap");
+      const fill = $("vc-bar-fill");
+      const pct = $("vc-pct");
+      const msg = $("vc-msg");
+      if (startBtn) startBtn.disabled = !!st.running;
+      if (cancelBtn) cancelBtn.disabled = !st.running;
+      if (wrap) wrap.style.display = st.running ? "" : "none";
+      if (fill) fill.style.width = `${st.percent || 0}%`;
+      if (pct) pct.textContent = `${st.percent || 0} %`;
+      if (msg) msg.textContent = st.error ? `Fehler: ${st.error}` : (st.message || "");
+      renderVmafCalibSummary(state.vmafCalib);
+      updateAllVmafEtas();
+      if (st.running) {
+        if (!vcPollTimer) vcPollTimer = setInterval(refreshVmafCalibration, 1200);
+      } else if (vcPollTimer) {
+        clearInterval(vcPollTimer);
+        vcPollTimer = null;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function initDiagnostics() {
     const btn = $("btn-diag-run");
     if (btn) btn.addEventListener("click", () => loadDiagnostics(false));
     const deep = $("btn-diag-deep");
     if (deep) deep.addEventListener("click", () => loadDiagnostics(true));
+
+    const vcStart = $("btn-vc-start");
+    if (vcStart) vcStart.addEventListener("click", async () => {
+      vcStart.disabled = true;
+      try {
+        const r = await (await fetch("/api/vmaf/calibration/start", { method: "POST" })).json();
+        if (r.error) alert(r.error);
+      } catch (e) { alert(e.message || e); }
+      refreshVmafCalibration();
+    });
+    const vcCancel = $("btn-vc-cancel");
+    if (vcCancel) vcCancel.addEventListener("click", async () => {
+      try { await fetch("/api/vmaf/calibration/cancel", { method: "POST" }); } catch (e) { /* ignore */ }
+      refreshVmafCalibration();
+    });
+
+    document.addEventListener("click", (ev) => {
+      const link = ev.target.closest("[data-open-vc]");
+      if (!link) return;
+      ev.preventDefault();
+      navTo("diag");
+      const sec = $("btn-vc-start");
+      if (sec) sec.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    let etaTimer = null;
+    const scheduleEta = () => {
+      clearTimeout(etaTimer);
+      etaTimer = setTimeout(updateAllVmafEtas, 60);
+    };
+    document.querySelectorAll("section.card[data-page]").forEach((root) => {
+      const dp = root.getAttribute("data-page") || "";
+      if (/(^|\s)(vmaf|encode|supertool|diag)(\s|$)/.test(dp)) {
+        root.addEventListener("change", scheduleEta);
+        root.addEventListener("input", scheduleEta);
+      }
+    });
+    const vtAdd = $("vt-add-row");
+    if (vtAdd) vtAdd.addEventListener("click", () => setTimeout(updateAllVmafEtas, 80));
+    const vtExtra = $("vt-extra-rows");
+    if (vtExtra) vtExtra.addEventListener("click", () => setTimeout(updateAllVmafEtas, 80));
+
+    refreshVmafCalibration();
   }
 
   const DIAG_ICON = { ok: "✓", warn: "!", fail: "✗" };

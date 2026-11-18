@@ -59,14 +59,33 @@ def _end_step(item: "QueueItem") -> None:
     """Laufenden Schritt abschließen und seine Dauer merken."""
     name = str(getattr(item, "_step_name", "") or "")
     t0 = float(getattr(item, "_step_t0", 0) or 0)
-    meta = getattr(item, "_step_meta", {})
+    meta = dict(getattr(item, "_step_meta", {}) or {})
     item._step_name = ""
     item._step_t0 = 0.0
     item._step_meta = {}
     if not name or t0 <= 0:
         return
+    ctx = meta.get("context")
+    if isinstance(ctx, dict) and isinstance(ctx.get("subtiming"), dict):
+        sub = dict(ctx["subtiming"])
+        act = sub.pop("active", "")
+        at0 = float(sub.pop("active_t0", 0) or 0)
+        if act and at0 > 0:
+            key_sec = f"{act}_sec"
+            sub[key_sec] = round(float(sub.get(key_sec, 0.0) or 0.0) + max(0.0, time.perf_counter() - at0), 1)
+        sub.pop("clip", None)
+        meta["context"] = {**ctx, "subtiming": sub}
     secs = round(max(0.0, time.time() - t0), 1)
     item.steps.append({"name": name, "seconds": secs, **meta})
+
+
+def _update_substep(item: "QueueItem", data: dict) -> None:
+    meta = getattr(item, "_step_meta", None)
+    if not isinstance(meta, dict) or not data:
+        return
+    ctx = dict(meta.get("context") or {})
+    ctx["subtiming"] = dict(data)
+    meta["context"] = ctx
 
 
 def _step_label(item: "QueueItem", fallback: str) -> str:
@@ -182,11 +201,22 @@ def _steps_public(item: "QueueItem") -> list:
     name = str(getattr(item, "_step_name", "") or "")
     t0 = float(getattr(item, "_step_t0", 0) or 0)
     if name and t0 > 0:
+        meta = dict(getattr(item, "_step_meta", {}) or {})
+        ctx = meta.get("context")
+        if isinstance(ctx, dict) and isinstance(ctx.get("subtiming"), dict):
+            sub = dict(ctx["subtiming"])
+            act = str(sub.get("active") or "")
+            act_t0 = float(sub.get("active_t0") or 0)
+            field_map = {"encode": "encode_sec", "vmaf": "vmaf_sec", "s2": "s2_sec", "post": "post_sec"}
+            if act in field_map and act_t0 > 0:
+                fld = field_map[act]
+                sub[fld] = round(max(0.0, float(sub.get(fld) or 0.0) + max(0.0, time.time() - act_t0)), 1)
+            meta["context"] = {**ctx, "subtiming": sub}
         out.append({
             "name": name,
             "seconds": round(max(0.0, time.time() - t0), 1),
             "running": True,
-            **getattr(item, "_step_meta", {}),
+            **meta,
         })
     return out
 
@@ -292,6 +322,11 @@ class JobSettings:
     vmaf_min_p5: float = 0.0       # 0 = aus, sonst Mindestwert für das 5%-Perzentil
     vmaf_subsample: int = 1        # 1 = jedes Frame (Standard), >1 = optionales Subsampling (jedes N-te Frame)
     vmaf_gpu: bool = False         # VMAF per GPU (libvmaf_cuda / CUDA-HW-Decode, abhängig von Treiber & Build)
+    vmaf_psnr: bool = True         # PSNR im VMAF-Lauf mitberechnen
+    vmaf_ssim: bool = True         # SSIM (float_ssim) im VMAF-Lauf mitberechnen
+    vmaf_ms_ssim: bool = True      # MS-SSIM (float_ms_ssim) im VMAF-Lauf mitberechnen
+    vmaf_xpsnr: bool = True        # XPSNR-Filter im VMAF-Lauf mitberechnen
+    vmaf_cambi: bool = True        # CAMBI (Banding-Index) im VMAF-Lauf mitberechnen
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     ssimulacra2_frames: int = 3    # Standbilder je Stichprobe für SSIMULACRA2
@@ -1423,6 +1458,11 @@ class QueueManager:
                 min_p5=float(getattr(s, "vmaf_min_p5", 0) or 0),
                 subsample=vmaf_mod.normalize_vmaf_subsample(getattr(s, "vmaf_subsample", 1)),
                 gpu_accel=bool(getattr(s, "vmaf_gpu", False)),
+                with_psnr=bool(getattr(s, "vmaf_psnr", True)),
+                with_ssim=bool(getattr(s, "vmaf_ssim", True)),
+                with_ms_ssim=bool(getattr(s, "vmaf_ms_ssim", True)),
+                with_xpsnr=bool(getattr(s, "vmaf_xpsnr", True)),
+                with_cambi=bool(getattr(s, "vmaf_cambi", True)),
             )
             try:
                 analysis = vmaf_mod.analyze(
@@ -1448,6 +1488,7 @@ class QueueManager:
                     on_step=lambda name: _begin_step(
                         item, name, "analysis.reference" if name.startswith("Referenz")
                         else "analysis.candidate"),
+                    on_substep=lambda sub: _update_substep(item, sub),
                 )
             finally:
                 _end_step(item)
@@ -3326,6 +3367,11 @@ def build_job_settings(d: dict) -> JobSettings:
         vmaf_min_p5=max(0.0, min(99.0, float(d.get("vmaf_min_p5", 0) or 0))),
         vmaf_subsample=vmaf_mod.normalize_vmaf_subsample(d.get("vmaf_subsample", 1)),
         vmaf_gpu=bool(d.get("vmaf_gpu", False)),
+        vmaf_psnr=bool(d.get("vmaf_psnr", True) if d.get("vmaf_psnr") is not None else True),
+        vmaf_ssim=bool(d.get("vmaf_ssim", True) if d.get("vmaf_ssim") is not None else True),
+        vmaf_ms_ssim=bool(d.get("vmaf_ms_ssim", True) if d.get("vmaf_ms_ssim") is not None else True),
+        vmaf_xpsnr=bool(d.get("vmaf_xpsnr", True) if d.get("vmaf_xpsnr") is not None else True),
+        vmaf_cambi=bool(d.get("vmaf_cambi", True) if d.get("vmaf_cambi") is not None else True),
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         ssimulacra2_frames=max(0, min(7, int(d.get("ssimulacra2_frames") if d.get("ssimulacra2_frames") is not None else 3))),

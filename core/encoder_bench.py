@@ -890,6 +890,11 @@ def _run_bench_inner(cfg: dict, vmaf_mod) -> None:
                 source_path=str(job["path"]),
                 anime=anime,
                 refine_midpoint=False,
+                with_psnr=bool(cfg.get("vmaf_psnr", True) if cfg.get("vmaf_psnr") is not None else True),
+                with_ssim=bool(cfg.get("vmaf_ssim", True) if cfg.get("vmaf_ssim") is not None else True),
+                with_ms_ssim=bool(cfg.get("vmaf_ms_ssim", True) if cfg.get("vmaf_ms_ssim") is not None else True),
+                with_xpsnr=bool(cfg.get("vmaf_xpsnr", True) if cfg.get("vmaf_xpsnr") is not None else True),
+                with_cambi=bool(cfg.get("vmaf_cambi", True) if cfg.get("vmaf_cambi") is not None else True),
             )
             t0 = time.time()
             analysis = vmaf_mod.analyze(

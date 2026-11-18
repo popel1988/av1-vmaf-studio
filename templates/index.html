@@ -31,6 +31,18 @@
                       <option value="5"{% if selected == "5" %} selected{% endif %}>5</option>
                       <option value="7"{% if selected == "7" %} selected{% endif %}>7</option>
   {% endmacro %}
+  {% macro vmaf_metric_checks(prefix) %}
+                <div class="field vmaf-metrics-field">
+                  <label data-tip="Zusätzliche Qualitätsmetriken neben VMAF. Einzelne Tests abwählen spart Messzeit (vor allem CAMBI, MS-SSIM und XPSNR). VMAF selbst läuft immer.">Zusatztests neben VMAF</label>
+                  <div class="vmaf-metric-checks">
+                    <label class="metric-chip" data-tip="PSNR (Peak Signal-to-Noise Ratio) – sehr geringer Mehraufwand"><input type="checkbox" id="{{ prefix }}-psnr" checked /><span>PSNR</span></label>
+                    <label class="metric-chip" data-tip="SSIM (Structural Similarity) – geringer Mehraufwand"><input type="checkbox" id="{{ prefix }}-ssim" checked /><span>SSIM</span></label>
+                    <label class="metric-chip" data-tip="MS-SSIM (Multi-Scale SSIM) – mittlerer Mehraufwand"><input type="checkbox" id="{{ prefix }}-ms-ssim" checked /><span>MS-SSIM</span></label>
+                    <label class="metric-chip" data-tip="XPSNR (Extended Perceptual PSNR, separater FFmpeg-Lauf) – mittlerer Mehraufwand"><input type="checkbox" id="{{ prefix }}-xpsnr" checked /><span>XPSNR</span></label>
+                    <label class="metric-chip" data-tip="CAMBI (Netflix Banding-Index) – höherer Mehraufwand"><input type="checkbox" id="{{ prefix }}-cambi" checked /><span>CAMBI</span></label>
+                  </div>
+                </div>
+  {% endmacro %}
   <div class="app">
     <!-- ============================= SIDEBAR ============================= -->
     <aside class="sidebar">
@@ -536,6 +548,7 @@
                       {{ s2_frame_options("3") }}
                     </select>
                   </div>
+                  {{ vmaf_metric_checks("opt-vmaf") }}
                   <div class="field">
                     <label>Vergleichsclip-Länge: <strong id="opt-vmaf-clip-val">20</strong> Sek.</label>
                     <input type="range" id="opt-vmaf-clip" min="5" max="120" value="20" step="5" />
@@ -558,6 +571,7 @@
                     <p class="hint">Wie im VMAF-Tool, optional. Bei Ordnern nur die erste Datei (repräsentativ).</p>
                   </div>
                 </div>
+                <div class="vmaf-eta-bar" id="opt-vmaf-eta" hidden></div>
               </div>
               <p class="hint" style="margin-top:8px">Fester CQ/CBR/ABR encodiert direkt. <strong>Ziel-VMAF</strong> macht
                 Test-Encodes und encodiert danach automatisch. Encoder-Vergleiche (mehrere Codecs) bleiben im
@@ -861,6 +875,7 @@
                   </select>
                   <p class="hint">Skala bis 100 (höher = besser): ab 85 kaum unterscheidbar · 70–85 sehr gut · 50–70 sichtbar · unter 50 schwach. 0 = aus.</p>
                 </div>
+                {{ vmaf_metric_checks("vt") }}
                 <div class="field">
                   <label>Testwerte (1–4 · Feld leeren = weniger Tests)</label>
                   <div class="test-values-grid" id="vt-test-grid">
@@ -1024,6 +1039,8 @@
               <div id="vt-extra-rows"></div>
               <button type="button" class="btn btn-ghost btn-sm" id="vt-add-row">+ Weiteren Vergleich</button>
             </div>
+
+            <div class="vmaf-eta-bar" id="vt-vmaf-eta" hidden style="margin-bottom:10px"></div>
 
             <button class="btn btn-primary btn-block" id="btn-vmaf-start" disabled>
               VMAF-Vergleich starten
@@ -1669,6 +1686,7 @@
                   </select>
                 </div>
               </div>
+              {{ vmaf_metric_checks("st") }}
               <div class="field">
                 <label>Clip-Länge (Sekunden)</label>
                 <input type="number" id="st-clip" min="5" max="120" value="20" />
@@ -1693,6 +1711,7 @@
                 </div>
                 <p class="hint" id="st-test-hint">Leere Felder werden ignoriert. Niedriger CQ = höhere Qualität/größer.</p>
               </div>
+              <div class="vmaf-eta-bar" id="st-vmaf-eta" hidden></div>
             </div>
 
             <label class="check">
@@ -4260,6 +4279,25 @@
             <div id="diag-report"></div>
 
             <div class="divider"></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <h4 class="subsection" style="margin:0">VMAF- &amp; Laufzeit-Kalibrierung (Grundtest)</h4>
+              <span class="badge" id="vc-badge">Nicht kalibriert</span>
+            </div>
+            <p class="hint" style="margin-top:6px">Führt lokal einen kurzen Grundtest für alle verfügbaren Encoder (1080p &amp; 4K, Speeds),
+              VMAF (CPU/GPU, Subsampling), sämtliche Zusatztests (PSNR, SSIM, MS-SSIM, XPSNR, CAMBI) und SSIMULACRA2 aus.
+              Damit zeigen VMAF-Tool, Ziel-VMAF und Super-Tool schon bei der Auswahl eine realistische Dauer-Prognose an.</p>
+            <div class="lib-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-vc-start">Grundtest starten</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-vc-cancel" disabled>Abbrechen</button>
+            </div>
+            <div class="enc-bench-progress" id="vc-progress-wrap" style="display:none">
+              <div class="bar-track"><div class="bar-fill" id="vc-bar-fill"></div></div>
+              <span class="bar-pct" id="vc-pct">0 %</span>
+            </div>
+            <p class="hint" id="vc-msg"></p>
+            <div id="vc-summary"></div>
+
+            <div class="divider"></div>
             <h4 class="subsection">Encoder-Test</h4>
             <p class="hint">Misst den gewählten Encoder an Referenzclips oder an einer eigenen Datei.
               VMAF vergleicht die Speed-Stufen über die Bildqualität.
@@ -4365,6 +4403,7 @@
                   {{ s2_frame_options("3") }}
                 </select>
               </div>
+              {{ vmaf_metric_checks("eb") }}
               <div class="field">
                 <label>Clip-Länge (Sekunden)</label>
                 <input type="number" id="eb-seconds" min="5" max="60" value="12" />

@@ -84,6 +84,12 @@ class VmafOptions:
     subsample: int = 1
     # Optionale GPU-Beschleunigung (libvmaf_cuda bzw. CUDA-HW-Decode unter Beachtung der FFmpeg-Linie)
     gpu_accel: bool = False
+    # Einzeln zu- und abschaltbare Zusatzmetriken neben dem eigentlichen VMAF-Score
+    with_psnr: bool = True
+    with_ssim: bool = True
+    with_ms_ssim: bool = True
+    with_xpsnr: bool = True
+    with_cambi: bool = True
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -292,6 +298,7 @@ class VmafResult:
     nvenc_tune: str = ""
     encoder_args: str = ""          # Flags ab -c:v, wie der Test-Encode sie bekam
     two_pass: bool = False
+    timing: dict = field(default_factory=dict)  # Aufschlüsselung: encode_sec, vmaf_sec, s2_sec, post_sec
 
     def to_dict(self) -> dict:
         d = {
@@ -317,6 +324,8 @@ class VmafResult:
             "savings_percent": round(self.savings_percent, 1),
             "recommended": self.recommended,
         }
+        if self.timing:
+            d["timing"] = dict(self.timing)
         if self.video_kbps:
             d["video_kbps"] = int(self.video_kbps)
             d["video_bitrate_human"] = ff._bitrate_human(self.video_kbps * 1000)
@@ -1289,28 +1298,74 @@ def _downsample_vmaf(vals: list[float], n: int = 80) -> list[float]:
     return out
 
 
+def _build_vmaf_feature_attempts(
+    *,
+    with_psnr: bool = True,
+    with_ssim: bool = True,
+    with_ms_ssim: bool = True,
+    with_cambi: bool = True,
+    with_xpsnr: bool = True,
+) -> list[tuple[str, bool]]:
+    """Erstellt die Fallback-Kette für libvmaf-Features und XPSNR gemäß Nutzerauswahl."""
+    wanted = [
+        name for name, enabled in (
+            ("psnr", with_psnr),
+            ("float_ssim", with_ssim),
+            ("float_ms_ssim", with_ms_ssim),
+            ("cambi", with_cambi),
+        )
+        if enabled
+    ]
+
+    def _fmt(items: list[str]) -> str:
+        return f"feature={'|'.join('name=' + n for n in items)}:" if items else ""
+
+    # Stufenweiser Rückfall, falls optionale Features im FFmpeg-Build fehlen,
+    # ohne abgewählte Metriken jemals wieder einzuschalten.
+    feat_candidates: list[str] = []
+    for drop_set in (set(), {"float_ms_ssim"}, {"cambi"}, {"float_ms_ssim", "cambi"}):
+        sub = [n for n in wanted if n not in drop_set]
+        s = _fmt(sub)
+        if s not in feat_candidates:
+            feat_candidates.append(s)
+    if "" not in feat_candidates:
+        feat_candidates.append("")
+
+    attempts: list[tuple[str, bool]] = []
+    if with_xpsnr and xpsnr_available():
+        for feat in feat_candidates:
+            if feat or not wanted:
+                attempts.append((feat, True))
+    for feat in feat_candidates:
+        attempts.append((feat, False))
+    return attempts
+
+
 def _vmaf_metrics(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     clip_len: float = 0.0, subsample: int = 1, gpu_accel: bool = False,
+    *,
+    with_psnr: bool = True,
+    with_ssim: bool = True,
+    with_ms_ssim: bool = True,
+    with_cambi: bool = True,
+    with_xpsnr: bool = True,
 ) -> Optional[dict]:
-    """Vollständige Metriken (VMAF + PSNR + SSIM + MS-SSIM + CAMBI + XPSNR + 1%-Low).
+    """Qualitätsmetriken (VMAF + optional PSNR, SSIM, MS-SSIM, CAMBI, XPSNR + 1%-Low).
 
     PSNR, SSIM, MS-SSIM und CAMBI laufen über die libvmaf-`feature`-Option, XPSNR im
     selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Fehlen optionale Features im
     Build (z. B. `float_ms_ssim` oder `cambi`), fällt der Lauf stufenweise zurück,
     damit vorhandene Zusatzmaße und VMAF erhalten bleiben.
     """
-    features_ms_cambi = "feature=name=psnr|name=float_ssim|name=float_ms_ssim|name=cambi:"
-    features_cambi = "feature=name=psnr|name=float_ssim|name=cambi:"
-    features_ms = "feature=name=psnr|name=float_ssim|name=float_ms_ssim:"
-    features = "feature=name=psnr|name=float_ssim:"
-    attempts: list[tuple[str, bool]] = []
-    if xpsnr_available():
-        for feat in (features_ms_cambi, features_cambi, features_ms, features):
-            attempts.append((feat, True))
-    for feat in (features_ms_cambi, features_cambi, features_ms, features, ""):
-        attempts.append((feat, False))
+    attempts = _build_vmaf_feature_attempts(
+        with_psnr=with_psnr,
+        with_ssim=with_ssim,
+        with_ms_ssim=with_ms_ssim,
+        with_cambi=with_cambi,
+        with_xpsnr=with_xpsnr,
+    )
     for feat, use_xp in attempts:
         data = _run_libvmaf(
             distorted, reference, info, work, key, neg, dims,
@@ -1328,9 +1383,13 @@ def _vmaf_compare(
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     subsample: int = 1, gpu_accel: bool = False,
 ) -> Optional[float]:
-    """Rückwärtskompatibel: nur der VMAF-Mittelwert."""
-    m = _vmaf_metrics(distorted, reference, info, work, key, neg, dims,
-                      subsample=subsample, gpu_accel=gpu_accel)
+    """Rückwärtskompatibel: reiner VMAF-Mittelwert (ohne Zusatzmetrik-Overhead)."""
+    m = _vmaf_metrics(
+        distorted, reference, info, work, key, neg, dims,
+        subsample=subsample, gpu_accel=gpu_accel,
+        with_psnr=False, with_ssim=False, with_ms_ssim=False,
+        with_cambi=False, with_xpsnr=False,
+    )
     return m["vmaf"] if m else None
 
 
@@ -1633,6 +1692,7 @@ def analyze(
     keyint_sec: int = 0,
     nvenc_tune: str = "auto",
     on_step: Optional[Callable[[str], None]] = None,
+    on_substep: Optional[Callable[[dict], None]] = None,
     tonemap_algo: str = "hable",
     tonemap_desat: float = 0.0,
     tonemap_peak: float = 0.0,
@@ -1783,6 +1843,41 @@ def analyze(
             on_step(lbl)
         prog["step"] += 1
 
+        t_enc = 0.0
+        t_vmaf = 0.0
+        t_s2 = 0.0
+        t_post = 0.0
+        active_metrics: list[str] = []
+        if not opts.visual_only:
+            if getattr(opts, "with_psnr", True):
+                active_metrics.append("PSNR")
+            if getattr(opts, "with_ssim", True):
+                active_metrics.append("SSIM")
+            if getattr(opts, "with_ms_ssim", True):
+                active_metrics.append("MS-SSIM")
+            if getattr(opts, "with_xpsnr", True) and xpsnr_available():
+                active_metrics.append("XPSNR")
+            if getattr(opts, "with_cambi", True):
+                active_metrics.append("CAMBI")
+        s2_target_n = 0 if opts.visual_only else _s2_frame_count(opts.ssimulacra2_frames)
+
+        def _notify_sub(active_key: str = "", clip_idx: Optional[int] = None, started_at: float = 0.0) -> None:
+            if not on_substep:
+                return
+            on_substep({
+                "encode_sec": round(t_enc, 1),
+                "vmaf_sec": round(t_vmaf, 1),
+                "s2_sec": round(t_s2, 1),
+                "post_sec": round(t_post, 1),
+                "metrics": list(active_metrics),
+                "s2_frames": s2_target_n,
+                "visual_only": bool(opts.visual_only),
+                "scenes": len(references),
+                "active": active_key,
+                "active_t0": started_at if active_key else 0.0,
+                "clip": (clip_idx + 1) if clip_idx is not None else None,
+            })
+
         total_size = 0
         total_dur = 0.0
         scores: list[float] = []
@@ -1847,6 +1942,8 @@ def analyze(
 
             runner = EncodeRunner(on_progress=lambda pr: emit(
                 "encode", fps=pr.fps, sub=pr.percent))
+            enc_t0 = time.time()
+            _notify_sub("encode", si, enc_t0)
             if cpu_two:
                 if status:
                     status(f"Test-Encode {shown} @ {rate_lbl}{smp} · Pass 1/2 …")
@@ -1854,8 +1951,12 @@ def analyze(
                 rc1, err1 = runner.run(_test_cmd(1), clip_len)
                 prog["done"] += 1
                 if cancelled():
+                    t_enc += max(0.0, time.time() - enc_t0)
+                    _notify_sub("")
                     break
                 if rc1 != 0:
+                    t_enc += max(0.0, time.time() - enc_t0)
+                    _notify_sub("")
                     tail = (err1 or "").strip().splitlines()
                     last_error = (
                         f"Test-Encode Pass 1 fehlgeschlagen ({shown} @ {rate_lbl}): "
@@ -1870,6 +1971,8 @@ def analyze(
             emit("encode")
             cmd = _test_cmd(2 if cpu_two else None)
             rc, enc_err = runner.run(cmd, clip_len)
+            t_enc += max(0.0, time.time() - enc_t0)
+            _notify_sub("")
             prog["done"] += 1
             if not enc_args:
                 enc_args = _encoder_args_text(cmd)
@@ -1889,12 +1992,21 @@ def analyze(
                 if status:
                     status(f"VMAF-Vergleich {shown} @ {rate_lbl}{smp} …")
                 emit("vmaf")
+                vmaf_t0 = time.time()
+                _notify_sub("vmaf", si, vmaf_t0)
                 metrics = _vmaf_metrics(
                     test_file, reference, info, work, skey,
                     neg=True, dims=dims, clip_len=clip_len,
                     subsample=normalize_vmaf_subsample(getattr(opts, "subsample", 1)),
                     gpu_accel=bool(getattr(opts, "gpu_accel", False)),
+                    with_psnr=bool(getattr(opts, "with_psnr", True)),
+                    with_ssim=bool(getattr(opts, "with_ssim", True)),
+                    with_ms_ssim=bool(getattr(opts, "with_ms_ssim", True)),
+                    with_cambi=bool(getattr(opts, "with_cambi", True)),
+                    with_xpsnr=bool(getattr(opts, "with_xpsnr", True)),
                 )
+                t_vmaf += max(0.0, time.time() - vmaf_t0)
+                _notify_sub("")
                 prog["done"] += 1
                 emit("vmaf")
                 if metrics is None:
@@ -1920,11 +2032,15 @@ def analyze(
                 if reference is not None and _s2_frame_count(opts.ssimulacra2_frames) > 0:
                     if status:
                         status(f"SSIMULACRA2 {shown} @ {rate_lbl}{smp} …")
+                    s2_t0 = time.time()
+                    _notify_sub("s2", si, s2_t0)
                     s2 = _ssimulacra2_clip(
                         reference, test_file, work, skey, clip_len,
                         float(info.fps or 0), opts.ssimulacra2_frames,
                         sess=sess, scene_idx=si,
                         save_previews=bool(opts.generate_screenshots))
+                    t_s2 += max(0.0, time.time() - s2_t0)
+                    _notify_sub("")
                     if s2 is not None:
                         metrics["ssimulacra2"] = s2["mean"]
                         metrics["ssimulacra2_min"] = s2["min"]
@@ -1974,6 +2090,7 @@ def analyze(
             total_size += clip_bytes
             total_dur += clip_len
             scene_kbps = measured_kbps(clip_bytes, clip_len)
+            post_t0 = time.time()
             if scene_scores:
                 scene_scores[-1]["kbps"] = scene_kbps
                 try:
@@ -1996,6 +2113,8 @@ def analyze(
                     "clip": f"test_{skey}.mkv",
                     "kbps": scene_kbps,
                 })
+            t_post += max(0.0, time.time() - post_t0)
+            _notify_sub("")
 
         if opts.visual_only:
             if not scene_scores or total_dur <= 0:
@@ -2048,6 +2167,13 @@ def analyze(
             keyint_sec=ki_use,
             nvenc_tune=tune_use,
             encoder_args=enc_args,
+            timing={
+                "encode_sec": round(t_enc, 1),
+                "vmaf_sec": round(t_vmaf, 1),
+                "s2_sec": round(t_s2, 1),
+                "post_sec": round(t_post, 1),
+                "metrics": list(active_metrics),
+            },
         ))
 
     try:
