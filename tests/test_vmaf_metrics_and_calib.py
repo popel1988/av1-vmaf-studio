@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest import mock
 from fastapi.testclient import TestClient
 
 import app as app_mod
@@ -125,6 +126,27 @@ class QueueSubtimingTests(unittest.TestCase):
         self.assertNotIn("active", st_done)
         self.assertNotIn("active_t0", st_done)
         self.assertGreaterEqual(st_done["vmaf_sec"], 3.0)
+
+
+class VmafCalibrationPairTests(unittest.TestCase):
+    def test_available_pairs_accept_boolean_capability_cache(self):
+        cache = {
+            "nvidia:av1": True,
+            "nvidia:hevc": False,
+            "cpu:av1": True,
+            "cpu:vp9": True,
+            "intel:av1": {"ok": True},
+            "amd:h264": {"ok": False},
+        }
+        with mock.patch.object(vmaf_calib.caps_mod, "results_map", return_value=cache):
+            pairs = vmaf_calib._available_pairs()
+        self.assertIn(("nvidia", "av1"), pairs)
+        self.assertIn(("cpu", "av1"), pairs)
+        self.assertIn(("cpu", "vp9"), pairs)
+        self.assertIn(("intel", "av1"), pairs)
+        self.assertNotIn(("nvidia", "hevc"), pairs)
+        self.assertNotIn(("amd", "h264"), pairs)
+        self.assertNotIn(("nvidia", "vp9"), pairs)
 
 
 class VmafCalibrationAndEstimateTests(unittest.TestCase):

@@ -136,21 +136,26 @@ def _synth_clip(dest: Path, width: int, height: int, fps: int, seconds: float, h
         return False
 
 
+def _cap_ok(entry) -> Optional[bool]:
+    """Capabilities-Cache speichert je Encoder einen bool, ältere Einträge ein Dict."""
+    if isinstance(entry, dict):
+        return bool(entry.get("ok"))
+    if isinstance(entry, bool):
+        return entry
+    return None
+
+
 def _available_pairs() -> list[tuple[str, str]]:
-    cached = caps_mod.get_cached() or {}
-    cap_res = cached.get("results") or {}
+    cap_res = caps_mod.results_map()
     pairs: list[tuple[str, str]] = []
     for plat in _PLATFORMS:
         for codec in _CODECS:
             if plat != "cpu" and codec == "vp9":
                 continue
-            key = f"{plat}:{codec}"
-            if cap_res and key in cap_res:
-                if not cap_res[key].get("ok"):
-                    continue
-            elif not ff.encoder_available(plat, codec):
-                continue
-            pairs.append((plat, codec))
+            known = _cap_ok(cap_res.get(f"{plat}:{codec}")) if cap_res else None
+            ok = known if known is not None else ff.encoder_available(plat, codec)
+            if ok:
+                pairs.append((plat, codec))
     return pairs
 
 
