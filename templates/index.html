@@ -1348,6 +1348,57 @@
                 <div id="stat-topsavers" class="stat-list"><p class="muted">Noch keine Daten.</p></div>
               </div>
             </div>
+
+            <div class="qrank-panel" id="qrank-section">
+              <div class="qrank-head">
+                <div>
+                  <h4 class="subhead" style="margin:0">Encoder- &amp; Codec-Rangliste <span class="muted" id="qrank-meta" style="font-weight:400;font-size:12px"></span></h4>
+                  <p class="hint" style="margin:2px 0 0">Median aus VMAF-Szenen und Encodes. Komplexe, typische und ruhige Ausschnitte bleiben getrennt, ebenso dichte und leichte Quellen.</p>
+                </div>
+                <div class="qrank-filters">
+                  <select id="qrank-height" title="Nach Auflösung filtern">
+                    <option value="0">Alle Auflösungen</option>
+                    <option value="2160">4K (2160p)</option>
+                    <option value="1080">Full HD (1080p)</option>
+                    <option value="720">≤ 720p</option>
+                  </select>
+                  <select id="qrank-hdr" title="HDR / SDR filtern">
+                    <option value="all">HDR &amp; SDR</option>
+                    <option value="hdr">Nur HDR</option>
+                    <option value="sdr">Nur SDR</option>
+                  </select>
+                  <select id="qrank-min-vmaf" title="Mindest-VMAF">
+                    <option value="0">Alle VMAF</option>
+                    <option value="93">VMAF ≥ 93</option>
+                    <option value="95">VMAF ≥ 95</option>
+                  </select>
+                  <select id="qrank-complexity" title="Szenenkomplexität aus dem Bitratenprofil">
+                    <option value="all">Alle Szenen</option>
+                    <option value="complex">Komplexe Szenen</option>
+                    <option value="typical">Typische Szenen</option>
+                    <option value="quiet">Ruhige Szenen</option>
+                  </select>
+                  <select id="qrank-density" title="Bits pro Pixel der Quelle">
+                    <option value="all">Jede Quelldichte</option>
+                    <option value="dense">Dichte Quelle</option>
+                    <option value="mid">Mittlere Quelle</option>
+                    <option value="light">Leichte Quelle</option>
+                  </select>
+                  <select id="qrank-anime" title="Anime-Flag der Messung">
+                    <option value="all">Anime &amp; Realfilm</option>
+                    <option value="anime">Anime</option>
+                    <option value="live">Realfilm</option>
+                  </select>
+                  <label class="metric-chip" title="Nach Speed-Preset aufschlüsseln">
+                    <input type="checkbox" id="qrank-group-speed" checked />
+                    <span>Speed trennen</span>
+                  </label>
+                </div>
+              </div>
+              <div id="qrank-body" class="qrank-body"><p class="muted">Lade Qualitätsdaten …</p></div>
+              <div id="qrank-h2h" class="qrank-h2h" hidden></div>
+            </div>
+
             <h4 class="subhead">Letzte Jobs</h4>
             <div class="data-table-wrap">
               <table class="data-table">

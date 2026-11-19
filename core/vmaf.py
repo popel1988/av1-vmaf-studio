@@ -2326,7 +2326,14 @@ def analyze(
             _pick_recommended(analysis, opts.target_vmaf, min_p5=opts.min_p5)
         if analysis.results:
             _save_session(sess, analysis, opts.source_title,
-                          source_path=opts.source_path or str(info.path), params=opts.params)
+                          source_path=opts.source_path or str(info.path), params=opts.params,
+                          source_info={
+                              "width": int(info.width or 1920),
+                              "height": int(info.height or 1080),
+                              "fps": float(info.fps or 24.0),
+                              "duration": float(info.duration or 0.0),
+                              "is_hdr": bool(getattr(info, "is_hdr", False)),
+                          })
         elif not cancelled():
             # Kein einziges Ergebnis – Grund weiterreichen, damit der Job nicht
             # kommentarlos „fertig"/leer wird.
@@ -2344,10 +2351,13 @@ def _session_meta_path(sess: str) -> Path:
 
 
 def _save_session(sess: str, analysis: VmafAnalysis, title: str,
-                  source_path: str = "", params: Optional[dict] = None) -> None:
+                  source_path: str = "", params: Optional[dict] = None,
+                  source_info: Optional[dict] = None) -> None:
     """Analyse samt Metadaten neben den Screenshots ablegen (für Archiv-Ansicht)."""
     import time
 
+    analysis_dict = analysis.to_dict()
+    now_ts = time.time()
     try:
         target = _session_meta_path(sess)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -2356,12 +2366,14 @@ def _save_session(sess: str, analysis: VmafAnalysis, title: str,
         payload = {
             "session": sess,
             "title": title or sess,
-            "created": time.time(),
-            "analysis": analysis.to_dict(),
+            "created": now_ts,
+            "analysis": analysis_dict,
             "source_path": source_path,
             "source_available": src_ok,
             "params": params or {},
         }
+        if source_info:
+            payload["source_info"] = source_info
         with storage_policy.session_guard(sess):
             # Bei erneutem Speichern eines noch aktiven Laufs Schutz nicht verlieren.
             if target.is_file():
@@ -2370,6 +2382,14 @@ def _save_session(sess: str, analysis: VmafAnalysis, title: str,
             provenance_api.atomic_json_write(target, payload)
     except (OSError, ValueError) as e:
         logger.warning("VMAF-Session konnte nicht gespeichert werden: %s", e)
+    try:
+        from . import history
+        history.record_vmaf_analysis_perf(
+            sess, analysis_dict, src_info=source_info, params=params, ts=now_ts,
+            source_path=source_path, source_title=title,
+        )
+    except Exception:
+        pass
 
 
 def list_sessions() -> list[dict]:

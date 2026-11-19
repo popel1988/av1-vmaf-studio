@@ -4672,6 +4672,11 @@
   function renderQueueTable(items, activeIds) {
     const body = $("queue-body");
     const active = new Set(activeIds || []);
+    const doneNow = (items || []).filter((x) => x.status === "fertig").length;
+    if (state._perfDoneCount !== undefined && doneNow > state._perfDoneCount) {
+      if (typeof refreshVmafCalibration === "function") refreshVmafCalibration();
+    }
+    state._perfDoneCount = doneNow;
     const view = orderQueueItems(items);
     if (!view.length) {
       body.innerHTML = '<tr class="empty-row"><td colspan="7">Warteschlange ist leer.</td></tr>';
@@ -9213,9 +9218,11 @@
     const body = $("data-preview-body");
     $("data-preview-title").textContent = item.name;
     panel.style.display = "";
+    body.classList.toggle("media", item.kind === "video" || !!item.preview_url);
 
     if (item.preview_url) {
       body.innerHTML = `<img src="${item.preview_url}" alt="${escapeHtml(item.name)}" />`;
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
       return;
     }
     if (item.kind === "rpu") {
@@ -9259,8 +9266,9 @@
     }
     if (item.kind === "video") {
       const url = `/api/data/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(item.rel)}`;
-      body.innerHTML = `<video controls style="max-width:100%"><source src="${url}" /></video>
+      body.innerHTML = `<video controls preload="metadata"><source src="${url}" /></video>
         <p class="hint muted">Test-Encode-Vorschau (nur Ausschnitt).</p>`;
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
       return;
     }
     body.innerHTML = `<p class="muted">Keine Vorschau für diesen Dateityp. Pfad: <code>${escapeHtml(item.rel)}</code></p>`;
@@ -10158,6 +10166,120 @@
       const d = await r.json();
       renderStats(d.stats || {}, d.recent || []);
     } catch (e) { /* ignorieren */ }
+    loadQualityRanking();
+  }
+
+  let qrankBound = false;
+  function bindQualityRankingControls() {
+    if (qrankBound) return;
+    qrankBound = true;
+    ["qrank-height", "qrank-hdr", "qrank-min-vmaf", "qrank-group-speed", "qrank-complexity", "qrank-density", "qrank-anime"].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("change", () => loadQualityRanking());
+    });
+  }
+
+  async function loadQualityRanking() {
+    bindQualityRankingControls();
+    const box = $("qrank-body");
+    if (!box) return;
+    const h = $("qrank-height") ? $("qrank-height").value : "0";
+    const hdr = $("qrank-hdr") ? $("qrank-hdr").value : "all";
+    const mv = $("qrank-min-vmaf") ? $("qrank-min-vmaf").value : "0";
+    const gs = $("qrank-group-speed") ? ($("qrank-group-speed").checked ? "1" : "0") : "1";
+    const cx = $("qrank-complexity") ? $("qrank-complexity").value : "all";
+    const density = $("qrank-density") ? $("qrank-density").value : "all";
+    const anime = $("qrank-anime") ? $("qrank-anime").value : "all";
+    try {
+      const qs = new URLSearchParams({
+        height: h, hdr, min_vmaf: mv, group_speed: gs,
+        complexity: cx, density, anime,
+      });
+      const r = await fetch(`/api/stats/quality-ranking?${qs.toString()}`);
+      const d = await r.json();
+      renderQualityRanking(d || {});
+    } catch (e) {
+      box.innerHTML = '<p class="muted">Qualitäts-Rangliste konnte nicht geladen werden.</p>';
+    }
+  }
+
+  function renderQualityRanking(data) {
+    const meta = $("qrank-meta");
+    const box = $("qrank-body");
+    const h2hBox = $("qrank-h2h");
+    if (!box) return;
+    const rows = data.rankings || [];
+    const h2h = data.head_to_head || [];
+    if (meta) {
+      meta.textContent = data.total_samples
+        ? `(${data.total_samples} Messungen · ${data.total_sessions || 0} Clips/Jobs)`
+        : "";
+    }
+    if (!rows.length) {
+      box.innerHTML = '<p class="muted" style="margin:6px 0">Noch keine passenden VMAF-/Encode-Messungen für diese Filter vorhanden.</p>';
+      if (h2hBox) h2hBox.hidden = true;
+      return;
+    }
+    const spLabel = (s) => ({
+      fastest: "Sehr schnell", fast: "Schnell", balanced: "Ausgewogen",
+      slow: "Langsam", slowest: "Sehr langsam", alle: "Alle",
+    })[s] || s;
+    const fmt = (v, dec = 1, suf = "") => (v != null ? `${Number(v).toFixed(dec)}${suf}` : "—");
+    const trHtml = rows.map((r, i) => {
+      const vmafCell = r.vmaf_median != null
+        ? `<strong>${Number(r.vmaf_median).toFixed(2)}</strong>${r.vmaf_1pct_median != null ? ` <span class="muted">(${Number(r.vmaf_1pct_median).toFixed(1)})</span>` : ""}`
+        : "—";
+      const detParts = [];
+      if (r.ms_ssim_median != null) detParts.push(`MS ${Number(r.ms_ssim_median).toFixed(3)}`);
+      if (r.s2_median != null) detParts.push(`S2 ${Number(r.s2_median).toFixed(0)}`);
+      const brParts = [];
+      if (r.kbps_median) brParts.push(`${(r.kbps_median / 1000).toFixed(1)} Mbit/s`);
+      if (r.savings_median != null) brParts.push(`${r.savings_median >= 0 ? "−" : "+"}${Math.abs(r.savings_median).toFixed(0)} %`);
+      const tagsHtml = (r.tags || []).map((t) => `<span class="qrank-tag">${escapeHtml(t)}</span>`).join(" ");
+      const scoreCls = r.score >= 78 ? "good" : (r.score >= 62 ? "" : "muted");
+      return `<tr>`
+        + `<td class="muted">${i + 1}</td>`
+        + `<td><strong>${escapeHtml((r.platform || "").toUpperCase())}:${escapeHtml((r.codec || "").toUpperCase())}</strong> ${tagsHtml}</td>`
+        + `<td>${escapeHtml(spLabel(r.speed))}</td>`
+        + `<td class="num">${r.samples} <span class="muted">(${r.sessions})</span></td>`
+        + `<td class="num">${vmafCell}</td>`
+        + `<td class="num">${detParts.length ? escapeHtml(detParts.join(" · ")) : "—"}</td>`
+        + `<td class="num">${fmt(r.cambi_median, 2)}</td>`
+        + `<td class="num">${brParts.length ? escapeHtml(brParts.join(" · ")) : "—"}</td>`
+        + `<td class="num">${r.speed_x_median != null ? `${Number(r.speed_x_median).toFixed(1)}×` : "—"}</td>`
+        + `<td class="num ${scoreCls}"><strong>${Number(r.score || 0).toFixed(0)}</strong></td>`
+        + `</tr>`;
+    }).join("");
+    box.innerHTML = `<div class="data-table-wrap"><table class="data-table qrank-table">`
+      + `<thead><tr>`
+      + `<th>#</th><th>Encoder</th><th>Speed</th><th class="num">Mess. (Clips)</th>`
+      + `<th class="num">VMAF (1%-Low)</th><th class="num">MS-SSIM / S2</th><th class="num">CAMBI</th>`
+      + `<th class="num">Ø Bitrate · Ersparnis</th><th class="num">Tempo</th><th class="num" title="Kombinierter Score (0–100) aus VMAF/1%-Low, Ersparnis/Head-to-Head und Detail/Banding">Score</th>`
+      + `</tr></thead><tbody>${trHtml}</tbody></table></div>`;
+
+    if (h2hBox) {
+      if (!h2h.length) {
+        h2hBox.hidden = true;
+      } else {
+        h2hBox.hidden = false;
+        const rowsH2h = h2h.map((d) => {
+          const br = d.bitrate_delta_pct != null
+            ? `<span class="${d.bitrate_delta_pct < 0 ? "good" : ""}">${d.bitrate_delta_pct > 0 ? "+" : ""}${d.bitrate_delta_pct} % Bitrate</span>`
+            : "";
+          const vm = d.vmaf_delta != null ? `${d.vmaf_delta > 0 ? "+" : ""}${d.vmaf_delta} VMAF` : "";
+          const sr = d.speed_ratio != null ? `${d.speed_ratio}× Tempo` : "";
+          const mid = [br, vm, sr].filter(Boolean).join(" · ");
+          const cxLabel = { complex: "komplexe Szene", typical: "typische Szene", quiet: "ruhige Szene" }[d.complexity] || "";
+          const where = cxLabel ? ` · ${cxLabel}` : "";
+          return `<div class="qrank-h2h-row">`
+            + `<strong>${escapeHtml(d.a.toUpperCase())}</strong> <span class="muted">vs</span> <strong>${escapeHtml(d.b.toUpperCase())}</strong>`
+            + `<span class="muted">(${d.duels} ${d.duels === 1 ? "Clip" : "Clips"}${escapeHtml(where)})</span>`
+            + `<span class="qrank-h2h-val">${mid}</span>`
+            + `</div>`;
+        }).join("");
+        h2hBox.innerHTML = `<div class="qrank-h2h-title">Direktvergleiche am selben Clip (Head-to-Head)</div>${rowsH2h}`;
+      }
+    }
   }
 
   function renderStats(st, recent) {
@@ -18313,7 +18435,7 @@
     const codec = String(params.codec || "av1").toLowerCase();
     const prof = (c.encoders || {})[`${plat}:${codec}`];
     if (!prof || !prof.speeds_1080p) return { calibrated: false };
-    const sp = normSpeedJs(params.encoder_speed);
+    const sp = nearestSpeedAliasJs(params.encoder_speed);
     const fps1080 = Number(prof.speeds_1080p[sp] || prof.speeds_1080p.balanced || 0);
     if (fps1080 <= 0) return { calibrated: false };
     const scale4k = Number(prof.scale_2160_to_1080 || 0.27);

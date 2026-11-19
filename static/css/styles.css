@@ -1839,6 +1839,37 @@ button.lib-nfo-badge:hover { background: color-mix(in srgb, var(--accent) 32%, t
   border-top: 1px solid rgba(127,127,127,.14); color: var(--muted); font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.qrank-panel {
+  margin: 14px 0 18px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(127,127,127,.04);
+}
+.qrank-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+  gap: 8px 14px; margin-bottom: 10px;
+}
+.qrank-filters {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.qrank-filters select {
+  padding: 4px 8px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.qrank-table { font-size: 12px; font-variant-numeric: tabular-nums; }
+.qrank-table th.num, .qrank-table td.num { text-align: right; white-space: nowrap; }
+.qrank-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10.5px;
+  background: rgba(94,161,255,.14); color: var(--text); margin-left: 4px; font-weight: 500;
+}
+.qrank-h2h {
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+}
+.qrank-h2h-title { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.qrank-h2h-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.qrank-h2h-val { margin-left: auto; color: var(--text); }
 tr.queue-row { cursor: pointer; }
 tr.queue-row:hover { background: rgba(127,127,127,.08); }
 /* Alle Zellen mittig ausrichten, damit Badges/Buttons die Zeile nicht versetzen. */
@@ -2433,14 +2464,26 @@ input[type="range"]::-moz-range-thumb {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600;
 }
-.data-preview-body { padding: 14px; max-height: 420px; overflow: auto; }
-.data-preview-body img { max-width: 100%; border-radius: 6px; display: block; margin: 0 auto; }
+.data-preview-body { padding: 14px; }
+.data-preview-body.media {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  overflow: visible;
+}
+.data-preview-body img,
+.data-preview-body video {
+  max-width: 100%;
+  max-height: calc(100vh - 190px);
+  width: auto; height: auto;
+  object-fit: contain;
+  border-radius: 6px; display: block; margin: 0 auto;
+  background: #000;
+}
 .data-preview-body pre {
   font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-all;
   background: var(--surface-3); padding: 12px; border-radius: 6px; max-height: 360px; overflow: auto;
 }
-.data-preview-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.data-preview-pair img { width: 100%; }
+.data-preview-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+.data-preview-pair img { width: 100%; max-height: calc(100vh - 220px); object-fit: contain; }
 
 /* ------------------------------ BUTTONS --------------------------------- */
 .btn {

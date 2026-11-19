@@ -2904,6 +2904,29 @@ async def get_stats():
     return {"stats": history.stats(), "recent": history.recent(100)}
 
 
+@app.get("/api/stats/quality-ranking")
+async def get_quality_ranking(
+    height: int = 0,
+    hdr: str = "all",
+    min_vmaf: float = 0.0,
+    group_speed: bool = True,
+    complexity: str = "all",
+    density: str = "all",
+    anime: str = "all",
+):
+    """Encoder- & Codec-Qualitätsrangliste inkl. Head-to-Head-Direktvergleiche."""
+    from core import history
+    return history.quality_ranking(
+        height_filter=height,
+        hdr_filter=hdr if hdr in ("all", "hdr", "sdr") else "all",
+        min_vmaf=max(0.0, min(100.0, float(min_vmaf or 0.0))),
+        group_by_speed=bool(group_speed),
+        complexity_filter=complexity if complexity in ("all", "complex", "typical", "quiet") else "all",
+        density_filter=density if density in ("all", "dense", "mid", "light") else "all",
+        anime_filter=anime if anime in ("all", "anime", "live") else "all",
+    )
+
+
 @app.post("/api/stats/clear")
 async def clear_stats():
     from core import history

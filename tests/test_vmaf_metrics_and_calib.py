@@ -1,6 +1,7 @@
 """Tests für auswählbare VMAF-Zusatztests, Sub-Timings, Diagnose-Kalibrierung & Ordner-Erkennung."""
 from __future__ import annotations
 
+import json
 import time
 import unittest
 from unittest import mock
@@ -240,6 +241,11 @@ class VmafCalibrationAndEstimateTests(unittest.TestCase):
         self.assertEqual(r_enc_est.status_code, 200)
         self.assertIn("calibrated", r_enc_est.json())
 
+        r_qrank = client.get("/api/stats/quality-ranking")
+        self.assertEqual(r_qrank.status_code, 200)
+        self.assertIn("rankings", r_qrank.json())
+        self.assertIn("head_to_head", r_qrank.json())
+
 
 class PerfLearningAndEncodeEtaTests(unittest.TestCase):
     def setUp(self):
@@ -327,7 +333,7 @@ class PerfLearningAndEncodeEtaTests(unittest.TestCase):
         old_dir = config.DATA_DIR
         old_conn = history._conn
         try:
-            with tempfile.TemporaryDirectory() as td:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
                 config.DATA_DIR = Path(td)
                 history._conn = None
                 history.init_db()
@@ -335,7 +341,7 @@ class PerfLearningAndEncodeEtaTests(unittest.TestCase):
                     id="job_perf_1",
                     title="Movie.mkv",
                     path="/media/Movie.mkv",
-                    status="done",
+                    status="fertig",
                     settings=SimpleNamespace(
                         platform="nvidia", codec="av1", rate_mode="vmaf",
                         quality=28, encoder_speed="balanced", video_mode="encode",
@@ -355,23 +361,168 @@ class PerfLearningAndEncodeEtaTests(unittest.TestCase):
                     details={},
                     report={},
                     vmaf={
+                        "session": "sess_perf_1",
+                        "sample_starts": [(60.0, 20.0), (420.0, 20.0)],
                         "results": [
                             {
                                 "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
                                 "rate_mode": "cq", "value": 28, "vmaf": 95.1,
-                                "timing": {"encode_sec": 6.0, "vmaf_sec": 18.0, "s2_sec": 2.4},
+                                "timing": {"encode_sec": 6.0, "vmaf_sec": 18.0, "s2_sec": 2.4, "metrics": ["PSNR", "SSIM"]},
                             }
                         ]
                     },
                 )
                 history.record_job(item, duration=230.0)
+                # Doppelter Aufruf aus _save_session darf dank sample_key keine Duplikate erzeugen
+                history.record_vmaf_analysis_perf(
+                    "sess_perf_1", item.vmaf, src_info=item.info, params={"ssimulacra2_frames": 3},
+                    source_path=item.path, source_title=item.title,
+                )
                 rows = history.list_perf_samples()
                 kinds = {r["kind"] for r in rows}
                 self.assertEqual(kinds, {"encode", "vmaf_metric", "s2"})
                 enc_sources = {r["source_kind"] for r in rows if r["kind"] == "encode"}
                 self.assertEqual(enc_sources, {"full_encode", "vmaf_test"})
-                history._conn.close()
+                self.assertEqual(len(rows), 4)
         finally:
+            if history._conn is not None and history._conn is not old_conn:
+                history._conn.close()
+            history._conn = old_conn
+            config.DATA_DIR = old_dir
+
+    def test_quality_ranking_and_head_to_head_duels(self):
+        import tempfile
+        from pathlib import Path
+        from core import config, history
+
+        old_dir = config.DATA_DIR
+        old_conn = history._conn
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                config.DATA_DIR = Path(td)
+                history._conn = None
+                history.init_db()
+                # Multi-Encoder-Session auf demselben Clip (Head-to-Head!)
+                analysis = {
+                    "session": "sess_h2h_1",
+                    "sample_starts": [(60.0, 20.0), (300.0, 20.0)],
+                    "results": [
+                        {
+                            "platform": "cpu", "codec": "av1", "encoder_speed": "balanced",
+                            "rate_mode": "cq", "value": 28, "vmaf": 95.4, "vmaf_1pct": 89.2,
+                            "ms_ssim": 0.992, "ssimulacra2": 82.0, "cambi": 1.1,
+                            "video_kbps": 4200, "savings_percent": 62.0, "recommended": True,
+                            "timing": {"encode_sec": 80.0, "vmaf_sec": 20.0, "s2_sec": 2.0},
+                        },
+                        {
+                            "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+                            "rate_mode": "cq", "value": 28, "vmaf": 95.1, "vmaf_1pct": 88.0,
+                            "ms_ssim": 0.990, "ssimulacra2": 79.5, "cambi": 1.8,
+                            "video_kbps": 5000, "savings_percent": 54.0, "recommended": True,
+                            "timing": {"encode_sec": 10.0, "vmaf_sec": 20.0, "s2_sec": 2.0},
+                        },
+                    ],
+                }
+                history.record_vmaf_analysis_perf(
+                    "sess_h2h_1",
+                    analysis,
+                    src_info={"width": 3840, "height": 2160, "fps": 24.0, "duration": 3600.0, "is_hdr": True},
+                    params={"ssimulacra2_frames": 3, "tonemap": False},
+                )
+                res_all = history.quality_ranking(height_filter=2160, hdr_filter="hdr", min_vmaf=95.0)
+                self.assertEqual(res_all["total_samples"], 2)
+                self.assertEqual(len(res_all["rankings"]), 2)
+                self.assertEqual(len(res_all["head_to_head"]), 1)
+                duel = res_all["head_to_head"][0]
+                self.assertEqual(duel["a"], "cpu:av1")
+                self.assertEqual(duel["b"], "nvidia:av1")
+                self.assertLess(duel["bitrate_delta_pct"], -10.0)  # CPU AV1 spart Bitrate ggü. NVIDIA AV1
+                self.assertLess(duel["speed_ratio"], 0.3)          # aber langsamer
+                # SDR-Filter muss 0 liefern
+                res_sdr = history.quality_ranking(hdr_filter="sdr")
+                self.assertEqual(res_sdr["total_samples"], 0)
+                analysis_cx = {
+                    "session": "sess_cx",
+                    "sample_windows": [
+                        {"role": "peak", "kbps": 18000},
+                        {"role": "quiet", "kbps": 2500},
+                    ],
+                    "results": [
+                        {
+                            "platform": "cpu", "codec": "av1", "encoder_speed": "balanced",
+                            "rate_mode": "cq", "value": 28, "vmaf": 95.0, "recommended": True,
+                            "timing": {"encode_sec": 40.0, "vmaf_sec": 10.0, "s2_sec": 1.0},
+                            "scene_scores": [
+                                {"scene": 0, "vmaf": 92.0, "p1": 84.0, "kbps": 9000},
+                                {"scene": 1, "vmaf": 98.0, "p1": 96.0, "kbps": 1800},
+                            ],
+                        },
+                        {
+                            "platform": "nvidia", "codec": "hevc", "encoder_speed": "balanced",
+                            "rate_mode": "cq", "value": 28, "vmaf": 94.5, "recommended": True,
+                            "timing": {"encode_sec": 8.0, "vmaf_sec": 10.0, "s2_sec": 1.0},
+                            "scene_scores": [
+                                {"scene": 0, "vmaf": 91.5, "p1": 82.0, "kbps": 12000},
+                                {"scene": 1, "vmaf": 97.5, "p1": 95.0, "kbps": 2200},
+                            ],
+                        },
+                    ],
+                }
+                history.record_vmaf_analysis_perf(
+                    "sess_cx",
+                    analysis_cx,
+                    src_info={"width": 3840, "height": 2160, "fps": 24.0, "duration": 3600.0,
+                              "bit_rate": 40_000_000, "is_hdr": False},
+                    params={"anime": True, "ssimulacra2_frames": 3},
+                )
+                res_cx = history.quality_ranking(complexity_filter="complex", anime_filter="anime")
+                self.assertEqual(res_cx["total_samples"], 2)
+                self.assertEqual(res_cx["head_to_head"][0]["complexity"], "complex")
+                self.assertLess(res_cx["head_to_head"][0]["bitrate_delta_pct"], 0)
+                res_quiet = history.quality_ranking(complexity_filter="quiet")
+                self.assertEqual(res_quiet["total_samples"], 2)
+                res_dense = history.quality_ranking(density_filter="dense")
+                self.assertEqual(res_dense["total_samples"], 4)
+                named = "Geheimer Film_2026-11-19_14-37_ab12cd"
+                history.record_vmaf_analysis_perf(
+                    named,
+                    {"results": [{
+                        "platform": "cpu", "codec": "av1", "encoder_speed": "balanced",
+                        "rate_mode": "cq", "value": 28, "vmaf": 95.0,
+                        "video_kbps": 4000, "timing": {"encode_sec": 6.0, "vmaf_sec": 4.0, "s2_sec": 1.0},
+                    }]},
+                    src_info={"width": 1920, "height": 1080, "fps": 24.0, "duration": 100.0},
+                    source_path="/media/Geheimer Film.mkv",
+                    source_title="Geheimer Film",
+                )
+                exported = json.dumps(history.export_quality_exchange(), ensure_ascii=False)
+                self.assertNotIn("Geheimer", exported)
+                self.assertNotIn("/media/", exported)
+                rows = history.list_perf_samples()
+                self.assertFalse(any("Geheimer" in json.dumps(r, ensure_ascii=False) for r in rows))
+                alias = history._conn.execute(
+                    "SELECT source_alias FROM quality_samples WHERE video_kbps=4000"
+                ).fetchone()["source_alias"]
+                resolved = history.resolve_source_alias(alias)
+                self.assertEqual(resolved["title"], "Geheimer Film")
+                self.assertEqual(resolved["path"], "/media/Geheimer Film.mkv")
+                history.record_vmaf_analysis_perf(
+                    "Geheimer Film_2026-11-19_15-01_cd34ef",
+                    {"results": [{
+                        "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+                        "rate_mode": "cq", "value": 30, "vmaf": 93.0,
+                        "video_kbps": 3500, "timing": {"encode_sec": 2.0, "vmaf_sec": 4.0, "s2_sec": 1.0},
+                    }]},
+                    source_path="/media/Geheimer Film.mkv",
+                    source_title="Geheimer Film",
+                )
+                again = history._conn.execute(
+                    "SELECT source_alias FROM quality_samples WHERE video_kbps=3500"
+                ).fetchone()["source_alias"]
+                self.assertEqual(again, alias)
+        finally:
+            if history._conn is not None and history._conn is not old_conn:
+                history._conn.close()
             history._conn = old_conn
             config.DATA_DIR = old_dir
 
