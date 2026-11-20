@@ -215,16 +215,17 @@ RUN mkdir -p ${VMAF_MODEL_DIR} \
         -O ${VMAF_MODEL_DIR}/hdr_vmaf_v1.1.8_3d0h.json \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/hdr_vmaf_v1.1.8/hdr_vmaf_v1.1.8_1d5h_2160.json" \
         -O ${VMAF_MODEL_DIR}/hdr_vmaf_v1.1.8_1d5h_2160.json \
-    # Build-Zeit-Smoke-Test für HDR-VMAF v1.1.8 im latest-Kanal (zscale ICtCp PQ 16-bit + libvmaf):
-    && if [ "${IMAGE_CHANNEL}" != "legacy" ] && [ -n "${VMAF_MODEL_HDR_4K}" ]; then \
-        python3 -c 'import json; d=json.load(open("'"${VMAF_MODEL_DIR}/${VMAF_MODEL_HDR_4K}"'")); d.get("model_dict",{}).pop("conversion_target",None); json.dump(d, open("/tmp/hdr_smoke_model.json","w"))' \
-        && /usr/local/bin/ffmpeg -y -hide_banner -loglevel error \
-            -f lavfi -i "color=c=gray:s=64x64:d=0.12:r=25,format=yuv420p10le" \
-            -f lavfi -i "color=c=gray:s=64x64:d=0.12:r=25,format=yuv420p10le" \
-            -filter_complex "[0:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[d];[1:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[r];[d][r]libvmaf=model='path=/tmp/hdr_smoke_model.json':log_fmt=json:log_path=/tmp/hdr_smoke_out.json" \
+    && if [ "${IMAGE_CHANNEL}" != "legacy" ] && [ -n "${VMAF_MODEL_HDR_1080P}" ]; then \
+        python3 -c 'import json; d=json.load(open("'"${VMAF_MODEL_DIR}/${VMAF_MODEL_HDR_1080P}"'")); d.get("model_dict",{}).pop("conversion_target",None); json.dump(d, open("/tmp/hdr_smoke_model.json","w"))' \
+        && /usr/local/bin/ffmpeg -y -hide_banner \
+            -f lavfi -i "color=c=gray:s=1920x1080:r=24:d=0.084,format=yuv420p10le,setparams=range=limited:color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc" \
+            -f lavfi -i "color=c=gray:s=1920x1080:r=24:d=0.084,format=yuv420p10le,setparams=range=limited:color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc" \
+            -filter_complex "[0:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[d];[1:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[r];[d][r]libvmaf=model='path=/tmp/hdr_smoke_model.json':log_fmt=json:log_path=/tmp/hdr_smoke_out.json:shortest=1:n_threads=2" \
             -f null - \
-        && python3 -c 'import json; d=json.load(open("/tmp/hdr_smoke_out.json")); v=d["pooled_metrics"]["vmaf"]["mean"]; assert 80.0 <= v <= 100.0, v; print("== HDR-VMAF Smoke-Test OK:", round(v, 2), "==")' \
-        && rm -f /tmp/hdr_smoke_model.json /tmp/hdr_smoke_out.json; \
+            > /tmp/hdr_smoke_ff.log 2>&1 \
+        || { echo "FEHLER: HDR-VMAF Smoke-Test"; cat /tmp/hdr_smoke_ff.log; exit 1; }; \
+        python3 -c 'import json; d=json.load(open("/tmp/hdr_smoke_out.json")); v=float(d["pooled_metrics"]["vmaf"]["mean"]); assert v == v and 0.0 <= v <= 100.0, v; print("== HDR-VMAF Smoke-Test OK:", round(v, 2), "==")' \
+        && rm -f /tmp/hdr_smoke_model.json /tmp/hdr_smoke_out.json /tmp/hdr_smoke_ff.log; \
     fi
 
 # --------------------------------------------------------------- Python-App

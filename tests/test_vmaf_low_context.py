@@ -969,6 +969,8 @@ class LowContextFrontendTests(unittest.TestCase):
           const xpsnrMark = (v) => ({text: v + " dB", word: "gut"});
           const ssimulacra2Pill = () => "";
           const ssimulacra2Mark = () => ({word: "gut"});
+          const butteraugliPill = () => "";
+          const butteraugliMark = () => ({word: "gut"});
           const vmafSpread = () => null;
           const vmafP1GapValue = () => 6;
           const vmafTargetLo = () => 94;

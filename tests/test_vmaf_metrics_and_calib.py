@@ -56,12 +56,14 @@ class FolderFirstMediaTests(unittest.TestCase):
 class VmafMetricToggleTests(unittest.TestCase):
     def test_feature_attempts_respect_disabled_metrics(self):
         pure = vmaf_mod._build_vmaf_feature_attempts(
-            with_psnr=False, with_ssim=False, with_ms_ssim=False, with_cambi=False
+            with_psnr=False, with_ssim=False, with_ms_ssim=False, with_cambi=False,
+            with_xpsnr=False,
         )
         self.assertEqual(pure, [("", False)])
 
         psnr_only = vmaf_mod._build_vmaf_feature_attempts(
-            with_psnr=True, with_ssim=False, with_ms_ssim=False, with_cambi=False
+            with_psnr=True, with_ssim=False, with_ms_ssim=False, with_cambi=False,
+            with_xpsnr=False,
         )
         self.assertEqual(psnr_only[0], ("feature=name=psnr:", False))
         for feat_str, has_cambi in psnr_only:
@@ -71,7 +73,8 @@ class VmafMetricToggleTests(unittest.TestCase):
             self.assertNotIn("float_ssim", feat_str)
 
         cambi_ssim = vmaf_mod._build_vmaf_feature_attempts(
-            with_psnr=False, with_ssim=True, with_ms_ssim=False, with_cambi=True
+            with_psnr=False, with_ssim=True, with_ms_ssim=False, with_cambi=True,
+            with_xpsnr=False,
         )
         self.assertIn("name=float_ssim", cambi_ssim[0][0])
         self.assertIn("name=cambi", cambi_ssim[0][0])
