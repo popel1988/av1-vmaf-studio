@@ -5755,7 +5755,18 @@
     "schwach": ["weak", "débil", "faible"],
     "sichtbar": ["visible differences", "diferencias visibles", "différences visibles"],
     "Standbild-Vergleich: Höher bedeutet näher am Original. Die Farbe bewertet jeden Wert einzeln, nicht die gesamte Szene.": ["Still-image comparison: higher means closer to the original. Each value is colored separately, not the whole scene.", "Comparación de imágenes fijas: un valor mayor indica más similitud con el original. El color clasifica cada valor por separado, no la escena completa.", "Comparaison d’images fixes : une valeur plus élevée indique une plus grande proximité avec l’original. La couleur classe chaque valeur séparément, pas la scène entière."],
-    "Nur zur Orientierung; ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich. Die Empfehlung bleibt beim VMAF.": ["For guidance only; use the A/B comparison to judge whether the difference is visually distracting. Recommendations remain based on VMAF.", "Solo como orientación; la comparación A/B permite juzgar si la diferencia molesta visualmente. La recomendación sigue basándose en VMAF.", "À titre indicatif uniquement ; la comparaison A/B permet de juger si la différence gêne visuellement. La recommandation reste fondée sur VMAF."]
+    "Nur zur Orientierung; ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich. Die Empfehlung bleibt beim VMAF.": ["For guidance only; use the A/B comparison to judge whether the difference is visually distracting. Recommendations remain based on VMAF.", "Solo como orientación; la comparación A/B permite juzgar si la diferencia molesta visualmente. La recomendación sigue basándose en VMAF.", "À titre indicatif uniquement ; la comparaison A/B permet de juger si la différence gêne visuellement. La recommandation reste fondée sur VMAF."],
+    "Butteraugli – Szenen und Einzelbilder": ["Butteraugli – scenes and individual images", "Butteraugli – escenas e imágenes individuales", "Butteraugli – scènes et images individuelles"],
+    "Schlechtestes Bild": ["Worst image", "Peor imagen", "Pire image"],
+    "3-Norm": ["3-norm", "3-norma", "3-norme"],
+    "Bild": ["Image", "Imagen", "Image"],
+    "deutlich": ["noticeable", "marcado", "net"],
+    "Ausreißer im Standbild": ["outlier in a still", "desviación en una imagen fija", "écart sur une image fixe"],
+    "Butteraugli-Distanz: niedriger bedeutet näher am Original. Die Farbe bewertet jeden Wert einzeln. Der Einzelwert ist der auffälligste Unterschied, die 3-Norm die Schwere über die Fläche.": ["Butteraugli distance: lower means closer to the original. Each value is colored separately. The single value is the most noticeable difference, the 3-norm the severity across the frame.", "Distancia Butteraugli: más bajo significa más cerca del original. El color clasifica cada valor por separado. El valor suelto es la diferencia más llamativa, la 3-norma la gravedad en toda la imagen.", "Distance Butteraugli : plus bas signifie plus proche de l’original. La couleur classe chaque valeur séparément. La valeur seule est l’écart le plus visible, la 3-norme la sévérité sur toute l’image."],
+    "Heatmap": ["Heatmap", "Mapa de calor", "Carte de chaleur"],
+    "BA-Bild": ["BA image", "Imagen BA", "Image BA"],
+    "Szenenmitte": ["Scene midpoint", "Centro de la escena", "Milieu de la scène"],
+    "Standbilder und Butteraugli-Fehlerkarten dieser Szene": ["Stills and Butteraugli error maps for this scene", "Imágenes fijas y mapas de error Butteraugli de esta escena", "Images fixes et cartes d’erreur Butteraugli de cette scène"]
   };
   [DICT, DICT_ES, DICT_FR].forEach(function (dict, index) {
     Object.keys(S2_TOOLTIP_TEXTS).forEach(function (key) { dict[key] = S2_TOOLTIP_TEXTS[key][index]; });

@@ -123,6 +123,7 @@
       if (typeof refreshVmafCalibration === "function") refreshVmafCalibration();
     }
     if ((page === "encode" || page === "vmaf") && state.bitrateData) drawBitrateChart(state.bitrateData);
+    if (page === "vmaf" || page === "vmafnerd") refreshVmafRetestButton(false);
     if (page === "vmafnerd") {
       state.vmafNerd = true;
       if (state.chartScene == null && state.shotScene != null) state.chartScene = state.shotScene;
@@ -4508,6 +4509,7 @@
   /** Job-Art aus Settings (encode | edit | copy | concat | split). */
   function jobKind(s) {
     if (!s) return "encode";
+    if (s.video_mode === "retest") return "retest";
     if (s.remux_only || s.video_mode === "edit") return "edit";
     const m = s.video_mode || "encode";
     if (m === "copy" || m === "concat" || m === "split") return m;
@@ -4517,6 +4519,7 @@
   /** Kurzes Badge + Detail für Queue/Stats (kein Encode-CQ bei Remux). */
   function jobModeParts(s) {
     const kind = jobKind(s);
+    if (kind === "retest") return { badge: "Nachmessung", detail: s.retest_metrics || "Metriken", kind };
     if (kind === "edit") {
       const cont = (((s.edit_spec || {}).container) || s.container || "mkv");
       return { badge: "Remux", detail: String(cont).toUpperCase(), kind };
@@ -4707,13 +4710,14 @@
     body.innerHTML = view.map((it) => {
       const reso = it.info ? it.info.resolution : "—";
       const isAct = active.has(it.id);
+      const isRetest = it.id === "retest";
       const canCancel = ["wartend", "auswahl"].includes(it.status) || isAct;
-      const suspendBtn = isAct
+      const suspendBtn = isAct && !isRetest
         ? `<button class="btn btn-ghost btn-sm" data-suspend="${it.id}" title="${escapeHtml(it.suspended ? tt("Encode-Prozess fortsetzen") : tt("Laufenden FFmpeg-Prozess anhalten (CPU/GPU sofort freigeben)"))}">${it.suspended ? "▶ Fortsetzen" : "⏸ Prozess"}</button>`
         : "";
       const cancelBtn = canCancel
         ? `<button class="btn btn-ghost btn-sm" data-cancel="${it.id}">Abbrechen</button>` : "";
-      const requeueBtn = DONE.includes(it.status)
+      const requeueBtn = DONE.includes(it.status) && !isRetest
         ? `<button class="btn btn-ghost btn-sm" data-requeue="${it.id}" title="Mit diesen Einstellungen öffnen">Erneut</button>` : "";
       const editWaitBtn = it.status === "wartend"
         ? `<button class="btn btn-ghost btn-sm iconbtn" data-edit-wait="${it.id}" title="${tt("Aus Warteschlange nehmen & Einstellungen bearbeiten")}">✎</button>` : "";
@@ -4746,7 +4750,8 @@
       const finished = DONE.includes(it.status) && it.finished_at
         ? `<div class="muted" style="font-size:11px">${new Date(it.finished_at * 1000).toLocaleTimeString().slice(0,5)}</div>` : "";
       const dragAttr = it.status === "wartend" ? ` draggable="true" data-wait-row="${it.id}"` : "";
-      return `<tr class="queue-row" data-details="${it.id}"${dragAttr} title="Details / ffprobe anzeigen">
+      const rowTitle = isRetest ? "Nachmessung gespeicherter Clips" : "Details / ffprobe anzeigen";
+      return `<tr class="queue-row" data-details="${it.id}"${dragAttr} title="${rowTitle}">
         <td>${dragHandle}<span class="queue-title-link">${escapeHtml(it.title)}</span>${err}${warn}${dvBox}${extraOut}</td>
         <td>${reso}</td>
         <td class="status-cell">${statusBadge(it.status, it.suspended)}</td>
@@ -4849,7 +4854,10 @@
     bindDvPromptButtons(body);
     bindResultActions(body);
     body.querySelectorAll("tr.queue-row").forEach((tr) => {
-      tr.addEventListener("click", () => openQueueDetails(tr.dataset.details));
+      tr.addEventListener("click", () => {
+        if (tr.dataset.details === "retest") return;
+        openQueueDetails(tr.dataset.details);
+      });
     });
   }
 
@@ -5211,7 +5219,7 @@
         <div class="job-progress-head">
           <span class="job-progress-title">${escapeHtml(job.title)}</span>
           <span class="job-progress-stage">${job.suspended ? "⏸ " + escapeHtml(tt("Prozess pausiert")) : escapeHtml(stage)}
-            <button class="btn btn-ghost btn-sm" type="button" data-prog-suspend="${job.id}" style="margin-left:8px">${job.suspended ? "▶ Fortsetzen" : "⏸ Pausieren"}</button>
+            ${job.id === "retest" ? "" : `<button class="btn btn-ghost btn-sm" type="button" data-prog-suspend="${job.id}" style="margin-left:8px">${job.suspended ? "▶ Fortsetzen" : "⏸ Pausieren"}</button>`}
           </span>
         </div>
         <div class="big-progress">
@@ -5359,14 +5367,15 @@
 
   let vmafRetestPoll = null;
   let vmafRetestInfoCache = null;
+  let vmafRetestInfoFlight = "";
 
   function syncVmafRepick() {
     const btn = $("btn-vmaf-repick");
     if (btn) btn.disabled = !state.vmafSession;
-    refreshVmafRetestButton();
+    refreshVmafRetestButton(false);
   }
 
-  async function refreshVmafRetestButton() {
+  async function refreshVmafRetestButton(force) {
     const btn = $("btn-vmaf-retest");
     const panel = $("vmaf-retest-panel");
     const session = state.vmafSession;
@@ -5377,8 +5386,17 @@
       vmafRetestInfoCache = null;
       return;
     }
+    const onVmafPage = state.currentPage === "vmaf" || state.currentPage === "vmafnerd";
+    if (!onVmafPage && !force) return;
+    if (!force && vmafRetestInfoCache && vmafRetestInfoCache.session === session) {
+      btn.hidden = !vmafRetestInfoCache.can_retest;
+      return;
+    }
+    if (!force && vmafRetestInfoFlight === session) return;
+    vmafRetestInfoFlight = session;
     try {
       const r = await fetch(`/api/vmaf/session/${encodeURIComponent(session)}/retest-info`);
+      if (vmafRetestInfoFlight === session) vmafRetestInfoFlight = "";
       if (!r.ok) {
         btn.hidden = true;
         if (panel) panel.hidden = true;
@@ -5394,6 +5412,7 @@
         renderVmafRetestPanel(info);
       }
     } catch (e) {
+      if (vmafRetestInfoFlight === session) vmafRetestInfoFlight = "";
       btn.hidden = true;
     }
   }
@@ -5531,7 +5550,7 @@
             }
           }
         }
-        await refreshVmafRetestButton();
+        await refreshVmafRetestButton(true);
       }
     } catch (e) {
       if (vmafRetestPoll) { clearInterval(vmafRetestPoll); vmafRetestPoll = null; }
@@ -5893,6 +5912,20 @@
     return ist ? `${tt("Ist")} ${ist}` : "";
   }
 
+  function previewSrc(path) {
+    const p = String(path || "");
+    if (!p) return "";
+    if (p.startsWith("/api/") || p.startsWith("http")) return p;
+    return `/api/preview/${p.replace(/^\/+/, "")}`;
+  }
+
+  function baPairAt(sceneScore, idx) {
+    if (!sceneScore || idx == null || idx < 0) return null;
+    const pairs = sceneScore.butteraugli_pairs;
+    if (!Array.isArray(pairs)) return null;
+    return pairs.find((p) => p && Number(p.idx) === idx) || pairs[idx] || null;
+  }
+
   function shotsOf(r) {
     if (Array.isArray(r.screenshots) && r.screenshots.length) return r.screenshots;
     if (r.screenshot_ref || r.screenshot_enc)
@@ -5942,12 +5975,13 @@
       });
     results.forEach((x) => {
       const s = x.shots.find((sh) => sh.scene === sc);
+      const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
+      const baPair = baPairAt(sceneScore, ui.s2Idx);
       if (s && s.enc) {
-        const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
         const s2Pair = (ui.s2Idx >= 0 && sceneScore && Array.isArray(sceneScore.ssimulacra2_pairs))
           ? sceneScore.ssimulacra2_pairs[ui.s2Idx]
           : null;
-        const encSrc = (s2Pair && s2Pair.enc) ? s2Pair.enc : s.enc;
+        const encSrc = (s2Pair && s2Pair.enc) ? previewSrc(s2Pair.enc) : s.enc;
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
         const bits = [];
         if (!vmaf.visual_only) {
@@ -5974,6 +6008,11 @@
               bits.push(`SSIMULACRA2 ${Number(sceneScore.ssimulacra2).toFixed(1)}${word}${mn}${vals}`);
             }
           }
+          if (baPair && baPair.score != null) {
+            const bm = butteraugliMark(baPair.score);
+            const word = bm.word ? ` (${bm.word})` : "";
+            bits.push(`BA-Bild ${ui.s2Idx + 1}: ${Number(baPair.score).toFixed(2)}${word}`);
+          }
         }
         const ist = bitrateReport(
           x.r, (s && s.kbps) || (sceneScore && sceneScore.kbps) || x.r.video_kbps);
@@ -5985,6 +6024,16 @@
           recommended: x.r.recommended,
           clip: (isMainOrNerd && s.clip) ? s.clip : "",
           start: sceneStart, len: sceneLen,
+        });
+      }
+      if (baPair && baPair.heat) {
+        const p3 = baPair.p3 != null ? ` · 3-Norm ${Number(baPair.p3).toFixed(2)}` : "";
+        const at = baPair.at != null ? ` · ${Number(baPair.at).toFixed(1)} s` : "";
+        tiles.push({
+          src: previewSrc(baPair.heat),
+          label: `${x.r.label || ("Q" + x.r.quality)} · ${tt("Heatmap")}`,
+          sub: `Distanz ${Number(baPair.score).toFixed(2)}${p3}${at}`,
+          heat: true,
         });
       }
     });
@@ -5999,9 +6048,11 @@
     const isMainOrNerd = isMain || isNerd;
     const fullDetail = !isMain;
     const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
+    const hasBaHeat = (r) => (r.scene_scores || []).some((sc) =>
+      (sc.butteraugli_pairs || []).some((p) => p && p.heat));
     const all = (vmaf.results || [])
       .map((r) => ({ r, shots: shotsOf(r) }))
-      .filter((x) => x.shots.length);
+      .filter((x) => x.shots.length || hasBaHeat(x.r));
     if (!all.length) { grid.innerHTML = ""; return; }
 
     const groups = [...new Set(all.map((x) => x.r.shotGroup).filter(Boolean))];
@@ -6012,7 +6063,13 @@
       : all;
 
     const scenes = [...new Set(
-      results.flatMap((x) => x.shots.map((s) => s.scene))
+      results.flatMap((x) => {
+        const fromShots = x.shots.map((s) => s.scene);
+        const fromBa = (x.r.scene_scores || [])
+          .filter((sc) => (sc.butteraugli_pairs || []).some((p) => p && p.heat))
+          .map((sc) => sc.scene);
+        return fromShots.concat(fromBa);
+      })
     )].sort((a, b) => a - b);
     if (ui.scene == null || !scenes.includes(ui.scene))
       ui.scene = scenes[0];
@@ -6020,16 +6077,23 @@
     if (isMainOrNerd) state.shotScene = sc;
 
     let maxS2Stills = 0;
-    if (fullDetail) {
-      results.forEach((x) => {
-        const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
-        if (s && Array.isArray(s.ssimulacra2_pairs)) {
-          const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
-          if (valid > maxS2Stills) maxS2Stills = valid;
-        }
-      });
-    }
-    if (!fullDetail || ui.s2Idx == null || ui.s2Idx >= maxS2Stills) ui.s2Idx = -1;
+    let maxBaStills = 0;
+    results.forEach((x) => {
+      const s = (x.r.scene_scores || []).find((v) => v.scene === sc);
+      if (!s) return;
+      if (fullDetail && Array.isArray(s.ssimulacra2_pairs)) {
+        const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
+        if (valid > maxS2Stills) maxS2Stills = valid;
+      }
+      if (Array.isArray(s.butteraugli_pairs)) {
+        const valid = s.butteraugli_pairs.filter((p) => p && p.heat).length;
+        if (valid > maxBaStills) maxBaStills = valid;
+      }
+    });
+    const stillCount = Math.max(maxS2Stills, maxBaStills);
+    if (ui.s2Idx == null || ui.s2Idx >= stillCount) ui.s2Idx = -1;
+    if (!fullDetail && maxBaStills <= 0) ui.s2Idx = -1;
+    if (ui.s2Idx < 0 && maxBaStills > 0 && !results.some((x) => x.shots.length)) ui.s2Idx = 0;
 
     const tiles = buildShotTiles(vmaf, results, sc, { ui, fullDetail, isMainOrNerd });
     if (!tiles.length) { grid.innerHTML = ""; return; }
@@ -6044,11 +6108,15 @@
           `<button class="shot-scene ${n === sc ? "active" : ""}" data-scene="${n}">${escapeHtml(sceneTabText(vmaf, n))}</button>`
         ).join("")}</div>`
       : "";
-    const s2Tabs = (fullDetail && maxS2Stills > 1)
-      ? `<div class="shot-scenes" title="SSIMULACRA2-Vergleichsbilder dieser Szene">`
-        + `<button class="shot-scene ${ui.s2Idx < 0 ? "active" : ""}" data-s2="-1">Szenenmitte</button>`
-        + Array.from({ length: maxS2Stills }, (_, idx) =>
-            `<button class="shot-scene ${ui.s2Idx === idx ? "active" : ""}" data-s2="${idx}">S2-Bild ${idx + 1}</button>`
+    const showStillTabs = (fullDetail && maxS2Stills > 1) || maxBaStills > 0;
+    const stillLabel = (idx) => (maxBaStills > 0 && maxS2Stills > 0)
+      ? `${tt("Bild")} ${idx + 1}`
+      : (maxBaStills > 0 ? `${tt("BA-Bild")} ${idx + 1}` : `S2-Bild ${idx + 1}`);
+    const s2Tabs = showStillTabs
+      ? `<div class="shot-scenes" title="${escapeHtml(tt("Standbilder und Butteraugli-Fehlerkarten dieser Szene"))}">`
+        + `<button class="shot-scene ${ui.s2Idx < 0 ? "active" : ""}" data-s2="-1">${tt("Szenenmitte")}</button>`
+        + Array.from({ length: stillCount }, (_, idx) =>
+            `<button class="shot-scene ${ui.s2Idx === idx ? "active" : ""}" data-s2="${idx}">${stillLabel(idx)}</button>`
           ).join("")
         + `</div>`
       : "";
@@ -6067,7 +6135,7 @@
         ${tiles.map((t) => {
           const cap = `${t.label} · ${t.sub}`;
           return `
-          <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""}"
+          <div class="shot-tile ${t.recommended ? "recommended" : ""} ${t.ref ? "is-ref" : ""} ${t.heat ? "is-heat" : ""}"
                data-src="${t.src}" data-cap="${escapeHtml(cap)}"
                data-key="${escapeHtml(t.ref ? "ref" : t.label)}"
                data-kind="${t.ref ? "ref" : "enc"}" data-clip="${escapeHtml(t.clip || "")}"
@@ -6770,14 +6838,61 @@
     return { cls, text: x.toFixed(2), word };
   }
 
+  function butteraugliValuePill(label, value) {
+    const n = value == null ? NaN : Number(value);
+    const valid = Number.isFinite(n);
+    const mark = valid ? butteraugliMark(n) : { cls: "", word: "Nicht gemessen" };
+    const score = valid ? n.toFixed(2) : "—";
+    return `<span class="metric-pill s2-tip-value ${mark.cls}">${escapeHtml(label)}: ${score}`
+      + ` <span class="s2-tip-rating">· ${escapeHtml(tt(mark.word || "Nicht gemessen"))}</span></span>`;
+  }
+
+  function butteraugliFrames(sc) {
+    if (Array.isArray(sc.butteraugli_pairs) && sc.butteraugli_pairs.length) {
+      return sc.butteraugli_pairs.filter((p) => p && p.score != null);
+    }
+    return (Array.isArray(sc.butteraugli_scores) ? sc.butteraugli_scores : [])
+      .map((v, i) => ({ idx: i, score: v }));
+  }
+
+  function butteraugliTooltipHtml(r) {
+    const text = (s) => escapeHtml(tt(s));
+    let html = `<div class="s2-tip"><strong>Butteraugli</strong>`
+      + `<div class="s2-tip-values">${butteraugliValuePill(tt("Gesamtmittel"), r.butteraugli)}`
+      + (r.butteraugli_max != null ? butteraugliValuePill(tt("Schlechtestes Bild"), r.butteraugli_max) : "")
+      + (r.butteraugli_3norm != null ? butteraugliValuePill(tt("3-Norm"), r.butteraugli_3norm) : "")
+      + `</div>`;
+    (r.scene_scores || []).forEach((sc) => {
+      const frames = butteraugliFrames(sc);
+      if (sc.butteraugli == null && !frames.length) return;
+      html += `<section class="s2-tip-scene"><strong>${text(`Szene ${Number(sc.scene) + 1}`)}</strong>`
+        + `<div class="s2-tip-values">${butteraugliValuePill(tt("Szenenmittel"), sc.butteraugli)}`
+        + (sc.butteraugli_max != null ? butteraugliValuePill(tt("Schlechtestes Bild"), sc.butteraugli_max) : "")
+        + (sc.butteraugli_3norm != null ? butteraugliValuePill(tt("3-Norm"), sc.butteraugli_3norm) : "")
+        + `</div>`;
+      if (frames.length) {
+        html += `<div class="s2-tip-values">` + frames.map((p, i) => {
+          const n = p.idx != null ? Number(p.idx) + 1 : i + 1;
+          const at = p.at != null ? ` · ${Number(p.at).toFixed(1)}s` : "";
+          return butteraugliValuePill(`${tt("Bild")} ${n}${at}`, p.score);
+        }).join("") + `</div>`;
+      }
+      html += `</section>`;
+    });
+    return html
+      + `<p class="s2-tip-note">${text("Butteraugli-Distanz: niedriger bedeutet näher am Original. Die Farbe bewertet jeden Wert einzeln. Der Einzelwert ist der auffälligste Unterschied, die 3-Norm die Schwere über die Fläche.")}</p>`
+      + `<p class="s2-tip-note">${text("Nur zur Orientierung; ob der Unterschied sichtbar stört, zeigt der A/B-Vergleich. Die Empfehlung bleibt beim VMAF.")}</p></div>`;
+  }
+
   function butteraugliPill(r) {
     if (r.butteraugli == null) return "";
     const m = butteraugliMark(r.butteraugli, r.butteraugli_max);
     const mx = r.butteraugli_max != null ? ` (max ${Number(r.butteraugli_max).toFixed(2)})` : "";
     const p3 = r.butteraugli_3norm != null ? ` · 3-Norm ${Number(r.butteraugli_3norm).toFixed(2)}` : "";
     const tip = `Butteraugli-Distanz (niedriger = besser, < 1,0 kaum unterscheidbar): Ø ${Number(r.butteraugli).toFixed(3)}${mx}${p3}`;
-    return `<span class="metric-pill ${m.cls}" data-tip="${escapeHtml(tip)}">`
-      + `Butteraugli ${m.text}${mx} · ${escapeHtml(tt(m.word))}</span>`;
+    return `<span class="metric-pill ${m.cls}" tabindex="0" data-tip="${escapeHtml(tip)}" data-tip-rich="butteraugli">`
+      + `Butteraugli ${m.text}${mx} · ${escapeHtml(tt(m.word))}`
+      + `<template class="ui-tip-content">${butteraugliTooltipHtml(r)}</template></span>`;
   }
 
   // Nur Einordnung: 5%/10% gehen NICHT in Empfehlung, Floor oder Score ein.
@@ -6999,8 +7114,11 @@
           if (sc.butteraugli != null) {
             const bm = butteraugliMark(sc.butteraugli, sc.butteraugli_max);
             const bmx = sc.butteraugli_max != null ? ` (max ${Number(sc.butteraugli_max).toFixed(2)})` : "";
+            const bvals = Array.isArray(sc.butteraugli_scores) && sc.butteraugli_scores.length
+              ? ` [${sc.butteraugli_scores.map((v) => Number(v).toFixed(2)).join(" / ")}]`
+              : (sc.butteraugli_n ? `, ${sc.butteraugli_n} Bilder` : "");
             const bword = bm.word ? ` (${bm.word})` : "";
-            bits.push(`Butteraugli ${Number(sc.butteraugli).toFixed(2)}${bword}${bmx}`);
+            bits.push(`Butteraugli ${Number(sc.butteraugli).toFixed(2)}${bword}${bmx}${bvals}`);
           }
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
@@ -18645,6 +18763,7 @@
 
     let vmafSec = 0;
     let s2Sec = 0;
+    let baSec = 0;
     if (!visualOnly) {
       const vc = c.vmaf || {};
       const useGpu = !!params.vmaf_gpu && Number(vc.gpu_fps_1080p || 0) > 0;
@@ -18672,14 +18791,28 @@
           : p1080 * Math.max(0.5, Math.pow(pixels / (1920 * 1080), 0.7));
         s2Sec = totalTiers * samples * s2Frames * secPair;
       }
+      if (params.vmaf_butteraugli) {
+        const baCfg = c.butteraugli || {};
+        if (baCfg.available !== false) {
+          const baFrames = s2Frames > 0 ? s2Frames : 3;
+          const bp1080 = Number(baCfg.sec_per_pair_1080p || 0.85);
+          const bp2160 = Number(baCfg.sec_per_pair_2160p || 2.2);
+          const baPair = pixels > 1920 * 1080
+            ? bp1080 + (bp2160 - bp1080) * Math.min(1.5, (pixels - 1920 * 1080) / (3840 * 2160 - 1920 * 1080))
+            : bp1080 * Math.max(0.5, Math.pow(pixels / (1920 * 1080), 0.7));
+          const share = s2Sec > 0 ? 0.6 : 1;
+          baSec = totalTiers * samples * baFrames * baPair * share;
+        }
+      }
     }
-    const total = (refSec + encodeSec + vmafSec + s2Sec) * batchCount;
+    const total = (refSec + encodeSec + vmafSec + s2Sec + baSec) * batchCount;
     return {
       calibrated: true,
       total_sec: Math.round(total),
       encode_sec: Math.round(encodeSec * batchCount),
       vmaf_sec: Math.round(vmafSec * batchCount),
       s2_sec: Math.round(s2Sec * batchCount),
+      ba_sec: Math.round(baSec * batchCount),
       ref_sec: Math.round(refSec * batchCount),
       resolution: `${width}×${height}`,
       assumed_source: !state.currentInfo,
@@ -18749,6 +18882,7 @@
     const subParts = [`Encode ~${formatDuration(est.encode_sec)}`];
     if (est.vmaf_sec > 0) subParts.push(`VMAF ~${formatDuration(est.vmaf_sec)}`);
     if (est.s2_sec > 0) subParts.push(`S2 ~${formatDuration(est.s2_sec)}`);
+    if (est.ba_sec > 0) subParts.push(`BA ~${formatDuration(est.ba_sec)}`);
     const resNote = est.assumed_source ? `${est.resolution} Referenzannahme` : est.resolution;
     const learnedN = Number((state.vmafCalib && state.vmafCalib.learned && state.vmafCalib.learned.total) || 0);
     if (learnedN > 0) subParts.push(`+${learnedN} Praxis`);
@@ -18855,6 +18989,7 @@
     const vc = calib.vmaf || {};
     const ov = vc.overheads || {};
     const s2 = calib.ssimulacra2 || {};
+    const ba = calib.butteraugli || {};
     const encEntries = Object.entries(calib.encoders || {}).sort((a, b) => a[0].localeCompare(b[0]));
 
     const vmafChip = `1080p <strong>${Math.round(vc.fps_1080p || 0)}</strong> · 4K <strong>${Math.round(vc.fps_2160p || 0)} fps</strong>`
@@ -18862,6 +18997,9 @@
     const s2Chip = s2.available
       ? `<strong>${Number(s2.sec_per_pair_1080p || 0).toFixed(2)}s</strong> / <strong>${Number(s2.sec_per_pair_2160p || 0).toFixed(2)}s</strong>`
       : "—";
+    const baChip = ba.available && Number(ba.sec_per_pair_1080p) > 0
+      ? `<strong>${Number(ba.sec_per_pair_1080p || 0).toFixed(2)}s</strong> / <strong>${Number(ba.sec_per_pair_2160p || 0).toFixed(2)}s</strong>`
+      : (ba.available === false ? "—" : `<span class="muted">nach Grundtest</span>`);
     const dbParts = [];
     if (learned.full_encodes) dbParts.push(`${learned.full_encodes} Encodes`);
     if (learned.vmaf_tests) dbParts.push(`${learned.vmaf_tests} VMAF-Clips`);
@@ -18896,6 +19034,7 @@
     box.innerHTML = `<div class="vc-strip">`
       + `<span class="vc-chip"><span class="vc-k">libvmaf</span> ${vmafChip}</span>`
       + `<span class="vc-chip"><span class="vc-k">S2 (1080p/4K)</span> ${s2Chip}</span>`
+      + `<span class="vc-chip" title="Sekunden pro Bildpaar, 1080p / 4K"><span class="vc-k">Butteraugli</span> ${baChip}</span>`
       + `<span class="vc-chip"><span class="vc-k">Lern-DB</span> ${dbChip}</span>`
       + `</div>`
       + `<details class="vc-details"${wasOpen ? " open" : ""}>`

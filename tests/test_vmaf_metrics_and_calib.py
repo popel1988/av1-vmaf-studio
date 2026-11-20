@@ -222,6 +222,48 @@ class VmafCalibrationAndEstimateTests(unittest.TestCase):
         self.assertEqual(slim["s2_sec"], 0.0)
         self.assertGreater(full["total_sec"], slim["total_sec"])
         self.assertGreater(uhd["total_sec"], full["total_sec"])
+        self.assertEqual(full["ba_sec"], 0.0)
+        with_ba = {
+            "width": 1920, "height": 1080, "fps": 24,
+            "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+            "test_values": [20, 24, 28, 32], "samples": 2, "clip_seconds": 20,
+            "ssimulacra2_frames": 3,
+            "vmaf_butteraugli": True,
+        }
+        both = vmaf_calib.estimate_vmaf_run(with_ba, calib=self.sample_calib)
+        solo = vmaf_calib.estimate_vmaf_run({**with_ba, "ssimulacra2_frames": 0}, calib=self.sample_calib)
+        self.assertGreater(both["ba_sec"], 0.0)
+        self.assertGreater(both["total_sec"], full["total_sec"])
+        self.assertGreater(solo["ba_sec"], both["ba_sec"])
+
+    def test_retest_appears_as_queue_row(self):
+        now = 1_700_000_000.0
+        hidden = qm.retest_queue_item({"running": False, "finished_at": now - 120}, now=now)
+        self.assertIsNone(hidden)
+        row = qm.retest_queue_item({
+            "running": True,
+            "session": "Film_demo",
+            "done": 2,
+            "total": 8,
+            "percent": 25,
+            "message": "MS-SSIM …",
+            "started_at": now - 12,
+            "metrics": ["MS-SSIM", "Butteraugli"],
+        }, now=now)
+        self.assertEqual(row["id"], "retest")
+        self.assertEqual(row["status"], "vmaf-test")
+        self.assertEqual(row["settings"]["video_mode"], "retest")
+        self.assertIn("Butteraugli", row["settings"]["retest_metrics"])
+        self.assertIn("25%", row["steps"][0]["name"])
+        done = qm.retest_queue_item({
+            "running": False,
+            "session": "Film_demo",
+            "finished_at": now - 5,
+            "started_at": now - 40,
+            "message": "Nachmessung abgeschlossen.",
+            "percent": 100,
+        }, now=now)
+        self.assertEqual(done["status"], "fertig")
 
     def test_endpoints_and_ui_elements_present(self):
         client = TestClient(app_mod.app)
@@ -807,6 +849,28 @@ class ButteraugliAndDoviFastPathTests(unittest.TestCase):
             self.assertAlmostEqual(s2["mean"], 84.2, places=2)
             self.assertAlmostEqual(ba["mean"], 0.65, places=3)
             self.assertAlmostEqual(ba["p3"], 0.31, places=3)
+            self.assertEqual(len(ba["pairs"]), 2)
+            self.assertAlmostEqual(ba["pairs"][0]["score"], 0.65, places=3)
+            self.assertLess(ba["pairs"][0]["at"], ba["pairs"][1]["at"])
+            self.assertEqual(ba["pairs"][0]["heat"], "")
+
+            calls = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(list(cmd))
+                if len(cmd) > 3:
+                    Path(cmd[-1]).write_bytes(b"\x89PNG")
+                    return mock.Mock(returncode=1, stdout="", stderr="no heatmap")
+                return mock.Mock(returncode=0, stdout="0.500\n3-norm: 0.200\n", stderr="")
+
+            heat = root / "nested" / "heat.png"
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                again = vmaf_mod._butteraugli_pair(ref, dist, heat)
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(str(calls[0][-1]).endswith("heat.png"))
+            self.assertEqual(len(calls[1]), 3)
+            self.assertAlmostEqual(again[0], 0.5, places=3)
+            self.assertFalse(heat.exists())
 
     def test_butteraugli_flag_in_settings_and_ui_template(self):
         from core.queue_manager import build_job_settings

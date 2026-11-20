@@ -2002,7 +2002,8 @@ async def preview_image(path: str):
         return JSONResponse({"error": "Ungültiger Pfad"}, status_code=403)
     if not target.is_file():
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
-    return FileResponse(target, media_type="image/jpeg")
+    kind = "image/png" if target.suffix.lower() == ".png" else "image/jpeg"
+    return FileResponse(target, media_type=kind)
 
 
 class ProfileRequest(BaseModel):
@@ -3158,6 +3159,9 @@ async def compare_weak_spots(session: str = "", job: str = "", result: int = -1)
 
 @app.post("/api/queue/{item_id}/cancel")
 async def cancel(item_id: str):
+    if item_id == "retest":
+        from core import vmaf as vmaf_mod
+        return {"ok": vmaf_mod.cancel_retest()}
     return {"ok": queue.cancel(item_id)}
 
 

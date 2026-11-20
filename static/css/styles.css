@@ -2436,6 +2436,7 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden; background: var(--surface-2); }
 .shot-tile.recommended { border-color: var(--good); box-shadow: 0 0 12px color-mix(in srgb, var(--good) 25%, transparent); }
 .shot-tile.is-ref { border-color: var(--accent); }
+.shot-tile.is-heat { border-color: var(--warn, #c9842a); }
 .shot-tile img { width: 100%; display: block; background: #000; cursor: zoom-in; aspect-ratio: 16 / 9; object-fit: cover; }
 .shot-tile video { width: 100%; display: block; background: #000; aspect-ratio: 16 / 9; }
 .shot-play { display: block; width: 100%; border: 0; border-top: 1px solid var(--border);

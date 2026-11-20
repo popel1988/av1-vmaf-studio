@@ -257,6 +257,7 @@ def _worker() -> None:
         has_gpu_vmaf = bool(gpu_stat.get("available"))
         has_xpsnr = bool(vmaf_mod.xpsnr_available())
         has_s2 = bool(vmaf_mod._ssimulacra2_ok())
+        has_ba = bool(vmaf_mod._butteraugli_ok())
 
         # Aufgabenliste für sauberen Fortschrittsbalken planen
         enc_tasks: list[tuple[str, str, str, str]] = []
@@ -280,6 +281,8 @@ def _worker() -> None:
             metric_tasks.extend(["vmaf_gpu_1080p", "vmaf_gpu_2160p"])
         if has_s2:
             metric_tasks.extend(["s2_1080p", "s2_2160p"])
+        if has_ba:
+            metric_tasks.extend(["ba_1080p", "ba_2160p"])
         metric_tasks.append("ref_tonemap_1080p")
 
         total_steps = 2 + len(enc_tasks) + len(metric_tasks)
@@ -477,6 +480,20 @@ def _worker() -> None:
                 dt = max(0.02, time.perf_counter() - t0)
                 if s2_res is not None:
                     vmaf_timings["s2_pair_2160p_sec"] = round(dt, 3)
+            elif mtask == "ba_1080p":
+                _set(message="Messe Butteraugli (1080p) …")
+                t0 = time.perf_counter()
+                ba_res = vmaf_mod._butteraugli_clip(ref_1080, dist_1080, tmp, "calibba1080", sec_1080, 24.0, 2)
+                dt = max(0.02, time.perf_counter() - t0)
+                if ba_res is not None:
+                    vmaf_timings["ba_pair_1080p_sec"] = round(dt / 2.0, 3)
+            elif mtask == "ba_2160p" and info_2160 and dist_2160:
+                _set(message="Messe Butteraugli (4K) …")
+                t0 = time.perf_counter()
+                ba_res = vmaf_mod._butteraugli_clip(ref_2160, dist_2160, tmp, "calibba2160", sec_2160, 24.0, 1)
+                dt = max(0.02, time.perf_counter() - t0)
+                if ba_res is not None:
+                    vmaf_timings["ba_pair_2160p_sec"] = round(dt, 3)
             elif mtask == "ref_tonemap_1080p":
                 _set(message="Messe HDR-Referenz-Vorbereitung …")
                 hdr_src = tmp / "hdr_1080p.mkv"
@@ -542,6 +559,11 @@ def _worker() -> None:
                 "available": has_s2,
                 "sec_per_pair_1080p": vmaf_timings.get("s2_pair_1080p_sec", 0.45 if has_s2 else 0.0),
                 "sec_per_pair_2160p": vmaf_timings.get("s2_pair_2160p_sec", 1.35 if has_s2 else 0.0),
+            },
+            "butteraugli": {
+                "available": has_ba,
+                "sec_per_pair_1080p": vmaf_timings.get("ba_pair_1080p_sec", 0.85 if has_ba else 0.0),
+                "sec_per_pair_2160p": vmaf_timings.get("ba_pair_2160p_sec", 2.2 if has_ba else 0.0),
             },
             "reference": {
                 "tonemap_fps_1080p": vmaf_timings.get("tonemap_ref_fps_1080p", 45.0),
@@ -634,6 +656,7 @@ def effective_profile(calib: Optional[dict] = None, samples: Optional[list[dict]
             "combo_scale": 0.85,
         },
         "ssimulacra2": {"available": True, "sec_per_pair_1080p": 0.45, "sec_per_pair_2160p": 1.35},
+        "butteraugli": {"available": True, "sec_per_pair_1080p": 0.85, "sec_per_pair_2160p": 2.2},
         "reference": {"tonemap_fps_1080p": 45.0},
     }
 
@@ -928,6 +951,7 @@ def estimate_vmaf_run(params: dict, calib: Optional[dict] = None) -> dict:
 
     vmaf_sec_total = 0.0
     s2_sec_total = 0.0
+    ba_sec_total = 0.0
     if not visual_only:
         vc = calib.get("vmaf") or {}
         use_gpu = bool(params.get("vmaf_gpu")) and float(vc.get("gpu_fps_1080p") or 0) > 0
@@ -964,7 +988,20 @@ def estimate_vmaf_run(params: dict, calib: Optional[dict] = None) -> dict:
             sec_pair = (p1080 + (p2160 - p1080) * px_t) if pixels > 1920 * 1080 else (p1080 * px_t)
             s2_sec_total = total_tiers * samples * s2_frames * sec_pair
 
-    total_one = ref_sec + encode_sec_total + vmaf_sec_total + s2_sec_total
+        if bool(params.get("vmaf_butteraugli")):
+            ba_cfg = calib.get("butteraugli") or {}
+            if ba_cfg.get("available", True):
+                # Ohne eigene Bildanzahl gelten dieselben Standbilder wie bei SSIMULACRA2
+                # (mindestens 3). Laufen beide, ist die PNG-Extraktion schon in s2_sec.
+                ba_frames = s2_frames if s2_frames > 0 else 3
+                bp1080 = float(ba_cfg.get("sec_per_pair_1080p") or 0.85)
+                bp2160 = float(ba_cfg.get("sec_per_pair_2160p") or 2.2)
+                bpx = min(1.5, max(0.4, (pixels - 1920 * 1080) / max(1.0, (3840 * 2160 - 1920 * 1080)))) if pixels > 1920 * 1080 else max(0.5, (pixels / (1920 * 1080)) ** 0.7)
+                ba_pair = (bp1080 + (bp2160 - bp1080) * bpx) if pixels > 1920 * 1080 else (bp1080 * bpx)
+                share = 0.6 if s2_sec_total > 0 else 1.0
+                ba_sec_total = total_tiers * samples * ba_frames * ba_pair * share
+
+    total_one = ref_sec + encode_sec_total + vmaf_sec_total + s2_sec_total + ba_sec_total
     total_all = total_one * batch_count
     learned = calib.get("learned") or {}
     return {
@@ -977,6 +1014,7 @@ def estimate_vmaf_run(params: dict, calib: Optional[dict] = None) -> dict:
         "encode_sec": round(encode_sec_total * batch_count, 1),
         "vmaf_sec": round(vmaf_sec_total * batch_count, 1),
         "s2_sec": round(s2_sec_total * batch_count, 1),
+        "ba_sec": round(ba_sec_total * batch_count, 1),
         "tiers": round(total_tiers, 1),
         "resolution": f"{width}×{height}",
     }

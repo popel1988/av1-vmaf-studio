@@ -470,6 +470,20 @@ class VmafResult:
                 ba_vals = s.get("butteraugli_scores") or []
                 if ba_vals:
                     item["butteraugli_scores"] = [round(float(x), 3) for x in ba_vals]
+                ba_pairs = s.get("butteraugli_pairs") or []
+                if ba_pairs:
+                    item["butteraugli_pairs"] = [
+                        {
+                            "idx": int(p.get("idx", j)),
+                            "at": round(float(p.get("at") or 0.0), 2),
+                            "score": round(float(p.get("score") or 0.0), 3),
+                            **({"p3": round(float(p["p3"]), 3)} if p.get("p3") is not None else {}),
+                            "heat": (p["heat"] if str(p.get("heat") or "").startswith("/api/preview/")
+                                     else (f"/api/preview/{p['heat']}" if p.get("heat") else "")),
+                        }
+                        for j, p in enumerate(ba_pairs)
+                        if isinstance(p, dict)
+                    ]
                 for key in ("frame_count", "p1_count", "scored_seconds", "scored_offset"):
                     if s.get(key) is not None:
                         item[key] = s[key]
@@ -1757,13 +1771,29 @@ def _jpg_from_png(src_png: Path, out_rel: str) -> str:
     return out_rel if res.returncode == 0 and dest.is_file() else ""
 
 
-def _butteraugli_pair(ref_png: Path, dist_png: Path) -> Optional[tuple[float, Optional[float]]]:
-    """Butteraugli-Distanz (und optionale 3-Norm) zweier PNGs. Niedriger = besser (<1.0 transparent)."""
+def _butteraugli_pair(
+    ref_png: Path, dist_png: Path, heatmap: Optional[Path] = None,
+) -> Optional[tuple[float, Optional[float]]]:
+    """Butteraugli-Distanz (und optionale 3-Norm) zweier PNGs. Niedriger = besser (<1.0 transparent).
+
+    Mit ``heatmap`` schreibt ``butteraugli_main`` die Fehlerkarte an diesen Pfad.
+    Schlägt das fehl, zählt der Lauf ohne Karte noch einmal.
+    """
+    cmd = [config.BUTTERAUGLI, str(ref_png), str(dist_png)]
+    if heatmap is not None:
+        heatmap.parent.mkdir(parents=True, exist_ok=True)
+        cmd.append(str(heatmap))
     proc = subprocess.run(
-        [config.BUTTERAUGLI, str(ref_png), str(dist_png)],
+        cmd,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=180, check=False,
     )
+    if proc.returncode != 0 and heatmap is not None:
+        try:
+            heatmap.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return _butteraugli_pair(ref_png, dist_png, None)
     if proc.returncode != 0:
         tail = ((proc.stderr or proc.stdout or "").strip().splitlines())
         logger.warning("Butteraugli fehlgeschlagen: %s", tail[-1] if tail else proc.returncode)
@@ -1808,6 +1838,7 @@ def _image_metrics_clip(
     s2_pairs: list[dict] = []
     ba_scores: list[float] = []
     ba_p3s: list[float] = []
+    ba_pairs: list[dict] = []
     times = _s2_times(clip_len, frames)
     try:
         for i, at in enumerate(times):
@@ -1835,11 +1866,23 @@ def _image_metrics_clip(
                             "enc": enc_rel,
                         })
                 if do_ba:
-                    ba = _butteraugli_pair(ref_png, dist_png)
+                    heat_rel = f"{sess}/ba_s{scene_idx}_f{i}_{key}.png" if sess else ""
+                    heat_dest = (config.PREVIEW_DIR / heat_rel) if heat_rel else None
+                    ba = _butteraugli_pair(ref_png, dist_png, heat_dest)
                     if ba is not None:
                         ba_scores.append(ba[0])
                         if ba[1] is not None:
                             ba_p3s.append(ba[1])
+                        saved = ""
+                        if heat_dest is not None and heat_dest.is_file() and heat_dest.stat().st_size > 0:
+                            saved = heat_rel
+                        ba_pairs.append({
+                            "idx": i,
+                            "at": round(float(at), 2),
+                            "score": round(float(ba[0]), 3),
+                            "p3": round(float(ba[1]), 3) if ba[1] is not None else None,
+                            "heat": saved,
+                        })
             finally:
                 for path in (ref_png, dist_png):
                     try:
@@ -1862,6 +1905,7 @@ def _image_metrics_clip(
         "p3": (sum(ba_p3s) / len(ba_p3s)) if ba_p3s else None,
         "n": len(ba_scores),
         "scores": [round(float(x), 3) for x in ba_scores],
+        "pairs": ba_pairs,
     } if ba_scores else None
     return s2_out, ba_out
 
@@ -2421,6 +2465,7 @@ def analyze(
                             metrics["butteraugli_3norm"] = ba["p3"]
                         metrics["butteraugli_n"] = ba["n"]
                         metrics["butteraugli_scores"] = ba.get("scores") or []
+                        metrics["butteraugli_pairs"] = ba.get("pairs") or []
                         bas.append(ba["mean"])
             scene = {
                 "scene": si,
@@ -2469,6 +2514,8 @@ def analyze(
                 scene["butteraugli_n"] = int(metrics["butteraugli_n"])
             if metrics and metrics.get("butteraugli_scores"):
                 scene["butteraugli_scores"] = list(metrics["butteraugli_scores"])
+            if metrics and metrics.get("butteraugli_pairs"):
+                scene["butteraugli_pairs"] = list(metrics["butteraugli_pairs"])
             scene_scores.append(scene)
             clip_bytes = test_file.stat().st_size
             total_size += clip_bytes
@@ -4436,13 +4483,13 @@ def _run_retest(
     try:
         data = load_session(session)
         if not data or not isinstance(data.get("analysis"), dict):
-            _set(running=False, error="Session nicht gefunden.", percent=0, message="")
+            _set(running=False, error="Session nicht gefunden.", percent=0, message="", finished_at=time.time())
             return
         analysis = data["analysis"]
         params = data.get("params") if isinstance(data.get("params"), dict) else {}
         pairs, scene_sources, _mode = _retest_find_clips(session, data)
         if not pairs:
-            _set(running=False, error="Keine erhaltenen Test- und Quellclips zum Nachmessen gefunden.", percent=0, message="")
+            _set(running=False, error="Keine erhaltenen Test- und Quellclips zum Nachmessen gefunden.", percent=0, message="", finished_at=time.time())
             return
 
         want_vmaf = bool(metrics.get("vmaf"))
@@ -4455,7 +4502,7 @@ def _run_retest(
         want_ba = bool(metrics.get("butteraugli")) and _butteraugli_ok()
         want_any_libvmaf = any((want_vmaf, want_psnr, want_ssim, want_ms, want_xpsnr, want_cambi))
         if not want_any_libvmaf and not want_s2 and not want_ba:
-            _set(running=False, error="Keine nachmessbare Metrik ausgewählt.", percent=0, message="")
+            _set(running=False, error="Keine nachmessbare Metrik ausgewählt.", percent=0, message="", finished_at=time.time())
             return
 
         neg = bool(params.get("vmaf_neg"))
@@ -4514,7 +4561,7 @@ def _run_retest(
             refs: dict[int, tuple[Path, VideoInfo, float]] = {}
             for si in sorted(needed_scenes):
                 if _retest_cancel.is_set():
-                    _set(running=False, message="Nachmessung abgebrochen.", percent=0)
+                    _set(running=False, message="Nachmessung abgebrochen.", percent=0, finished_at=time.time())
                     return
                 src_path, seek_at, clen = scene_sources[si]
                 src_info = ff.ffprobe(src_path)
@@ -4536,7 +4583,7 @@ def _run_retest(
             updated_clips = 0
             for r_idx, raw, si, sc, cpath, need_lv, need_s2, need_ba in work_items:
                 if _retest_cancel.is_set():
-                    _set(running=False, message="Nachmessung abgebrochen.", percent=0)
+                    _set(running=False, message="Nachmessung abgebrochen.", percent=0, finished_at=time.time())
                     return
                 ref_entry = refs.get(si)
                 if ref_entry is None:
@@ -4596,7 +4643,9 @@ def _run_retest(
                 if need_s2 or need_ba:
                     s2, ba = _image_metrics_clip(
                         ref_clip, cpath, tmp, f"rt_{r_idx}_s{si}", clen,
-                        float(src_info.fps or 24.0), s2_n, save_previews=False,
+                        float(src_info.fps or 24.0), s2_n,
+                        sess=session, scene_idx=si,
+                        save_previews=bool(need_s2 or need_ba),
                         want_s2=need_s2, want_ba=need_ba,
                     )
                     if s2 is not None:
@@ -4613,6 +4662,17 @@ def _run_retest(
                             sc["butteraugli_3norm"] = ba["p3"]
                         sc["butteraugli_n"] = ba["n"]
                         sc["butteraugli_scores"] = ba.get("scores") or []
+                        sc["butteraugli_pairs"] = [
+                            {
+                                **p,
+                                "heat": (
+                                    p["heat"] if str(p.get("heat") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['heat']}" if p.get("heat") else "")
+                                ),
+                            }
+                            for p in (ba.get("pairs") or [])
+                            if isinstance(p, dict)
+                        ]
                         changed = True
 
                 if changed:
@@ -4668,7 +4728,7 @@ def _run_retest(
         )
     except Exception as exc:
         logger.exception("VMAF-Nachmessung fehlgeschlagen")
-        _set(running=False, error=str(exc), percent=0, message="")
+        _set(running=False, error=str(exc), percent=0, message="", finished_at=time.time())
 
 
 def start_retest(
@@ -4690,10 +4750,17 @@ def start_retest(
         if _retest_state["running"]:
             return False, "Es läuft bereits eine Nachmessung."
         _retest_cancel.clear()
+        labels = {
+            "vmaf": "VMAF", "psnr": "PSNR", "ssim": "SSIM", "ms_ssim": "MS-SSIM",
+            "xpsnr": "XPSNR", "cambi": "CAMBI", "ssimulacra2": "SSIMULACRA2",
+            "butteraugli": "Butteraugli",
+        }
+        chosen = [labels[k] for k in _RETEST_METRICS if (metrics or {}).get(k)]
         _retest_state.update(
             running=True, session=session, done=0, total=0, percent=0,
             message="Starte Nachmessung …", error="",
             updated_clips=0, updated_results=0, finished_at=0.0,
+            started_at=time.time(), metrics=chosen,
         )
     th = threading.Thread(
         target=_run_retest,

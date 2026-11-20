@@ -499,6 +499,90 @@ class QueueItem:
         }
 
 
+def retest_queue_item(st: Optional[dict], now: Optional[float] = None) -> Optional[dict]:
+    """Laufende oder gerade beendete VMAF-Nachmessung als Queue-Zeile."""
+    if not isinstance(st, dict):
+        return None
+    running = bool(st.get("running"))
+    finished = float(st.get("finished_at") or 0)
+    tick = time.time() if now is None else float(now)
+    if not running and (finished <= 0 or tick - finished > 45):
+        return None
+    started = float(st.get("started_at") or finished or tick)
+    end = tick if running else (finished or tick)
+    elapsed = max(0.0, end - started)
+    error = str(st.get("error") or "")
+    message = str(st.get("message") or "")
+    if running:
+        status = "vmaf-test"
+    elif error:
+        status = "fehlgeschlagen"
+    elif message.startswith("Nachmessung abgebrochen"):
+        status = "abgebrochen"
+    else:
+        status = "fertig"
+    metrics = [str(m) for m in (st.get("metrics") or []) if m]
+    title = str(st.get("session") or "Nachmessung")
+    step_name = message or error or "Metriken nachmessen"
+    percent = int(st.get("percent") or (100 if not running else 0))
+    if running and percent:
+        step_name = f"{step_name} ({percent}%)"
+    return {
+        "id": "retest",
+        "title": title,
+        "path": "",
+        "group_id": "",
+        "status": status,
+        "settings": {
+            "video_mode": "retest",
+            "retest_metrics": ", ".join(metrics) if metrics else "Metriken",
+        },
+        "info": {"resolution": "Archiv"},
+        "progress": {
+            "percent": percent,
+            "step": int(st.get("done") or 0),
+            "steps": int(st.get("total") or 0),
+            "phase": "vmaf",
+        },
+        "vmaf": None,
+        "error": error,
+        "message": message or error,
+        "original_size": 0,
+        "original_human": "—",
+        "output_size": 0,
+        "output_human": "—",
+        "saved_bytes": 0,
+        "saved_human": "—",
+        "vmaf_verify": None,
+        "verify_attempts": 0,
+        "integrity_ok": None,
+        "integrity_msg": "",
+        "caps_failed": False,
+        "crop": "",
+        "output_path": "",
+        "extra_outputs": [],
+        "eta_estimate": None,
+        "vmaf_warning": "",
+        "dv_prompt": None,
+        "suspended": False,
+        "created_at": started,
+        "started_at": started,
+        "finished_at": 0.0 if running else finished,
+        "duration": round(elapsed, 1),
+        "duration_human": ff.human_duration(elapsed) if elapsed else "—",
+        "steps": [{
+            "name": step_name[:160],
+            "running": running,
+            "seconds": round(elapsed, 1),
+        }],
+        "phase": None,
+        "phase_seconds": {},
+        "details": None,
+        "report": None,
+        "output_report": None,
+    }
+
+
 class QueueManager:
     def __init__(self, max_parallel: int = 1) -> None:
         self._items: list[QueueItem] = []
@@ -1075,6 +1159,15 @@ class QueueManager:
             parallel = self._max_parallel
             paused = self._paused
             gate_msg = self._gate_msg
+        try:
+            from .vmaf import get_retest_state
+            extra = retest_queue_item(get_retest_state())
+        except Exception:
+            extra = None
+        if extra:
+            items.append(extra)
+            if extra.get("status") == "vmaf-test":
+                active_ids.append(extra["id"])
         total_saved = sum(i["saved_bytes"] for i in items if i["saved_bytes"] > 0)
         # Gesamt-ETA: Summe aktiver ETAs + wartende Jobs × Ø-Dauer aus Historie.
         from . import history as _hist
