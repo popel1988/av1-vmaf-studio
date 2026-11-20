@@ -3880,7 +3880,8 @@
       current = el;
       // Nur unsere intern erzeugte, escapte Vorlage übernehmen; kein HTML
       // aus data-tip/title oder beliebigen API-Zeichenketten interpretieren.
-      const rich = el.getAttribute("data-tip-rich") === "ssimulacra2"
+      const richKind = el.getAttribute("data-tip-rich");
+      const rich = (richKind === "ssimulacra2" || richKind === "butteraugli")
         ? el.querySelector("template.ui-tip-content") : null;
       if (rich && rich.content) {
         tip.appendChild(rich.content.cloneNode(true));
@@ -5921,9 +5922,36 @@
 
   function baPairAt(sceneScore, idx) {
     if (!sceneScore || idx == null || idx < 0) return null;
-    const pairs = sceneScore.butteraugli_pairs;
-    if (!Array.isArray(pairs)) return null;
-    return pairs.find((p) => p && Number(p.idx) === idx) || pairs[idx] || null;
+    const pairs = Array.isArray(sceneScore.butteraugli_pairs) ? sceneScore.butteraugli_pairs : [];
+    const stored = pairs.find((p) => p && Number(p.idx) === idx) || pairs[idx] || null;
+    const scores = Array.isArray(sceneScore.butteraugli_scores) ? sceneScore.butteraugli_scores : [];
+    const s2 = Array.isArray(sceneScore.ssimulacra2_pairs) ? sceneScore.ssimulacra2_pairs[idx] : null;
+    if (!stored && scores[idx] == null) return null;
+    const score = stored && stored.score != null ? stored.score : scores[idx];
+    if (score == null) return null;
+    return {
+      idx,
+      score,
+      at: stored && stored.at != null ? stored.at : (s2 && s2.at != null ? s2.at : null),
+      p3: stored ? stored.p3 : null,
+      heat: stored && stored.heat ? stored.heat : "",
+      ref: (stored && stored.ref) || (s2 && s2.ref) || "",
+      enc: (stored && stored.enc) || (s2 && s2.enc) || "",
+    };
+  }
+
+  function baStillSlots(sceneScore) {
+    if (!sceneScore) return 0;
+    const pairs = Array.isArray(sceneScore.butteraugli_pairs) ? sceneScore.butteraugli_pairs : [];
+    const s2 = Array.isArray(sceneScore.ssimulacra2_pairs) ? sceneScore.ssimulacra2_pairs : [];
+    const scores = Array.isArray(sceneScore.butteraugli_scores) ? sceneScore.butteraugli_scores.length : 0;
+    const limit = Math.max(scores, pairs.length, s2.length);
+    let images = 0;
+    for (let i = 0; i < limit; i++) {
+      const pair = baPairAt(sceneScore, i);
+      if (pair && (pair.heat || pair.ref || pair.enc)) images = i + 1;
+    }
+    return images;
   }
 
   function shotsOf(r) {
@@ -5950,9 +5978,11 @@
       if (ui.s2Idx >= 0) {
         const scObj = (x.r.scene_scores || []).find((v) => v.scene === sc);
         const pair = scObj && Array.isArray(scObj.ssimulacra2_pairs) ? scObj.ssimulacra2_pairs[ui.s2Idx] : null;
-        if (pair && pair.ref && !refSrc) refSrc = pair.ref;
+        const ba = baPairAt(scObj, ui.s2Idx);
+        const stillRef = (pair && pair.ref) || (ba && ba.ref) || "";
+        if (stillRef && !refSrc) refSrc = previewSrc(stillRef);
       }
-      if (!refSrc && s && s.ref) refSrc = s.ref;
+      if (!refSrc && ui.s2Idx < 0 && s && s.ref) refSrc = s.ref;
     });
 
     let sceneStart = 0;
@@ -5968,7 +5998,7 @@
       tiles.push({
         src: refSrc,
         label: "Original",
-        sub: ui.s2Idx >= 0 ? `Szene ${sc + 1} · S2-Bild ${ui.s2Idx + 1}` : `Szene ${sc + 1}`,
+        sub: ui.s2Idx >= 0 ? `Szene ${sc + 1} · ${tt("Bild")} ${ui.s2Idx + 1}` : `Szene ${sc + 1}`,
         ref: true,
         start: sceneStart, len: sceneLen,
         sourceClip, lead: sourceLead,
@@ -5977,11 +6007,15 @@
       const s = x.shots.find((sh) => sh.scene === sc);
       const sceneScore = (x.r.scene_scores || []).find((v) => v.scene === sc);
       const baPair = baPairAt(sceneScore, ui.s2Idx);
-      if (s && s.enc) {
-        const s2Pair = (ui.s2Idx >= 0 && sceneScore && Array.isArray(sceneScore.ssimulacra2_pairs))
-          ? sceneScore.ssimulacra2_pairs[ui.s2Idx]
-          : null;
-        const encSrc = (s2Pair && s2Pair.enc) ? previewSrc(s2Pair.enc) : s.enc;
+      const s2Pair = (ui.s2Idx >= 0 && sceneScore && Array.isArray(sceneScore.ssimulacra2_pairs))
+        ? sceneScore.ssimulacra2_pairs[ui.s2Idx]
+        : null;
+      let encSrc = "";
+      if (ui.s2Idx >= 0) {
+        if (s2Pair && s2Pair.enc) encSrc = previewSrc(s2Pair.enc);
+        else if (baPair && baPair.enc) encSrc = previewSrc(baPair.enc);
+      } else if (s && s.enc) encSrc = s.enc;
+      if (encSrc) {
         const v = sceneScore ? sceneScore.vmaf : x.r.vmaf;
         const bits = [];
         if (!vmaf.visual_only) {
@@ -6022,7 +6056,7 @@
           label: x.r.label || ("Q" + x.r.quality),
           sub: bits.join(" · "),
           recommended: x.r.recommended,
-          clip: (isMainOrNerd && s.clip) ? s.clip : "",
+          clip: (isMainOrNerd && s && s.clip) ? s.clip : "",
           start: sceneStart, len: sceneLen,
         });
       }
@@ -6048,11 +6082,10 @@
     const isMainOrNerd = isMain || isNerd;
     const fullDetail = !isMain;
     const ui = grid._shotUi || (grid._shotUi = { scene: null, group: null });
-    const hasBaHeat = (r) => (r.scene_scores || []).some((sc) =>
-      (sc.butteraugli_pairs || []).some((p) => p && p.heat));
+    const hasBaView = (r) => (r.scene_scores || []).some((sc) => baStillSlots(sc) > 0);
     const all = (vmaf.results || [])
       .map((r) => ({ r, shots: shotsOf(r) }))
-      .filter((x) => x.shots.length || hasBaHeat(x.r));
+      .filter((x) => x.shots.length || hasBaView(x.r));
     if (!all.length) { grid.innerHTML = ""; return; }
 
     const groups = [...new Set(all.map((x) => x.r.shotGroup).filter(Boolean))];
@@ -6066,7 +6099,7 @@
       results.flatMap((x) => {
         const fromShots = x.shots.map((s) => s.scene);
         const fromBa = (x.r.scene_scores || [])
-          .filter((sc) => (sc.butteraugli_pairs || []).some((p) => p && p.heat))
+          .filter((sc) => baStillSlots(sc) > 0)
           .map((sc) => sc.scene);
         return fromShots.concat(fromBa);
       })
@@ -6085,10 +6118,8 @@
         const valid = s.ssimulacra2_pairs.filter((p) => p && (p.ref || p.enc)).length;
         if (valid > maxS2Stills) maxS2Stills = valid;
       }
-      if (Array.isArray(s.butteraugli_pairs)) {
-        const valid = s.butteraugli_pairs.filter((p) => p && p.heat).length;
-        if (valid > maxBaStills) maxBaStills = valid;
-      }
+      const baSlots = baStillSlots(s);
+      if (baSlots > maxBaStills) maxBaStills = baSlots;
     });
     const stillCount = Math.max(maxS2Stills, maxBaStills);
     if (ui.s2Idx == null || ui.s2Idx >= stillCount) ui.s2Idx = -1;
@@ -7135,13 +7166,20 @@
               ? ` (${sc.ssimulacra2_scores.map((v, i) => `B${i + 1}: ${Number(v).toFixed(1)}`).join(", ")})`
               : (sc.ssimulacra2_min != null ? ` (min ${Number(sc.ssimulacra2_min).toFixed(1)})` : ""))
           : "";
-        const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}${idle}`;
+        const baTip = sc.butteraugli != null
+          ? ` · Butteraugli Ø ${Number(sc.butteraugli).toFixed(2)}`
+            + (Array.isArray(sc.butteraugli_scores) && sc.butteraugli_scores.length
+              ? ` (${sc.butteraugli_scores.map((v, i) => `B${i + 1}: ${Number(v).toFixed(2)}`).join(", ")})`
+              : (sc.butteraugli_max != null ? ` (max ${Number(sc.butteraugli_max).toFixed(2)})` : ""))
+          : "";
+        const baBit = sc.butteraugli != null ? ` · BA ${Number(sc.butteraugli).toFixed(2)}` : "";
+        const text = `S${sc.scene + 1} ${Number(sc.vmaf).toFixed(1)}${p}${baBit}${idle}`;
         if (sc.idle || !vmafSceneP1Miss(sc, floor)) {
-          return s2Tip
-            ? `<span title="${escapeHtml(`Szene ${sc.scene + 1}: VMAF ${Number(sc.vmaf).toFixed(1)}${p}${s2Tip}`)}">${escapeHtml(text)}</span>`
+          return (s2Tip || baTip)
+            ? `<span title="${escapeHtml(`Szene ${sc.scene + 1}: VMAF ${Number(sc.vmaf).toFixed(1)}${p}${s2Tip}${baTip}`)}">${escapeHtml(text)}</span>`
             : escapeHtml(text);
         }
-        const tip = `Low-Kriterium nicht erfüllt: 1%-Low ${Number(sc.p1).toFixed(2)} unter ${floor.toFixed(2)}. Sichtbarkeit und Dauer separat prüfen.${s2Tip}`;
+        const tip = `Low-Kriterium nicht erfüllt: 1%-Low ${Number(sc.p1).toFixed(2)} unter ${floor.toFixed(2)}. Sichtbarkeit und Dauer separat prüfen.${s2Tip}${baTip}`;
         return `<span class="vmaf-scene-miss" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
       }).join(" · ");
       const sceneFallback = r.vmaf_min != null && r.vmaf_max != null

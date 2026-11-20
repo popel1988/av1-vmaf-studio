@@ -571,6 +571,9 @@ class LowContextFrontendTests(unittest.TestCase):
         js.eval("rich.isConnected = true; rich.attrs['data-tip-rich'] = 'untrusted'; document.emit('focusin',{target:rich});")
         self.assertEqual(js.eval('tip.textContent'), 'SSIMULACRA2')
         self.assertEqual(js.eval('clones'), 0)
+        js.eval("rich.attrs['data-tip-rich'] = 'butteraugli'; document.emit('focusin',{target:rich});")
+        self.assertTrue(js.eval("tip.classList.contains('is-rich')"))
+        self.assertEqual(js.eval('clones'), 1)
 
     def test_runtime_observer_translates_late_low_context_and_attribute_updates(self):
         for language in ['en', 'es', 'fr']:

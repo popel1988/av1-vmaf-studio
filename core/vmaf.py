@@ -478,6 +478,10 @@ class VmafResult:
                             "at": round(float(p.get("at") or 0.0), 2),
                             "score": round(float(p.get("score") or 0.0), 3),
                             **({"p3": round(float(p["p3"]), 3)} if p.get("p3") is not None else {}),
+                            "ref": (p["ref"] if str(p.get("ref") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['ref']}" if p.get("ref") else "")),
+                            "enc": (p["enc"] if str(p.get("enc") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['enc']}" if p.get("enc") else "")),
                             "heat": (p["heat"] if str(p.get("heat") or "").startswith("/api/preview/")
                                      else (f"/api/preview/{p['heat']}" if p.get("heat") else "")),
                         }
@@ -1849,15 +1853,21 @@ def _image_metrics_clip(
                     continue
                 if not _png_at(distorted, dist_png, at, fps):
                     continue
+                ref_rel = ""
+                enc_rel = ""
+
+                def remember_stills() -> None:
+                    nonlocal ref_rel, enc_rel
+                    if ref_rel or enc_rel or not (save_previews and sess):
+                        return
+                    ref_rel = _jpg_from_png(ref_png, f"{sess}/s2_s{scene_idx}_f{i}_ref.jpg")
+                    enc_rel = _jpg_from_png(dist_png, f"{sess}/s2_s{scene_idx}_f{i}_{key}.jpg")
+
                 if do_s2:
                     score = _ssimulacra2_pair(ref_png, dist_png)
                     if score is not None:
+                        remember_stills()
                         s2_scores.append(score)
-                        ref_rel = ""
-                        enc_rel = ""
-                        if save_previews and sess:
-                            ref_rel = _jpg_from_png(ref_png, f"{sess}/s2_s{scene_idx}_f{i}_ref.jpg")
-                            enc_rel = _jpg_from_png(dist_png, f"{sess}/s2_s{scene_idx}_f{i}_{key}.jpg")
                         s2_pairs.append({
                             "idx": i,
                             "at": round(float(at), 2),
@@ -1870,6 +1880,7 @@ def _image_metrics_clip(
                     heat_dest = (config.PREVIEW_DIR / heat_rel) if heat_rel else None
                     ba = _butteraugli_pair(ref_png, dist_png, heat_dest)
                     if ba is not None:
+                        remember_stills()
                         ba_scores.append(ba[0])
                         if ba[1] is not None:
                             ba_p3s.append(ba[1])
@@ -1881,6 +1892,8 @@ def _image_metrics_clip(
                             "at": round(float(at), 2),
                             "score": round(float(ba[0]), 3),
                             "p3": round(float(ba[1]), 3) if ba[1] is not None else None,
+                            "ref": ref_rel,
+                            "enc": enc_rel,
                             "heat": saved,
                         })
             finally:
@@ -4665,6 +4678,14 @@ def _run_retest(
                         sc["butteraugli_pairs"] = [
                             {
                                 **p,
+                                "ref": (
+                                    p["ref"] if str(p.get("ref") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['ref']}" if p.get("ref") else "")
+                                ),
+                                "enc": (
+                                    p["enc"] if str(p.get("enc") or "").startswith("/api/preview/")
+                                    else (f"/api/preview/{p['enc']}" if p.get("enc") else "")
+                                ),
                                 "heat": (
                                     p["heat"] if str(p.get("heat") or "").startswith("/api/preview/")
                                     else (f"/api/preview/{p['heat']}" if p.get("heat") else "")
