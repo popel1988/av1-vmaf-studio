@@ -2125,30 +2125,46 @@ def make_profile7_tv_stream(
     try:
         work_dir = _job_work_dir(source_path, "dv81")
         out_path = _output_beside(source_path, ".DV81", replace_source)
-        if status:
-            status("Profil-7-RPU wird nach 8.1 gewandelt …")
-        rpu = work_dir / "p81.rpu.bin"
-        if not dv._extract_rpu(source_path, "hevc", rpu, mode=2):
-            return {"ok": False, "error": "RPU-Extraktion (Profil 7 → 8.1) fehlgeschlagen."}
-        if status:
-            status("Basisspur wird ohne Enhancement Layer geschrieben …")
-        full_es = work_dir / "full.hevc"
-        base_es = work_dir / "base.hevc"
-        ok_es, err_es = _demux_base_hevc(source_path, full_es)
-        if not ok_es:
-            return {"ok": False, "error": err_es or "Extraktion der Basisspur fehlgeschlagen."}
-        dropped = write_base_layer_annexb(full_es, base_es)
-        full_es.unlink(missing_ok=True)
         injected = work_dir / "tv.hevc"
-        if status:
-            status("Profil-8.1-RPU wird in die Basisspur gelegt …")
-        res_inj = subprocess.run(
-            [config.DOVI_TOOL, "inject-rpu", "-i", str(base_es), "--rpu-in", str(rpu), "-o", str(injected)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
-        )
-        if res_inj.returncode != 0 or not injected.is_file():
-            err_i = (res_inj.stderr or res_inj.stdout or "")[-500:]
-            return {"ok": False, "error": f"RPU-Injektion fehlgeschlagen: {err_i}"}
+        dropped: dict = {"dropped_el_bytes": 0}
+        used_fast_path = False
+
+        # dovi_tool >= 2.3.4 Fast-Path für Single-Track-MKV: konvertiert direkt aus MKV
+        # nach Profil 8.1 (--discard) ohne 50-GB-Zwischendateien (full.hevc + base.hevc).
+        if not dual and source_path.suffix.lower() == ".mkv" and dv.supports_mkv_fast_path():
+            if status:
+                status("Direkte Profil-7→8.1-Konvertierung aus MKV (dovi_tool Fast-Path) …")
+            ok_fast, err_fast = dv.convert_mkv_to_81_es(source_path, injected, discard_el=True)
+            if ok_fast:
+                used_fast_path = True
+                logger.info("DV Profil 7→8.1 per dovi_tool MKV-Fast-Path erfolgreich (%s)", source_path.name)
+            else:
+                logger.info("dovi_tool MKV-Fast-Path fehlgeschlagen – Fallback auf Standardpfad: %s", err_fast)
+
+        if not used_fast_path:
+            if status:
+                status("Profil-7-RPU wird nach 8.1 gewandelt …")
+            rpu = work_dir / "p81.rpu.bin"
+            if not dv._extract_rpu(source_path, "hevc", rpu, mode=2):
+                return {"ok": False, "error": "RPU-Extraktion (Profil 7 → 8.1) fehlgeschlagen."}
+            if status:
+                status("Basisspur wird ohne Enhancement Layer geschrieben …")
+            full_es = work_dir / "full.hevc"
+            base_es = work_dir / "base.hevc"
+            ok_es, err_es = _demux_base_hevc(source_path, full_es)
+            if not ok_es:
+                return {"ok": False, "error": err_es or "Extraktion der Basisspur fehlgeschlagen."}
+            dropped = write_base_layer_annexb(full_es, base_es)
+            full_es.unlink(missing_ok=True)
+            if status:
+                status("Profil-8.1-RPU wird in die Basisspur gelegt …")
+            res_inj = subprocess.run(
+                [config.DOVI_TOOL, "inject-rpu", "-i", str(base_es), "--rpu-in", str(rpu), "-o", str(injected)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            if res_inj.returncode != 0 or not injected.is_file():
+                err_i = (res_inj.stderr or res_inj.stdout or "")[-500:]
+                return {"ok": False, "error": f"RPU-Injektion fehlgeschlagen: {err_i}"}
         if status:
             status("TV-Stream wird gemuxt …")
         ok_mux, err_mux = _mux_injected_hevc(
@@ -2172,6 +2188,7 @@ def make_profile7_tv_stream(
             "output_name": final_out.name,
             "el_dropped": True,
             "dual_track": dual,
+            "fast_path": used_fast_path,
             "dropped_el_bytes": int(dropped.get("dropped_el_bytes") or 0),
             "profile": "8.1",
             "warning": warning,

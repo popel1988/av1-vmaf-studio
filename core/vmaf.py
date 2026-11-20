@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -90,6 +92,9 @@ class VmafOptions:
     with_ms_ssim: bool = True
     with_xpsnr: bool = True
     with_cambi: bool = True
+    with_butteraugli: bool = False
+    # HDR-VMAF v1.1.8 automatisch für HDR-Quellen ohne Tonemap nutzen (nur latest-Linie / VMAF v1)
+    hdr_vmaf: bool = True
 
 
 # Anzeigenamen je Codec (plattformabhängig verfeinert in _codec_disp)
@@ -285,7 +290,8 @@ class VmafResult:
     ms_ssim: Optional[float] = None       # Multi-Scale SSIM (0–1); None = nicht gemessen
     xpsnr: float = 0.0        # XPSNR (dB, 4:1:1 über Y/U/V gewichtet), FFmpeg ≥ 7.1
     cambi: Optional[float] = None          # Banding, höher = mehr; None = nicht gemessen
-    ssimulacra2: Optional[float] = None    # ein Standbild je Szene, höher = besser
+    ssimulacra2: Optional[float] = None    # Standbilder je Szene, höher = besser
+    butteraugli: Optional[float] = None    # Standbilder je Szene (Distanz), niedriger = besser (<1.0 transparent)
     screenshot_ref: str = ""            # Szene 0 (Rückwärtskompatibilität)
     screenshot_enc: str = ""
     screenshots: list = field(default_factory=list)  # [{scene, ref, enc}] je Szene
@@ -297,10 +303,12 @@ class VmafResult:
     keyint_sec: int = 0
     nvenc_tune: str = ""
     encoder_args: str = ""          # Flags ab -c:v, wie der Test-Encode sie bekam
+    encoder_version: str = ""       # z. B. "NVENC RTX 4070 · drv 575.57" oder "SVT-AV1 3.0.2"
     two_pass: bool = False
     timing: dict = field(default_factory=dict)  # Aufschlüsselung: encode_sec, vmaf_sec, s2_sec, post_sec
 
     def to_dict(self) -> dict:
+        enc_ver = self.encoder_version or ff.encoder_version_label(self.platform, self.codec)
         d = {
             "value": self.value,
             "quality": self.value,  # Rückwärtskompatibilität UI
@@ -315,6 +323,7 @@ class VmafResult:
             "keyint_sec": int(self.keyint_sec or 0),
             "nvenc_tune": self.nvenc_tune or "",
             "encoder_args": self.encoder_args or "",
+            "encoder_version": enc_ver,
             "two_pass": bool(self.two_pass),
             "vmaf": round(self.vmaf, 2),
             "vmaf_score": round(quality_score(self.vmaf, self.vmaf_1pct, self.vmaf_hmean), 2),
@@ -362,6 +371,28 @@ class VmafResult:
             ]
             if counts:
                 d["ssimulacra2_n"] = max(counts)
+        if self.butteraugli is not None:
+            d["butteraugli"] = round(float(self.butteraugli), 3)
+            maxs = [
+                float(s["butteraugli_max"]) for s in (self.scene_scores or [])
+                if isinstance(s, dict) and s.get("butteraugli_max") is not None
+                and not s.get("idle")
+            ]
+            if maxs:
+                d["butteraugli_max"] = round(max(maxs), 3)
+            p3s = [
+                float(s["butteraugli_3norm"]) for s in (self.scene_scores or [])
+                if isinstance(s, dict) and s.get("butteraugli_3norm") is not None
+                and not s.get("idle")
+            ]
+            if p3s:
+                d["butteraugli_3norm"] = round(sum(p3s) / len(p3s), 3)
+            bcounts = [
+                int(s["butteraugli_n"]) for s in (self.scene_scores or [])
+                if isinstance(s, dict) and s.get("butteraugli_n")
+            ]
+            if bcounts:
+                d["butteraugli_n"] = max(bcounts)
         if self.screenshot_ref:
             d["screenshot_ref"] = f"/api/preview/{self.screenshot_ref}"
         if self.screenshot_enc:
@@ -428,6 +459,17 @@ class VmafResult:
                         for j, p in enumerate(s2_pairs)
                         if isinstance(p, dict)
                     ]
+                if s.get("butteraugli") is not None:
+                    item["butteraugli"] = round(float(s["butteraugli"]), 3)
+                if s.get("butteraugli_max") is not None:
+                    item["butteraugli_max"] = round(float(s["butteraugli_max"]), 3)
+                if s.get("butteraugli_3norm") is not None:
+                    item["butteraugli_3norm"] = round(float(s["butteraugli_3norm"]), 3)
+                if s.get("butteraugli_n"):
+                    item["butteraugli_n"] = int(s["butteraugli_n"])
+                ba_vals = s.get("butteraugli_scores") or []
+                if ba_vals:
+                    item["butteraugli_scores"] = [round(float(x), 3) for x in ba_vals]
                 for key in ("frame_count", "p1_count", "scored_seconds", "scored_offset"):
                     if s.get(key) is not None:
                         item[key] = s[key]
@@ -646,7 +688,156 @@ def _label(rate_mode: str, value: int) -> str:
     return f"{value} kbit/s"
 
 
-def _model_for(info: VideoInfo, neg: bool = False) -> tuple[str, Path]:
+_zscale_ok: Optional[bool] = None
+
+
+def _ffmpeg_has_zscale() -> bool:
+    """Prüft einmalig, ob FFmpeg den zscale-Filter (zimg) enthält."""
+    global _zscale_ok
+    if _zscale_ok is not None:
+        return bool(_zscale_ok)
+    try:
+        r = subprocess.run(
+            [config.FFMPEG, "-hide_banner", "-filters"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=False,
+        )
+        _zscale_ok = bool(re.search(r"\bzscale\b", r.stdout or ""))
+    except (OSError, subprocess.SubprocessError):
+        _zscale_ok = False
+    return bool(_zscale_ok)
+
+
+def hdr_vmaf_status() -> dict:
+    """Verfügbarkeit und Status von HDR-VMAF v1.1.8 (nur latest-Linie / VMAF v1)."""
+    channel = str(getattr(config, "IMAGE_CHANNEL", "latest") or "latest").strip().lower()
+    if channel == "legacy":
+        return {
+            "available": False,
+            "channel": channel,
+            "reason": "Im Legacy-Kanal (VMAF v0.6.1 / FFmpeg n8.1) deaktiviert – HDR nutzt Standard-VMAF.",
+            "model_1080p": "",
+            "model_4k": "",
+            "has_zscale": False,
+        }
+    m1080 = str(getattr(config, "VMAF_MODEL_HDR_1080P", "") or "").strip()
+    m4k = str(getattr(config, "VMAF_MODEL_HDR_4K", "") or "").strip()
+    p1080 = (config.VMAF_MODEL_DIR / m1080) if m1080 else None
+    p4k = (config.VMAF_MODEL_DIR / m4k) if m4k else None
+    has_models = bool((p1080 and p1080.is_file()) or (p4k and p4k.is_file()))
+    has_zscale = _ffmpeg_has_zscale()
+    if not has_models:
+        return {
+            "available": False,
+            "channel": channel,
+            "reason": "HDR-VMAF-Modelle (hdr_vmaf_v1.1.8_*.json) fehlen im Modellordner.",
+            "model_1080p": m1080,
+            "model_4k": m4k,
+            "has_zscale": has_zscale,
+        }
+    if not has_zscale:
+        return {
+            "available": False,
+            "channel": channel,
+            "reason": "FFmpeg-Filter zscale fehlt (für ICtCp PQ 16-Bit Konvertierung nötig).",
+            "model_1080p": m1080,
+            "model_4k": m4k,
+            "has_zscale": False,
+        }
+    return {
+        "available": True,
+        "channel": channel,
+        "reason": "Aktiv · HDR-VMAF v1.1.8 + zscale (ICtCp PQ 16-Bit) bei HDR ohne Tonemap.",
+        "model_1080p": m1080,
+        "model_4k": m4k,
+        "has_zscale": True,
+    }
+
+
+def _is_hdr_vmaf_model(name: str, path: Optional[Path] = None) -> bool:
+    if str(name or "").strip().lower().startswith("hdr_vmaf"):
+        return True
+    if path is not None and path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and isinstance(raw.get("model_dict"), dict):
+                return bool(raw["model_dict"].get("conversion_target"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return False
+    return False
+
+
+def _hdr_zscale_filter(info: VideoInfo) -> str:
+    """Baut die zimg/zscale-Kette auf das Zielformat von HDR-VMAF v1.1.8
+    (BT.2020 Primaries, SMPTE 2084 PQ, ICtCp Matrix, Limited Range, yuv420p16le).
+    """
+    trc = str(getattr(info, "color_transfer", "") or "").strip().lower()
+    tin = "arib-std-b67" if trc in ("arib-std-b67", "hlg") else "smpte2084"
+    prim = str(getattr(info, "color_primaries", "") or "").strip().lower()
+    if prim in ("bt709", "smpte432", "bt2020"):
+        pin = prim
+    else:
+        pin = "bt2020"
+    space = str(getattr(info, "color_space", "") or "").strip().lower()
+    if space == "bt2020c":
+        min_m = "bt2020c"
+    elif space == "bt709":
+        min_m = "bt709"
+    else:
+        min_m = "bt2020nc"
+    rng = str(getattr(info, "color_range", "") or "").strip().lower()
+    rin = "full" if rng in ("pc", "full", "jpeg") else "limited"
+    return (
+        f"zscale=pin={pin}:tin={tin}:min={min_m}:rin={rin}:"
+        f"p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le"
+    )
+
+
+def _prepare_hdr_model_file(model_path: Path, work: Path) -> tuple[Path, Optional[dict]]:
+    """Erstellt für FFmpeg-libvmaf eine Arbeitskopie ohne `conversion_target`.
+
+    Hintergrund: HDR-VMAF v1.1.8 deklariert `conversion_target` für libvmaf+zimg.
+    BtbN FFmpeg 9.0 baut libvmaf ohne `-Denable_zimg=true` und reicht
+    `VmafPicture.color` nicht weiter – stattdessen übernimmt FFmpegs `zscale`
+    (identische zimg-Bibliothek) die ICtCp-PQ-16-Bit-Umwandlung vor `libvmaf`.
+    Die Originaldatei im Modellordner bleibt für Provenance-Hashes unverändert.
+    """
+    try:
+        data = json.loads(model_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return model_path, None
+    md = data.get("model_dict") if isinstance(data, dict) else None
+    if not isinstance(md, dict) or not md.get("conversion_target"):
+        return model_path, None
+    target = md.pop("conversion_target", None)
+    work.mkdir(parents=True, exist_ok=True)
+    out = work / f"_ff_{model_path.name}"
+    if not out.exists():
+        out.write_text(json.dumps(data), encoding="utf-8")
+    return out, target
+
+
+def _model_for(
+    info: VideoInfo,
+    neg: bool = False,
+    *,
+    tonemap: bool = False,
+    hdr_vmaf: bool = True,
+) -> tuple[str, Path]:
+    # HDR-VMAF v1.1.8 nur für echte HDR-Quellen ohne SDR-Tonemap und nicht im Legacy-Kanal.
+    if (
+        hdr_vmaf
+        and bool(getattr(info, "is_hdr", False))
+        and not tonemap
+        and str(getattr(config, "IMAGE_CHANNEL", "latest") or "latest").strip().lower() != "legacy"
+    ):
+        hdr_name = str(
+            (config.VMAF_MODEL_HDR_4K if info.is_4k else config.VMAF_MODEL_HDR_1080P) or ""
+        ).strip()
+        if hdr_name:
+            hdr_path = config.VMAF_MODEL_DIR / hdr_name
+            if hdr_path.is_file() and _ffmpeg_has_zscale():
+                return hdr_name, hdr_path
     if neg:
         name = config.VMAF_MODEL_4K_NEG if info.is_4k else config.VMAF_MODEL_1080P_NEG
         path = config.VMAF_MODEL_DIR / name
@@ -1104,6 +1295,10 @@ def _run_libvmaf(
     neg: bool, dims: Optional[tuple[int, int]], features: str,
     clip_len: float = 0.0, with_xpsnr: bool = False,
     subsample: int = 1, gpu_accel: bool = False,
+    *,
+    tonemap: bool = False,
+    hdr_vmaf: bool = True,
+    force_sdr_model: bool = False,
 ) -> Optional[dict]:
     """Ein libvmaf-Lauf; liefert das geparste JSON-Dict oder None.
 
@@ -1112,15 +1307,26 @@ def _run_libvmaf(
     subsample: 1 = Standard (jedes Bild), >1 = optionales Frame-Subsampling (`n_subsample`).
     gpu_accel: nutzt `libvmaf_cuda` (falls im Build) bzw. CUDA-HW-Decode unter Beachtung
                der FFmpeg-Treibervorgaben (`latest` >= 610 vs. `legacy` >= 525), mit CPU-Fallback.
+    hdr_vmaf: nutzt auf der `latest`-Linie automatisch `hdr_vmaf_v1.1.8` inkl.
+              `zscale`-Konvertierung nach ICtCp PQ 16-Bit bei HDR-Quellen ohne Tonemap.
     """
-    _, model_path = _model_for(info, neg)
+    model_name, model_path = _model_for(
+        info, neg, tonemap=tonemap, hdr_vmaf=(hdr_vmaf and not force_sdr_model),
+    )
+    eff_model_path = model_path
+    use_hdr_pipeline = False
+    if _is_hdr_vmaf_model(model_name, model_path):
+        eff_model_path, conv_target = _prepare_hdr_model_file(model_path, work)
+        use_hdr_pipeline = bool(conv_target) or model_name.lower().startswith("hdr_vmaf")
+    hdr_zscale = _hdr_zscale_filter(info) if use_hdr_pipeline else ""
+
     log = work / f"vmaf_{key}.json"
     xlog = work / f"xpsnr_{key}.txt"
     w, h = dims if dims else (info.width, info.height)
     scale = f"scale={w}:{h}:flags=bicubic"
     dist_dur = ff._probe_duration(distorted) or float(clip_len or 0)
     ref_dur = ff._probe_duration(reference) or float(clip_len or 0)
-    mpath = _esc_filter_path(model_path)
+    mpath = _esc_filter_path(eff_model_path)
     lpath = _esc_filter_path(log)
     sub_n = normalize_vmaf_subsample(subsample)
     sub_opt = f":n_subsample={sub_n}" if sub_n > 1 else ""
@@ -1132,6 +1338,10 @@ def _run_libvmaf(
             gpu_mode = str(gstat.get("mode") or "cpu")
         else:
             logger.info("VMAF GPU-Beschleunigung übersprungen (%s) -> CPU-Modus.", gstat.get("reason"))
+    # libvmaf_cuda unterstützt kein yuv420p16le (ICtCp PQ 16-Bit) – bei HDR-VMAF
+    # daher CUDA-HW-Decode + CPU-libvmaf nutzen.
+    if use_hdr_pipeline and gpu_mode == "libvmaf_cuda":
+        gpu_mode = "cuda_decode"
 
     def _build_cmd(mode: str) -> list[str]:
         if mode == "libvmaf_cuda":
@@ -1159,18 +1369,37 @@ def _run_libvmaf(
         )
         if with_xpsnr:
             xpath = _esc_filter_path(xlog)
-            fc_cpu = (
-                f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
-                f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
-                f"[d1][r1]{vmaf_filter};"
-                f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
-            )
+            if hdr_zscale:
+                # XPSNR bleibt im Original-YCbCr-10-Bit-Farbraum, nur der libvmaf-Zweig
+                # wird per zscale nach ICtCp PQ 16-Bit transformiert.
+                fc_cpu = (
+                    f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
+                    f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
+                    f"[d1]{hdr_zscale}[d1h];"
+                    f"[r1]{hdr_zscale}[r1h];"
+                    f"[d1h][r1h]{vmaf_filter};"
+                    f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
+                )
+            else:
+                fc_cpu = (
+                    f"[0:v]{_score_chain(dist_dur, scale)},split[d1][d2];"
+                    f"[1:v]{_score_chain(ref_dur)},split[r1][r2];"
+                    f"[d1][r1]{vmaf_filter};"
+                    f"[d2][r2]xpsnr=stats_file='{xpath}':shortest=1"
+                )
         else:
-            fc_cpu = (
-                f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
-                f"[1:v]{_score_chain(ref_dur)}[ref];"
-                f"[dist][ref]{vmaf_filter}"
-            )
+            if hdr_zscale:
+                fc_cpu = (
+                    f"[0:v]{_score_chain(dist_dur, scale)},{hdr_zscale}[dist];"
+                    f"[1:v]{_score_chain(ref_dur)},{hdr_zscale}[ref];"
+                    f"[dist][ref]{vmaf_filter}"
+                )
+            else:
+                fc_cpu = (
+                    f"[0:v]{_score_chain(dist_dur, scale)}[dist];"
+                    f"[1:v]{_score_chain(ref_dur)}[ref];"
+                    f"[dist][ref]{vmaf_filter}"
+                )
         head = [config.FFMPEG, "-y", "-hide_banner"]
         if mode == "cuda_decode":
             head += ["-hwaccel", "cuda"]
@@ -1179,7 +1408,13 @@ def _run_libvmaf(
 
     log.unlink(missing_ok=True)
     cmd = _build_cmd(gpu_mode)
-    _run_logged(cmd, f"VMAF-Vergleich {key}" + (f" [{gpu_mode}]" if gpu_mode != "cpu" else ""))
+    tag_extra = []
+    if use_hdr_pipeline:
+        tag_extra.append("hdr-vmaf")
+    if gpu_mode != "cpu":
+        tag_extra.append(gpu_mode)
+    tag_sfx = f" [{', '.join(tag_extra)}]" if tag_extra else ""
+    _run_logged(cmd, f"VMAF-Vergleich {key}{tag_sfx}")
     if not log.exists() and gpu_mode != "cpu":
         logger.warning("VMAF im GPU-Modus (%s) fehlgeschlagen – automatischer Fallback auf CPU.", gpu_mode)
         cmd_cpu = _build_cmd("cpu")
@@ -1190,6 +1425,7 @@ def _run_libvmaf(
         data = json.loads(log.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    data["model_name"] = model_name
     # Tatsächlich bewertetes Fenster: beide Eingänge werden am Rand getrimmt.
     spans = [end - start for start, end in (
         _scored_window(dist_dur), _scored_window(ref_dur))]
@@ -1351,13 +1587,17 @@ def _vmaf_metrics(
     with_ms_ssim: bool = True,
     with_cambi: bool = True,
     with_xpsnr: bool = True,
+    tonemap: bool = False,
+    hdr_vmaf: bool = True,
 ) -> Optional[dict]:
     """Qualitätsmetriken (VMAF + optional PSNR, SSIM, MS-SSIM, CAMBI, XPSNR + 1%-Low).
 
     PSNR, SSIM, MS-SSIM und CAMBI laufen über die libvmaf-`feature`-Option, XPSNR im
     selben Lauf über den xpsnr-Filter (FFmpeg ≥ 7.1). Fehlen optionale Features im
     Build (z. B. `float_ms_ssim` oder `cambi`), fällt der Lauf stufenweise zurück,
-    damit vorhandene Zusatzmaße und VMAF erhalten bleiben.
+    damit vorhandene Zusatzmaße und VMAF erhalten bleiben. Schlägt HDR-VMAF v1.1.8
+    trotz aktivierter Pipeline fehl, fällt der Lauf automatisch auf das Standard-VMAF-
+    Modell zurück.
     """
     attempts = _build_vmaf_feature_attempts(
         with_psnr=with_psnr,
@@ -1366,15 +1606,29 @@ def _vmaf_metrics(
         with_cambi=with_cambi,
         with_xpsnr=with_xpsnr,
     )
-    for feat, use_xp in attempts:
-        data = _run_libvmaf(
-            distorted, reference, info, work, key, neg, dims,
-            features=feat, clip_len=clip_len, with_xpsnr=use_xp,
-            subsample=subsample, gpu_accel=gpu_accel,
-        )
-        metrics = _metrics_from_json(data) if data else None
-        if metrics is not None:
-            return metrics
+    wants_hdr_model = False
+    if info is not None and hdr_vmaf and not tonemap and bool(getattr(info, "is_hdr", False)):
+        mname, mpath = _model_for(info, neg, tonemap=tonemap, hdr_vmaf=True)
+        wants_hdr_model = _is_hdr_vmaf_model(mname, mpath)
+
+    for force_sdr in ((False, True) if wants_hdr_model else (False,)):
+        if force_sdr:
+            logger.warning(
+                "HDR-VMAF für %s fehlgeschlagen – automatischer Fallback auf Standard-VMAF-Modell.",
+                key,
+            )
+        for feat, use_xp in attempts:
+            data = _run_libvmaf(
+                distorted, reference, info, work, key, neg, dims,
+                features=feat, clip_len=clip_len, with_xpsnr=use_xp,
+                subsample=subsample, gpu_accel=gpu_accel,
+                tonemap=tonemap, hdr_vmaf=hdr_vmaf, force_sdr_model=force_sdr,
+            )
+            metrics = _metrics_from_json(data) if data else None
+            if metrics is not None:
+                if data and data.get("model_name"):
+                    metrics["model_name"] = str(data["model_name"])
+                return metrics
     return None
 
 
@@ -1382,6 +1636,7 @@ def _vmaf_compare(
     distorted: Path, reference: Path, info: VideoInfo, work: Path, key: str,
     neg: bool = False, dims: Optional[tuple[int, int]] = None,
     subsample: int = 1, gpu_accel: bool = False,
+    *, tonemap: bool = False, hdr_vmaf: bool = True,
 ) -> Optional[float]:
     """Rückwärtskompatibel: reiner VMAF-Mittelwert (ohne Zusatzmetrik-Overhead)."""
     m = _vmaf_metrics(
@@ -1389,6 +1644,7 @@ def _vmaf_compare(
         subsample=subsample, gpu_accel=gpu_accel,
         with_psnr=False, with_ssim=False, with_ms_ssim=False,
         with_cambi=False, with_xpsnr=False,
+        tonemap=tonemap, hdr_vmaf=hdr_vmaf,
     )
     return m["vmaf"] if m else None
 
@@ -1416,6 +1672,7 @@ def _extract_frame(
 
 
 _s2_ok: Optional[bool] = None
+_ba_ok: Optional[bool] = None
 
 
 def _ssimulacra2_ok() -> bool:
@@ -1424,6 +1681,19 @@ def _ssimulacra2_ok() -> bool:
         path = Path(config.SSIMULACRA2)
         _s2_ok = path.is_file()
     return bool(_s2_ok)
+
+
+def _butteraugli_ok() -> bool:
+    global _ba_ok
+    if _ba_ok is None:
+        path = Path(config.BUTTERAUGLI)
+        _ba_ok = path.is_file()
+    return bool(_ba_ok)
+
+
+def butteraugli_available() -> bool:
+    """True, wenn das Butteraugli-Binary (libjxl butteraugli_main) vorhanden ist."""
+    return _butteraugli_ok()
 
 
 def _png_at(src: Path, dest: Path, at_sec: float, fps: float) -> bool:
@@ -1487,41 +1757,89 @@ def _jpg_from_png(src_png: Path, out_rel: str) -> str:
     return out_rel if res.returncode == 0 and dest.is_file() else ""
 
 
-def _ssimulacra2_clip(
+def _butteraugli_pair(ref_png: Path, dist_png: Path) -> Optional[tuple[float, Optional[float]]]:
+    """Butteraugli-Distanz (und optionale 3-Norm) zweier PNGs. Niedriger = besser (<1.0 transparent)."""
+    proc = subprocess.run(
+        [config.BUTTERAUGLI, str(ref_png), str(dist_png)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=180, check=False,
+    )
+    if proc.returncode != 0:
+        tail = ((proc.stderr or proc.stdout or "").strip().splitlines())
+        logger.warning("Butteraugli fehlgeschlagen: %s", tail[-1] if tail else proc.returncode)
+        return None
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return None
+    dist: Optional[float] = None
+    pnorm3: Optional[float] = None
+    for ln in lines:
+        low = ln.lower()
+        if "3-norm" in low and ":" in ln:
+            try:
+                pnorm3 = float(ln.split(":", 1)[1].strip().split()[0])
+            except (ValueError, IndexError):
+                pass
+            continue
+        if dist is None:
+            try:
+                dist = float(ln.split()[0])
+            except (ValueError, IndexError):
+                continue
+    if dist is None or not math.isfinite(dist):
+        return None
+    if pnorm3 is not None and not math.isfinite(pnorm3):
+        pnorm3 = None
+    return max(0.0, dist), (max(0.0, pnorm3) if pnorm3 is not None else None)
+
+
+def _image_metrics_clip(
     reference: Path, distorted: Path, work: Path, key: str,
     clip_len: float, fps: float, frames: int = 3,
     *, sess: str = "", scene_idx: int = 0, save_previews: bool = False,
-) -> Optional[dict]:
-    """Mehrere Standbilder je Stichprobe. Höher ist besser, bis 100."""
-    if _s2_frame_count(frames) <= 0 or not _ssimulacra2_ok():
-        return None
-    scores: list[float] = []
-    pairs: list[dict] = []
+    want_s2: bool = True, want_ba: bool = False,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """Extrahiert PNG-Standbilder einmalig und misst SSIMULACRA2 und/oder Butteraugli darauf."""
+    do_s2 = bool(want_s2) and _ssimulacra2_ok()
+    do_ba = bool(want_ba) and _butteraugli_ok()
+    if (not do_s2 and not do_ba) or _s2_frame_count(frames) <= 0:
+        return None, None
+    s2_scores: list[float] = []
+    s2_pairs: list[dict] = []
+    ba_scores: list[float] = []
+    ba_p3s: list[float] = []
     times = _s2_times(clip_len, frames)
     try:
         for i, at in enumerate(times):
-            ref_png = work / f"s2_{key}_{i}_ref.png"
-            dist_png = work / f"s2_{key}_{i}_enc.png"
+            ref_png = work / f"img_{key}_{i}_ref.png"
+            dist_png = work / f"img_{key}_{i}_enc.png"
             try:
                 if not _png_at(reference, ref_png, at, fps):
                     continue
                 if not _png_at(distorted, dist_png, at, fps):
                     continue
-                score = _ssimulacra2_pair(ref_png, dist_png)
-                if score is not None:
-                    scores.append(score)
-                    ref_rel = ""
-                    enc_rel = ""
-                    if save_previews and sess:
-                        ref_rel = _jpg_from_png(ref_png, f"{sess}/s2_s{scene_idx}_f{i}_ref.jpg")
-                        enc_rel = _jpg_from_png(dist_png, f"{sess}/s2_s{scene_idx}_f{i}_{key}.jpg")
-                    pairs.append({
-                        "idx": i,
-                        "at": round(float(at), 2),
-                        "score": round(float(score), 2),
-                        "ref": ref_rel,
-                        "enc": enc_rel,
-                    })
+                if do_s2:
+                    score = _ssimulacra2_pair(ref_png, dist_png)
+                    if score is not None:
+                        s2_scores.append(score)
+                        ref_rel = ""
+                        enc_rel = ""
+                        if save_previews and sess:
+                            ref_rel = _jpg_from_png(ref_png, f"{sess}/s2_s{scene_idx}_f{i}_ref.jpg")
+                            enc_rel = _jpg_from_png(dist_png, f"{sess}/s2_s{scene_idx}_f{i}_{key}.jpg")
+                        s2_pairs.append({
+                            "idx": i,
+                            "at": round(float(at), 2),
+                            "score": round(float(score), 2),
+                            "ref": ref_rel,
+                            "enc": enc_rel,
+                        })
+                if do_ba:
+                    ba = _butteraugli_pair(ref_png, dist_png)
+                    if ba is not None:
+                        ba_scores.append(ba[0])
+                        if ba[1] is not None:
+                            ba_p3s.append(ba[1])
             finally:
                 for path in (ref_png, dist_png):
                     try:
@@ -1529,17 +1847,49 @@ def _ssimulacra2_clip(
                     except OSError:
                         pass
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        logger.warning("SSIMULACRA2: %s", exc)
-        return None
-    if not scores:
-        return None
-    return {
-        "mean": sum(scores) / len(scores),
-        "min": min(scores),
-        "n": len(scores),
-        "scores": [round(float(x), 2) for x in scores],
-        "pairs": pairs,
-    }
+        logger.warning("Standbild-Metriken: %s", exc)
+        return None, None
+    s2_out = {
+        "mean": sum(s2_scores) / len(s2_scores),
+        "min": min(s2_scores),
+        "n": len(s2_scores),
+        "scores": [round(float(x), 2) for x in s2_scores],
+        "pairs": s2_pairs,
+    } if s2_scores else None
+    ba_out = {
+        "mean": sum(ba_scores) / len(ba_scores),
+        "max": max(ba_scores),
+        "p3": (sum(ba_p3s) / len(ba_p3s)) if ba_p3s else None,
+        "n": len(ba_scores),
+        "scores": [round(float(x), 3) for x in ba_scores],
+    } if ba_scores else None
+    return s2_out, ba_out
+
+
+def _ssimulacra2_clip(
+    reference: Path, distorted: Path, work: Path, key: str,
+    clip_len: float, fps: float, frames: int = 3,
+    *, sess: str = "", scene_idx: int = 0, save_previews: bool = False,
+) -> Optional[dict]:
+    """Mehrere Standbilder je Stichprobe. Höher ist besser, bis 100."""
+    s2_out, _ = _image_metrics_clip(
+        reference, distorted, work, key, clip_len, fps, frames,
+        sess=sess, scene_idx=scene_idx, save_previews=save_previews,
+        want_s2=True, want_ba=False,
+    )
+    return s2_out
+
+
+def _butteraugli_clip(
+    reference: Path, distorted: Path, work: Path, key: str,
+    clip_len: float, fps: float, frames: int = 3,
+) -> Optional[dict]:
+    """Butteraugli-Distanz über mehrere Standbilder je Stichprobe. Niedriger = besser (<1.0 transparent)."""
+    _, ba_out = _image_metrics_clip(
+        reference, distorted, work, key, clip_len, fps, frames,
+        want_s2=False, want_ba=True,
+    )
+    return ba_out
 
 
 def _extract_source_still(
@@ -1626,7 +1976,8 @@ def measure_output_vmaf(
                 continue
             score = _vmaf_compare(dist, ref, info, work, f"verify_{idx}",
                                   neg=True, dims=dims,
-                                  subsample=subsample, gpu_accel=gpu_accel)
+                                  subsample=subsample, gpu_accel=gpu_accel,
+                                  tonemap=tonemap, hdr_vmaf=True)
             if score is not None:
                 scores.append(score)
         return round(sum(scores) / len(scores), 2) if scores else None
@@ -1709,7 +2060,8 @@ def analyze(
     work.mkdir(parents=True, exist_ok=True)
 
     from dataclasses import asdict
-    model_name, model_path = _model_for(info, True)
+    want_hdr_vmaf = bool(getattr(opts, "hdr_vmaf", True))
+    model_name, model_path = _model_for(info, True, tonemap=tonemap, hdr_vmaf=want_hdr_vmaf)
     effective_params = {
         **dict(opts.params or {}), "options": asdict(opts),
         "platform": platform, "codec": codec, "target_height": target_height,
@@ -1721,6 +2073,7 @@ def analyze(
         "tonemap_algo": tonemap_algo, "tonemap_desat": tonemap_desat,
         "tonemap_peak": tonemap_peak, "tonemap_engine": tonemap_engine,
         "deband": deband, "svt_look": svt_look, "edge_seconds": _EDGE_SEC,
+        "vmaf_hdr": want_hdr_vmaf,
     }
     analysis = VmafAnalysis(
         model="" if opts.visual_only else model_name,
@@ -1734,7 +2087,8 @@ def analyze(
             model_path=None if opts.visual_only else model_path,
             params=effective_params,
             source_info={key: getattr(info, key, None) for key in (
-                "duration", "width", "height", "fps", "pix_fmt", "bit_depth", "is_4k")}),
+                "duration", "width", "height", "fps", "pix_fmt", "bit_depth", "is_4k",
+                "is_hdr", "color_transfer", "color_primaries", "color_space", "color_range")}),
     )
     use_bitrate = opts.rate_mode in ("bitrate", "abr")
     values = [v for v in opts.test_values[:4] if v > 0]
@@ -1859,6 +2213,8 @@ def analyze(
                 active_metrics.append("XPSNR")
             if getattr(opts, "with_cambi", True):
                 active_metrics.append("CAMBI")
+            if getattr(opts, "with_butteraugli", False) and _butteraugli_ok():
+                active_metrics.append("Butteraugli")
         s2_target_n = 0 if opts.visual_only else _s2_frame_count(opts.ssimulacra2_frames)
 
         def _notify_sub(active_key: str = "", clip_idx: Optional[int] = None, started_at: float = 0.0) -> None:
@@ -1890,6 +2246,7 @@ def analyze(
         xpsnrs: list[float] = []
         cambis: list[float] = []
         s2s: list[float] = []
+        bas: list[float] = []
         shots: list[dict] = []
         scene_scores: list[dict] = []
         enc_args = ""
@@ -2004,6 +2361,8 @@ def analyze(
                     with_ms_ssim=bool(getattr(opts, "with_ms_ssim", True)),
                     with_cambi=bool(getattr(opts, "with_cambi", True)),
                     with_xpsnr=bool(getattr(opts, "with_xpsnr", True)),
+                    tonemap=tonemap,
+                    hdr_vmaf=want_hdr_vmaf,
                 )
                 t_vmaf += max(0.0, time.time() - vmaf_t0)
                 _notify_sub("")
@@ -2029,16 +2388,23 @@ def analyze(
                     xpsnrs.append(metrics["xpsnr"])
                 if metrics.get("cambi") is not None:
                     cambis.append(float(metrics["cambi"]))
-                if reference is not None and _s2_frame_count(opts.ssimulacra2_frames) > 0:
+                want_s2_img = _s2_frame_count(opts.ssimulacra2_frames) > 0 and _ssimulacra2_ok()
+                want_ba_img = bool(getattr(opts, "with_butteraugli", False)) and _butteraugli_ok()
+                if reference is not None and (want_s2_img or want_ba_img):
+                    img_lbl = "SSIMULACRA2 + Butteraugli" if (want_s2_img and want_ba_img) else (
+                        "SSIMULACRA2" if want_s2_img else "Butteraugli"
+                    )
                     if status:
-                        status(f"SSIMULACRA2 {shown} @ {rate_lbl}{smp} …")
+                        status(f"{img_lbl} {shown} @ {rate_lbl}{smp} …")
                     s2_t0 = time.time()
                     _notify_sub("s2", si, s2_t0)
-                    s2 = _ssimulacra2_clip(
+                    img_frames = _s2_frame_count(opts.ssimulacra2_frames) or 3
+                    s2, ba = _image_metrics_clip(
                         reference, test_file, work, skey, clip_len,
-                        float(info.fps or 0), opts.ssimulacra2_frames,
+                        float(info.fps or 0), img_frames,
                         sess=sess, scene_idx=si,
-                        save_previews=bool(opts.generate_screenshots))
+                        save_previews=bool(opts.generate_screenshots),
+                        want_s2=want_s2_img, want_ba=want_ba_img)
                     t_s2 += max(0.0, time.time() - s2_t0)
                     _notify_sub("")
                     if s2 is not None:
@@ -2048,6 +2414,14 @@ def analyze(
                         metrics["ssimulacra2_scores"] = s2.get("scores") or []
                         metrics["ssimulacra2_pairs"] = s2.get("pairs") or []
                         s2s.append(s2["mean"])
+                    if ba is not None:
+                        metrics["butteraugli"] = ba["mean"]
+                        metrics["butteraugli_max"] = ba["max"]
+                        if ba.get("p3") is not None:
+                            metrics["butteraugli_3norm"] = ba["p3"]
+                        metrics["butteraugli_n"] = ba["n"]
+                        metrics["butteraugli_scores"] = ba.get("scores") or []
+                        bas.append(ba["mean"])
             scene = {
                 "scene": si,
                 "start": float(start),      # Position im Film (s) – für Sprünge im Player
@@ -2085,6 +2459,16 @@ def analyze(
                 scene["ssimulacra2_scores"] = list(metrics["ssimulacra2_scores"])
             if metrics and metrics.get("ssimulacra2_pairs"):
                 scene["ssimulacra2_pairs"] = list(metrics["ssimulacra2_pairs"])
+            if metrics and metrics.get("butteraugli") is not None:
+                scene["butteraugli"] = metrics["butteraugli"]
+            if metrics and metrics.get("butteraugli_max") is not None:
+                scene["butteraugli_max"] = metrics["butteraugli_max"]
+            if metrics and metrics.get("butteraugli_3norm") is not None:
+                scene["butteraugli_3norm"] = metrics["butteraugli_3norm"]
+            if metrics and metrics.get("butteraugli_n"):
+                scene["butteraugli_n"] = int(metrics["butteraugli_n"])
+            if metrics and metrics.get("butteraugli_scores"):
+                scene["butteraugli_scores"] = list(metrics["butteraugli_scores"])
             scene_scores.append(scene)
             clip_bytes = test_file.stat().st_size
             total_size += clip_bytes
@@ -2153,6 +2537,7 @@ def analyze(
             xpsnr=_avg(xpsnrs),
             cambi=_avg(cambis) if cambis else None,
             ssimulacra2=_avg(s2s) if s2s else None,
+            butteraugli=_avg(bas) if bas else None,
             clip_size_bytes=total_size,
             predicted_size_bytes=predicted,
             savings_percent=savings,
@@ -3460,6 +3845,7 @@ def apply_idle_scenes(results) -> set[int]:
         ("xpsnr", "xpsnr"),
         ("cambi", "cambi"),
         ("ssimulacra2", "ssimulacra2"),
+        ("butteraugli", "butteraugli"),
     )
     for row in results or []:
         scenes = row.get("scene_scores") if isinstance(row, dict) else row.scene_scores
@@ -3482,7 +3868,7 @@ def apply_idle_scenes(results) -> set[int]:
             counted.append(s)
             for src, _dest in pairs:
                 raw = s.get(src)
-                if src in ("cambi", "ssimulacra2", "ms_ssim"):
+                if src in ("cambi", "ssimulacra2", "ms_ssim", "butteraugli"):
                     if raw is None:
                         continue
                 elif not raw:
@@ -3799,3 +4185,527 @@ def _cleanup(work: Path) -> None:
             work.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# ------------------------------------------------------- Nachträgliches Nachmessen
+_RETEST_METRICS = ("vmaf", "psnr", "ssim", "ms_ssim", "xpsnr", "cambi", "ssimulacra2", "butteraugli")
+
+_retest_lock = threading.RLock()
+_retest_cancel = threading.Event()
+_retest_state: dict = {
+    "running": False,
+    "session": "",
+    "done": 0,
+    "total": 0,
+    "percent": 0,
+    "message": "",
+    "error": "",
+    "updated_clips": 0,
+    "updated_results": 0,
+    "finished_at": 0.0,
+}
+
+
+def get_retest_state() -> dict:
+    with _retest_lock:
+        return dict(_retest_state)
+
+
+def cancel_retest() -> bool:
+    with _retest_lock:
+        if not _retest_state["running"]:
+            return False
+    _retest_cancel.set()
+    return True
+
+
+def _retest_find_clips(session: str, data: dict) -> tuple[list[tuple[int, dict, int, dict, Path]], dict[int, tuple[Path, float, float]], str]:
+    """Ordnet vorhandene Testclips & Referenzquellen einer gespeicherten Session zu."""
+    analysis = data.get("analysis") if isinstance(data.get("analysis"), dict) else {}
+    root = config.VMAF_SESSIONS_DIR / session
+    clip_sec_default = float(analysis.get("clip_seconds") or 0)
+    leads: dict[int, float] = {}
+    for item in analysis.get("source_clips") or []:
+        if isinstance(item, dict):
+            try:
+                leads[int(item.get("scene"))] = float(item.get("lead") or 0.0)
+            except (TypeError, ValueError):
+                pass
+    starts_list = analysis.get("sample_starts") if isinstance(analysis.get("sample_starts"), list) else []
+
+    movie_path_str = str(data.get("source_path") or "")
+    movie_path = Path(movie_path_str) if movie_path_str else None
+    movie_ok = bool(movie_path and movie_path.is_file())
+
+    pairs: list[tuple[int, dict, int, dict, Path]] = []
+    scene_sources: dict[int, tuple[Path, float, float]] = {}
+    used_clips = False
+    used_movie = False
+
+    results = analysis.get("results") or []
+    for r_idx, raw in enumerate(results):
+        if not isinstance(raw, dict):
+            continue
+        shots_by_scene: dict[int, dict] = {}
+        for sh in raw.get("screenshots") or []:
+            if isinstance(sh, dict):
+                try:
+                    shots_by_scene[int(sh.get("scene", 0))] = sh
+                except (TypeError, ValueError):
+                    pass
+        scenes = raw.get("scene_scores") or []
+        for sc in scenes:
+            if not isinstance(sc, dict):
+                continue
+            try:
+                si = int(sc.get("scene", 0))
+            except (TypeError, ValueError):
+                continue
+            sh = shots_by_scene.get(si) or {}
+            cname = str(sc.get("clip") or sh.get("clip") or _clip_name(
+                raw.get("platform") or "", raw.get("codec") or "",
+                raw.get("value", raw.get("quality")), si))
+            cpath = root / cname if cname and _CLIP_NAME.match(cname) else None
+            if cpath is None or not cpath.is_file():
+                continue
+            clen = float(sc.get("length") or clip_sec_default or 0.0)
+            if clen <= 0 and si < len(starts_list) and isinstance(starts_list[si], (list, tuple)) and len(starts_list[si]) >= 2:
+                try:
+                    clen = float(starts_list[si][1])
+                except (TypeError, ValueError):
+                    clen = 0.0
+            if clen <= 0:
+                clen = float(ff._probe_duration(cpath) or 10.0)
+
+            if si not in scene_sources:
+                sname = _source_clip_name(si)
+                spath = root / sname if sname else None
+                if spath is not None and spath.is_file():
+                    lead = float(sh.get("source_lead") if sh.get("source_lead") is not None else leads.get(si, 0.0))
+                    scene_sources[si] = (spath, max(0.0, lead), clen)
+                    used_clips = True
+                elif movie_ok and movie_path is not None:
+                    start_t = float(sc.get("start") or 0.0)
+                    if start_t <= 0 and si < len(starts_list) and isinstance(starts_list[si], (list, tuple)) and starts_list[si]:
+                        try:
+                            start_t = float(starts_list[si][0])
+                        except (TypeError, ValueError):
+                            start_t = 0.0
+                    scene_sources[si] = (movie_path, max(0.0, start_t), clen)
+                    used_movie = True
+            if si in scene_sources:
+                pairs.append((r_idx, raw, si, sc, cpath))
+
+    source_mode = "clips" if used_clips and not used_movie else ("mixed" if used_clips and used_movie else ("movie" if used_movie else "none"))
+    return pairs, scene_sources, source_mode
+
+
+def retest_info(session: str) -> Optional[dict]:
+    """Prüft für eine archivierte Session, welche Clips und Metriken nachmessbar sind."""
+    data = load_session(session)
+    if not data or not isinstance(data.get("analysis"), dict):
+        return None
+    analysis = data["analysis"]
+    results = [r for r in (analysis.get("results") or []) if isinstance(r, dict)]
+    total_scenes = sum(len(r.get("scene_scores") or []) for r in results)
+    pairs, scene_sources, source_mode = _retest_find_clips(session, data)
+
+    def _has_metric(sc: dict, name: str) -> bool:
+        val = sc.get(name)
+        if name in ("cambi", "ms_ssim", "ssimulacra2", "butteraugli"):
+            return val is not None
+        try:
+            return val is not None and float(val) > 0
+        except (TypeError, ValueError):
+            return False
+
+    present: dict[str, bool] = {}
+    missing: list[str] = []
+    for m in _RETEST_METRICS:
+        if pairs:
+            all_have = all(_has_metric(sc, m) for _, _, _, sc, _ in pairs)
+        else:
+            all_have = False
+        present[m] = all_have
+        if not all_have:
+            missing.append(m)
+
+    hdr_st = hdr_vmaf_status()
+    return {
+        "session": session,
+        "can_retest": len(pairs) > 0,
+        "test_clips_found": len(pairs),
+        "test_clips_total": total_scenes,
+        "scenes_available": len(scene_sources),
+        "source_mode": source_mode,
+        "s2_available": _ssimulacra2_ok(),
+        "butteraugli_available": _butteraugli_ok(),
+        "xpsnr_available": xpsnr_available(),
+        "gpu_available": libvmaf_cuda_available(),
+        "hdr_vmaf_available": bool(hdr_st.get("available")),
+        "hdr_vmaf_reason": str(hdr_st.get("reason") or ""),
+        "metrics_present": present,
+        "metrics_missing": missing,
+    }
+
+
+def _reaggregate_result(raw: dict) -> None:
+    """Rechnet die Gesamt-Metriken eines Ergebnis-Dicts aus seinen `scene_scores` neu."""
+    scenes = [sc for sc in (raw.get("scene_scores") or []) if isinstance(sc, dict)]
+    if not scenes:
+        return
+
+    def _avg(key: str, *, allow_zero: bool = False) -> Optional[float]:
+        vals = []
+        for sc in scenes:
+            v = sc.get(key)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(fv):
+                continue
+            if allow_zero or fv > 0:
+                vals.append(fv)
+        return (sum(vals) / len(vals)) if vals else None
+
+    vm = _avg("vmaf")
+    if vm is not None:
+        raw["vmaf"] = round(vm, 2)
+    hm = _avg("hmean")
+    if hm is not None:
+        raw["vmaf_hmean"] = round(hm, 2)
+    p1 = _avg("p1")
+    if p1 is not None:
+        raw["vmaf_1pct"] = round(p1, 2)
+    p5 = _avg("p5")
+    if p5 is not None:
+        raw["vmaf_5pct"] = round(p5, 2)
+    if vm is not None:
+        raw["vmaf_score"] = round(quality_score(vm, p1 or 0.0, hm or 0.0), 2)
+    ps = _avg("psnr")
+    if ps is not None:
+        raw["psnr"] = round(ps, 2)
+    ss = _avg("ssim")
+    if ss is not None:
+        raw["ssim"] = round(ss, 4)
+    ms = _avg("ms_ssim", allow_zero=True)
+    if ms is not None:
+        raw["ms_ssim"] = round(ms, 6)
+    xp = _avg("xpsnr")
+    if xp is not None:
+        raw["xpsnr"] = round(xp, 2)
+    cb = _avg("cambi", allow_zero=True)
+    if cb is not None:
+        raw["cambi"] = round(cb, 2)
+    s2 = _avg("ssimulacra2", allow_zero=True)
+    if s2 is not None:
+        raw["ssimulacra2"] = round(s2, 2)
+    ba = _avg("butteraugli", allow_zero=True)
+    if ba is not None:
+        raw["butteraugli"] = round(ba, 3)
+        ba_maxs = [
+            float(sc["butteraugli_max"]) for sc in scenes
+            if sc.get("butteraugli_max") is not None and not sc.get("idle")
+        ]
+        if ba_maxs:
+            raw["butteraugli_max"] = round(max(ba_maxs), 3)
+        ba_p3 = _avg("butteraugli_3norm", allow_zero=True)
+        if ba_p3 is not None:
+            raw["butteraugli_3norm"] = round(ba_p3, 3)
+
+
+def _run_retest(
+    session: str,
+    metrics: dict[str, bool],
+    *,
+    force: bool = False,
+    ssimulacra2_frames: int = 3,
+    subsample: int = 1,
+    gpu_accel: bool = False,
+) -> None:
+    import tempfile
+    import time
+
+    def _set(**kw) -> None:
+        with _retest_lock:
+            _retest_state.update(kw)
+
+    try:
+        data = load_session(session)
+        if not data or not isinstance(data.get("analysis"), dict):
+            _set(running=False, error="Session nicht gefunden.", percent=0, message="")
+            return
+        analysis = data["analysis"]
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        pairs, scene_sources, _mode = _retest_find_clips(session, data)
+        if not pairs:
+            _set(running=False, error="Keine erhaltenen Test- und Quellclips zum Nachmessen gefunden.", percent=0, message="")
+            return
+
+        want_vmaf = bool(metrics.get("vmaf"))
+        want_psnr = bool(metrics.get("psnr"))
+        want_ssim = bool(metrics.get("ssim"))
+        want_ms = bool(metrics.get("ms_ssim"))
+        want_xpsnr = bool(metrics.get("xpsnr")) and xpsnr_available()
+        want_cambi = bool(metrics.get("cambi"))
+        want_s2 = bool(metrics.get("ssimulacra2")) and _ssimulacra2_ok()
+        want_ba = bool(metrics.get("butteraugli")) and _butteraugli_ok()
+        want_any_libvmaf = any((want_vmaf, want_psnr, want_ssim, want_ms, want_xpsnr, want_cambi))
+        if not want_any_libvmaf and not want_s2 and not want_ba:
+            _set(running=False, error="Keine nachmessbare Metrik ausgewählt.", percent=0, message="")
+            return
+
+        neg = bool(params.get("vmaf_neg"))
+        tonemap = bool(params.get("tonemap"))
+        raw_opts = params.get("options") if isinstance(params.get("options"), dict) else {}
+        hdr_vmaf = bool(params.get("vmaf_hdr", raw_opts.get("hdr_vmaf", True)))
+        crop = str(params.get("crop") or "")
+        tm_algo = str(params.get("tonemap_algo") or "hable")
+        tm_desat = float(params.get("tonemap_desat") or 0.0)
+        tm_peak = float(params.get("tonemap_peak") or 0.0)
+        tm_engine = str(params.get("tonemap_engine") or "cpu")
+        tm_plat = str(params.get("platform") or "cpu")
+        sub = normalize_vmaf_subsample(subsample)
+        s2_n = max(1, min(12, int(ssimulacra2_frames or 3)))
+        target_h = int(params.get("target_height") or 0)
+
+        # Aufgaben filtern: welche Clips brauchen wirklich eine Nachmessung?
+        def _missing(sc: dict, name: str) -> bool:
+            if force:
+                return True
+            val = sc.get(name)
+            if name in ("cambi", "ms_ssim", "ssimulacra2", "butteraugli"):
+                return val is None
+            try:
+                return val is None or float(val) <= 0
+            except (TypeError, ValueError):
+                return True
+
+        work_items: list[tuple[int, dict, int, dict, Path, bool, bool, bool]] = []
+        needed_scenes: set[int] = set()
+        for r_idx, raw, si, sc, cpath in pairs:
+            need_lv = want_any_libvmaf and (
+                (want_vmaf and _missing(sc, "vmaf"))
+                or (want_psnr and _missing(sc, "psnr"))
+                or (want_ssim and _missing(sc, "ssim"))
+                or (want_ms and _missing(sc, "ms_ssim"))
+                or (want_xpsnr and _missing(sc, "xpsnr"))
+                or (want_cambi and _missing(sc, "cambi"))
+            )
+            need_s2 = want_s2 and _missing(sc, "ssimulacra2")
+            need_ba = want_ba and _missing(sc, "butteraugli")
+            if need_lv or need_s2 or need_ba:
+                work_items.append((r_idx, raw, si, sc, cpath, need_lv, need_s2, need_ba))
+                needed_scenes.add(si)
+
+        if not work_items:
+            _set(running=False, percent=100, message="Alle gewählten Metriken sind bereits vorhanden.", finished_at=time.time())
+            return
+
+        total_steps = len(needed_scenes) + len(work_items)
+        done_steps = 0
+        _set(total=total_steps, done=0, percent=1, message=f"Bereite {len(needed_scenes)} Referenz-Szene(n) vor …")
+
+        with tempfile.TemporaryDirectory(prefix="vmaf_retest_") as tmp_str:
+            tmp = Path(tmp_str)
+            refs: dict[int, tuple[Path, VideoInfo, float]] = {}
+            for si in sorted(needed_scenes):
+                if _retest_cancel.is_set():
+                    _set(running=False, message="Nachmessung abgebrochen.", percent=0)
+                    return
+                src_path, seek_at, clen = scene_sources[si]
+                src_info = ff.ffprobe(src_path)
+                if src_info is None:
+                    done_steps += 1
+                    continue
+                _set(message=f"Extrahiere Referenz für Szene {si + 1} …")
+                ref = _extract_reference(
+                    src_info, tmp, tonemap, seek_at, clen, si, None,
+                    crop=crop, tonemap_algo=tm_algo, tonemap_desat=tm_desat,
+                    tonemap_peak=tm_peak, tonemap_engine=tm_engine, platform=tm_plat,
+                )
+                done_steps += 1
+                _set(done=done_steps, percent=min(98, int(round(done_steps / max(1, total_steps) * 100))))
+                if ref.is_file() and ref.stat().st_size > 0:
+                    refs[si] = (ref, src_info, clen)
+
+            touched_results: set[int] = set()
+            updated_clips = 0
+            for r_idx, raw, si, sc, cpath, need_lv, need_s2, need_ba in work_items:
+                if _retest_cancel.is_set():
+                    _set(running=False, message="Nachmessung abgebrochen.", percent=0)
+                    return
+                ref_entry = refs.get(si)
+                if ref_entry is None:
+                    done_steps += 1
+                    continue
+                ref_clip, src_info, clen = ref_entry
+                dims = None
+                if target_h > 0 and src_info.height > target_h and src_info.width > 0:
+                    sw = max(16, int(round(src_info.width * (target_h / src_info.height))))
+                    sw -= sw % 2
+                    dims = (sw, target_h)
+                lbl = str(raw.get("label") or f"Stufe {r_idx + 1}")
+                _set(message=f"Messe {lbl} (Szene {si + 1}) …")
+
+                changed = False
+                if need_lv:
+                    m = _vmaf_metrics(
+                        cpath, ref_clip, src_info, tmp, f"rt_{r_idx}_s{si}",
+                        neg=neg, dims=dims, clip_len=clen, subsample=sub,
+                        gpu_accel=bool(gpu_accel and libvmaf_cuda_available()),
+                        with_psnr=want_psnr, with_ssim=want_ssim,
+                        with_ms_ssim=want_ms, with_cambi=want_cambi,
+                        with_xpsnr=want_xpsnr,
+                        tonemap=tonemap, hdr_vmaf=hdr_vmaf,
+                    )
+                    if m:
+                        if want_vmaf and m.get("model_name"):
+                            analysis["model"] = str(m["model_name"])
+                        if want_vmaf or _missing(sc, "vmaf"):
+                            sc["vmaf"] = m["vmaf"]
+                            if m.get("hmean"):
+                                sc["hmean"] = m["hmean"]
+                            if m.get("p1"):
+                                sc["p1"] = m["p1"]
+                            if m.get("p5"):
+                                sc["p5"] = m["p5"]
+                            if m.get("frames"):
+                                sc["frames"] = m["frames"]
+                        if want_psnr and m.get("psnr"):
+                            sc["psnr"] = m["psnr"]
+                        if want_ssim and m.get("ssim"):
+                            sc["ssim"] = m["ssim"]
+                        if want_ms and m.get("ms_ssim") is not None:
+                            sc["ms_ssim"] = m["ms_ssim"]
+                            if m.get("ms_ssim_frames") is not None:
+                                sc["ms_ssim_frames"] = list(m["ms_ssim_frames"])
+                        if want_xpsnr and m.get("xpsnr"):
+                            sc["xpsnr"] = m["xpsnr"]
+                            if m.get("xpsnr_min"):
+                                sc["xpsnr_min"] = m["xpsnr_min"]
+                        if want_cambi and m.get("cambi") is not None:
+                            sc["cambi"] = m["cambi"]
+                            if m.get("cambi_max") is not None:
+                                sc["cambi_max"] = m["cambi_max"]
+                        changed = True
+
+                if need_s2 or need_ba:
+                    s2, ba = _image_metrics_clip(
+                        ref_clip, cpath, tmp, f"rt_{r_idx}_s{si}", clen,
+                        float(src_info.fps or 24.0), s2_n, save_previews=False,
+                        want_s2=need_s2, want_ba=need_ba,
+                    )
+                    if s2 is not None:
+                        sc["ssimulacra2"] = s2["mean"]
+                        sc["ssimulacra2_min"] = s2["min"]
+                        sc["ssimulacra2_n"] = s2["n"]
+                        sc["ssimulacra2_scores"] = s2.get("scores") or []
+                        sc["ssimulacra2_pairs"] = s2.get("pairs") or []
+                        changed = True
+                    if ba is not None:
+                        sc["butteraugli"] = ba["mean"]
+                        sc["butteraugli_max"] = ba["max"]
+                        if ba.get("p3") is not None:
+                            sc["butteraugli_3norm"] = ba["p3"]
+                        sc["butteraugli_n"] = ba["n"]
+                        sc["butteraugli_scores"] = ba.get("scores") or []
+                        changed = True
+
+                if changed:
+                    updated_clips += 1
+                    touched_results.add(r_idx)
+                done_steps += 1
+                _set(
+                    done=done_steps,
+                    updated_clips=updated_clips,
+                    percent=min(98, int(round(done_steps / max(1, total_steps) * 100))),
+                )
+
+        if touched_results:
+            results = analysis.get("results") or []
+            for r_idx in touched_results:
+                if 0 <= r_idx < len(results) and isinstance(results[r_idx], dict):
+                    _reaggregate_result(results[r_idx])
+            if want_vmaf or analysis.get("visual_only"):
+                if any(float(r.get("vmaf") or 0) > 0 for r in results if isinstance(r, dict)):
+                    analysis["visual_only"] = False
+                    try:
+                        target = float(params.get("target_vmaf") or 0)
+                    except (TypeError, ValueError):
+                        target = 0.0
+                    repick_analysis(analysis, target)
+
+            with storage_policy.session_guard(session):
+                saved = {k: v for k, v in data.items() if k not in ("archive_context", "coverage")}
+                provenance_api.atomic_json_write(_session_meta_path(session), saved)
+
+            try:
+                from . import history
+                history.record_vmaf_analysis_perf(
+                    session, analysis,
+                    src_info=data.get("source_info"),
+                    params=params,
+                    ts=float(data.get("created") or time.time()),
+                    source_path=str(data.get("source_path") or ""),
+                    source_title=str(data.get("title") or ""),
+                    upsert_metrics=True,
+                )
+            except Exception:
+                logger.exception("Qualitäts-DB nach Nachmessung nicht aktualisierbar")
+
+        _set(
+            running=False,
+            done=total_steps,
+            percent=100,
+            updated_clips=updated_clips,
+            updated_results=len(touched_results),
+            message=f"Nachmessung abgeschlossen: {updated_clips} Clip(s) in {len(touched_results)} Stufe(n) aktualisiert.",
+            finished_at=time.time(),
+        )
+    except Exception as exc:
+        logger.exception("VMAF-Nachmessung fehlgeschlagen")
+        _set(running=False, error=str(exc), percent=0, message="")
+
+
+def start_retest(
+    session: str,
+    metrics: dict[str, bool],
+    *,
+    force: bool = False,
+    ssimulacra2_frames: int = 3,
+    subsample: int = 1,
+    gpu_accel: bool = False,
+) -> tuple[bool, str]:
+    """Startet die nachträgliche Metrik-Messung für eine archivierte Session im Hintergrund."""
+    info = retest_info(session)
+    if info is None:
+        return False, "Session nicht gefunden."
+    if not info.get("can_retest"):
+        return False, "Für diese Session sind keine Test- und Quellclips mehr vorhanden."
+    with _retest_lock:
+        if _retest_state["running"]:
+            return False, "Es läuft bereits eine Nachmessung."
+        _retest_cancel.clear()
+        _retest_state.update(
+            running=True, session=session, done=0, total=0, percent=0,
+            message="Starte Nachmessung …", error="",
+            updated_clips=0, updated_results=0, finished_at=0.0,
+        )
+    th = threading.Thread(
+        target=_run_retest,
+        args=(session, dict(metrics or {})),
+        kwargs={
+            "force": bool(force),
+            "ssimulacra2_frames": int(ssimulacra2_frames or 3),
+            "subsample": int(subsample or 1),
+            "gpu_accel": bool(gpu_accel),
+        },
+        daemon=True,
+        name="vmaf-retest",
+    )
+    th.start()
+    return True, ""

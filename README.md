@@ -146,7 +146,7 @@ matching FFmpeg encoder:
 | `hdr10plus_tool` | **1.7.2** (HEVC HDR10+ extract + inject) |
 | `dovi_tool` | **2.3.3** (HEVC Dolby Vision RPU; no AV1 inject) |
 | `ssimulacra2` | libjxl **0.11.1** static binary (still-image score beside VMAF) |
-| libva | **2.22** (built from source; Intel/AMD VAAPI) |
+| libva | **2.24.1** (built from source, VA-API 1.24, includes `vaMapBuffer2`; Intel/AMD VAAPI) |
 | OpenCL | `ocl-icd-libopencl1`, `intel-opencl-icd`, `mesa-opencl-icd`. The NVIDIA OpenCL ICD is the host driver at runtime. |
 
 ## Image channels
@@ -161,6 +161,7 @@ GitHub Actions publishes two tags from the same source. `docker compose up --bui
 | NVIDIA driver for NVENC | **610** or newer (NVENC API 13.1). A GPU that cannot install that driver, including Pascal cards on the 580 branch, stays on legacy. | Older than 610 (NVENC API 13.0 and below, including the 550, 570 and 575 branches) |
 | VMAF 1080p | `vmaf_v1.0.16_3d0h.json` (0–100) | `vmaf_v0.6.1.json` |
 | VMAF 4K | `vmaf_v1.0.16_1d5h_2160.json` (0–100) | `vmaf_4k_v0.6.1.json` |
+| HDR-VMAF | `hdr_vmaf_v1.1.8_3d0h.json` / `hdr_vmaf_v1.1.8_1d5h_2160.json` when HDR is kept (no tone-map). `zscale` converts to ICtCp PQ 16-bit before `libvmaf`. | not used; HDR stays on the standard VMAF model |
 | Anime | same v1 file (NEG is inside the model) | separate NEG model files |
 | AV1 hierarchical B-frames | with B-frames set to Auto (CQ) or Deep, when a probe accepts `-bf 7 -b_ref_mode hierarchical` | not in this FFmpeg build. Auto/Deep fall back to `-bf 4 -b_ref_mode middle` when a probe accepts it |
 | H.264 / HEVC hierarchical B-frames | no (SDK 13.1 adds the mode for AV1 only) | no |
@@ -1062,6 +1063,9 @@ docker-compose.yml      Portainer stack
 | `UPLOAD_DIR` | `$DATA_DIR/uploads` | Uploaded external tracks |
 | `VMAF_SESSIONS_DIR` | `$DATA_DIR/vmaf` | Retained VMAF artifacts |
 | `VMAF_MODEL_DIR` | `/usr/local/share/model` | Path to VMAF models |
+| `VMAF_MODEL_HDR_1080P` | `hdr_vmaf_v1.1.8_3d0h.json` on `latest`, empty on `legacy` | HDR-VMAF model for 1080p. Empty disables HDR-VMAF. |
+| `VMAF_MODEL_HDR_4K` | `hdr_vmaf_v1.1.8_1d5h_2160.json` on `latest`, empty on `legacy` | HDR-VMAF model for 4K. Empty disables HDR-VMAF. |
+| `LIBVA_VERSION` | `2.24.1` in the image | Reported in Diagnose next to the VA-API version. |
 | `RETAIN_VMAF_SESSIONS` | `true` | Keep VMAF artifacts after analysis |
 | `METRICS_INTERVAL` | `1.5` | Live metrics refresh interval (s) |
 | `VMAF_CLIP_SECONDS` | `30` | Length of the VMAF test clip (s) |

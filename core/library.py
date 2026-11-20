@@ -37,6 +37,8 @@ _state: dict = {
     "error": "",
     "generated_at": 0.0,
     "root": "",
+    "incremental": False,
+    "delta": {"added": 0, "updated": 0, "removed": 0, "reused": 0},
 }
 # Abgeschlossene Scans pro Root ("" = gesamter Medienbaum).
 _by_root: dict[str, dict] = {}
@@ -175,6 +177,8 @@ def _empty_snapshot(root: str = "") -> dict:
         "error": "",
         "generated_at": 0.0,
         "root": root,
+        "incremental": False,
+        "delta": {"added": 0, "updated": 0, "removed": 0, "reused": 0},
         "stats": _compute_stats([]),
     }
 
@@ -197,6 +201,8 @@ def _entry_to_snapshot(entry: dict, *, running: bool = False) -> dict:
         "error": str(entry.get("error") or ""),
         "generated_at": float(entry.get("generated_at") or 0.0),
         "root": root,
+        "incremental": bool(entry.get("incremental", False)),
+        "delta": dict(entry.get("delta") or {"added": 0, "updated": 0, "removed": 0, "reused": 0}),
         "stats": _compute_stats(matched),
     }
 
@@ -219,6 +225,8 @@ def _snapshot_locked() -> dict:
         "error": _state["error"],
         "generated_at": _state["generated_at"],
         "root": _norm_root(_state["root"]),
+        "incremental": bool(_state.get("incremental", False)),
+        "delta": dict(_state.get("delta") or {"added": 0, "updated": 0, "removed": 0, "reused": 0}),
         "stats": _compute_stats(matched),
     }
 
@@ -236,6 +244,8 @@ def _store_root_locked(snap: dict) -> None:
         "root": root,
         "done": True,
         "error": str(snap.get("error") or ""),
+        "incremental": bool(snap.get("incremental", False)),
+        "delta": dict(snap.get("delta") or {"added": 0, "updated": 0, "removed": 0, "reused": 0}),
     }
 
 
@@ -467,18 +477,26 @@ def load_last(root: Optional[str] = None) -> dict:
     return list_caches()
 
 
-def start_scan(root_rel: str, filters: dict) -> bool:
-    """Startet einen Scan, sofern nicht bereits einer läuft."""
+def start_scan(root_rel: str, filters: dict, incremental: Optional[bool] = None) -> bool:
+    """Startet einen Scan, sofern nicht bereits einer läuft.
+
+    Mit ``incremental=True`` werden unveränderte Dateien aus dem bestehenden
+    Cache dieses Roots direkt übernommen und nur neue/geänderte Dateien per
+    ``ffprobe`` eingelesen sowie gelöschte entfernt.
+    """
     global _thread
     root_rel = _norm_root(root_rel)
+    inc = bool(incremental) if incremental is not None else bool((filters or {}).get("incremental", False))
     with _lock:
         if _state["running"]:
             return False
         _state.update(running=True, done=False, total=0, scanned=0,
                       matched=[], total_size_bytes=0, total_saved_bytes=0,
-                      error="", generated_at=time.time(), root=root_rel)
+                      error="", generated_at=time.time(), root=root_rel,
+                      incremental=inc,
+                      delta={"added": 0, "updated": 0, "removed": 0, "reused": 0})
     _stop.clear()
-    _thread = threading.Thread(target=_run, args=(root_rel, filters or {}), daemon=True)
+    _thread = threading.Thread(target=_run, args=(root_rel, filters or {}, inc), daemon=True)
     _thread.start()
     return True
 
@@ -555,38 +573,112 @@ def _dynamic_match(info, dynamic_filters: list) -> bool:
     return any(_dynamic_match_one(info, d) for d in active)
 
 
-def _run(root_rel: str, filters: dict) -> None:
-    """Scannt die Bibliothek vollständig (ffprobe).
+def _file_sig(path: Path) -> tuple[int, float]:
+    """Größe in Bytes + Änderungszeit (mtime) für inkrementellen Abgleich."""
+    try:
+        st = path.stat()
+        return int(st.st_size), round(float(st.st_mtime), 3)
+    except OSError:
+        return 0, 0.0
+
+
+def _sidecar_mtime(path: Path) -> float:
+    """Maximale mtime relevanter NFO-Sidecars neben der Videodatei."""
+    best = 0.0
+    for cand in (path.with_suffix(".nfo"), path.parent / "movie.nfo", path.parent / "tvshow.nfo"):
+        try:
+            if cand.is_file():
+                mt = float(cand.stat().st_mtime)
+                if mt > best:
+                    best = mt
+        except OSError:
+            continue
+    return round(best, 3)
+
+
+def _run(root_rel: str, filters: dict, incremental: bool = False) -> None:
+    """Scannt die Bibliothek vollständig oder inkrementell (ffprobe).
 
     Filter (Name, Codec, Bitrate, …) werden **nicht** mehr serverseitig
     angewendet – die UI filtert den letzten Scan live. ``filters`` wird nur
     noch für optionale Kompatibilität akzeptiert; der Scan nimmt immer alle
     bekannten Video-Endungen im gewählten Root.
     """
+    cancelled = False
     try:
         from . import history
 
         _ = filters  # bewusst ungenutzt (Live-Filter in der UI)
         allowed = set(config.VIDEO_EXTENSIONS)
         files = list(config.iter_input_files(root_rel, allowed))
+
+        prev_map: dict[str, dict] = {}
+        if incremental:
+            with _lock:
+                prev_entry = _by_root.get(_norm_root(root_rel))
+                if prev_entry:
+                    for item in prev_entry.get("matched") or []:
+                        p = str(item.get("path") or "")
+                        if p:
+                            prev_map[p] = item
+
         with _lock:
             _state["total"] = len(files)
+            _state["scanned"] = 0
+            _state["matched"] = []
+            _state["total_size_bytes"] = 0
+            _state["total_saved_bytes"] = 0
+            _state["error"] = ""
             _state["root"] = root_rel or ""
+            _state["incremental"] = bool(incremental)
+            _state["delta"] = {"added": 0, "updated": 0, "removed": 0, "reused": 0}
 
         # Default-Projektion AV1 (UI rechnet bei Ziel-Codec-Wechsel neu).
         target_codec = "av1"
+        seen_rels: set[str] = set()
+        added = 0
+        updated = 0
+        reused = 0
 
         for f in files:
             if _stop.is_set():
+                cancelled = True
                 break
             with _lock:
                 _state["scanned"] += 1
+
+            rel = config.rel_input(f) or f.name
+            seen_rels.add(rel)
+            size_now, mtime_now = _file_sig(f)
+            sc_mtime_now = _sidecar_mtime(f)
+
+            prev = prev_map.get(rel) if incremental else None
+            if prev is not None and size_now > 0:
+                prev_size = int(prev.get("size_bytes") or 0)
+                prev_mtime = prev.get("mtime")
+                prev_sc = prev.get("sidecar_mtime")
+                mtime_ok = (prev_mtime is None) or (abs(float(prev_mtime) - mtime_now) < 0.05)
+                sc_ok = (prev_sc is None) or (abs(float(prev_sc) - sc_mtime_now) < 0.05)
+                if prev_size == size_now and mtime_ok and sc_ok:
+                    entry = dict(prev)
+                    entry["mtime"] = mtime_now
+                    entry["sidecar_mtime"] = sc_mtime_now
+                    try:
+                        entry["processed"] = history.is_processed(str(f.resolve()))
+                    except OSError:
+                        entry["processed"] = history.is_processed(str(f))
+                    reused += 1
+                    with _lock:
+                        _state["matched"].append(entry)
+                        _state["total_size_bytes"] += int(entry.get("size_bytes") or 0)
+                        _state["total_saved_bytes"] += int(entry.get("est_saved_bytes") or 0)
+                        _state["delta"] = {"added": added, "updated": updated, "removed": 0, "reused": reused}
+                    continue
 
             info, _err = ff.probe_with_error(f)
             if info is None:
                 continue
 
-            rel = config.rel_input(f) or f.name
             folder = str(Path(rel).parent).replace("\\", "/")
             try:
                 extras = sidecar_details(f, media_folder=folder)
@@ -601,6 +693,11 @@ def _run(root_rel: str, filters: dict) -> None:
             except OSError:
                 processed = history.is_processed(str(f))
 
+            if prev is not None:
+                updated += 1
+            else:
+                added += 1
+
             with _lock:
                 _state["matched"].append(_with_work({
                     "path": rel,
@@ -609,6 +706,8 @@ def _run(root_rel: str, filters: dict) -> None:
                     "ext": f.suffix.lower().lstrip("."),
                     "size_bytes": info.size_bytes,
                     "size_human": ff.human_size(info.size_bytes),
+                    "mtime": mtime_now,
+                    "sidecar_mtime": sc_mtime_now,
                     "codec": info.codec,
                     "resolution": f"{info.width}x{info.height}",
                     "width": info.width,
@@ -639,6 +738,11 @@ def _run(root_rel: str, filters: dict) -> None:
                 }))
                 _state["total_size_bytes"] += info.size_bytes
                 _state["total_saved_bytes"] += proj["est_saved_bytes"]
+                _state["delta"] = {"added": added, "updated": updated, "removed": 0, "reused": reused}
+
+        removed = len(set(prev_map.keys()) - seen_rels) if (incremental and not cancelled) else 0
+        with _lock:
+            _state["delta"] = {"added": added, "updated": updated, "removed": removed, "reused": reused}
     except Exception as e:  # pragma: no cover
         logger.exception("Bibliotheks-Scan fehlgeschlagen")
         with _lock:
@@ -648,9 +752,9 @@ def _run(root_rel: str, filters: dict) -> None:
             _state["running"] = False
             _state["done"] = True
             snap = _snapshot_locked()
-            if not _state["error"]:
+            if not _state["error"] and not (incremental and cancelled):
                 _store_root_locked(snap)
-        if not snap.get("error"):
+        if not snap.get("error") and not (incremental and cancelled):
             _save_cache()
 
 

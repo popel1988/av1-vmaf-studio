@@ -1001,6 +1001,8 @@ class EnqueueRequest(BaseModel):
     vmaf_ms_ssim: bool = True
     vmaf_xpsnr: bool = True
     vmaf_cambi: bool = True
+    vmaf_butteraugli: bool = False
+    vmaf_hdr: bool = True
     clip_seconds: int = 30
     samples: int = 1
     ssimulacra2_frames: int = 3
@@ -2249,12 +2251,13 @@ class LibraryScanRequest(BaseModel):
     dynamic_filters: list[str] = []  # sdr|hdr|dv|dv5|dv7|dv8|dv8.1|dv8.2|dv8.4|dv10|dv10.1
     skip_optimized: bool = False     # bereits effiziente Dateien ausblenden
     skip_processed: bool = False     # bereits verarbeitete Dateien ausblenden
+    incremental: bool = False        # nur neue/geänderte/gelöschte Dateien abgleichen
 
 
 @app.post("/api/library/scan")
 async def library_scan(req: LibraryScanRequest):
     from core import library
-    started = library.start_scan(req.root, req.model_dump())
+    started = library.start_scan(req.root, req.model_dump(), incremental=req.incremental)
     return {"started": started, "state": library.get_state()}
 
 
@@ -2910,6 +2913,7 @@ async def get_quality_ranking(
     hdr: str = "all",
     min_vmaf: float = 0.0,
     group_speed: bool = True,
+    group_version: bool = False,
     complexity: str = "all",
     density: str = "all",
     anime: str = "all",
@@ -2921,6 +2925,7 @@ async def get_quality_ranking(
         hdr_filter=hdr if hdr in ("all", "hdr", "sdr") else "all",
         min_vmaf=max(0.0, min(100.0, float(min_vmaf or 0.0))),
         group_by_speed=bool(group_speed),
+        group_by_version=bool(group_version),
         complexity_filter=complexity if complexity in ("all", "complex", "typical", "quiet") else "all",
         density_filter=density if density in ("all", "dense", "mid", "light") else "all",
         anime_filter=anime if anime in ("all", "anime", "live") else "all",
@@ -2973,6 +2978,60 @@ async def vmaf_repick(req: VmafRepickRequest):
         return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
     queue.patch_vmaf_by_session(req.session, data.get("analysis") or {})
     return data
+
+
+@app.get("/api/vmaf/session/{name}/retest-info")
+async def vmaf_retest_info(name: str):
+    """Prüft, ob für eine gespeicherte Session noch Clips zum Nachmessen vorliegen."""
+    from core import vmaf as vmaf_mod
+    info = await asyncio.to_thread(vmaf_mod.retest_info, name)
+    if info is None:
+        return JSONResponse({"error": "Nicht gefunden"}, status_code=404)
+    return info
+
+
+class VmafRetestRequest(BaseModel):
+    session: str
+    metrics: dict[str, bool] = Field(default_factory=dict)
+    force: bool = False
+    ssimulacra2_frames: int = 3
+    subsample: int = 1
+    gpu_accel: bool = False
+
+
+@app.post("/api/vmaf/retest")
+async def vmaf_retest_start(req: VmafRetestRequest):
+    """Startet das nachträgliche Messen fehlender Metriken auf gespeicherten VMAF-Clips."""
+    from core import vmaf as vmaf_mod
+    ok, err = await asyncio.to_thread(
+        vmaf_mod.start_retest,
+        req.session,
+        req.metrics,
+        force=req.force,
+        ssimulacra2_frames=req.ssimulacra2_frames,
+        subsample=req.subsample,
+        gpu_accel=req.gpu_accel,
+    )
+    if not ok:
+        return JSONResponse({"started": False, "error": err, "state": vmaf_mod.get_retest_state()}, status_code=409)
+    return {"started": True, "state": vmaf_mod.get_retest_state()}
+
+
+@app.get("/api/vmaf/retest/status")
+async def vmaf_retest_status():
+    from core import vmaf as vmaf_mod
+    st = vmaf_mod.get_retest_state()
+    if not st.get("running") and st.get("updated_results") and st.get("session"):
+        data = await asyncio.to_thread(vmaf_mod.load_session, st["session"])
+        if data and isinstance(data.get("analysis"), dict):
+            queue.patch_vmaf_by_session(st["session"], data["analysis"])
+    return st
+
+
+@app.post("/api/vmaf/retest/cancel")
+async def vmaf_retest_cancel():
+    from core import vmaf as vmaf_mod
+    return {"cancelled": vmaf_mod.cancel_retest(), "state": vmaf_mod.get_retest_state()}
 
 
 @app.get("/api/vmaf/clip")
@@ -3785,6 +3844,8 @@ class EncoderBenchStartRequest(BaseModel):
     vmaf_ms_ssim: bool = True
     vmaf_xpsnr: bool = True
     vmaf_cambi: bool = True
+    vmaf_butteraugli: bool = False
+    vmaf_hdr: bool = True
     anime: bool = False
     mode: str = "vmaf"
 

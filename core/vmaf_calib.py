@@ -184,16 +184,47 @@ def _measure_encode_fps(info: ff.VideoInfo, work: Path, tag: str,
         cmd = build_encode_cmd(
             info, out, plat, codec, cq, None, False,
             duration_limit=clip_sec, start_at=0.0,
-            include_progress=False, audio_mode="none",
+            include_progress=True, audio_mode="none",
             encoder_speed=speed,
         )
     except Exception:
         return None
-    dt = _time_cmd(cmd, timeout=180)
-    if dt is None or not out.is_file() or out.stat().st_size == 0:
+    t0 = time.perf_counter()
+    first_frame_t: Optional[float] = None
+    first_frame_n = 0
+    last_frame_n = 0
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line.startswith("frame="):
+                try:
+                    n = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    continue
+                if n > 0:
+                    last_frame_n = n
+                    if first_frame_t is None:
+                        first_frame_t = time.perf_counter()
+                        first_frame_n = n
+        rc = proc.wait(timeout=180)
+    except (OSError, subprocess.SubprocessError):
         return None
-    frames = max(1.0, float(info.fps or 24.0) * clip_sec)
-    return round(frames / dt, 2)
+    t_end = time.perf_counter()
+    if rc != 0 or not out.is_file() or out.stat().st_size == 0:
+        return None
+    total_frames = float(last_frame_n) if last_frame_n > 0 else max(1.0, float(info.fps or 24.0) * clip_sec)
+    # Wenn genügend Frames nach dem ersten Progress-Tick liefen, nutzen wir die
+    # eingeschwungene Zeit (ohne Prozess-/GPU-Startoverhead).
+    steady_frames = last_frame_n - first_frame_n
+    if first_frame_t is not None and steady_frames >= 24 and (t_end - first_frame_t) >= 0.25:
+        fps = steady_frames / (t_end - first_frame_t)
+    else:
+        fps = total_frames / max(0.05, t_end - t0)
+    return round(max(0.1, fps), 2)
 
 
 def _measure_vmaf_sec(dist: Path, ref: Path, info: ff.VideoInfo, work: Path, tag: str,
@@ -260,30 +291,45 @@ def _worker() -> None:
             pct = min(99, int(round(done / max(1, total_steps) * 100)))
             _set(step=done, total=total_steps, percent=pct, message=msg)
 
-        # 1) Synthetische Referenzclips (1080p: 3.0s = 72 Frames, 2160p: 2.0s = 48 Frames)
-        _set(total=total_steps, message="Erzeuge 1080p-Referenzclip …")
-        ref_1080 = tmp / "ref_1080p.mkv"
-        sec_1080 = 3.0
-        if not _synth_clip(ref_1080, 1920, 1080, 24, sec_1080):
+        # 1) Synthetische Referenzclips: ausreichend lang für verlässliche HW/CPU-FPS
+        #    (1080p: 8.0s = 192 Frames, 4K: 5.0s = 120 Frames). Für die vielen
+        #    VMAF-Zusatztests schneiden wir per Stream-Copy kurze 3s/2s-Referenzen.
+        _set(total=total_steps, message="Erzeuge 1080p-Referenzclip (8 s) …")
+        ref_1080_long = tmp / "ref_1080p_long.mkv"
+        sec_1080_hw = 8.0
+        sec_1080_vmaf = 3.0
+        if not _synth_clip(ref_1080_long, 1920, 1080, 24, sec_1080_hw):
             _set(running=False, error="1080p-Referenzclip konnte nicht erzeugt werden.", percent=0, message="")
             return
-        info_1080 = ff.ffprobe(ref_1080)
-        bump("Erzeuge 4K-Referenzclip …")
+        info_1080 = ff.ffprobe(ref_1080_long)
+        ref_1080 = tmp / "ref_1080p.mkv"
+        if not _time_cmd([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                          "-i", str(ref_1080_long), "-t", str(sec_1080_vmaf), "-c", "copy", str(ref_1080)], timeout=30):
+            ref_1080 = ref_1080_long
+            sec_1080_vmaf = sec_1080_hw
+        bump("Erzeuge 4K-Referenzclip (5 s) …")
         if _cancel.is_set():
             _set(running=False, message="Kalibrierung abgebrochen.", percent=0)
             return
 
+        ref_2160_long = tmp / "ref_2160p_long.mkv"
+        sec_2160_hw = 5.0
+        sec_2160_vmaf = 2.0
+        has_2160 = _synth_clip(ref_2160_long, 3840, 2160, 24, sec_2160_hw)
+        info_2160 = ff.ffprobe(ref_2160_long) if has_2160 else None
         ref_2160 = tmp / "ref_2160p.mkv"
-        sec_2160 = 2.0
-        has_2160 = _synth_clip(ref_2160, 3840, 2160, 24, sec_2160)
-        info_2160 = ff.ffprobe(ref_2160) if has_2160 else None
+        if has_2160:
+            if not _time_cmd([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                              "-i", str(ref_2160_long), "-t", str(sec_2160_vmaf), "-c", "copy", str(ref_2160)], timeout=30):
+                ref_2160 = ref_2160_long
+                sec_2160_vmaf = sec_2160_hw
         bump("Starte Encoder-Messungen …")
 
         if info_1080 is None:
             _set(running=False, error="ffprobe für Referenzclip fehlgeschlagen.", percent=0, message="")
             return
 
-        # 2) Encoder-Geschwindigkeiten messen
+        # 2) Encoder-Geschwindigkeiten messen (HW volle Länge, langsame CPU-Stufen kürzer)
         encoders_out: dict[str, dict] = {}
         dist_1080: Optional[Path] = None
         dist_2160: Optional[Path] = None
@@ -298,21 +344,33 @@ def _worker() -> None:
                 if not info_2160:
                     bump(f"Überspringe {label}")
                     continue
-                fps_val = _measure_encode_fps(info_2160, tmp, f"{plat}_{codec}_{sp}_2160", plat, codec, sp, sec_2160)
+                dur = sec_2160_hw if plat != "cpu" else 3.0
+                fps_val = _measure_encode_fps(info_2160, tmp, f"{plat}_{codec}_{sp}_2160", plat, codec, sp, dur)
                 if fps_val:
                     entry = encoders_out.setdefault(f"{plat}:{codec}", {"speeds_1080p": {}, "fps_2160p_balanced": 0.0})
                     entry["fps_2160p_balanced"] = fps_val
                     cand = tmp / f"enc_{plat}_{codec}_{sp}_2160.mkv"
                     if dist_2160 is None and cand.is_file():
-                        dist_2160 = cand
+                        cut = tmp / "dist_2160p_vmaf.mkv"
+                        if _time_cmd([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                                      "-i", str(cand), "-t", str(sec_2160_vmaf), "-c", "copy", str(cut)], timeout=30):
+                            dist_2160 = cut
+                        else:
+                            dist_2160 = cand
             else:
-                fps_val = _measure_encode_fps(info_1080, tmp, f"{plat}_{codec}_{sp}_1080", plat, codec, sp, sec_1080)
+                dur = sec_1080_hw if plat != "cpu" else (4.0 if sp == "slow" else 6.0)
+                fps_val = _measure_encode_fps(info_1080, tmp, f"{plat}_{codec}_{sp}_1080", plat, codec, sp, dur)
                 if fps_val:
                     entry = encoders_out.setdefault(f"{plat}:{codec}", {"speeds_1080p": {}, "fps_2160p_balanced": 0.0})
                     entry["speeds_1080p"][sp] = fps_val
                     cand = tmp / f"enc_{plat}_{codec}_{sp}_1080.mkv"
                     if dist_1080 is None and cand.is_file():
-                        dist_1080 = cand
+                        cut = tmp / "dist_1080p_vmaf.mkv"
+                        if _time_cmd([config.FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                                      "-i", str(cand), "-t", str(sec_1080_vmaf), "-c", "copy", str(cut)], timeout=30):
+                            dist_1080 = cut
+                        else:
+                            dist_1080 = cand
             bump(f"Encoder gemessen: {label}")
 
         # Fehlende Speed-Stufen (fastest / slowest) sauber aus Nachbarwerten ableiten
@@ -337,7 +395,9 @@ def _worker() -> None:
         if dist_2160 is None and ref_2160.is_file():
             dist_2160 = ref_2160
 
-        # 3) VMAF & Zusatzmetriken messen
+        # 3) VMAF & Zusatzmetriken messen (auf den kurzen 3s/2s-Clips)
+        sec_1080 = sec_1080_vmaf
+        sec_2160 = sec_2160_vmaf
         frames_1080 = float(info_1080.fps or 24.0) * sec_1080
         frames_2160 = float((info_2160.fps if info_2160 else 24.0) or 24.0) * sec_2160
 

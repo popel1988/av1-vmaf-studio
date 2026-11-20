@@ -8,7 +8,7 @@
 #  Basis Ubuntu 24.04 (noble) wegen neuem iHD-Treiber + oneVPL. WICHTIG: Der
 #  BtbN-FFmpeg-Build verlangt das libva-Symbol `vaMapBuffer2` (erst ab libva
 #  2.21 / VA-API 1.21). Da 24.04 nur libva 2.20 mitbringt, wird libva unten aus
-#  dem Quelltext (2.22) gebaut – sonst crasht jeder Intel/AMD-HW-Encode.
+#  dem Quelltext (2.24.1 / VA-API 1.24) gebaut – sonst crasht jeder Intel/AMD-HW-Encode.
 #  Hinweis: CUDA-Images für ubuntu24.04 gibt es erst ab CUDA 12.6.
 # =============================================================================
 # Basis-Image überschreibbar – z. B. andere CUDA-Version, falls der
@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget xz-utils tar pciutils \
         python3 python3-pip python3-dev \
         # --- VAAPI / Intel QSV / AMD Userspace-Treiber ---
-        # libva2 (wird unten durch Quellbau 2.22 ersetzt) + iHD-Treiber für
+        # libva2 (wird unten durch Quellbau 2.24.1 ersetzt) + iHD-Treiber für
         # Intel, mesa-va für AMD. QSV läuft über oneVPL: libvpl2 (Dispatcher) +
         # libmfx-gen1.2 (Gen-Runtime, z. B. UHD 730/Gen12). libmfx1 als Fallback.
         libva2 libva-drm2 vainfo \
@@ -56,11 +56,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 2.21.0 / VA-API 1.21). KEINE gängige Distro liefert das aktuell: Ubuntu 24.04
 # hat nur 2.20.0, Ubuntu 22.04 nur 2.12 → jeder Intel/AMD-Hardware-Encode
 # stürzt sonst mit "undefined symbol: vaMapBuffer2" ab (BtbN-Issue #457).
-# Wir bauen daher libva 2.22 aus dem Quelltext und überschreiben die
-# Distro-Version am Standard-Pfad. Der per apt installierte iHD-Treiber ist
-# abwärtskompatibel; fehlt ihm der neue Backend-Hook, fällt libva intern auf
+# Wir bauen daher libva 2.24.1 (VA-API 1.24) aus dem Quelltext und überschreiben
+# die Distro-Version am Standard-Pfad. Der per apt installierte iHD-Treiber ist
+# abwärtskompatibel; fehlt ihm ein neuer Backend-Hook, fällt libva intern auf
 # vaMapBuffer zurück.
-ARG LIBVA_VERSION=2.22.0
+ARG LIBVA_VERSION=2.24.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential meson ninja-build pkg-config libdrm-dev \
     && wget -q "https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz" \
@@ -72,7 +72,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         -Dwith_x11=no -Dwith_glx=no -Dwith_wayland=no \
     && meson install -C build \
     && ldconfig \
-    # Verifizieren, dass das neue libva das benötigte Symbol exportiert:
+    # Verifizieren, dass das neue libva (VA-API >= 1.24) + vaMapBuffer2 aktiv sind:
+    && echo "== Gebaute libva / VA-API Version: $(pkg-config --modversion libva) (libva ${LIBVA_VERSION}) ==" \
+    && ( pkg-config --modversion libva | grep -qE '^1\.(2[4-9]|[3-9][0-9])\.' \
+         || (echo "FEHLER: libva VA-API-Version < 1.24!" && exit 1) ) \
     && ( nm -D --defined-only /usr/lib/x86_64-linux-gnu/libva.so.2 | grep -q vaMapBuffer2 \
          || (echo "FEHLER: libva ohne vaMapBuffer2 gebaut!" && exit 1) ) \
     && cd / && rm -rf /tmp/libva* \
@@ -107,7 +110,7 @@ RUN wget -q "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FF
 # die im Upstream fehlen: tonemap_cuda, erweitertes tonemap_opencl,
 # tonemap_vaapi und tonemapx. 8.1 spricht dieselbe NVENC-API wie latest-legacy
 # (Treiber vor 610, inklusive 575).
-ARG JELLYFIN_FFMPEG_VERSION=8.1.3-1
+ARG JELLYFIN_FFMPEG_VERSION=8.1.3-2
 RUN wget -q "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg_${JELLYFIN_FFMPEG_VERSION}_portable_linux64-gpl.tar.xz" \
         -O /tmp/jf.tar.xz \
     && mkdir -p /tmp/jf \
@@ -126,7 +129,7 @@ RUN wget -q "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JE
 # ------------------------------------------------------------- dovi_tool
 # Für die (experimentelle) Dolby-Vision-RPU-Erhaltung bei HEVC. Statisches
 # musl-Binary aus den GitHub-Releases (quietvoid/dovi_tool).
-ARG DOVI_TOOL_VERSION=2.3.3
+ARG DOVI_TOOL_VERSION=2.3.4
 RUN wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
         -O /tmp/dovi_tool.tar.gz \
     && mkdir -p /tmp/dovi \
@@ -148,36 +151,53 @@ RUN wget -q "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR
     && rm -rf /tmp/hdr10plus /tmp/hdr10plus_tool.tar.gz \
     && /usr/local/bin/hdr10plus_tool --version
 
-# ------------------------------------------------------------- SSIMULACRA2
-# Standbild-Vergleich Quelle gegen Encode. Statisches Binary aus dem
+# -------------------------------------------------- SSIMULACRA2 & Butteraugli
+# Standbild-Vergleich Quelle gegen Encode. Statische Binaries aus dem
 # libjxl-Release (devtools), kein eigener Compiler-Lauf.
-ARG SSIMULACRA2_VERSION=v0.11.1
-RUN wget -q "https://github.com/libjxl/libjxl/releases/download/${SSIMULACRA2_VERSION}/jxl-linux-x86_64-static-${SSIMULACRA2_VERSION}.tar.gz" \
-        -O /tmp/jxl.tgz \
-    && tar -xf /tmp/jxl.tgz -C /tmp \
-    && install -m 0755 /tmp/tools/ssimulacra2 /usr/local/bin/ssimulacra2 \
-    && rm -rf /tmp/jxl.tgz /tmp/tools \
+# Ab v0.13.0 liefert libjxl das Linux-Static-Archiv als .tar.lz (lzip).
+ARG SSIMULACRA2_VERSION=v0.13.0
+RUN apt-get update && apt-get install -y --no-install-recommends lzip \
+    && wget -q "https://github.com/libjxl/libjxl/releases/download/${SSIMULACRA2_VERSION}/jxl-linux-x86_64-static.tar.lz" \
+        -O /tmp/jxl.tar.lz \
+    && mkdir -p /tmp/jxl \
+    && tar --lzip -xf /tmp/jxl.tar.lz -C /tmp/jxl \
+    && S2_BIN="$(find /tmp/jxl -type f -name ssimulacra2 | head -n1)" \
+    && test -n "$S2_BIN" \
+    && install -m 0755 "$S2_BIN" /usr/local/bin/ssimulacra2 \
+    && BA_BIN="$(find /tmp/jxl -type f -name butteraugli_main | head -n1)" \
+    && test -n "$BA_BIN" \
+    && install -m 0755 "$BA_BIN" /usr/local/bin/butteraugli_main \
+    && rm -rf /tmp/jxl.tar.lz /tmp/jxl \
+    && apt-get purge -y lzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
     && /usr/local/bin/ffmpeg -y -hide_banner -loglevel error \
         -f lavfi -i color=c=black:s=32x32 -frames:v 1 /tmp/s2a.png \
     && cp /tmp/s2a.png /tmp/s2b.png \
     && score="$(/usr/local/bin/ssimulacra2 /tmp/s2a.png /tmp/s2b.png)" \
     && python3 -c 'import sys; v=float(sys.argv[1]); assert v > 90, v' "$score" \
+    && bdist="$(/usr/local/bin/butteraugli_main /tmp/s2a.png /tmp/s2b.png | head -n1)" \
+    && python3 -c 'import sys; v=float(sys.argv[1]); assert 0.0 <= v < 0.01, v' "$bdist" \
     && rm -f /tmp/s2a.png /tmp/s2b.png
 
 # ------------------------------------------------------------- VMAF-Modelle
 # libvmaf liegt im FFmpeg-Build. Die JSON-Dateien kommen extra.
-# Default ist VMAF v1 (Tag latest). latest-legacy setzt die v0.6.1-Dateinamen
-# per --build-arg. In v1 steckt NEG im Modell, daher zeigen die NEG-Variablen
-# dort auf dieselbe Datei. Beide Generationen liegen im Image.
+# Default ist VMAF v1 (Tag latest) inkl. HDR-VMAF v1.1.8 (ICtCp PQ 16-Bit via
+# zscale). latest-legacy setzt die v0.6.1-Dateinamen per --build-arg und
+# deaktiviert die HDR-VMAF-v1-Modelle (leerer Wert). In v1 steckt NEG im
+# Modell, daher zeigen die NEG-Variablen dort auf dieselbe Datei.
 ARG VMAF_MODEL_1080P=vmaf_v1.0.16_3d0h.json
 ARG VMAF_MODEL_4K=vmaf_v1.0.16_1d5h_2160.json
 ARG VMAF_MODEL_1080P_NEG=vmaf_v1.0.16_3d0h.json
 ARG VMAF_MODEL_4K_NEG=vmaf_v1.0.16_1d5h_2160.json
+ARG VMAF_MODEL_HDR_1080P=hdr_vmaf_v1.1.8_3d0h.json
+ARG VMAF_MODEL_HDR_4K=hdr_vmaf_v1.1.8_1d5h_2160.json
 ENV IMAGE_CHANNEL=${IMAGE_CHANNEL} \
+    LIBVA_VERSION=${LIBVA_VERSION} \
     VMAF_MODEL_1080P=${VMAF_MODEL_1080P} \
     VMAF_MODEL_4K=${VMAF_MODEL_4K} \
     VMAF_MODEL_1080P_NEG=${VMAF_MODEL_1080P_NEG} \
-    VMAF_MODEL_4K_NEG=${VMAF_MODEL_4K_NEG}
+    VMAF_MODEL_4K_NEG=${VMAF_MODEL_4K_NEG} \
+    VMAF_MODEL_HDR_1080P=${VMAF_MODEL_HDR_1080P} \
+    VMAF_MODEL_HDR_4K=${VMAF_MODEL_HDR_4K}
 RUN mkdir -p ${VMAF_MODEL_DIR} \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v0.6.1.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_v0.6.1.json \
@@ -190,7 +210,22 @@ RUN mkdir -p ${VMAF_MODEL_DIR} \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json" \
         -O ${VMAF_MODEL_DIR}/vmaf_v1.0.16_3d0h.json \
     && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/vmaf_v1.0.16/vmaf_v1.0.16_1d5h_2160.json" \
-        -O ${VMAF_MODEL_DIR}/vmaf_v1.0.16_1d5h_2160.json
+        -O ${VMAF_MODEL_DIR}/vmaf_v1.0.16_1d5h_2160.json \
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/hdr_vmaf_v1.1.8/hdr_vmaf_v1.1.8_3d0h.json" \
+        -O ${VMAF_MODEL_DIR}/hdr_vmaf_v1.1.8_3d0h.json \
+    && wget -q "https://raw.githubusercontent.com/Netflix/vmaf/master/model/hdr_vmaf_v1.1.8/hdr_vmaf_v1.1.8_1d5h_2160.json" \
+        -O ${VMAF_MODEL_DIR}/hdr_vmaf_v1.1.8_1d5h_2160.json \
+    # Build-Zeit-Smoke-Test für HDR-VMAF v1.1.8 im latest-Kanal (zscale ICtCp PQ 16-bit + libvmaf):
+    && if [ "${IMAGE_CHANNEL}" != "legacy" ] && [ -n "${VMAF_MODEL_HDR_4K}" ]; then \
+        python3 -c 'import json; d=json.load(open("'"${VMAF_MODEL_DIR}/${VMAF_MODEL_HDR_4K}"'")); d.get("model_dict",{}).pop("conversion_target",None); json.dump(d, open("/tmp/hdr_smoke_model.json","w"))' \
+        && /usr/local/bin/ffmpeg -y -hide_banner -loglevel error \
+            -f lavfi -i "color=c=gray:s=64x64:d=0.12:r=25,format=yuv420p10le" \
+            -f lavfi -i "color=c=gray:s=64x64:d=0.12:r=25,format=yuv420p10le" \
+            -filter_complex "[0:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[d];[1:v]zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=smpte2084:m=ictcp:r=limited,format=yuv420p16le[r];[d][r]libvmaf=model='path=/tmp/hdr_smoke_model.json':log_fmt=json:log_path=/tmp/hdr_smoke_out.json" \
+            -f null - \
+        && python3 -c 'import json; d=json.load(open("/tmp/hdr_smoke_out.json")); v=d["pooled_metrics"]["vmaf"]["mean"]; assert 80.0 <= v <= 100.0, v; print("== HDR-VMAF Smoke-Test OK:", round(v, 2), "==")' \
+        && rm -f /tmp/hdr_smoke_model.json /tmp/hdr_smoke_out.json; \
+    fi
 
 # --------------------------------------------------------------- Python-App
 WORKDIR /app

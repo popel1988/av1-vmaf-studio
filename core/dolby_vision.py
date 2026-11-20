@@ -33,15 +33,33 @@ StatusCb = Optional[Callable[[str], None]]
 
 
 @functools.lru_cache(maxsize=1)
-def available() -> bool:
-    """True, wenn dovi_tool im Image aufrufbar ist."""
+def _dovi_version() -> tuple[int, ...]:
+    """Parst die dovi_tool-Version (z. B. (2, 3, 4)) oder () wenn nicht verfügbar."""
+    import re
     try:
         r = subprocess.run([config.DOVI_TOOL, "--version"],
                            capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=15, check=False)
-        return r.returncode == 0
+        if r.returncode != 0:
+            return ()
+        out = (r.stdout or "") + " " + (r.stderr or "")
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return (0, 0, 0)
     except (OSError, subprocess.SubprocessError):
-        return False
+        return ()
+
+
+def available() -> bool:
+    """True, wenn dovi_tool im Image aufrufbar ist."""
+    return bool(_dovi_version())
+
+
+def supports_mkv_fast_path() -> bool:
+    """True ab dovi_tool 2.3.4 (direkte MKV-Unterstützung für extract-rpu/convert)."""
+    ver = _dovi_version()
+    return len(ver) >= 3 and ver >= (2, 3, 4)
 
 
 def _mode_for_profile(profile: int) -> int:
@@ -78,30 +96,64 @@ def _run(cmd: list[str], label: str) -> bool:
     return res.returncode == 0
 
 
+def _rpu_video_track(info) -> Optional[dict]:
+    """Videospur-Dict, in der die RPU liegt (Base bei Single-Track, EL bei Dual-Track)."""
+    tracks = [t for t in (getattr(info, "video_tracks", None) or []) if not t.get("attached_pic")]
+    if not tracks:
+        return None
+    base = next((t for t in tracks if t.get("role") == "base"), tracks[0])
+    el = next((t for t in tracks if t.get("role") == "enhancement" and t.get("dolby_vision")), None)
+    base_has_rpu = bool(base.get("dolby_vision")) and base.get("dv_rpu") is not False
+    if el is not None and not base_has_rpu:
+        return el
+    return base
+
+
 def _rpu_video_map(info) -> str:
     """ffmpeg-Map der Spur, in der die RPU liegt.
 
     Einspurig (Blu-ray/MKV) steckt sie im Hauptbild. Bei Profil 7 mit getrennter
     Enhancement-Spur ist das Hauptbild nur HDR10 und die RPU liegt auf Spur 2.
     """
-    tracks = [t for t in (getattr(info, "video_tracks", None) or []) if not t.get("attached_pic")]
-    if not tracks:
+    track = _rpu_video_track(info)
+    if track is None:
         return "0:v:0"
-    base = next((t for t in tracks if t.get("role") == "base"), tracks[0])
-    el = next((t for t in tracks if t.get("role") == "enhancement" and t.get("dolby_vision")), None)
-    base_has_rpu = bool(base.get("dolby_vision")) and base.get("dv_rpu") is not False
-    if el is not None and not base_has_rpu:
-        return f"0:v:{int(el.get('index') or 0)}"
-    return f"0:v:{int(base.get('index') or 0)}"
+    return f"0:v:{int(track.get('index') or 0)}"
+
+
+def _mkv_rpu_track_number(info) -> Optional[int]:
+    """1-basierte Matroska-Track-Nummer für `dovi_tool extract-rpu -t` (ab 2.3.4).
+
+    Gibt nur bei Mehrspur-Videos eine explizite Spur-Nummer zurück, damit
+    Single-Track-MKVs den Standard-Autodetect von dovi_tool nutzen.
+    """
+    tracks = [t for t in (getattr(info, "video_tracks", None) or []) if not t.get("attached_pic")]
+    if len(tracks) < 2:
+        return None
+    track = _rpu_video_track(info)
+    if track is None:
+        return None
+    sidx = track.get("stream_index")
+    if sidx is not None:
+        try:
+            return int(sidx) + 1
+        except (TypeError, ValueError):
+            pass
+    try:
+        return int(track.get("index") or 0) + 1
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
                  duration_limit: Optional[float] = None) -> bool:
     """RPU-Schicht aus der (Dolby-Vision-)Quelle in eine .bin extrahieren.
 
-    ffmpeg liefert den Elementarstream (HEVC-Annex-B bzw. AV1-OBU) via Pipe an
-    dovi_tool. `mode` konvertiert die RPU dabei (z. B. Profil 7 -> 8.1).
+    Nutzt ab dovi_tool 2.3.4 für volle MKV/HEVC-Quellen den direkten MKV-Pfad
+    (inkl. `-t`-Spurauswahl bei Dual-Track-Profil-7) und fällt bei Fehlern oder
+    Ausschnitten (`duration_limit`) nahtlos auf die ffmpeg-Pipe zurück.
     """
+    probed = None
     vmap = "0:v:0"
     try:
         from . import ffmpeg_utils as ff
@@ -109,7 +161,37 @@ def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
         if probed is not None:
             vmap = _rpu_video_map(probed)
     except Exception:  # pragma: no cover
+        probed = None
         vmap = "0:v:0"
+
+    # Direkter MKV-Fast-Path (dovi_tool >= 2.3.4): spart die komplette ffmpeg-Pipe
+    if (source.suffix.lower() == ".mkv" and source_codec != "av1"
+            and not (duration_limit and duration_limit > 0)
+            and supports_mkv_fast_path()):
+        mkv_cmd = [config.DOVI_TOOL]
+        if mode:
+            mkv_cmd += ["-m", str(mode)]
+        mkv_cmd += ["extract-rpu", "-i", str(source)]
+        track_no = _mkv_rpu_track_number(probed) if probed is not None else None
+        if track_no is not None:
+            mkv_cmd += ["-t", str(track_no)]
+        mkv_cmd += ["-o", str(rpu)]
+        try:
+            res = subprocess.run(mkv_cmd, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", check=False)
+            if res.returncode == 0 and rpu.exists() and rpu.stat().st_size > 0:
+                logger.info("RPU direkt aus MKV extrahiert (dovi_tool MKV-Fast-Path%s)",
+                            f", Track {track_no}" if track_no is not None else "")
+                return True
+            logger.info("Direkte MKV-RPU-Extraktion fehlgeschlagen – Fallback auf ffmpeg-Pipe: %s",
+                        (res.stderr or res.stdout or "")[-400:])
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.info("Direkte MKV-RPU-Extraktion – Ausnahme (%s), Fallback auf ffmpeg-Pipe", e)
+        try:
+            rpu.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     fmt, bsf = _es_args(source_codec)
     ff_cmd = [config.FFMPEG, "-hide_banner", "-loglevel", "error"]
     if duration_limit and duration_limit > 0:
@@ -136,6 +218,33 @@ def _extract_rpu(source: Path, source_codec: str, rpu: Path, mode: int = 0,
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning("RPU-Extraktion – Ausnahme: %s", e)
         return False
+
+
+def convert_mkv_to_81_es(source: Path, dest_es: Path, *, discard_el: bool = True) -> tuple[bool, str]:
+    """Direkter dovi_tool-2.3.4-Fast-Path: MKV (Profil 7 Single-Track) → HEVC-ES Profil 8.1.
+
+    Spart bei großen 4K-Remuxes die temporäre Demux- und Basisspur-Kopie.
+    Gibt (True, "") bei Erfolg zurück, sonst (False, Grund) für den Fallback.
+    """
+    if source.suffix.lower() != ".mkv" or not supports_mkv_fast_path():
+        return False, "MKV-Fast-Path nicht verfügbar"
+    cmd = [config.DOVI_TOOL, "-m", "2", "convert"]
+    if discard_el:
+        cmd.append("--discard")
+    cmd += ["-i", str(source), "-o", str(dest_es)]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", check=False)
+        if res.returncode == 0 and dest_es.is_file() and dest_es.stat().st_size > 0:
+            return True, ""
+        err = (res.stderr or res.stdout or "").strip()[-500:]
+    except (OSError, subprocess.SubprocessError) as e:
+        err = str(e)
+    try:
+        dest_es.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False, err or "dovi_tool convert (MKV) fehlgeschlagen"
 
 
 def reinject(source: Path, encoded: Path, work_dir: Path, *,

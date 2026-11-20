@@ -539,6 +539,7 @@ def _video_track(stream: dict, index: int, primary_index: int) -> dict:
         role = "video"
     return {
         "index": index,
+        "stream_index": int(stream.get("index", index)) if stream.get("index") is not None else index,
         "role": role,
         "el_inferred": False,
         "codec": str(stream.get("codec_name") or ""),
@@ -965,7 +966,7 @@ def probe_streams(path: Path) -> tuple[Optional[dict], Optional[str]]:
 # ----------------------------------------------------------------- Encoder-Map
 
 # Encoder-Name pro Plattform/Codec. Intel gibt es in zwei Ausprägungen:
-# QSV (oneVPL) und VAAPI – beide laufen mit dem Image (Ubuntu 24.04, libva 2.20).
+# QSV (oneVPL) und VAAPI – beide laufen mit dem Image (libva 2.24.1, VA-API 1.24).
 ENCODERS = {
     "nvidia": {"av1": "av1_nvenc", "hevc": "hevc_nvenc", "h264": "h264_nvenc"},
     "intel": {"av1": "av1_qsv", "hevc": "hevc_qsv", "h264": "h264_qsv"},
@@ -1062,6 +1063,144 @@ def ffmpeg_version() -> str:
         return first[0].strip() if first else "unbekannt"
     except (OSError, subprocess.SubprocessError):
         return "unbekannt"
+
+
+@functools.lru_cache(maxsize=1)
+def ffmpeg_short_version() -> str:
+    """Kompakte FFmpeg-Versionskennung (z. B. 'n9.0', '8.1.3', '7.1')."""
+    raw = ffmpeg_version()
+    m = re.search(r"ffmpeg\s+version\s+([A-Za-z0-9._-]+)", raw, re.IGNORECASE)
+    if not m:
+        return ""
+    tok = m.group(1)
+    # BtbN-Stil 'n9.0-latest-...' oder 'n9.0-12-g...' -> 'n9.0'
+    m2 = re.match(r"^(n?\d+\.\d+(?:\.\d+)?)", tok)
+    return m2.group(1) if m2 else tok[:24]
+
+
+@functools.lru_cache(maxsize=1)
+def _vainfo_driver_label() -> str:
+    """Liest den VAAPI-Treibernamen aus `vainfo` (z. B. 'iHD 24.3.4' oder 'Mesa 24.2')."""
+    try:
+        out = subprocess.run(
+            ["vainfo"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=8, check=False,
+        )
+        txt = (out.stdout or "") + "\n" + (out.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for line in txt.splitlines():
+        if "driver version" in line.lower():
+            val = line.split(":", 1)[1].strip() if ":" in line else line.strip()
+            m_ihd = re.search(r"iHD\s+driver[^0-9]*([0-9]+(?:\.[0-9]+)+)", val, re.IGNORECASE)
+            if m_ihd:
+                return f"iHD {m_ihd.group(1)}"
+            m_mesa = re.search(r"Mesa\s+Gallium[^0-9]*([0-9]+(?:\.[0-9]+)+)", val, re.IGNORECASE)
+            if m_mesa:
+                return f"Mesa {m_mesa.group(1)}"
+            return val[:48]
+    return ""
+
+
+@functools.lru_cache(maxsize=8)
+def _probe_cpu_encoder_banner(enc_name: str) -> str:
+    """Liest die echte Bibliotheks-Version aus einem 1-Frame-Null-Encode."""
+    from . import config
+    extra: list[str] = []
+    if enc_name == "libsvtav1":
+        extra = ["-preset", "12"]
+    elif enc_name in ("libx265", "libx264"):
+        extra = ["-preset", "ultrafast"]
+    cmd = [
+        config.FFMPEG, "-hide_banner", "-loglevel", "info",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:r=24:d=0.05",
+        "-frames:v", "1", "-c:v", enc_name, *extra, "-f", "null", "-",
+    ]
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15, check=False,
+        )
+        txt = (res.stderr or "") + "\n" + (res.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if enc_name == "libsvtav1":
+        m = re.search(r"SVT-AV1\s+Encoder\s+Lib\s+v?([0-9]+(?:\.[0-9]+)+(?:-[A-Za-z0-9.]+)?)", txt, re.IGNORECASE)
+        if m:
+            return f"SVT-AV1 {m.group(1)}"
+    elif enc_name == "libx265":
+        m = re.search(r"HEVC\s+encoder\s+version\s+([0-9]+(?:\.[0-9]+)+(?:[+.-][0-9a-zA-Z]+)?)", txt, re.IGNORECASE)
+        if m:
+            ver = m.group(1).split("+", 1)[0]
+            return f"x265 {ver}"
+    elif enc_name == "libx264":
+        m = re.search(r"x264\s*-\s*core\s+(\d+(?:\s*r\d+)?)", txt, re.IGNORECASE)
+        if m:
+            return f"x264 core {m.group(1).strip()}"
+    return ""
+
+
+@functools.lru_cache(maxsize=32)
+def encoder_version_label(platform: str, codec: str) -> str:
+    """Kompakte, anonyme Encoder-/Treiber-Kennung für Statistik & Vergleiche.
+
+    Beispiele: ``NVENC RTX 4070 · drv 575.57``, ``SVT-AV1 3.0.2``, ``x265 4.1``,
+    ``QSV · iHD 24.3.4``. Enthält niemals Dateinamen oder Pfade.
+    """
+    plat = (platform or "").lower().strip()
+    cod = (codec or "").lower().strip()
+    if not plat or not cod:
+        return ""
+    ff_short = ffmpeg_short_version()
+
+    if plat == "nvidia":
+        gpu_short = ""
+        drv = ""
+        try:
+            from . import hardware
+            mon = getattr(hardware, "monitor", None)
+            if mon is not None:
+                st = mon.nvenc_driver_status() or {}
+                drv = str(st.get("driver_version") or "").strip()
+                info = getattr(mon, "gpu_info", None)
+                if callable(info):
+                    g = info() or {}
+                else:
+                    g = info if isinstance(info, dict) else {}
+                name = str(g.get("name") or "").strip()
+                if not name and hasattr(mon, "snapshot"):
+                    snap = mon.snapshot() or {}
+                    name = str((snap.get("gpu") or {}).get("name") or "").strip()
+                if name:
+                    gpu_short = re.sub(r"^(NVIDIA\s+)?(GeForce\s+)?", "", name, flags=re.IGNORECASE).strip()
+        except Exception:
+            pass
+        parts = ["NVENC"]
+        if gpu_short:
+            parts[0] = f"NVENC {gpu_short}"
+        if drv:
+            parts.append(f"drv {drv}")
+        elif ff_short:
+            parts.append(f"FFmpeg {ff_short}")
+        return " · ".join(parts)
+
+    if plat in ("intel", "amd"):
+        prefix = "QSV" if plat == "intel" else "VAAPI"
+        va = _vainfo_driver_label()
+        parts = [prefix]
+        if va:
+            parts.append(va)
+        if ff_short:
+            parts.append(f"FFmpeg {ff_short}")
+        return " · ".join(parts)
+
+    enc = encoder_name(plat, cod)
+    if enc in ("libsvtav1", "libx265", "libx264"):
+        probed = _probe_cpu_encoder_banner(enc)
+        if probed:
+            return probed
+    label = {"libsvtav1": "SVT-AV1", "libx265": "x265", "libx264": "x264", "libvpx-vp9": "libvpx"}.get(enc, enc or cod.upper())
+    return f"{label} · FFmpeg {ff_short}" if ff_short else label
 
 
 @functools.lru_cache(maxsize=1)

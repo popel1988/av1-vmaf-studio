@@ -111,10 +111,22 @@ def record_binary(provenance: dict, role: str, binary: str) -> None:
         binaries[key] = {"role": role, "config_key": config_key, **binary_identity(binary)}
 
 
-def _current_model(saved: dict, info: dict) -> dict:
+def _current_model(saved: dict, info: dict, params: Optional[dict] = None) -> dict:
     if not saved.get("name"):
         return model_identity("", None)
     is_4k = bool(info.get("is_4k"))
+    p = params if isinstance(params, dict) else {}
+    opts = p.get("options") if isinstance(p.get("options"), dict) else {}
+    is_hdr = bool(info.get("is_hdr"))
+    tonemap = bool(p.get("tonemap"))
+    want_hdr = bool(opts.get("hdr_vmaf", p.get("vmaf_hdr", True)))
+    saved_is_hdr = str(saved.get("name") or "").lower().startswith("hdr_vmaf")
+    if ((is_hdr and not tonemap and want_hdr) or saved_is_hdr) and config.IMAGE_CHANNEL.strip().lower() != "legacy":
+        hdr_name = config.VMAF_MODEL_HDR_4K if is_4k else config.VMAF_MODEL_HDR_1080P
+        if hdr_name:
+            hdr_path = config.VMAF_MODEL_DIR / hdr_name
+            if hdr_path.is_file():
+                return model_identity(hdr_name, hdr_path)
     # The analysis pipeline always requests NEG and falls back to the standard model.
     name = config.VMAF_MODEL_4K_NEG if is_4k else config.VMAF_MODEL_1080P_NEG
     path = config.VMAF_MODEL_DIR / name
@@ -137,7 +149,8 @@ def archive_context(data: dict) -> dict:
     if state != "unchanged":
         warnings.append({"code": f"source_{state}"})
     model = provenance.get("model") or {}
-    actual = _current_model(model, provenance.get("source_info") or {})
+    actual = _current_model(model, provenance.get("source_info") or {},
+                            provenance.get("params") or data.get("params") or {})
     comparable = None
     if model.get("status") == "not_applicable":
         model_status = "not_applicable"

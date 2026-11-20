@@ -3545,9 +3545,9 @@
   }
 
   function gatherVmafMetricFlags(prefix) {
-    const chk = (suffix) => {
+    const chk = (suffix, defVal = true) => {
       const el = $(`${prefix}-${suffix}`);
-      return el ? !!el.checked : true;
+      return el ? !!el.checked : defVal;
     };
     return {
       vmaf_psnr: chk("psnr"),
@@ -3555,7 +3555,22 @@
       vmaf_ms_ssim: chk("ms-ssim"),
       vmaf_xpsnr: chk("xpsnr"),
       vmaf_cambi: chk("cambi"),
+      vmaf_butteraugli: chk("butteraugli", false),
+      vmaf_hdr: (() => {
+        const el = $(`${prefix}-hdr-vmaf`);
+        if (!el) return true;
+        if (el.disabled) return false;
+        return !!el.checked;
+      })(),
     };
+  }
+
+  function applyHdrVmafChannel() {
+    if (!window.APP_CONFIG || APP_CONFIG.imageChannel !== "legacy") return;
+    document.querySelectorAll('input[id$="-hdr-vmaf"]').forEach((el) => {
+      el.checked = false;
+      el.disabled = true;
+    });
   }
 
   function applyVmafMetricFlags(prefix, s) {
@@ -3566,13 +3581,17 @@
       ["vmaf_ms_ssim", "ms-ssim"],
       ["vmaf_xpsnr", "xpsnr"],
       ["vmaf_cambi", "cambi"],
+      ["vmaf_butteraugli", "butteraugli"],
+      ["vmaf_hdr", "hdr-vmaf"],
     ];
     map.forEach(([key, suffix]) => {
       const el = $(`${prefix}-${suffix}`);
-      if (el && s[key] !== undefined && s[key] !== null) {
+      if (!el || el.disabled) return;
+      if (s[key] !== undefined && s[key] !== null) {
         el.checked = !!s[key];
       }
     });
+    applyHdrVmafChannel();
   }
 
   // Encoding-Seite: fester CQ/CBR/ABR oder Ziel-VMAF (Test-Encodes, dann auto).
@@ -4042,7 +4061,7 @@
       const on = !!(visual && visual.checked);
       if (visualHint) visualHint.hidden = !on;
       if (on && shots) shots.checked = true;
-      ["vt-psnr", "vt-ssim", "vt-ms-ssim", "vt-xpsnr", "vt-cambi", "vt-s2-frames"].forEach((id) => {
+      ["vt-psnr", "vt-ssim", "vt-ms-ssim", "vt-xpsnr", "vt-cambi", "vt-butteraugli", "vt-s2-frames"].forEach((id) => {
         const el = $(id);
         if (el) el.disabled = on;
       });
@@ -5314,6 +5333,17 @@
     if (csv) csv.addEventListener("click", exportVmafCsv);
     const repick = $("btn-vmaf-repick");
     if (repick) repick.addEventListener("click", repickVmaf);
+    const retestBtn = $("btn-vmaf-retest");
+    if (retestBtn) retestBtn.addEventListener("click", toggleVmafRetestPanel);
+    const retestClose = $("btn-vmaf-retest-close");
+    if (retestClose) retestClose.addEventListener("click", () => {
+      const p = $("vmaf-retest-panel");
+      if (p) p.hidden = true;
+    });
+    const retestRun = $("btn-vmaf-retest-run");
+    if (retestRun) retestRun.addEventListener("click", startVmafRetest);
+    const retestCancel = $("btn-vmaf-retest-cancel");
+    if (retestCancel) retestCancel.addEventListener("click", cancelVmafRetest);
     const nerd = $("btn-vmaf-nerd");
     if (nerd) nerd.addEventListener("click", () => navTo("vmafnerd"));
     const nerdBack = $("btn-nerd-back");
@@ -5327,9 +5357,187 @@
     refreshVmafHistory();
   }
 
+  let vmafRetestPoll = null;
+  let vmafRetestInfoCache = null;
+
   function syncVmafRepick() {
     const btn = $("btn-vmaf-repick");
     if (btn) btn.disabled = !state.vmafSession;
+    refreshVmafRetestButton();
+  }
+
+  async function refreshVmafRetestButton() {
+    const btn = $("btn-vmaf-retest");
+    const panel = $("vmaf-retest-panel");
+    const session = state.vmafSession;
+    if (!btn) return;
+    if (!session) {
+      btn.hidden = true;
+      if (panel) panel.hidden = true;
+      vmafRetestInfoCache = null;
+      return;
+    }
+    try {
+      const r = await fetch(`/api/vmaf/session/${encodeURIComponent(session)}/retest-info`);
+      if (!r.ok) {
+        btn.hidden = true;
+        if (panel) panel.hidden = true;
+        return;
+      }
+      const info = await r.json();
+      if (state.vmafSession !== session) return;
+      vmafRetestInfoCache = info;
+      btn.hidden = !info.can_retest;
+      if (!info.can_retest && panel) {
+        panel.hidden = true;
+      } else if (panel && !panel.hidden) {
+        renderVmafRetestPanel(info);
+      }
+    } catch (e) {
+      btn.hidden = true;
+    }
+  }
+
+  function renderVmafRetestPanel(info) {
+    const meta = $("vmaf-retest-meta");
+    const box = $("vmaf-retest-metrics");
+    if (!info || !box) return;
+    if (meta) {
+      const srcLabel = info.source_mode === "clips"
+        ? "Quellclips im Archiv"
+        : (info.source_mode === "movie" ? "Originalfilm" : "Quellclips + Originalfilm");
+      meta.textContent = `${info.test_clips_found}/${info.test_clips_total} Testclips erhalten · Quelle: ${srcLabel}`;
+    }
+    const defs = [
+      ["ssimulacra2", "SSIMULACRA2", info.s2_available !== false],
+      ["butteraugli", "Butteraugli (↓)", info.butteraugli_available !== false],
+      ["ms_ssim", "MS-SSIM", true],
+      ["xpsnr", "XPSNR", info.xpsnr_available !== false],
+      ["cambi", "CAMBI (Banding)", true],
+      ["psnr", "PSNR", true],
+      ["ssim", "SSIM", true],
+      ["vmaf", "VMAF", true],
+    ];
+    const present = info.metrics_present || {};
+    box.innerHTML = defs.map(([key, label, avail]) => {
+      const has = !!present[key];
+      const checked = avail && !has ? " checked" : "";
+      const disabled = !avail ? " disabled" : "";
+      const tag = !avail ? " (nicht verfügbar)" : (has ? " ✓" : " (fehlt)");
+      return `<label class="metric-chip${has ? " muted" : ""}">`
+        + `<input type="checkbox" data-retest-metric="${key}"${checked}${disabled} />`
+        + `<span>${escapeHtml(label)}${escapeHtml(tag)}</span></label>`;
+    }).join("");
+  }
+
+  async function toggleVmafRetestPanel() {
+    const panel = $("vmaf-retest-panel");
+    if (!panel) return;
+    if (!panel.hidden) {
+      panel.hidden = true;
+      return;
+    }
+    const session = state.vmafSession;
+    if (!session) return;
+    try {
+      const r = await fetch(`/api/vmaf/session/${encodeURIComponent(session)}/retest-info`);
+      if (r.ok) vmafRetestInfoCache = await r.json();
+    } catch (e) { /* weiter */ }
+    if (!vmafRetestInfoCache || !vmafRetestInfoCache.can_retest) return;
+    renderVmafRetestPanel(vmafRetestInfoCache);
+    const stEl = $("vmaf-retest-status");
+    if (stEl) stEl.textContent = "";
+    panel.hidden = false;
+  }
+
+  async function startVmafRetest() {
+    const session = state.vmafSession;
+    if (!session) return;
+    const metrics = {};
+    document.querySelectorAll("[data-retest-metric]").forEach((cb) => {
+      if (cb.checked && !cb.disabled) metrics[cb.dataset.retestMetric] = true;
+    });
+    const stEl = $("vmaf-retest-status");
+    if (!Object.keys(metrics).length) {
+      if (stEl) stEl.textContent = "Bitte mindestens eine Metrik auswählen.";
+      return;
+    }
+    const force = !!($("vmaf-retest-force") && $("vmaf-retest-force").checked);
+    const runBtn = $("btn-vmaf-retest-run");
+    const cancelBtn = $("btn-vmaf-retest-cancel");
+    if (runBtn) runBtn.disabled = true;
+    if (cancelBtn) cancelBtn.hidden = false;
+    if (stEl) stEl.textContent = "Starte Nachmessung …";
+    try {
+      const r = await fetch("/api/vmaf/retest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session, metrics, force }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.started) {
+        if (stEl) stEl.textContent = d.error || "Nachmessung konnte nicht gestartet werden.";
+        if (runBtn) runBtn.disabled = false;
+        if (cancelBtn) cancelBtn.hidden = true;
+        return;
+      }
+      if (vmafRetestPoll) clearInterval(vmafRetestPoll);
+      vmafRetestPoll = setInterval(() => pollVmafRetest(session), 1000);
+      pollVmafRetest(session);
+    } catch (e) {
+      if (stEl) stEl.textContent = "Fehler beim Starten der Nachmessung.";
+      if (runBtn) runBtn.disabled = false;
+      if (cancelBtn) cancelBtn.hidden = true;
+    }
+  }
+
+  async function cancelVmafRetest() {
+    try { await fetch("/api/vmaf/retest/cancel", { method: "POST" }); }
+    catch (e) { /* ignorieren */ }
+  }
+
+  async function pollVmafRetest(session) {
+    const stEl = $("vmaf-retest-status");
+    const runBtn = $("btn-vmaf-retest-run");
+    const cancelBtn = $("btn-vmaf-retest-cancel");
+    try {
+      const r = await fetch("/api/vmaf/retest/status");
+      const st = await r.json();
+      if (st.running) {
+        if (stEl) stEl.textContent = `${st.percent || 0}% · ${st.message || "Messung läuft …"}`;
+        return;
+      }
+      if (vmafRetestPoll) { clearInterval(vmafRetestPoll); vmafRetestPoll = null; }
+      if (runBtn) runBtn.disabled = false;
+      if (cancelBtn) cancelBtn.hidden = true;
+      if (st.error) {
+        if (stEl) stEl.textContent = `Fehler: ${st.error}`;
+        return;
+      }
+      if (stEl) stEl.textContent = st.message || "Fertig.";
+      if (st.updated_results > 0 && state.vmafSession === session) {
+        if (state.viewSession === session) {
+          await showArchivedSession(session);
+        } else {
+          const rs = await fetch(`/api/vmaf/session/${encodeURIComponent(session)}`);
+          if (rs.ok) {
+            const fresh = await rs.json();
+            if (fresh && fresh.analysis) {
+              const items = state.lastItems || [];
+              const hit = items.find((i) => i.vmaf && i.vmaf.session === session);
+              if (hit) hit.vmaf = fresh.analysis;
+              state.lastVmafKey = null;
+              renderVmaf(items, state.lastActiveId);
+            }
+          }
+        }
+        await refreshVmafRetestButton();
+      }
+    } catch (e) {
+      if (vmafRetestPoll) { clearInterval(vmafRetestPoll); vmafRetestPoll = null; }
+      if (runBtn) runBtn.disabled = false;
+      if (cancelBtn) cancelBtn.hidden = true;
+    }
   }
 
   async function repickVmaf() {
@@ -6542,6 +6750,36 @@
       + `<template class="ui-tip-content">${ssimulacra2TooltipHtml(r)}</template></span>`;
   }
 
+  // Butteraugli-Distanz (libjxl): niedriger = besser.
+  // < 1.0 visuell kaum unterscheidbar, < 2.0 sehr gut, < 3.5 sichtbar, >= 3.5 deutlich.
+  function butteraugliMark(v, maxVal) {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return { cls: "", text: "—", word: "" };
+    const mx = maxVal != null && Number.isFinite(Number(maxVal)) ? Number(maxVal) : x;
+    if (mx >= 3.5) {
+      return {
+        cls: mx >= 5.0 ? "bad" : "warn",
+        text: x.toFixed(2),
+        word: x < 2.0 ? "Ausreißer im Standbild" : "deutlich",
+      };
+    }
+    const cls = x < 1.0 ? "good" : (x < 2.0 ? "" : (x < 3.5 ? "warn" : "bad"));
+    const word = x < 1.0
+      ? "kaum unterscheidbar"
+      : (x < 2.0 ? "sehr gut" : (x < 3.5 ? "sichtbar" : "deutlich"));
+    return { cls, text: x.toFixed(2), word };
+  }
+
+  function butteraugliPill(r) {
+    if (r.butteraugli == null) return "";
+    const m = butteraugliMark(r.butteraugli, r.butteraugli_max);
+    const mx = r.butteraugli_max != null ? ` (max ${Number(r.butteraugli_max).toFixed(2)})` : "";
+    const p3 = r.butteraugli_3norm != null ? ` · 3-Norm ${Number(r.butteraugli_3norm).toFixed(2)}` : "";
+    const tip = `Butteraugli-Distanz (niedriger = besser, < 1,0 kaum unterscheidbar): Ø ${Number(r.butteraugli).toFixed(3)}${mx}${p3}`;
+    return `<span class="metric-pill ${m.cls}" data-tip="${escapeHtml(tip)}">`
+      + `Butteraugli ${m.text}${mx} · ${escapeHtml(tt(m.word))}</span>`;
+  }
+
   // Nur Einordnung: 5%/10% gehen NICHT in Empfehlung, Floor oder Score ein.
   // Neue Werte ausschließlich aus vollständigen Logs, nie aus der Graphkurve.
   function vmafLowContextData(sc, series, floor) {
@@ -6758,6 +6996,12 @@
             const word = m.word ? ` (${m.word})` : "";
             bits.push(`SSIMULACRA2 ${Number(sc.ssimulacra2).toFixed(1)}${word}${mn}${vals}`);
           }
+          if (sc.butteraugli != null) {
+            const bm = butteraugliMark(sc.butteraugli, sc.butteraugli_max);
+            const bmx = sc.butteraugli_max != null ? ` (max ${Number(sc.butteraugli_max).toFixed(2)})` : "";
+            const bword = bm.word ? ` (${bm.word})` : "";
+            bits.push(`Butteraugli ${Number(sc.butteraugli).toFixed(2)}${bword}${bmx}`);
+          }
           const d = Number(sc.vmaf) - r.vmaf;
           bits.push(`Δ ${d >= 0 ? "+" : ""}${d.toFixed(1)}`);
           return bits.join(" · ");
@@ -6810,9 +7054,9 @@
         + `H-Ø = harmonisches Mittel; Score = 55 % Mittel + 35 % 1%-Low + 10 % H-Ø. `
         + `${escapeHtml(rec)}">${extra.join(" · ")}</span>`;
     }
-    // Zweite Meinung: XPSNR und SSIMULACRA2 als eingefärbte Pillen,
+    // Zweite Meinung: XPSNR, SSIMULACRA2 und Butteraugli als eingefärbte Pillen,
     // PSNR/SSIM/MS-SSIM/CAMBI daneben.
-    const pill = [xpsnrPill(r), ssimulacra2Pill(r)].filter(Boolean).join(" ");
+    const pill = [xpsnrPill(r), ssimulacra2Pill(r), butteraugliPill(r)].filter(Boolean).join(" ");
     const qual = [];
     if (r.psnr != null) qual.push(`PSNR ${r.psnr.toFixed(1)} dB`);
     if (r.ssim != null) qual.push(`SSIM ${r.ssim.toFixed(3)}`);
@@ -6939,7 +7183,7 @@
       lines.push("");
       lines.push(line([
         "Einstellung", "Plattform", "Codec", "Wert", "VMAF", "1%-Low",
-        "H-Mittel", "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "Ersparnis %", "Prognose Bytes",
+        "H-Mittel", "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "Butteraugli", "Ersparnis %", "Prognose Bytes",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -6948,7 +7192,7 @@
           r.value != null ? r.value : r.quality,
           num(r.vmaf, 2), num(r.vmaf_1pct, 2), num(r.vmaf_hmean, 2),
           num(r.psnr, 2), num(r.xpsnr, 2), num(r.ssim, 4), num(r.ms_ssim, 6),
-          num(r.cambi, 2), num(r.ssimulacra2, 1), num(r.savings_percent, 1),
+          num(r.cambi, 2), num(r.ssimulacra2, 1), num(r.butteraugli, 3), num(r.savings_percent, 1),
           r.predicted_size_bytes != null ? r.predicted_size_bytes : "",
           ...settingCells(r),
         ]));
@@ -6956,7 +7200,7 @@
       lines.push("");
       lines.push(line([
         "Szene", "Start s", "Länge s", "Einstellung", "VMAF", "1%-Low", "H-Mittel",
-        "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "kbit/s",
+        "PSNR", "XPSNR", "SSIM", "MS-SSIM", "CAMBI", "SSIMULACRA2", "Butteraugli", "kbit/s",
         ...settingHead,
       ]));
       rows.forEach((r) => {
@@ -6967,7 +7211,7 @@
             r.label || ("Q" + r.quality),
             num(sc.vmaf, 2), num(sc.p1, 2), num(sc.hmean, 2),
             num(sc.psnr, 2), num(sc.xpsnr, 2), num(sc.ssim, 4), num(sc.ms_ssim, 6),
-            num(sc.cambi, 2), num(sc.ssimulacra2, 1),
+            num(sc.cambi, 2), num(sc.ssimulacra2, 1), num(sc.butteraugli, 3),
             sc.kbps ? Math.round(sc.kbps) : "",
             ...settingCells(r),
           ]));
@@ -9959,6 +10203,7 @@
       });
     }
 
+    applyHdrVmafChannel();
     // Live-Status für VMAF GPU-Beschleunigung (Main ≥ 610 vs. Legacy ≥ 525) abrufen
     fetch("/api/vmaf/gpu-status").then((r) => r.json()).then((st) => {
       if (!st) return;
@@ -10173,7 +10418,7 @@
   function bindQualityRankingControls() {
     if (qrankBound) return;
     qrankBound = true;
-    ["qrank-height", "qrank-hdr", "qrank-min-vmaf", "qrank-group-speed", "qrank-complexity", "qrank-density", "qrank-anime"].forEach((id) => {
+    ["qrank-height", "qrank-hdr", "qrank-min-vmaf", "qrank-group-speed", "qrank-group-version", "qrank-complexity", "qrank-density", "qrank-anime"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("change", () => loadQualityRanking());
     });
@@ -10187,12 +10432,13 @@
     const hdr = $("qrank-hdr") ? $("qrank-hdr").value : "all";
     const mv = $("qrank-min-vmaf") ? $("qrank-min-vmaf").value : "0";
     const gs = $("qrank-group-speed") ? ($("qrank-group-speed").checked ? "1" : "0") : "1";
+    const gv = $("qrank-group-version") ? ($("qrank-group-version").checked ? "1" : "0") : "0";
     const cx = $("qrank-complexity") ? $("qrank-complexity").value : "all";
     const density = $("qrank-density") ? $("qrank-density").value : "all";
     const anime = $("qrank-anime") ? $("qrank-anime").value : "all";
     try {
       const qs = new URLSearchParams({
-        height: h, hdr, min_vmaf: mv, group_speed: gs,
+        height: h, hdr, min_vmaf: mv, group_speed: gs, group_version: gv,
         complexity: cx, density, anime,
       });
       const r = await fetch(`/api/stats/quality-ranking?${qs.toString()}`);
@@ -10232,14 +10478,20 @@
       const detParts = [];
       if (r.ms_ssim_median != null) detParts.push(`MS ${Number(r.ms_ssim_median).toFixed(3)}`);
       if (r.s2_median != null) detParts.push(`S2 ${Number(r.s2_median).toFixed(0)}`);
+      if (r.butteraugli_median != null) detParts.push(`BA ${Number(r.butteraugli_median).toFixed(2)}`);
       const brParts = [];
       if (r.kbps_median) brParts.push(`${(r.kbps_median / 1000).toFixed(1)} Mbit/s`);
       if (r.savings_median != null) brParts.push(`${r.savings_median >= 0 ? "−" : "+"}${Math.abs(r.savings_median).toFixed(0)} %`);
       const tagsHtml = (r.tags || []).map((t) => `<span class="qrank-tag">${escapeHtml(t)}</span>`).join(" ");
+      const vers = Array.isArray(r.encoder_versions) ? r.encoder_versions : [];
+      const verMain = r.encoder_version || vers[0] || "";
+      const verMore = vers.length > 1 ? ` (+${vers.length - 1})` : "";
+      const verTip = vers.length > 1 ? ` title="${escapeHtml(vers.join(" | "))}"` : "";
+      const verHtml = verMain ? `<div class="qrank-ver muted"${verTip}>${escapeHtml(verMain + verMore)}</div>` : "";
       const scoreCls = r.score >= 78 ? "good" : (r.score >= 62 ? "" : "muted");
       return `<tr>`
         + `<td class="muted">${i + 1}</td>`
-        + `<td><strong>${escapeHtml((r.platform || "").toUpperCase())}:${escapeHtml((r.codec || "").toUpperCase())}</strong> ${tagsHtml}</td>`
+        + `<td><strong>${escapeHtml((r.platform || "").toUpperCase())}:${escapeHtml((r.codec || "").toUpperCase())}</strong> ${tagsHtml}${verHtml}</td>`
         + `<td>${escapeHtml(spLabel(r.speed))}</td>`
         + `<td class="num">${r.samples} <span class="muted">(${r.sessions})</span></td>`
         + `<td class="num">${vmafCell}</td>`
@@ -10253,7 +10505,7 @@
     box.innerHTML = `<div class="data-table-wrap"><table class="data-table qrank-table">`
       + `<thead><tr>`
       + `<th>#</th><th>Encoder</th><th>Speed</th><th class="num">Mess. (Clips)</th>`
-      + `<th class="num">VMAF (1%-Low)</th><th class="num">MS-SSIM / S2</th><th class="num">CAMBI</th>`
+      + `<th class="num">VMAF (1%-Low)</th><th class="num" title="MS-SSIM (↑) / SSIMULACRA2 (↑) / Butteraugli-Distanz (↓)">MS-SSIM / S2 / BA</th><th class="num">CAMBI</th>`
       + `<th class="num">Ø Bitrate · Ersparnis</th><th class="num">Tempo</th><th class="num" title="Kombinierter Score (0–100) aus VMAF/1%-Low, Ersparnis/Head-to-Head und Detail/Banding">Score</th>`
       + `</tr></thead><tbody>${trHtml}</tbody></table></div>`;
 
@@ -10460,7 +10712,9 @@
     if (!scanBtn) return;
     state.libScanAll = state.libScanAll || [];
     state.libScanRoot = state.libScanRoot || "";
-    scanBtn.addEventListener("click", startLibraryScan);
+    scanBtn.addEventListener("click", () => startLibraryScan({ incremental: false }));
+    const updBtn = $("btn-lib-update");
+    if (updBtn) updBtn.addEventListener("click", () => startLibraryScan({ incremental: true }));
     $("btn-lib-add").addEventListener("click", () => addLibrarySelection(false));
     const auto = $("btn-lib-add-auto");
     if (auto) auto.addEventListener("click", () => addLibrarySelection(true));
@@ -11209,17 +11463,18 @@
 
   function libSetRunning(running) {
     const scan = $("btn-lib-scan"); if (scan) scan.disabled = running;
+    const upd = $("btn-lib-update"); if (upd) upd.disabled = running;
     const cancel = $("btn-lib-cancel"); if (cancel) cancel.disabled = !running;
     const clear = $("btn-lib-clear"); if (clear) clear.disabled = running;
   }
 
-  async function startLibraryScan() {
+  async function startLibraryScan({ incremental = false } = {}) {
     libUpdateScanBadge(true);
     libSetRunning(true);
     // Nur Root scannen – Filter greifen live auf dem Ergebnis.
     await fetch("/api/library/scan", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ root: libSelectedRoot() }),
+      body: JSON.stringify({ root: libSelectedRoot(), incremental: !!incremental }),
     });
     if (libPoll) clearInterval(libPoll);
     libPoll = setInterval(pollLibrary, 1200);
@@ -11305,10 +11560,24 @@
       const viewing = libNormRoot(libSelectedRoot());
       const prog = $("lib-progress");
       if (viewing === scanRoot && prog) {
-        prog.textContent = st.running
-          ? `${st.scanned}/${st.total} geprüft · ${st.matched.length} Dateien im Scan`
-          : `${st.matched.length} Dateien gescannt` +
+        const d = st.delta || {};
+        if (st.running) {
+          prog.textContent = st.incremental
+            ? `Update: ${st.scanned}/${st.total} geprüft · +${d.added || 0} neu · ${d.updated || 0} geändert · ${d.reused || 0} unverändert`
+            : `${st.scanned}/${st.total} geprüft · ${st.matched.length} Dateien im Scan`;
+        } else if (st.incremental) {
+          const parts = [];
+          if (d.added) parts.push(`+${d.added} neu`);
+          if (d.updated) parts.push(`${d.updated} geändert`);
+          if (d.removed) parts.push(`${d.removed} entfernt`);
+          if (d.reused) parts.push(`${d.reused} unverändert`);
+          const summary = parts.length ? parts.join(" · ") : "keine Änderungen";
+          prog.textContent = `Update fertig (${summary}) · ${st.matched.length} Dateien`
+            + (st.generated_at ? ` · ${new Date(st.generated_at * 1000).toLocaleString()}` : "");
+        } else {
+          prog.textContent = `${st.matched.length} Dateien gescannt` +
             (st.generated_at ? ` · ${new Date(st.generated_at * 1000).toLocaleString()}` : "");
+        }
       }
       if (viewing === scanRoot) {
         applyLibState(st);
@@ -18630,10 +18899,10 @@
       + `<span class="vc-chip"><span class="vc-k">Lern-DB</span> ${dbChip}</span>`
       + `</div>`
       + `<details class="vc-details"${wasOpen ? " open" : ""}>`
-      + `<summary>Encoder-Durchsatz in fps (${encEntries.length}) &amp; Zusatztest-Aufschläge</summary>`
+      + `<summary>Encoder-Durchsatz in fps · 1080p &amp; 4K (${encEntries.length}) &amp; Zusatztest-Aufschläge</summary>`
       + `<div class="vc-details-body">`
       + (encRows
-        ? `<table class="vc-table"><thead><tr><th>Encoder</th><th>Schnell</th><th>Ausgew.</th><th>Langs.</th><th>4K (Ausg.)</th><th>Praxis</th></tr></thead><tbody>${encRows}</tbody></table>`
+        ? `<table class="vc-table"><thead><tr><th>Encoder</th><th>1080p Schnell</th><th>1080p Ausgew.</th><th>1080p Langs.</th><th>4K Ausgew.</th><th>Praxis</th></tr></thead><tbody>${encRows}</tbody></table>`
         : `<div class="muted">Noch keine Encoder-Daten vorhanden.</div>`)
       + `<div class="vc-overheads"><span>Zusatztests (Basiszeit-Aufschlag):</span><span>${ovItems.map(escapeHtml).join(" · ")}</span></div>`
       + `</div></details>`;

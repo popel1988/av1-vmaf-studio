@@ -40,6 +40,8 @@
                     <label class="metric-chip" data-tip="MS-SSIM (Multi-Scale SSIM) – mittlerer Mehraufwand"><input type="checkbox" id="{{ prefix }}-ms-ssim" checked /><span>MS-SSIM</span></label>
                     <label class="metric-chip" data-tip="XPSNR (Extended Perceptual PSNR, separater FFmpeg-Lauf) – mittlerer Mehraufwand"><input type="checkbox" id="{{ prefix }}-xpsnr" checked /><span>XPSNR</span></label>
                     <label class="metric-chip" data-tip="CAMBI (Netflix Banding-Index) – höherer Mehraufwand"><input type="checkbox" id="{{ prefix }}-cambi" checked /><span>CAMBI</span></label>
+                    <label class="metric-chip" data-tip="Butteraugli-Distanz auf Standbildern (libjxl) – niedriger = besser (&lt; 1,0 visuell transparent). Nutzt dieselben PNGs wie SSIMULACRA2."><input type="checkbox" id="{{ prefix }}-butteraugli" /><span>Butteraugli</span></label>
+                    <label class="metric-chip" data-tip="HDR-VMAF v1.1.8 (Netflix) nur bei HDR ohne Tone-Mapping und nur im Image latest. zscale rechnet vor der Messung nach ICtCp PQ 16-Bit. Legacy, SDR und Tone-Mapping bleiben beim normalen VMAF. Schlägt die Messung fehl, fällt sie darauf zurück."><input type="checkbox" id="{{ prefix }}-hdr-vmaf" checked /><span>HDR-VMAF</span></label>
                   </div>
                 </div>
   {% endmacro %}
@@ -1061,8 +1063,26 @@
               <p class="hint" id="vmaf-sample-note" hidden></p>
               <div id="analysis-insights" class="analysis-insights" data-no-i18n hidden></div>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-csv" type="button">CSV exportieren</button>
+              <button class="btn btn-ghost btn-sm" id="btn-vmaf-retest" type="button" hidden title="Fehlende Metriken auf den erhaltenen Testclips ohne erneutes Encodieren nachmessen">Metriken nachtesten</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-repick" type="button" disabled>Neu einordnen</button>
               <button class="btn btn-ghost btn-sm" id="btn-vmaf-nerd" type="button">Daten für Nerds</button>
+            </div>
+          </div>
+          <div id="vmaf-retest-panel" class="vmaf-retest-panel" hidden>
+            <div class="vmaf-retest-head">
+              <strong>Metriken nachträglich messen</strong>
+              <span id="vmaf-retest-meta" class="muted"></span>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-vmaf-retest-close" style="margin-left:auto">Schließen</button>
+            </div>
+            <div class="vmaf-retest-metrics" id="vmaf-retest-metrics"></div>
+            <div class="vmaf-retest-actions">
+              <label class="metric-chip" title="Auch bereits gemessene Werte überschreiben">
+                <input type="checkbox" id="vmaf-retest-force" />
+                <span>Vorhandene neu messen</span>
+              </label>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-vmaf-retest-run">Jetzt nachmessen</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-vmaf-retest-cancel" hidden>Abbrechen</button>
+              <span id="vmaf-retest-status" class="muted" style="font-size:12px"></span>
             </div>
           </div>
           <div id="vmaf-archive-note" class="archive-note" style="display:none">
@@ -1393,6 +1413,10 @@
                     <input type="checkbox" id="qrank-group-speed" checked />
                     <span>Speed trennen</span>
                   </label>
+                  <label class="metric-chip" title="Nach Encoder-/Treiber-Version getrennt auswerten">
+                    <input type="checkbox" id="qrank-group-version" />
+                    <span>Version trennen</span>
+                  </label>
                 </div>
               </div>
               <div id="qrank-body" class="qrank-body"><p class="muted">Lade Qualitätsdaten …</p></div>
@@ -1431,7 +1455,8 @@
                 </select>
               </div>
               <div class="lib-actions lib-scan-actions">
-                <button type="button" class="btn btn-primary btn-sm" id="btn-lib-scan">Scan</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-lib-update" title="Schnelles Update: nur neue, geänderte oder gelöschte Dateien abgleichen">Update-Scan</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-scan" title="Alle Dateien vollständig per ffprobe neu einlesen">Komplettscan</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-cancel" disabled title="Laufenden Scan abbrechen">Abbrechen</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-clear" title="Scan-Ergebnisse leeren">Leeren</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-lib-add-library" title="Neue Unterbibliothek">+ Hinzufügen</button>
@@ -4744,6 +4769,12 @@
               <summary>Was ist CAMBI neben VMAF?</summary>
               <div class="faq-body">
                 <p>CAMBI sucht Banding, also stufige Flächen in Verläufen. Es läuft im selben libvmaf-Durchgang wie VMAF, PSNR und SSIM. Höher heißt mehr Streifen. Die Zahl ist der Schnitt über die Stichproben und ändert die Empfehlung nicht.</p>
+              </div>
+            </details>
+            <details class="faq-item" id="faq-hdr-vmaf">
+              <summary>Was ist HDR-VMAF?</summary>
+              <div class="faq-body">
+                <p>HDR-VMAF v1.1.8 ist das Netflix-Modell für HDR10 und HLG. Es gilt nur im Image latest (VMAF v1, FFmpeg 9.0). Vor der Messung rechnet zscale nach BT.2020, PQ und ICtCp in 16 Bit um. Genutzt wird es bei HDR-Quellen ohne Tone-Mapping, solange die Option HDR-VMAF an ist. SDR, Tone-Mapping und der Legacy-Kanal (VMAF v0.6.1, FFmpeg n8.1) bleiben beim normalen VMAF-Modell. Schlägt die HDR-Messung fehl, fällt der Lauf darauf zurück. libvmaf_cuda kann dieses 16-Bit-Format nicht; dann dekodiert CUDA und libvmaf rechnet auf der CPU. Die Empfehlung bleibt auf derselben Skala 0–100.</p>
               </div>
             </details>
             <details class="faq-item" id="faq-ms-ssim">

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import time
 import unittest
 from unittest import mock
@@ -525,6 +526,561 @@ class PerfLearningAndEncodeEtaTests(unittest.TestCase):
                 history._conn.close()
             history._conn = old_conn
             config.DATA_DIR = old_dir
+
+    def test_encoder_version_grouping_and_upsert(self):
+        import tempfile
+        from pathlib import Path
+        from core import config, history
+
+        old_dir = config.DATA_DIR
+        old_prev = config.PREVIEW_DIR
+        old_conn = history._conn
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                config.DATA_DIR = Path(td)
+                config.PREVIEW_DIR = Path(td) / "previews"
+                history._conn = None
+                history.init_db()
+                a1 = {
+                    "session": "sess_ver_1",
+                    "results": [{
+                        "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+                        "encoder_version": "NVENC RTX 4070 · drv 575.57",
+                        "rate_mode": "cq", "value": 28, "vmaf": 94.5, "video_kbps": 4200,
+                        "scene_scores": [{"scene": 0, "vmaf": 94.5, "kbps": 4200}],
+                    }],
+                }
+                a2 = {
+                    "session": "sess_ver_2",
+                    "results": [{
+                        "platform": "nvidia", "codec": "av1", "encoder_speed": "balanced",
+                        "encoder_version": "NVENC RTX 5080 · drv 610.12",
+                        "rate_mode": "cq", "value": 28, "vmaf": 95.8, "video_kbps": 3900,
+                        "scene_scores": [{"scene": 0, "vmaf": 95.8, "kbps": 3900}],
+                    }],
+                }
+                history.record_vmaf_analysis_perf("sess_ver_1", a1)
+                history.record_vmaf_analysis_perf("sess_ver_2", a2)
+
+                merged = history.quality_ranking(group_by_speed=True, group_by_version=False)
+                self.assertEqual(len(merged["rankings"]), 1)
+                self.assertEqual(len(merged["rankings"][0]["encoder_versions"]), 2)
+
+                split = history.quality_ranking(group_by_speed=True, group_by_version=True)
+                self.assertEqual(len(split["rankings"]), 2)
+                vers = {r["encoder_version"] for r in split["rankings"]}
+                self.assertEqual(vers, {"NVENC RTX 4070 · drv 575.57", "NVENC RTX 5080 · drv 610.12"})
+
+                # Nachmessung via upsert_metrics ergänzt fehlende Spalten ohne Duplikat
+                a1["results"][0]["scene_scores"][0]["ssimulacra2"] = 78.4
+                a1["results"][0]["scene_scores"][0]["cambi"] = 1.8
+                history.record_vmaf_analysis_perf("sess_ver_1", a1, upsert_metrics=True)
+                ex = history.export_quality_exchange()
+                self.assertEqual(len(ex), 2)
+                r1 = next(x for x in ex if x["encoder_version"] == "NVENC RTX 4070 · drv 575.57")
+                self.assertAlmostEqual(r1["ssimulacra2"], 78.4, places=1)
+                self.assertAlmostEqual(r1["cambi"], 1.8, places=1)
+        finally:
+            if history._conn is not None and history._conn is not old_conn:
+                history._conn.close()
+            history._conn = old_conn
+            config.DATA_DIR = old_dir
+            config.PREVIEW_DIR = old_prev
+
+    def test_library_incremental_scan(self):
+        import os
+        import tempfile
+        import time
+        from pathlib import Path
+        from unittest import mock
+        from core import config, library
+        from core.ffmpeg_utils import VideoInfo
+
+        old_cache = library._CACHE_PATH
+        old_by_root = dict(library._by_root)
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                td_p = Path(td)
+                media = td_p / "media"
+                media.mkdir()
+                f_keep = media / "Keep.mkv"
+                f_edit = media / "Edit.mkv"
+                f_del = media / "Delete.mkv"
+                f_keep.write_bytes(b"a" * 1000)
+                f_edit.write_bytes(b"b" * 1000)
+                f_del.write_bytes(b"c" * 1000)
+
+                library._CACHE_PATH = td_p / "library_scan.json"
+                library._by_root.clear()
+
+                probed: list[str] = []
+
+                def fake_probe(path: Path):
+                    probed.append(path.name)
+                    return VideoInfo(
+                        path=str(path), width=1920, height=1080, fps=24.0,
+                        duration=600.0, codec="h264", pix_fmt="yuv420p",
+                        color_transfer="bt709", color_primaries="bt709",
+                        color_space="bt709", bit_rate=8_000_000,
+                        size_bytes=path.stat().st_size,
+                    ), ""
+
+                def fake_iter(_root, _exts):
+                    return sorted(p for p in media.iterdir() if p.is_file())
+
+                def fake_rel(p: Path):
+                    return p.name
+
+                with mock.patch("core.config.iter_input_files", side_effect=fake_iter), \
+                     mock.patch("core.config.rel_input", side_effect=fake_rel), \
+                     mock.patch("core.ffmpeg_utils.probe_with_error", side_effect=fake_probe), \
+                     mock.patch("core.history.is_processed", return_value=False):
+                    library._run("", {}, incremental=False)
+                    self.assertEqual(sorted(probed), ["Delete.mkv", "Edit.mkv", "Keep.mkv"])
+
+                    # 1 behalten, 1 ändern, 1 löschen, 1 neu anlegen
+                    probed.clear()
+                    f_del.unlink()
+                    f_edit.write_bytes(b"b" * 2048)
+                    os.utime(f_edit, (time.time() + 10, time.time() + 10))
+                    f_new = media / "New.mkv"
+                    f_new.write_bytes(b"d" * 1500)
+
+                    library._run("", {}, incremental=True)
+                    self.assertEqual(sorted(probed), ["Edit.mkv", "New.mkv"])
+                    snap = library.get_cached("")
+                    names = sorted(m["name"] for m in snap["matched"])
+                    self.assertEqual(names, ["Edit.mkv", "Keep.mkv", "New.mkv"])
+                    self.assertEqual(snap["delta"], {"added": 1, "updated": 1, "removed": 1, "reused": 1})
+        finally:
+            library._CACHE_PATH = old_cache
+            library._by_root.clear()
+            library._by_root.update(old_by_root)
+
+    def test_vmaf_retest_info_and_run(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from core import config, history, vmaf
+        from core.ffmpeg_utils import VideoInfo
+
+        old_prev = config.PREVIEW_DIR
+        old_sess = config.VMAF_SESSIONS_DIR
+        old_data = config.DATA_DIR
+        old_conn = history._conn
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                td_p = Path(td)
+                config.DATA_DIR = td_p
+                config.PREVIEW_DIR = td_p / "previews"
+                config.VMAF_SESSIONS_DIR = td_p / "vmaf_sessions"
+                history._conn = None
+                history.init_db()
+
+                sess = "test_retest_sess"
+                meta_dir = config.PREVIEW_DIR / sess
+                clip_dir = config.VMAF_SESSIONS_DIR / sess
+                meta_dir.mkdir(parents=True)
+                clip_dir.mkdir(parents=True)
+
+                (clip_dir / "source_s0.mkv").write_bytes(b"src")
+                (clip_dir / "test_nvidia_av1_28_s0.mkv").write_bytes(b"enc")
+                payload = {
+                    "session": sess,
+                    "title": "Demo",
+                    "created": 1700000000.0,
+                    "source_path": "",
+                    "params": {"target_vmaf": 93.0, "platform": "nvidia"},
+                    "source_info": {"width": 1920, "height": 1080, "fps": 24.0, "is_hdr": False},
+                    "analysis": {
+                        "session": sess,
+                        "clip_seconds": 10.0,
+                        "source_clips": [{"scene": 0, "file": "source_s0.mkv", "lead": 0.5}],
+                        "results": [{
+                            "value": 28, "quality": 28, "rate_mode": "cq", "label": "CQ 28",
+                            "codec": "av1", "platform": "nvidia", "encoder_speed": "balanced",
+                            "vmaf": 94.0, "video_kbps": 3800,
+                            "scene_scores": [{"scene": 0, "start": 60.0, "length": 10.0, "vmaf": 94.0, "kbps": 3800}],
+                            "screenshots": [{"scene": 0, "clip": "test_nvidia_av1_28_s0.mkv"}],
+                        }],
+                    },
+                }
+                (meta_dir / "analysis.json").write_text(json.dumps(payload), encoding="utf-8")
+
+                with mock.patch("core.vmaf._ssimulacra2_ok", return_value=True), \
+                     mock.patch("core.vmaf.xpsnr_available", return_value=True), \
+                     mock.patch("core.vmaf._measured_source_lead", return_value=0.5):
+                    info = vmaf.retest_info(sess)
+                    self.assertIsNotNone(info)
+                    self.assertTrue(info["can_retest"])
+                    self.assertEqual(info["source_mode"], "clips")
+                    self.assertTrue(info["metrics_present"]["vmaf"])
+                    self.assertIn("ssimulacra2", info["metrics_missing"])
+                    self.assertIn("cambi", info["metrics_missing"])
+
+                    fake_vi = VideoInfo(
+                        path=str(clip_dir / "source_s0.mkv"), width=1920, height=1080,
+                        fps=24.0, duration=10.5, codec="h264", pix_fmt="yuv420p",
+                        color_transfer="bt709", color_primaries="bt709",
+                        color_space="bt709", bit_rate=8_000_000, size_bytes=1024,
+                    )
+
+                    def fake_ref(src_info, tmp, *args, **kwargs):
+                        p = tmp / "reference_0.mkv"
+                        p.write_bytes(b"ref")
+                        return p
+
+                    with mock.patch("core.vmaf._butteraugli_ok", return_value=True), \
+                         mock.patch("core.ffmpeg_utils.ffprobe", return_value=fake_vi), \
+                         mock.patch("core.vmaf._extract_reference", side_effect=fake_ref), \
+                         mock.patch("core.vmaf._vmaf_metrics", return_value={"vmaf": 94.0, "cambi": 1.4, "ms_ssim": 0.9912}), \
+                         mock.patch("core.vmaf._image_metrics_clip", return_value=(
+                             {"mean": 81.5, "min": 79.0, "n": 3, "scores": [81.5]},
+                             {"mean": 0.742, "max": 0.891, "p3": 0.412, "n": 3, "scores": [0.742]},
+                         )):
+                        vmaf._run_retest(sess, {"cambi": True, "ms_ssim": True, "ssimulacra2": True, "butteraugli": True})
+
+                st = vmaf.get_retest_state()
+                self.assertFalse(st["running"])
+                self.assertEqual(st["error"], "")
+                self.assertEqual(st["updated_clips"], 1)
+                reloaded = json.loads((meta_dir / "analysis.json").read_text(encoding="utf-8"))
+                res0 = reloaded["analysis"]["results"][0]
+                self.assertAlmostEqual(res0["cambi"], 1.4, places=2)
+                self.assertAlmostEqual(res0["ms_ssim"], 0.9912, places=4)
+                self.assertAlmostEqual(res0["ssimulacra2"], 81.5, places=1)
+                self.assertAlmostEqual(res0["butteraugli"], 0.742, places=3)
+                self.assertAlmostEqual(res0["butteraugli_max"], 0.891, places=3)
+                self.assertAlmostEqual(res0["butteraugli_3norm"], 0.412, places=3)
+                ex = history.export_quality_exchange()
+                self.assertEqual(len(ex), 1)
+                self.assertAlmostEqual(ex[0]["ssimulacra2"], 81.5, places=1)
+                self.assertAlmostEqual(ex[0]["butteraugli"], 0.742, places=3)
+        finally:
+            if history._conn is not None and history._conn is not old_conn:
+                history._conn.close()
+            history._conn = old_conn
+            config.DATA_DIR = old_data
+            config.PREVIEW_DIR = old_prev
+            config.VMAF_SESSIONS_DIR = old_sess
+
+
+class ButteraugliAndDoviFastPathTests(unittest.TestCase):
+    def test_butteraugli_pair_parsing_and_shared_frame_extraction(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ref = root / "ref.mkv"
+            dist = root / "dist.mkv"
+            ref.write_bytes(b"r")
+            dist.write_bytes(b"d")
+
+            fake_proc = mock.Mock(returncode=0, stdout="0.8421000000\n3-norm: 0.412300\n", stderr="")
+            with mock.patch("subprocess.run", return_value=fake_proc):
+                parsed = vmaf_mod._butteraugli_pair(ref, dist)
+            self.assertIsNotNone(parsed)
+            self.assertAlmostEqual(parsed[0], 0.8421, places=4)
+            self.assertAlmostEqual(parsed[1], 0.4123, places=4)
+
+            png_calls = []
+
+            def fake_png(src, dest, at, fps):
+                png_calls.append((src.name, round(at, 2)))
+                dest.write_bytes(b"PNG")
+                return True
+
+            with mock.patch("core.vmaf._ssimulacra2_ok", return_value=True), \
+                 mock.patch("core.vmaf._butteraugli_ok", return_value=True), \
+                 mock.patch("core.vmaf._png_at", side_effect=fake_png), \
+                 mock.patch("core.vmaf._ssimulacra2_pair", return_value=84.2), \
+                 mock.patch("core.vmaf._butteraugli_pair", return_value=(0.65, 0.31)):
+                s2, ba = vmaf_mod._image_metrics_clip(
+                    ref, dist, root, "k", 10.0, 24.0, frames=2,
+                    want_s2=True, want_ba=True,
+                )
+            # 2 Zeitpunkte × (1x ref + 1x dist) = 4 PNG-Extraktionen trotz 2 Metriken!
+            self.assertEqual(len(png_calls), 4)
+            self.assertAlmostEqual(s2["mean"], 84.2, places=2)
+            self.assertAlmostEqual(ba["mean"], 0.65, places=3)
+            self.assertAlmostEqual(ba["p3"], 0.31, places=3)
+
+    def test_butteraugli_flag_in_settings_and_ui_template(self):
+        from core.queue_manager import build_job_settings
+        js = build_job_settings({"vmaf_butteraugli": True})
+        self.assertTrue(js.vmaf_butteraugli)
+        js_def = build_job_settings({})
+        self.assertFalse(js_def.vmaf_butteraugli)
+        html = Path("templates/index.html").read_text(encoding="utf-8")
+        self.assertIn("{{ prefix }}-butteraugli", html)
+
+    def test_dovi_mkv_fast_path_extract_and_fallback(self):
+        import tempfile
+        from core import dolby_vision as dv
+        from core.ffmpeg_utils import VideoInfo
+
+        dv._dovi_version.cache_clear()
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="dovi_tool 2.3.4\n", stderr="")):
+            self.assertTrue(dv.supports_mkv_fast_path())
+
+        dv._dovi_version.cache_clear()
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="dovi_tool 2.3.3\n", stderr="")):
+            self.assertFalse(dv.supports_mkv_fast_path())
+        dv._dovi_version.cache_clear()
+
+        dual_info = VideoInfo(
+            path="movie.mkv", width=3840, height=2160, fps=23.976, duration=120.0,
+            codec="hevc", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+            color_primaries="bt2020", color_space="bt2020nc", bit_rate=50_000_000, size_bytes=1000,
+            video_tracks=[
+                {"index": 0, "stream_index": 0, "role": "base", "dolby_vision": False},
+                {"index": 1, "stream_index": 2, "role": "enhancement", "dolby_vision": True, "dv_rpu": True},
+            ],
+        )
+        self.assertEqual(dv._mkv_rpu_track_number(dual_info), 3)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "dual.mkv"
+            rpu = Path(td) / "out.rpu.bin"
+            src.write_bytes(b"mkv")
+            seen_cmds = []
+
+            def fake_run(cmd, **kw):
+                seen_cmds.append(cmd)
+                rpu.write_bytes(b"RPU_DATA")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch("core.dolby_vision.supports_mkv_fast_path", return_value=True), \
+                 mock.patch("core.ffmpeg_utils.ffprobe", return_value=dual_info), \
+                 mock.patch("subprocess.run", side_effect=fake_run):
+                ok = dv._extract_rpu(src, "hevc", rpu, mode=2)
+            self.assertTrue(ok)
+            self.assertEqual(len(seen_cmds), 1)
+            self.assertIn("-t", seen_cmds[0])
+            self.assertEqual(seen_cmds[0][seen_cmds[0].index("-t") + 1], "3")
+            self.assertIn("-m", seen_cmds[0])
+
+    def test_dv_lab_p7_to_81_uses_mkv_fast_path_and_falls_back(self):
+        import tempfile
+        from core import dv_lab
+        from core.ffmpeg_utils import VideoInfo
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "movie.mkv"
+            src.write_bytes(b"mkv")
+            vi = VideoInfo(
+                path=str(src), width=3840, height=2160, fps=23.976, duration=120.0,
+                codec="hevc", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+                color_primaries="bt2020", color_space="bt2020nc", bit_rate=50_000_000, size_bytes=1000,
+                dolby_vision=True, dv_profile=7,
+                video_tracks=[{"index": 0, "stream_index": 0, "role": "base", "dolby_vision": True, "dv_rpu": True}],
+            )
+
+            def fake_fast(source, dest_es, *, discard_el=True):
+                dest_es.write_bytes(b"HEVC81")
+                return True, ""
+
+            def fake_mux(injected, source_path, out_path, *a, **kw):
+                out_path.write_bytes(b"OUT_MKV")
+                return True, ""
+
+            with mock.patch("core.ffmpeg_utils.ffprobe", return_value=vi), \
+                 mock.patch("core.dolby_vision.available", return_value=True), \
+                 mock.patch("core.dolby_vision.supports_mkv_fast_path", return_value=True), \
+                 mock.patch("core.dolby_vision.convert_mkv_to_81_es", side_effect=fake_fast) as m_fast, \
+                 mock.patch("core.dv_lab._demux_base_hevc") as m_demux, \
+                 mock.patch("core.dv_lab._mux_injected_hevc", side_effect=fake_mux):
+                res = dv_lab.make_profile7_tv_stream(src)
+            self.assertTrue(res["ok"])
+            self.assertTrue(res["fast_path"])
+            m_fast.assert_called_once()
+            m_demux.assert_not_called()
+
+            # Fallback wenn MKV-Fast-Path fehlschlägt
+            def fake_rpu(source, codec, rpu, mode=0, **kw):
+                rpu.write_bytes(b"RPU")
+                return True
+
+            def fake_demux(source, dest, **kw):
+                dest.write_bytes(b"\x00\x00\x00\x01\x02\x01abc")
+                return True, ""
+
+            def fake_inj(cmd, **kw):
+                out_p = Path(cmd[cmd.index("-o") + 1])
+                out_p.write_bytes(b"INJ")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch("core.ffmpeg_utils.ffprobe", return_value=vi), \
+                 mock.patch("core.dolby_vision.available", return_value=True), \
+                 mock.patch("core.dolby_vision.supports_mkv_fast_path", return_value=True), \
+                 mock.patch("core.dolby_vision.convert_mkv_to_81_es", return_value=(False, "unsupported")), \
+                 mock.patch("core.dolby_vision._extract_rpu", side_effect=fake_rpu), \
+                 mock.patch("core.dv_lab._demux_base_hevc", side_effect=fake_demux) as m_demux2, \
+                 mock.patch("subprocess.run", side_effect=fake_inj), \
+                 mock.patch("core.dv_lab._mux_injected_hevc", side_effect=fake_mux):
+                res2 = dv_lab.make_profile7_tv_stream(src)
+            self.assertTrue(res2["ok"])
+            self.assertFalse(res2["fast_path"])
+            m_demux2.assert_called_once()
+
+
+
+
+class HdrVmafAndLibvaTests(unittest.TestCase):
+    def _info(self, **kw):
+        from core.ffmpeg_utils import VideoInfo
+        base = dict(
+            path="film.mkv", width=1920, height=1080, duration=60.0,
+            codec="hevc", pix_fmt="yuv420p10le", color_transfer="smpte2084",
+            color_primaries="bt2020", color_space="bt2020nc",
+            bit_rate=8_000_000, size_bytes=60_000_000, color_range="tv",
+        )
+        base.update(kw)
+        return VideoInfo(**base)
+
+    def test_hdr_flag_defaults_on_and_template_exposes_it(self):
+        from core.queue_manager import build_job_settings
+        self.assertTrue(build_job_settings({}).vmaf_hdr)
+        self.assertFalse(build_job_settings({"vmaf_hdr": False}).vmaf_hdr)
+        html = Path("templates/index.html").read_text(encoding="utf-8")
+        self.assertIn('id="{{ prefix }}-hdr-vmaf" checked', html)
+        self.assertIn('id="faq-hdr-vmaf"', html)
+
+    def test_model_selection_respects_channel_tonemap_and_zscale(self):
+        from core import config
+        info = self._info()
+        info4k = self._info(width=3840, height=2160)
+        sdr = self._info(color_transfer="bt709")
+        with mock.patch.object(config, "IMAGE_CHANNEL", "latest"), \
+             mock.patch.object(config, "VMAF_MODEL_HDR_1080P", "hdr_vmaf_v1.1.8_3d0h.json"), \
+             mock.patch.object(config, "VMAF_MODEL_HDR_4K", "hdr_vmaf_v1.1.8_1d5h_2160.json"), \
+             mock.patch.object(vmaf_mod, "_ffmpeg_has_zscale", return_value=True), \
+             mock.patch.object(Path, "is_file", return_value=True), \
+             mock.patch.object(Path, "exists", return_value=True):
+            name, _path = vmaf_mod._model_for(info, True, tonemap=False, hdr_vmaf=True)
+            self.assertEqual(name, "hdr_vmaf_v1.1.8_3d0h.json")
+            name4, _path4 = vmaf_mod._model_for(info4k, True, tonemap=False, hdr_vmaf=True)
+            self.assertEqual(name4, "hdr_vmaf_v1.1.8_1d5h_2160.json")
+            mapped, _ = vmaf_mod._model_for(info, True, tonemap=True, hdr_vmaf=True)
+            self.assertEqual(mapped, config.VMAF_MODEL_1080P_NEG)
+            off, _ = vmaf_mod._model_for(info, True, tonemap=False, hdr_vmaf=False)
+            self.assertEqual(off, config.VMAF_MODEL_1080P_NEG)
+            sdr_name, _ = vmaf_mod._model_for(sdr, True, tonemap=False, hdr_vmaf=True)
+            self.assertEqual(sdr_name, config.VMAF_MODEL_1080P_NEG)
+        with mock.patch.object(config, "IMAGE_CHANNEL", "legacy"), \
+             mock.patch.object(vmaf_mod, "_ffmpeg_has_zscale", return_value=True), \
+             mock.patch.object(Path, "is_file", return_value=True), \
+             mock.patch.object(Path, "exists", return_value=True):
+            legacy_name, _ = vmaf_mod._model_for(info, True, tonemap=False, hdr_vmaf=True)
+            self.assertFalse(str(legacy_name).lower().startswith("hdr_vmaf"))
+        with mock.patch.object(config, "IMAGE_CHANNEL", "latest"), \
+             mock.patch.object(config, "VMAF_MODEL_HDR_1080P", "hdr_vmaf_v1.1.8_3d0h.json"), \
+             mock.patch.object(vmaf_mod, "_ffmpeg_has_zscale", return_value=False), \
+             mock.patch.object(Path, "is_file", return_value=True), \
+             mock.patch.object(Path, "exists", return_value=True):
+            no_z, _ = vmaf_mod._model_for(info, True)
+            self.assertEqual(no_z, config.VMAF_MODEL_1080P_NEG)
+
+    def test_prepare_model_strips_conversion_target_only_on_the_copy(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "hdr_vmaf_v1.1.8_3d0h.json"
+            src.write_text(json.dumps({
+                "model_dict": {"conversion_target": {"fmt": "yuv420p16le"}, "feature": "x"},
+            }), encoding="utf-8")
+            out, target = vmaf_mod._prepare_hdr_model_file(src, Path(td) / "work")
+            self.assertEqual(target["fmt"], "yuv420p16le")
+            stripped = json.loads(out.read_text(encoding="utf-8"))
+            self.assertNotIn("conversion_target", stripped["model_dict"])
+            original = json.loads(src.read_text(encoding="utf-8"))
+            self.assertIn("conversion_target", original["model_dict"])
+
+    def test_zscale_filter_uses_source_transfer_and_ictcp_pq(self):
+        pq = vmaf_mod._hdr_zscale_filter(self._info())
+        self.assertIn("tin=smpte2084", pq)
+        self.assertIn("m=ictcp", pq)
+        self.assertTrue(pq.endswith("format=yuv420p16le"))
+        hlg = vmaf_mod._hdr_zscale_filter(self._info(color_transfer="arib-std-b67"))
+        self.assertIn("tin=arib-std-b67", hlg)
+        self.assertIn("t=smpte2084", hlg)
+
+    def test_status_legacy_disables_hdr_vmaf(self):
+        from core import config
+        with mock.patch.object(config, "IMAGE_CHANNEL", "legacy"):
+            st = vmaf_mod.hdr_vmaf_status()
+        self.assertFalse(st["available"])
+        self.assertEqual(st["channel"], "legacy")
+        self.assertIn("Legacy", st["reason"])
+
+    def test_libva_diag_reports_api_and_package_version(self):
+        from core import diagnostics as diag
+        fake = mock.Mock(
+            returncode=0,
+            stdout="VA-API version: 1.24\nDriver version: Intel iHD driver 25.1\n",
+            stderr="",
+        )
+        with mock.patch.dict("os.environ", {"LIBVA_VERSION": "2.24.1"}, clear=False), \
+             mock.patch("core.diagnostics.shutil.which", return_value="vainfo"), \
+             mock.patch("core.diagnostics.subprocess.run", return_value=fake), \
+             mock.patch("pathlib.Path.exists", return_value=True):
+            stat, detail = diag._libva_diag()
+        self.assertEqual(stat, "ok")
+        self.assertIn("VA-API 1.24", detail)
+        self.assertIn("libva 2.24.1", detail)
+        self.assertIn("Intel iHD", detail)
+
+    def test_hdr_run_converts_with_zscale_and_skips_libvmaf_cuda(self):
+        import tempfile
+        from core import config
+        info = self._info()
+        captured = {}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            model = root / "hdr_vmaf_v1.1.8_3d0h.json"
+            model.write_text(json.dumps({
+                "model_dict": {"conversion_target": {"color_space": "ictcp"}},
+            }), encoding="utf-8")
+            work = root / "job"
+            work.mkdir()
+
+            def fake_logged(cmd, label):
+                captured["cmd"] = list(cmd)
+                captured["label"] = label
+                (work / "vmaf_k.json").write_text(json.dumps({
+                    "pooled_metrics": {"vmaf": {"mean": 96.0}},
+                    "frames": [{"metrics": {"vmaf": 96.0}}],
+                }), encoding="utf-8")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(config, "IMAGE_CHANNEL", "latest"), \
+                 mock.patch.object(config, "VMAF_MODEL_DIR", root), \
+                 mock.patch.object(config, "VMAF_MODEL_HDR_1080P", model.name), \
+                 mock.patch.object(vmaf_mod, "_ffmpeg_has_zscale", return_value=True), \
+                 mock.patch.object(vmaf_mod, "vmaf_gpu_status", return_value={"available": True, "mode": "libvmaf_cuda"}), \
+                 mock.patch.object(vmaf_mod.ff, "_probe_duration", return_value=2.0), \
+                 mock.patch.object(vmaf_mod, "_run_logged", side_effect=fake_logged):
+                data = vmaf_mod._run_libvmaf(
+                    root / "dist.mkv", root / "ref.mkv", info, work, "k",
+                    True, None, features="", clip_len=2.0, with_xpsnr=False,
+                    gpu_accel=True, tonemap=False, hdr_vmaf=True,
+                )
+            self.assertIsNotNone(data)
+            cmd = captured["cmd"]
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            self.assertIn("zscale=", fc)
+            self.assertIn("m=ictcp", fc)
+            self.assertIn("format=yuv420p16le", fc)
+            self.assertIn("libvmaf=", fc)
+            self.assertNotIn("libvmaf_cuda", fc)
+            self.assertIn("-hwaccel", cmd)
+            self.assertIn("hdr-vmaf", captured["label"])
+            self.assertEqual(data["model_name"], model.name)
+            copies = list(work.glob("_ff_*.json"))
+            self.assertTrue(copies)
+            self.assertNotIn(
+                "conversion_target",
+                json.loads(copies[0].read_text(encoding="utf-8"))["model_dict"],
+            )
 
 
 if __name__ == "__main__":

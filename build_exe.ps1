@@ -49,23 +49,25 @@ if (-not $SkipToolDownloads -and -not (Test-Path (Join-Path $BinDir "ffmpeg.exe"
     }
 }
 
-# 1b) VMAF-Modelle (v0.6.1 + NEG + 4K + v1.0.16) nach .\bin\model\
+# 1b) VMAF-Modelle (v0.6.1 + NEG + 4K + v1.0.16 + HDR-VMAF v1.1.8) nach .\bin\model\
 $VmafModels = @(
-    "vmaf_v0.6.1.json",
-    "vmaf_v0.6.1neg.json",
-    "vmaf_4k_v0.6.1.json",
-    "vmaf_4k_v0.6.1neg.json",
-    "vmaf_v1.0.16_3d0h.json",
-    "vmaf_v1.0.16_1d5h_2160.json"
+    @{ Rel = "vmaf_v0.6.1.json"; Name = "vmaf_v0.6.1.json" },
+    @{ Rel = "vmaf_v0.6.1neg.json"; Name = "vmaf_v0.6.1neg.json" },
+    @{ Rel = "vmaf_4k_v0.6.1.json"; Name = "vmaf_4k_v0.6.1.json" },
+    @{ Rel = "vmaf_4k_v0.6.1neg.json"; Name = "vmaf_4k_v0.6.1neg.json" },
+    @{ Rel = "vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json"; Name = "vmaf_v1.0.16_3d0h.json" },
+    @{ Rel = "vmaf_v1.0.16/vmaf_v1.0.16_1d5h_2160.json"; Name = "vmaf_v1.0.16_1d5h_2160.json" },
+    @{ Rel = "hdr_vmaf_v1.1.8/hdr_vmaf_v1.1.8_3d0h.json"; Name = "hdr_vmaf_v1.1.8_3d0h.json" },
+    @{ Rel = "hdr_vmaf_v1.1.8/hdr_vmaf_v1.1.8_1d5h_2160.json"; Name = "hdr_vmaf_v1.1.8_1d5h_2160.json" }
 )
 foreach ($m in $VmafModels) {
-    $TargetModel = Join-Path $ModelDir $m
+    $TargetModel = Join-Path $ModelDir $m.Name
     if (-not $SkipToolDownloads -and -not (Test-Path $TargetModel)) {
-        Write-Host "Lade VMAF-Modell $m ..."
+        Write-Host "Lade VMAF-Modell $($m.Name) ..."
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Netflix/vmaf/master/model/$m" -OutFile $TargetModel
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Netflix/vmaf/master/model/$($m.Rel)" -OutFile $TargetModel
         } catch {
-            Write-Warning "Modell $m nicht gefunden (optional): $_"
+            Write-Warning "Modell $($m.Name) nicht gefunden (optional): $_"
         }
     }
 }

@@ -327,6 +327,8 @@ class JobSettings:
     vmaf_ms_ssim: bool = True      # MS-SSIM (float_ms_ssim) im VMAF-Lauf mitberechnen
     vmaf_xpsnr: bool = True        # XPSNR-Filter im VMAF-Lauf mitberechnen
     vmaf_cambi: bool = True        # CAMBI (Banding-Index) im VMAF-Lauf mitberechnen
+    vmaf_butteraugli: bool = False # Butteraugli-Distanz auf Standbildern (libjxl butteraugli_main)
+    vmaf_hdr: bool = True          # HDR-VMAF v1.1.8 bei HDR ohne Tonemap (nur latest-Linie)
     clip_seconds: int = 30
     samples: int = 1               # VMAF-Stichproben-Clips (1 = nur Mitte)
     ssimulacra2_frames: int = 3    # Standbilder je Stichprobe für SSIMULACRA2
@@ -1463,6 +1465,8 @@ class QueueManager:
                 with_ms_ssim=bool(getattr(s, "vmaf_ms_ssim", True)),
                 with_xpsnr=bool(getattr(s, "vmaf_xpsnr", True)),
                 with_cambi=bool(getattr(s, "vmaf_cambi", True)),
+                with_butteraugli=bool(getattr(s, "vmaf_butteraugli", False)),
+                hdr_vmaf=bool(getattr(s, "vmaf_hdr", True)),
             )
             try:
                 analysis = vmaf_mod.analyze(
@@ -3372,6 +3376,8 @@ def build_job_settings(d: dict) -> JobSettings:
         vmaf_ms_ssim=bool(d.get("vmaf_ms_ssim", True) if d.get("vmaf_ms_ssim") is not None else True),
         vmaf_xpsnr=bool(d.get("vmaf_xpsnr", True) if d.get("vmaf_xpsnr") is not None else True),
         vmaf_cambi=bool(d.get("vmaf_cambi", True) if d.get("vmaf_cambi") is not None else True),
+        vmaf_butteraugli=bool(d.get("vmaf_butteraugli", False) if d.get("vmaf_butteraugli") is not None else False),
+        vmaf_hdr=bool(d.get("vmaf_hdr", True) if d.get("vmaf_hdr") is not None else True),
         clip_seconds=max(5, min(120, int(d.get("clip_seconds", 30) or 30))),
         samples=max(1, min(5, int(d.get("samples", 1) or 1))),
         ssimulacra2_frames=max(0, min(7, int(d.get("ssimulacra2_frames") if d.get("ssimulacra2_frames") is not None else 3))),

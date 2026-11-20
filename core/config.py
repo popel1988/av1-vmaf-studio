@@ -84,8 +84,9 @@ DOVI_TOOL = _resolve_binary("dovi_tool")
 # hdr10plus_tool: HDR10+-Szenenmetadaten nach einem HEVC-Encode zurückschreiben.
 HDR10PLUS_TOOL = _resolve_binary("hdr10plus_tool")
 
-# SSIMULACRA2: Wahrnehmungsvergleich eines Standbilds, Quelle gegen Encode.
+# SSIMULACRA2 & Butteraugli: Wahrnehmungsvergleich von Standbildern (libjxl devtools).
 SSIMULACRA2 = _resolve_binary("ssimulacra2")
+BUTTERAUGLI = _resolve_named("BUTTERAUGLI_BIN", "butteraugli_main")
 
 # mkvmerge / mediainfo: optionale Werkzeuge für DV-Hybrid-Remux & DV-Analyzer.
 MKVMERGE = _resolve_binary("mkvmerge")
@@ -426,7 +427,7 @@ RETAIN_VMAF_SESSIONS = _env_bool("RETAIN_VMAF_SESSIONS", True)
 # VMAF-Modelle (im Docker-Image unter /usr/local/share/model/, bei EXE unter ./bin/model/).
 # Das Image setzt die Dateinamen per ENV. Ohne ENV gelten die v0.6.1-Namen,
 # damit ein lokaler Lauf ohne die v1-Dateien nicht ins Leere zeigt.
-# IMAGE_CHANNEL=legacy schaltet hierarchische AV1-B-Frames ab.
+# IMAGE_CHANNEL=legacy schaltet hierarchische AV1-B-Frames und HDR-VMAF v1 ab.
 IMAGE_CHANNEL = os.getenv("IMAGE_CHANNEL", "latest")
 VMAF_MODEL_DIR = _default_vmaf_model_dir()
 VMAF_MODEL_1080P = os.getenv("VMAF_MODEL_1080P", "vmaf_v0.6.1.json")
@@ -435,6 +436,12 @@ VMAF_MODEL_4K = os.getenv("VMAF_MODEL_4K", "vmaf_4k_v0.6.1.json")
 # ab und urteilen bei Animation/Anime oft realistischer.
 VMAF_MODEL_1080P_NEG = os.getenv("VMAF_MODEL_1080P_NEG", "vmaf_v0.6.1neg.json")
 VMAF_MODEL_4K_NEG = os.getenv("VMAF_MODEL_4K_NEG", "vmaf_4k_v0.6.1neg.json")
+# HDR-VMAF (v1.1.8, ICtCp PQ 16-Bit via zscale) – nur für die aktuelle VMAF-v1-Linie
+# (latest / FFmpeg 9.0+). Im legacy-Kanal bewusst leer (deaktiviert).
+_default_hdr_1080p = "" if IMAGE_CHANNEL.strip().lower() == "legacy" else "hdr_vmaf_v1.1.8_3d0h.json"
+_default_hdr_4k = "" if IMAGE_CHANNEL.strip().lower() == "legacy" else "hdr_vmaf_v1.1.8_1d5h_2160.json"
+VMAF_MODEL_HDR_1080P = os.getenv("VMAF_MODEL_HDR_1080P", _default_hdr_1080p).strip()
+VMAF_MODEL_HDR_4K = os.getenv("VMAF_MODEL_HDR_4K", _default_hdr_4k).strip()
 
 # --- VMAF-Parameter (Defaults; UI kann clip_seconds pro Job überschreiben) ----
 VMAF_CLIP_SECONDS = int(os.getenv("VMAF_CLIP_SECONDS", "30"))
@@ -491,8 +498,9 @@ LOG_FFMPEG_CMD = _env_bool("LOG_FFMPEG_CMD", True)
 VAAPI_DEVICE = os.getenv("VAAPI_DEVICE", "/dev/dri/renderD128")
 
 # Intel-Encoder-Backend: "vaapi" (Standard) oder "qsv".
-# Das Basis-Image (Ubuntu 24.04) bringt libva 2.20 (VA-API 1.21) + oneVPL mit,
-# daher funktionieren beide Backends auf derselben Intel-Hardware. VAAPI ist als
+# Im Docker-Image wird libva 2.24.1 (VA-API 1.24) aus dem Quelltext gebaut +
+# oneVPL mitgeliefert, daher funktionieren beide Backends auf derselben Intel-
+# Hardware (inkl. vaMapBuffer2 für moderne BtbN-FFmpeg-Builds). VAAPI ist als
 # robuster Standard gesetzt; QSV/oneVPL bietet zusätzliche Feinheiten (Look-ahead
 # etc.) – bei Bedarf einfach auf "qsv" umstellen.
 INTEL_ENCODER = os.getenv("INTEL_ENCODER", "qsv" if os.name == "nt" else "vaapi").strip().lower()

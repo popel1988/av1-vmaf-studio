@@ -189,6 +189,7 @@ def _ensure_quality_table(conn: sqlite3.Connection) -> None:
             xpsnr         REAL,
             cambi         REAL,
             ssimulacra2   REAL,
+            butteraugli   REAL,
             video_kbps    INTEGER NOT NULL DEFAULT 0,
             savings_pct   REAL,
             speed_x       REAL,
@@ -205,6 +206,10 @@ def _ensure_quality_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE quality_samples ADD COLUMN source_density TEXT NOT NULL DEFAULT ''")
     if "source_alias" not in cols:
         conn.execute("ALTER TABLE quality_samples ADD COLUMN source_alias TEXT NOT NULL DEFAULT ''")
+    if "encoder_version" not in cols:
+        conn.execute("ALTER TABLE quality_samples ADD COLUMN encoder_version TEXT NOT NULL DEFAULT ''")
+    if "butteraugli" not in cols:
+        conn.execute("ALTER TABLE quality_samples ADD COLUMN butteraugli REAL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_qual_pc ON quality_samples(platform, codec, speed)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_qual_sess ON quality_samples(session_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_qual_cx ON quality_samples(complexity, source_density)")
@@ -247,10 +252,11 @@ def _device_secret() -> bytes:
         return b"vcompress-local-alias"
 
 
-def _bind_alias_locked(conn: sqlite3.Connection, path: str = "", title: str = "") -> str:
+def _bind_alias_locked(conn: sqlite3.Connection, path: str = "", title: str = "", fallback_key: str = "") -> str:
     """Stabile Kennung für dieselbe Quelle auf diesem Gerät. Der Alias ist Zufall, kein Hash des Titels."""
     norm_path = str(path or "").strip()
     norm_title = str(title or "").strip()
+    norm_fb = str(fallback_key or "").strip()
     row = None
     if norm_path:
         row = conn.execute(
@@ -267,6 +273,11 @@ def _bind_alias_locked(conn: sqlite3.Connection, path: str = "", title: str = ""
                 "UPDATE source_aliases SET local_key=?, path=?, title=CASE WHEN title='' THEN ? ELSE title END WHERE alias=?",
                 (f"path:{norm_path}", norm_path, norm_title, row["alias"]),
             )
+    if row is None and norm_fb:
+        row = conn.execute(
+            "SELECT alias, title FROM source_aliases WHERE local_key=?",
+            (norm_fb,),
+        ).fetchone()
     if row is not None:
         if norm_title and not str(row["title"] or ""):
             conn.execute("UPDATE source_aliases SET title=? WHERE alias=?", (norm_title, row["alias"]))
@@ -276,6 +287,8 @@ def _bind_alias_locked(conn: sqlite3.Connection, path: str = "", title: str = ""
         local_key, stored_title, stored_path = f"path:{norm_path}", norm_title, norm_path
     elif norm_title:
         local_key, stored_title, stored_path = f"title:{norm_title.casefold()}", norm_title, ""
+    elif norm_fb:
+        local_key, stored_title, stored_path = norm_fb, "", ""
     else:
         local_key, stored_title, stored_path = f"anon:{alias}", "", ""
     conn.execute(
@@ -290,7 +303,7 @@ def _opaque_session_locked(conn: sqlite3.Connection, session_name: str, path: st
     name = str(session_name or "").strip()
     named = _NAMED_SESSION.fullmatch(name)
     display = str(title or "").strip() or (named.group("stem").replace("_", " ") if named else "")
-    alias = _bind_alias_locked(conn, path, display)
+    alias = _bind_alias_locked(conn, path, display, fallback_key=f"session:{name}" if name else "")
     if name.startswith("job:"):
         return name, alias
     if _OPAQUE_SESSION.fullmatch(name):
@@ -330,9 +343,9 @@ def export_quality_exchange() -> list[dict]:
             rows = _conn.execute(
                 """
                 SELECT ts, session_id, source_alias, source_kind, platform, codec, speed,
-                       rate_mode, quality_val, two_pass, height_bucket, is_hdr, anime,
+                       encoder_version, rate_mode, quality_val, two_pass, height_bucket, is_hdr, anime,
                        vmaf, vmaf_1pct, vmaf_hmean, vmaf_score, psnr, ssim, ms_ssim,
-                       xpsnr, cambi, ssimulacra2, video_kbps, savings_pct, speed_x,
+                       xpsnr, cambi, ssimulacra2, butteraugli, video_kbps, savings_pct, speed_x,
                        encode_fps, recommended, complexity, source_density
                 FROM quality_samples ORDER BY ts DESC
                 """
@@ -431,6 +444,7 @@ def _insert_quality_sample(
     xpsnr: Optional[float] = None,
     cambi: Optional[float] = None,
     ssimulacra2: Optional[float] = None,
+    butteraugli: Optional[float] = None,
     video_kbps: int = 0,
     savings_pct: Optional[float] = None,
     speed_x: Optional[float] = None,
@@ -439,7 +453,9 @@ def _insert_quality_sample(
     complexity: str = "",
     source_density: str = "",
     source_alias: str = "",
+    encoder_version: str = "",
     sample_key: Optional[str] = None,
+    upsert_metrics: bool = False,
 ) -> None:
     plat = str(platform or "").lower().strip()
     cod = str(codec or "").lower().strip()
@@ -447,25 +463,52 @@ def _insert_quality_sample(
         return
     if vmaf is None or vmaf <= 0:
         return
-    conn.execute(
+    sql_head = (
         """
-        INSERT OR IGNORE INTO quality_samples
+        INSERT INTO quality_samples
         (ts, session_id, source_kind, platform, codec, speed, rate_mode, quality_val,
          two_pass, height_bucket, is_hdr, anime, vmaf, vmaf_1pct, vmaf_hmean, vmaf_score,
-         psnr, ssim, ms_ssim, xpsnr, cambi, ssimulacra2, video_kbps, savings_pct,
-         speed_x, encode_fps, recommended, complexity, source_density, source_alias, sample_key)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
+         psnr, ssim, ms_ssim, xpsnr, cambi, ssimulacra2, butteraugli, video_kbps, savings_pct,
+         speed_x, encode_fps, recommended, complexity, source_density, source_alias,
+         encoder_version, sample_key)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """
+        + (
+            """
+            ON CONFLICT(sample_key) DO UPDATE SET
+                vmaf        = COALESCE(excluded.vmaf, quality_samples.vmaf),
+                vmaf_1pct   = COALESCE(excluded.vmaf_1pct, quality_samples.vmaf_1pct),
+                vmaf_hmean  = COALESCE(excluded.vmaf_hmean, quality_samples.vmaf_hmean),
+                vmaf_score  = COALESCE(excluded.vmaf_score, quality_samples.vmaf_score),
+                psnr        = COALESCE(excluded.psnr, quality_samples.psnr),
+                ssim        = COALESCE(excluded.ssim, quality_samples.ssim),
+                ms_ssim     = COALESCE(excluded.ms_ssim, quality_samples.ms_ssim),
+                xpsnr       = COALESCE(excluded.xpsnr, quality_samples.xpsnr),
+                cambi       = COALESCE(excluded.cambi, quality_samples.cambi),
+                ssimulacra2 = COALESCE(excluded.ssimulacra2, quality_samples.ssimulacra2),
+                butteraugli = COALESCE(excluded.butteraugli, quality_samples.butteraugli),
+                encoder_version = CASE
+                    WHEN excluded.encoder_version != '' THEN excluded.encoder_version
+                    ELSE quality_samples.encoder_version
+                END
+            """
+            if (upsert_metrics and sample_key)
+            else " ON CONFLICT(sample_key) DO NOTHING"
+        )
+    )
+    conn.execute(
+        sql_head,
         (
             float(ts or time.time()), str(session_id or ""), str(source_kind or "vmaf_session"),
             plat, cod, str(speed or "balanced"), str(rate_mode or "cq"), int(quality_val or 0),
             1 if two_pass else 0, int(height_b or 1080), 1 if is_hdr else 0, 1 if anime else 0,
             _opt_float(vmaf), _opt_float(vmaf_1pct), _opt_float(vmaf_hmean), _opt_float(vmaf_score),
             _opt_float(psnr), _opt_float(ssim), _opt_float(ms_ssim), _opt_float(xpsnr),
-            _opt_float(cambi), _opt_float(ssimulacra2), max(0, int(video_kbps or 0)),
+            _opt_float(cambi), _opt_float(ssimulacra2), _opt_float(butteraugli), max(0, int(video_kbps or 0)),
             _opt_float(savings_pct), _opt_float(speed_x), _opt_float(encode_fps),
             1 if recommended else 0,
             str(complexity or ""), str(source_density or ""), str(source_alias or ""),
+            str(encoder_version or "")[:80],
             sample_key,
         ),
     )
@@ -650,6 +693,19 @@ def _clip_totals_from_analysis(vmaf_data: dict, s: dict) -> tuple[int, float]:
     return samples_n, samples_n * clip_sec
 
 
+def _detect_enc_version(platform: str, codec: str, explicit: str = "", *, live: bool = True) -> str:
+    ev = str(explicit or "").strip()
+    if ev:
+        return ev[:80]
+    if not live:
+        return ""
+    try:
+        from . import ffmpeg_utils as ff
+        return str(ff.encoder_version_label(platform, codec) or "")[:80]
+    except Exception:
+        return ""
+
+
 def _record_vmaf_results_locked(
     conn: sqlite3.Connection,
     *,
@@ -664,6 +720,8 @@ def _record_vmaf_results_locked(
     session_id: str = "",
     source_bit_rate: float = 0.0,
     source_alias: str = "",
+    live: bool = True,
+    upsert_metrics: bool = False,
 ) -> None:
     results = (vmaf_data.get("results") or []) if isinstance(vmaf_data, dict) else []
     if not results:
@@ -687,6 +745,7 @@ def _record_vmaf_results_locked(
         r_sp = _norm_speed_alias(r_plat, r_codec, r.get("encoder_speed") or s.get("encoder_speed") or "balanced")
         r_rm = str(r.get("rate_mode") or s.get("rate_mode") or "cq")
         r_tp = bool(r.get("two_pass")) and r_rm in ("abr", "bitrate")
+        r_ver = _detect_enc_version(r_plat, r_codec, r.get("encoder_version") or s.get("encoder_version") or "", live=live)
         tm = r.get("timing") if isinstance(r.get("timing"), dict) else {}
         r_enc = float(tm.get("encode_sec") or 0.0)
         r_vmaf = float(tm.get("vmaf_sec") or 0.0)
@@ -732,6 +791,7 @@ def _record_vmaf_results_locked(
                     xpsnr=_opt_float(sc.get("xpsnr")),
                     cambi=_opt_float(sc.get("cambi")),
                     ssimulacra2=_opt_float(sc.get("ssimulacra2")),
+                    butteraugli=_opt_float(sc.get("butteraugli")),
                     video_kbps=int(sc.get("kbps") or 0),
                     savings_pct=_opt_float(r.get("savings_percent")),
                     speed_x=speed_x,
@@ -740,7 +800,9 @@ def _record_vmaf_results_locked(
                     complexity=cx,
                     source_density=density,
                     source_alias=source_alias,
+                    encoder_version=r_ver,
                     sample_key=f"{key_prefix}:q{idx}:s{si}" if key_prefix else None,
+                    upsert_metrics=upsert_metrics,
                 )
         else:
             vm = _opt_float(r.get("vmaf"))
@@ -769,6 +831,7 @@ def _record_vmaf_results_locked(
                     xpsnr=_opt_float(r.get("xpsnr")),
                     cambi=_opt_float(r.get("cambi")),
                     ssimulacra2=_opt_float(r.get("ssimulacra2")),
+                    butteraugli=_opt_float(r.get("butteraugli")),
                     video_kbps=int(r.get("video_kbps") or 0),
                     savings_pct=_opt_float(r.get("savings_percent")),
                     speed_x=speed_x,
@@ -776,7 +839,9 @@ def _record_vmaf_results_locked(
                     recommended=bool(r.get("recommended")),
                     source_density=density,
                     source_alias=source_alias,
+                    encoder_version=r_ver,
                     sample_key=f"{key_prefix}:q{idx}" if key_prefix else None,
+                    upsert_metrics=upsert_metrics,
                 )
 
         if not tm:
@@ -870,6 +935,7 @@ def _record_item_perf_locked(conn: sqlite3.Connection, item, now: float) -> None
                     source_alias=_bind_alias_locked(
                         conn, str(getattr(item, "path", "") or ""), str(getattr(item, "title", "") or ""),
                     ),
+                    encoder_version=_detect_enc_version(plat, codec, s.get("encoder_version") or "", live=True),
                     sample_key=f"job:{job_id}:qenc" if job_id else None,
                 )
 
@@ -898,6 +964,7 @@ def record_vmaf_analysis_perf(
     ts: Optional[float] = None,
     source_path: str = "",
     source_title: str = "",
+    upsert_metrics: bool = False,
 ) -> None:
     """Speichert Performance- & Qualitäts-Samples direkt beim Abschluss einer VMAF-Analyse."""
     if _conn is None:
@@ -918,6 +985,8 @@ def record_vmaf_analysis_perf(
                 is_hdr=bool(src.get("is_hdr")), session_id=public,
                 source_bit_rate=float(src.get("bit_rate") or 0),
                 source_alias=alias,
+                live=not upsert_metrics,
+                upsert_metrics=upsert_metrics,
             )
             _conn.commit()
     except sqlite3.Error as exc:
@@ -958,6 +1027,7 @@ def _backfill_vmaf_sessions(conn: sqlite3.Connection) -> None:
             is_hdr=bool(src.get("is_hdr")), session_id=public,
             source_bit_rate=float(src.get("bit_rate") or 0),
             source_alias=alias,
+            live=False,
         )
 
 
@@ -1142,6 +1212,7 @@ def quality_ranking(
     hdr_filter: str = "all",
     min_vmaf: float = 0.0,
     group_by_speed: bool = True,
+    group_by_version: bool = False,
     complexity_filter: str = "all",
     density_filter: str = "all",
     anime_filter: str = "all",
@@ -1273,19 +1344,28 @@ def quality_ranking(
             "speed_ratio": round(sr_med, 2) if sr_med is not None else None,
         })
 
-    # 2) Gruppierte Rangliste pro (platform, codec[, speed])
+    # 2) Gruppierte Rangliste pro (platform, codec[, speed][, encoder_version])
     groups: dict[tuple, list[dict]] = {}
     for r in items:
-        key = (r["platform"], r["codec"], r["speed"] if group_by_speed else "alle")
+        ver_key = (str(r.get("encoder_version") or "").strip() or "—") if group_by_version else ""
+        key = (r["platform"], r["codec"], r["speed"] if group_by_speed else "alle", ver_key)
         groups.setdefault(key, []).append(r)
 
     rankings = []
-    for (plat, cod, sp), rows_g in groups.items():
+    for (plat, cod, sp, ver_key), rows_g in groups.items():
         sess_set = {str(x.get("session_id") or x.get("id")) for x in rows_g}
+        ver_counts: dict[str, int] = {}
+        for x in rows_g:
+            v_str = str(x.get("encoder_version") or "").strip()
+            if v_str:
+                ver_counts[v_str] = ver_counts.get(v_str, 0) + 1
+        versions_sorted = [v for v, _ in sorted(ver_counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        primary_ver = (ver_key if (group_by_version and ver_key != "—") else (versions_sorted[0] if versions_sorted else ""))
         vm = _med_opt([float(x["vmaf"]) for x in rows_g if x.get("vmaf")])
         p1 = _med_opt([float(x["vmaf_1pct"]) for x in rows_g if x.get("vmaf_1pct") is not None])
         ms = _med_opt([float(x["ms_ssim"]) for x in rows_g if x.get("ms_ssim") is not None])
         s2 = _med_opt([float(x["ssimulacra2"]) for x in rows_g if x.get("ssimulacra2") is not None])
+        ba = _med_opt([float(x["butteraugli"]) for x in rows_g if x.get("butteraugli") is not None])
         cb = _med_opt([float(x["cambi"]) for x in rows_g if x.get("cambi") is not None])
         kb = _med_opt([float(x["video_kbps"]) for x in rows_g if int(x.get("video_kbps") or 0) > 0])
         sv = _med_opt([float(x["savings_pct"]) for x in rows_g if x.get("savings_pct") is not None])
@@ -1323,12 +1403,15 @@ def quality_ranking(
             "platform": plat,
             "codec": cod,
             "speed": sp,
+            "encoder_version": primary_ver,
+            "encoder_versions": versions_sorted,
             "samples": len(rows_g),
             "sessions": len(sess_set),
             "vmaf_median": round(vm, 2) if vm is not None else None,
             "vmaf_1pct_median": round(p1, 2) if p1 is not None else None,
             "ms_ssim_median": round(ms, 4) if ms is not None else None,
             "s2_median": round(s2, 1) if s2 is not None else None,
+            "butteraugli_median": round(ba, 3) if ba is not None else None,
             "cambi_median": round(cb, 2) if cb is not None else None,
             "kbps_median": int(round(kb)) if kb is not None else None,
             "savings_median": round(sv, 1) if sv is not None else None,

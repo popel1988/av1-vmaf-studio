@@ -8,6 +8,8 @@ defensiv (Timeouts, Exceptions abgefangen), damit die Seite nie hängt.
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -86,10 +88,33 @@ def _tools_section() -> dict:
         "im FFmpeg-Build enthalten" if _ffmpeg_has_filter("libvmaf")
         else "fehlt – VMAF-Analyse nicht möglich"))
 
+    try:
+        from . import vmaf as vmaf_mod
+        hst = vmaf_mod.hdr_vmaf_status()
+        if hst.get("channel") == "legacy":
+            checks.append(_check("HDR-VMAF (v1.1.8)", "ok", str(hst.get("reason") or "")))
+        else:
+            checks.append(_check(
+                "HDR-VMAF (v1.1.8)",
+                "ok" if hst.get("available") else "warn",
+                str(hst.get("reason") or ""),
+            ))
+    except Exception as e:  # pragma: no cover
+        checks.append(_check("HDR-VMAF (v1.1.8)", "warn", str(e)))
+
+    if os.name != "nt":
+        va_stat, va_detail = _libva_diag()
+        checks.append(_check("libva / VA-API", va_stat, va_detail))
+
     s2 = Path(config.SSIMULACRA2)
     checks.append(_check(
         "SSIMULACRA2", "ok" if s2.is_file() else "warn",
         str(s2) if s2.is_file() else "nicht gefunden – Standbild-Vergleich entfällt"))
+
+    ba = Path(config.BUTTERAUGLI)
+    checks.append(_check(
+        "Butteraugli", "ok" if ba.is_file() else "warn",
+        str(ba) if ba.is_file() else "nicht gefunden – Butteraugli-Distanz entfällt"))
 
     try:
         from . import dolby_vision as dv
@@ -102,6 +127,8 @@ def _tools_section() -> dict:
                 detail = dver[0] if dver else config.DOVI_TOOL
             except (OSError, subprocess.SubprocessError):
                 detail = config.DOVI_TOOL
+            if dv.supports_mkv_fast_path():
+                detail += " · MKV-Fast-Path aktiv"
             checks.append(_check("dovi_tool (Dolby Vision)", "ok", detail))
         else:
             checks.append(_check("dovi_tool (Dolby Vision)", "warn",
@@ -157,6 +184,60 @@ def _tools_section() -> dict:
     return _section("FFmpeg & Werkzeuge", checks)
 
 
+def _libva_diag() -> tuple[str, str]:
+    """Ermittelt installierte libva-/VA-API-Version und optionalen GPU-Treiber (Linux)."""
+    env_ver = (os.getenv("LIBVA_VERSION") or "").strip()
+    so_va = ""
+    for cand in (
+        Path("/usr/lib/x86_64-linux-gnu/libva.so.2"),
+        Path("/usr/lib/aarch64-linux-gnu/libva.so.2"),
+        Path("/usr/lib/libva.so.2"),
+    ):
+        if cand.exists():
+            try:
+                name = cand.resolve().name
+                # libva.so.2.2400.0 -> minor 24 -> VA-API 1.24
+                m = re.search(r"libva\.so\.2\.(\d+)", name)
+                if m:
+                    age = int(m.group(1))
+                    so_va = f"VA-API 1.{age // 100}"
+                    break
+            except OSError:
+                pass
+    vainfo_va = ""
+    driver = ""
+    vainfo_bin = shutil.which("vainfo")
+    if vainfo_bin:
+        dev = Path(config.VAAPI_DEVICE)
+        cmd = [vainfo_bin, "--display", "drm", "--device", str(dev)] if dev.exists() else [vainfo_bin]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=8, check=False,
+            )
+            out = (r.stdout or "") + "\n" + (r.stderr or "")
+            mv = re.search(r"VA-API version:\s*([0-9]+\.[0-9]+)", out)
+            if mv:
+                vainfo_va = f"VA-API {mv.group(1)}"
+            md = re.search(r"Driver version:\s*(.+)", out)
+            if md:
+                driver = md.group(1).strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    parts = []
+    if vainfo_va or so_va:
+        parts.append(vainfo_va or so_va)
+    if env_ver:
+        parts.append(f"libva {env_ver}")
+    if driver:
+        parts.append(driver)
+    elif not Path(config.VAAPI_DEVICE).exists():
+        parts.append(f"kein Render-Node ({config.VAAPI_DEVICE})")
+    if not parts:
+        return "warn", "libva nicht gefunden (nur für Intel/AMD VAAPI nötig)"
+    return "ok", " · ".join(parts)
+
+
 def _models_section() -> dict:
     checks: list[dict] = []
     models = [
@@ -173,6 +254,26 @@ def _models_section() -> dict:
         status = "ok" if exists else ("warn" if neg else "fail")
         detail = str(path) if exists else f"fehlt: {path}"
         checks.append(_check(f"VMAF-Modell {label}", status, detail))
+
+    legacy = str(getattr(config, "IMAGE_CHANNEL", "latest") or "latest").strip().lower() == "legacy"
+    hdr_models = [
+        ("HDR HD (1080p)", config.VMAF_MODEL_HDR_1080P),
+        ("HDR 4K/UHD", config.VMAF_MODEL_HDR_4K),
+    ]
+    for label, name in hdr_models:
+        if legacy or not name:
+            checks.append(_check(
+                f"VMAF-Modell {label}", "ok",
+                "im Legacy-Kanal (VMAF v0.6.1) deaktiviert – nutzt Standard-VMAF",
+            ))
+            continue
+        path = config.VMAF_MODEL_DIR / name
+        exists = path.exists()
+        checks.append(_check(
+            f"VMAF-Modell {label}",
+            "ok" if exists else "warn",
+            str(path) if exists else f"optional fehlt: {path} (Fallback auf SDR-Modell)",
+        ))
     return _section("VMAF-Modelle", checks)
 
 
